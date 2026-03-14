@@ -21,7 +21,6 @@ const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
 const AUTO_BOARD_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(160);
-const AUTO_BOARD_ZOOM_STEP: f32 = 0.92;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
@@ -35,12 +34,6 @@ enum WorkspaceRenderMode {
     Interactive,
     Preview,
     Badge,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AutoBoardMode {
-    FitBoard,
-    ZoomPlusOne,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,9 +85,7 @@ pub struct OrbitermApp {
     workspace_badge_rects: HashMap<WorkspaceId, Rect>,
     workspace_canvas_rects: HashMap<WorkspaceId, Rect>,
     workspace_rename: Option<WorkspaceRenameState>,
-    auto_board_mode: AutoBoardMode,
-    pending_auto_board_action_at: Option<Instant>,
-    pending_fit_workspace: Option<WorkspaceId>,
+    pending_fit_at: Option<Instant>,
     last_viewport_size: Option<Vec2>,
     config_path: Option<PathBuf>,
     show_config_editor: bool,
@@ -131,9 +122,7 @@ impl OrbitermApp {
             workspace_badge_rects: HashMap::new(),
             workspace_canvas_rects: HashMap::new(),
             workspace_rename: None,
-            auto_board_mode: AutoBoardMode::FitBoard,
-            pending_auto_board_action_at: Some(Instant::now()),
-            pending_fit_workspace: None,
+            pending_fit_at: Some(Instant::now()),
             last_viewport_size: None,
             config_path,
             show_config_editor: false,
@@ -183,8 +172,7 @@ impl OrbitermApp {
         self.workspace_badge_rects.clear();
         self.workspace_canvas_rects.clear();
         self.workspace_rename = None;
-        self.pending_auto_board_action_at = Some(Instant::now());
-        self.pending_fit_workspace = None;
+        self.pending_fit_at = Some(Instant::now());
         self.last_viewport_size = None;
     }
 
@@ -208,15 +196,15 @@ impl OrbitermApp {
             .is_some_and(|rename| rename.workspace_id == workspace_id)
     }
 
-    fn schedule_auto_board_action(&mut self, delay: Duration) {
-        self.pending_auto_board_action_at = Some(Instant::now() + delay);
+    fn schedule_fit_board(&mut self, delay: Duration) {
+        self.pending_fit_at = Some(Instant::now() + delay);
     }
 
     fn handle_zoom(&mut self, ctx: &Context) {
         let zoom_delta = ctx.input(egui::InputState::zoom_delta);
         if (zoom_delta - 1.0).abs() > f32::EPSILON {
             self.zoom = (self.zoom * zoom_delta).clamp(0.45, 2.5);
-            self.pending_auto_board_action_at = None;
+            self.pending_fit_at = None;
         }
 
         if ctx.input(|input| input.key_pressed(Key::Num0) && input.modifiers.ctrl) {
@@ -249,7 +237,7 @@ impl OrbitermApp {
 
         if pan_delta != Vec2::ZERO {
             self.pan_offset += pan_delta;
-            self.pending_auto_board_action_at = None;
+            self.pending_fit_at = None;
         }
     }
 
@@ -330,7 +318,7 @@ impl OrbitermApp {
             .create_panel(PanelOptions::default(), Some(workspace_id))
             .is_ok()
         {
-            self.pending_fit_workspace = Some(workspace_id);
+            self.schedule_fit_board(Duration::ZERO);
         }
         self.board.focus_workspace(workspace_id);
     }
@@ -371,11 +359,7 @@ impl OrbitermApp {
     fn create_panel_with_options(&mut self, workspace_id: Option<WorkspaceId>, opts: PanelOptions) {
         let target_workspace = self.preferred_workspace(workspace_id);
         if self.board.create_panel(opts, target_workspace).is_ok() {
-            if let Some(ws_id) = target_workspace {
-                self.pending_fit_workspace = Some(ws_id);
-            } else {
-                self.schedule_auto_board_action(Duration::ZERO);
-            }
+            self.schedule_fit_board(Duration::ZERO);
         }
         if let Some(workspace_id) = target_workspace {
             self.board.focus_workspace(workspace_id);
@@ -508,42 +492,6 @@ impl OrbitermApp {
                         if ui.add(chrome_button("+ Claude")).clicked() {
                             self.create_agent_panel(None, PanelKind::Claude);
                         }
-
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .add_enabled(self.board.active_workspace.is_some(), chrome_button("Fit Workspace"))
-                                .clicked()
-                                && let Some(workspace_id) = self.board.active_workspace
-                            {
-                                self.fit_view_to_workspace(ctx, workspace_id);
-                            }
-
-                            if ui.add(chrome_button("Fit Board")).clicked() {
-                                self.fit_view_to_content(ctx);
-                            }
-
-                            if ui
-                                .add(if self.auto_board_mode == AutoBoardMode::ZoomPlusOne {
-                                    primary_button("Auto Zoom +1")
-                                } else {
-                                    chrome_button("Auto Zoom +1")
-                                })
-                                .clicked()
-                            {
-                                self.auto_board_mode = AutoBoardMode::ZoomPlusOne;
-                            }
-
-                            if ui
-                                .add(if self.auto_board_mode == AutoBoardMode::FitBoard {
-                                    primary_button("Auto Fit")
-                                } else {
-                                    chrome_button("Auto Fit")
-                                })
-                                .clicked()
-                            {
-                                self.auto_board_mode = AutoBoardMode::FitBoard;
-                            }
-                        });
                     });
 
                     ui.add_space(6.0);
@@ -775,7 +723,7 @@ impl OrbitermApp {
                 .move_workspace(workspace_id, [canvas_position.x, canvas_position.y])
                 && drag_delta != Vec2::ZERO
             {
-                self.pending_auto_board_action_at = None;
+                self.pending_fit_at = None;
             }
 
             if add_terminal {
@@ -1270,11 +1218,11 @@ impl OrbitermApp {
     fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>, min_zoom: f32) {
         let Some(content_bounds) = bounds else {
             self.reset_view(ctx);
-            self.pending_auto_board_action_at = None;
+            self.pending_fit_at = None;
             return;
         };
         let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
-            self.schedule_auto_board_action(AUTO_BOARD_RESIZE_SETTLE_DELAY);
+            self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
             return;
         };
 
@@ -1291,19 +1239,7 @@ impl OrbitermApp {
 
         self.zoom = target_zoom;
         self.pan_offset = canvas_rect.center().to_vec2() - content_bounds.center().to_vec2() * target_zoom;
-        self.pending_auto_board_action_at = None;
-    }
-
-    fn zoom_out_around(&mut self, screen_point: Pos2) {
-        let anchor = self.screen_to_canvas(screen_point);
-        let next_zoom = (self.zoom * AUTO_BOARD_ZOOM_STEP).clamp(0.45, 2.5);
-        if (next_zoom - self.zoom).abs() <= f32::EPSILON {
-            return;
-        }
-
-        self.zoom = next_zoom;
-        self.pan_offset = screen_point.to_vec2() - anchor.to_vec2() * self.zoom;
-        self.pending_auto_board_action_at = None;
+        self.pending_fit_at = None;
     }
 
     fn fit_board_bounds(&self) -> Option<Rect> {
@@ -1344,51 +1280,20 @@ impl OrbitermApp {
             let width_changed = (last_viewport_size.x - viewport_size.x).abs() > f32::EPSILON;
             let height_changed = (last_viewport_size.y - viewport_size.y).abs() > f32::EPSILON;
             if width_changed || height_changed {
-                self.schedule_auto_board_action(AUTO_BOARD_RESIZE_SETTLE_DELAY);
+                self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
             }
         }
     }
 
-    fn board_overflows_canvas(&self, ctx: &Context) -> bool {
-        let Some(bounds) = self.fit_board_bounds() else {
-            return false;
-        };
-        let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
-            return false;
-        };
-
-        let content_screen_rect =
-            Rect::from_min_max(self.canvas_to_screen(bounds.min), self.canvas_to_screen(bounds.max));
-        let safe_canvas_rect = canvas_rect.shrink2(Vec2::new(24.0, 24.0));
-
-        !safe_canvas_rect.contains_rect(content_screen_rect)
-    }
-
-    fn run_auto_board_action(&mut self, ctx: &Context) {
-        if !self.board_overflows_canvas(ctx) {
-            self.pending_auto_board_action_at = None;
-            return;
-        }
-
-        match self.auto_board_mode {
-            AutoBoardMode::FitBoard => self.fit_view_to_content(ctx),
-            AutoBoardMode::ZoomPlusOne => {
-                let anchor =
-                    Self::canvas_view_rect(ctx).map_or_else(|| viewport_local_rect(ctx).center(), |rect| rect.center());
-                self.zoom_out_around(anchor);
-            }
-        }
-    }
-
-    fn maybe_apply_pending_auto_board_action(&mut self, ctx: &Context) {
-        let Some(run_at) = self.pending_auto_board_action_at else {
+    fn maybe_apply_pending_fit(&mut self, ctx: &Context) {
+        let Some(run_at) = self.pending_fit_at else {
             return;
         };
         if Instant::now() < run_at {
             return;
         }
 
-        self.run_auto_board_action(ctx);
+        self.fit_view_to_content(ctx);
     }
 }
 
@@ -1417,11 +1322,7 @@ impl eframe::App for OrbitermApp {
 
         if closed_any_panels {
             self.remove_empty_workspaces();
-            if let Some(ws) = self.board.active_workspace {
-                self.pending_fit_workspace = Some(ws);
-            } else {
-                self.schedule_auto_board_action(Duration::ZERO);
-            }
+            self.schedule_fit_board(Duration::ZERO);
         }
 
         self.handle_shortcuts(ctx);
@@ -1438,11 +1339,7 @@ impl eframe::App for OrbitermApp {
         self.render_workspace_badges(ctx);
         self.render_preview_panels(ctx);
         self.render_live_panels(ctx);
-        if let Some(workspace_id) = self.pending_fit_workspace.take() {
-            self.fit_view_to_workspace(ctx, workspace_id);
-        } else {
-            self.maybe_apply_pending_auto_board_action(ctx);
-        }
+        self.maybe_apply_pending_fit(ctx);
 
         self.draw_connectors(ctx);
         render_viewport_resize_handles(ctx);
