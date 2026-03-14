@@ -44,6 +44,12 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// Spawn a new PTY-backed terminal panel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PTY cannot be created, the command cannot be
+    /// spawned, or the PTY reader/writer handles cannot be acquired.
     pub fn spawn(id: PanelId, opts: PanelOptions) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system

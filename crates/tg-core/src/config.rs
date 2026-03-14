@@ -43,6 +43,10 @@ fn default_cols() -> u16 {
 impl Config {
     /// Load config from an explicit path, or search standard locations,
     /// or return a default config with one workspace and one shell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a discovered config file cannot be read or parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         if let Some(p) = path {
             let contents = std::fs::read_to_string(p)?;
@@ -63,6 +67,7 @@ impl Config {
         Ok(Self::default())
     }
 
+    #[must_use]
     pub fn expand_tilde(s: &str) -> PathBuf {
         if let Some(rest) = s.strip_prefix("~/")
             && let Ok(home) = std::env::var("HOME")

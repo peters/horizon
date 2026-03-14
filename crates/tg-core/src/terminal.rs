@@ -5,6 +5,7 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    #[must_use]
     pub fn new(rows: u16, cols: u16) -> Self {
         Self {
             parser: vt100::Parser::new(rows, cols, 1000),
@@ -17,6 +18,7 @@ impl Terminal {
         self.parser.process(bytes);
     }
 
+    #[must_use]
     pub fn screen(&self) -> &vt100::Screen {
         self.parser.screen()
     }
@@ -29,14 +31,17 @@ impl Terminal {
         }
     }
 
+    #[must_use]
     pub fn cols(&self) -> u16 {
         self.cols
     }
 
+    #[must_use]
     pub fn rows(&self) -> u16 {
         self.rows
     }
 
+    #[must_use]
     pub fn title(&self) -> &str {
         self.parser.screen().title()
     }

@@ -12,6 +12,7 @@ pub struct Board {
 }
 
 impl Board {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             panels: Vec::new(),
@@ -23,6 +24,10 @@ impl Board {
     }
 
     /// Build a board from a YAML config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured panel fails to spawn.
     pub fn from_config(config: &Config) -> Result<Self> {
         let mut board = Self::new();
 
@@ -51,6 +56,7 @@ impl Board {
         Ok(board)
     }
 
+    #[must_use]
     pub fn create_workspace(&mut self, name: &str) -> WorkspaceId {
         let id = WorkspaceId(self.next_workspace_id);
         self.next_workspace_id += 1;
@@ -60,6 +66,11 @@ impl Board {
         id
     }
 
+    /// Create a panel and optionally attach it to a workspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying PTY-backed panel cannot be spawned.
     pub fn create_panel(&mut self, opts: PanelOptions, workspace: Option<WorkspaceId>) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
@@ -90,6 +101,21 @@ impl Board {
         self.workspaces.retain(|w| w.id != id);
     }
 
+    #[must_use]
+    pub fn rename_workspace(&mut self, id: WorkspaceId, name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        if let Some(workspace) = self.workspaces.iter_mut().find(|workspace| workspace.id == id) {
+            trimmed.clone_into(&mut workspace.name);
+            return true;
+        }
+
+        false
+    }
+
     pub fn process_output(&mut self) {
         for panel in &mut self.panels {
             panel.process_output();
@@ -104,5 +130,28 @@ impl Board {
 impl Default for Board {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_workspace_updates_matching_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+
+        assert!(board.rename_workspace(workspace_id, "backend"));
+        assert_eq!(board.workspaces[0].name, "backend");
+    }
+
+    #[test]
+    fn rename_workspace_rejects_blank_names() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+
+        assert!(!board.rename_workspace(workspace_id, "   "));
+        assert_eq!(board.workspaces[0].name, "frontend");
     }
 }
