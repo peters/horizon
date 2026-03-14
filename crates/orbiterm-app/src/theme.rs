@@ -77,6 +77,7 @@ pub fn workspace_border(accent: Color32, active: bool) -> Color32 {
     alpha(border, if active { 255 } else { 220 })
 }
 
+#[allow(dead_code)]
 pub fn workspace_shadow(accent: Color32) -> Shadow {
     Shadow {
         offset: [0.0, 4.0].into(),

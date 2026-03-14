@@ -16,7 +16,6 @@ const DEFAULT_PANEL_HEIGHT: f32 = 340.0;
 const PANEL_COLUMN_SPACING: f32 = 540.0;
 const PANEL_ROW_SPACING: f32 = 360.0;
 const TITLEBAR_HEIGHT: f32 = 38.0;
-const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
@@ -75,7 +74,6 @@ struct WorkspaceTitleStyle {
 pub struct OrbitermApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
-    new_workspace_name: String,
     theme_applied: bool,
     zoom: f32,
     pan_offset: Vec2,
@@ -112,7 +110,6 @@ impl OrbitermApp {
         Self {
             board,
             panels_to_close: Vec::new(),
-            new_workspace_name: String::new(),
             theme_applied: false,
             zoom: 1.0,
             pan_offset: Vec2::ZERO,
@@ -300,6 +297,11 @@ impl OrbitermApp {
             return;
         }
 
+        if ctx.input(|input| input.key_pressed(Key::T) && input.modifiers.ctrl) {
+            let name = self.next_workspace_name();
+            self.create_workspace_named(ctx, &name);
+        }
+
         if ctx.input(|input| input.key_pressed(Key::N) && input.modifiers.ctrl && input.modifiers.shift) {
             self.create_panel_in_workspace(None);
         }
@@ -369,6 +371,7 @@ impl OrbitermApp {
         self.create_panel_with_options(workspace_id, PanelOptions::default());
     }
 
+    #[allow(dead_code)]
     fn create_agent_panel(&mut self, workspace_id: Option<WorkspaceId>, kind: PanelKind) {
         let (name, resume, auto_resize_pty) = agent_panel_defaults(kind);
         self.create_panel_with_options(
@@ -468,143 +471,6 @@ impl OrbitermApp {
             });
     }
 
-    fn render_toolbar(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::bottom("toolbar")
-            .exact_height(CONTROL_BAR_HEIGHT)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::TOOLBAR_BG)
-                    .inner_margin(Margin::symmetric(14.0, 10.0))
-                    .stroke(Stroke::new(
-                        1.0,
-                        theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.12),
-                    )),
-            )
-            .show(ctx, |ui| {
-                let input_width = (ui.available_width() * 0.22).clamp(128.0, 220.0);
-
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("workspaces")
-                                .color(theme::FG_DIM)
-                                .size(11.0)
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-
-                        let input_response = ui.add(
-                            egui::TextEdit::singleline(&mut self.new_workspace_name)
-                                .desired_width(input_width)
-                                .hint_text("new workspace"),
-                        );
-                        let create_from_enter =
-                            input_response.has_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-
-                        if create_from_enter || ui.add(primary_button("+ Workspace")).clicked() {
-                            let fallback_name = self.next_workspace_name();
-                            let name = workspace_name_from_input(&self.new_workspace_name, &fallback_name);
-                            self.create_workspace_named(ctx, &name);
-                            self.new_workspace_name.clear();
-                        }
-
-                        if ui.add(chrome_button("+ Shell")).clicked() {
-                            self.create_panel_in_workspace(None);
-                        }
-
-                        if ui.add(chrome_button("+ Codex")).clicked() {
-                            self.create_agent_panel(None, PanelKind::Codex);
-                        }
-
-                        if ui.add(chrome_button("+ Claude")).clicked() {
-                            self.create_agent_panel(None, PanelKind::Claude);
-                        }
-                    });
-
-                    ui.add_space(6.0);
-                    let line_rect = ui.available_rect_before_wrap();
-                    ui.painter().hline(
-                        line_rect.x_range(),
-                        line_rect.top(),
-                        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 100)),
-                    );
-                    ui.add_space(6.0);
-                    self.render_workspace_strip(ui);
-                });
-            });
-    }
-
-    fn render_workspace_strip(&mut self, ui: &mut egui::Ui) {
-        let workspaces = self.workspace_snapshots();
-
-        if workspaces.is_empty() {
-            ui.label(egui::RichText::new("No workspaces yet").color(theme::FG_DIM).size(11.0));
-            return;
-        }
-
-        egui::ScrollArea::horizontal()
-            .id_salt("workspace_strip")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (workspace_id, name, accent, count, _position) in workspaces {
-                        self.render_workspace_chip(
-                            ui,
-                            workspace_id,
-                            &name,
-                            Color32::from_rgb(accent.0, accent.1, accent.2),
-                            count,
-                            self.board.active_workspace == Some(workspace_id),
-                        );
-                    }
-                });
-            });
-    }
-
-    fn render_workspace_chip(
-        &mut self,
-        ui: &mut egui::Ui,
-        workspace_id: WorkspaceId,
-        name: &str,
-        accent: Color32,
-        count: usize,
-        active: bool,
-    ) {
-        let editing = self.is_renaming_workspace(workspace_id);
-        let mut add_terminal = false;
-
-        egui::Frame::default()
-            .fill(theme::workspace_fill(accent))
-            .rounding(Rounding::same(15.0))
-            .inner_margin(Margin::symmetric(10.0, 6.0))
-            .stroke(Stroke::new(1.0, theme::workspace_border(accent, editing || active)))
-            .shadow(theme::workspace_shadow(accent))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    paint_workspace_dot(ui, accent, 4.5);
-                    let _ = self.render_workspace_name_control(
-                        ui,
-                        workspace_id,
-                        name,
-                        accent,
-                        WorkspaceTitleStyle {
-                            text_size: 12.0,
-                            width_bounds: [78.0, 180.0],
-                        },
-                        true,
-                    );
-                    render_count_badge(ui, accent, count);
-
-                    if ui.add(icon_button("+")).clicked() {
-                        add_terminal = true;
-                    }
-                });
-            });
-
-        if add_terminal {
-            self.create_panel_in_workspace(Some(workspace_id));
-        }
-    }
-
     fn render_workspace_name_control(
         &mut self,
         ui: &mut egui::Ui,
@@ -675,7 +541,7 @@ impl OrbitermApp {
 
         let workspaces = self.workspace_snapshots();
 
-        for (workspace_id, name, accent, count, position) in workspaces {
+        for (workspace_id, name, accent, _count, position) in workspaces {
             let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
             let current_pos = self.canvas_to_screen(Pos2::new(position[0], position[1]));
             let desired_rect = clamp_rect_to_bounds(
@@ -696,25 +562,22 @@ impl OrbitermApp {
                 .show(ctx, |ui| {
                     egui::Frame::default()
                         .fill(theme::workspace_fill(accent))
-                        .rounding(Rounding::same(18.0))
-                        .inner_margin(Margin::symmetric(14.0, 9.0))
-                        .stroke(Stroke::new(1.2, theme::workspace_border(accent, editing || active)))
-                        .shadow(theme::workspace_shadow(accent))
+                        .rounding(Rounding::ZERO)
+                        .inner_margin(Margin::symmetric(10.0, 6.0))
+                        .stroke(Stroke::new(1.0, theme::workspace_border(accent, editing || active)))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                paint_workspace_dot(ui, accent, 5.5);
                                 title_rect = self.render_workspace_name_control(
                                     ui,
                                     workspace_id,
                                     &name,
                                     accent,
                                     WorkspaceTitleStyle {
-                                        text_size: 13.5,
-                                        width_bounds: [86.0, 220.0],
+                                        text_size: 12.0,
+                                        width_bounds: [60.0, 200.0],
                                     },
                                     false,
                                 );
-                                render_count_badge(ui, accent, count);
 
                                 if ui.add(icon_button("+")).clicked() {
                                     add_terminal = true;
@@ -1226,12 +1089,8 @@ impl OrbitermApp {
 
     fn canvas_view_rect(ctx: &Context) -> Option<Rect> {
         let rect = viewport_local_rect(ctx);
-        (rect.width() > 0.0 && rect.height() > 0.0).then(|| {
-            Rect::from_min_max(
-                Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT),
-                Pos2::new(rect.max.x, rect.max.y - CONTROL_BAR_HEIGHT),
-            )
-        })
+        (rect.width() > 0.0 && rect.height() > 0.0)
+            .then(|| Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT), rect.max))
     }
 
     fn fit_view_to_content(&mut self, ctx: &Context) {
@@ -1367,7 +1226,6 @@ impl eframe::App for OrbitermApp {
 
         paint_root_backdrop(ctx);
         self.render_titlebar(ctx);
-        self.render_toolbar(ctx);
         self.render_canvas(ctx);
         self.panel_screen_rects.clear();
         self.panel_canvas_rects.clear();
@@ -1816,25 +1674,6 @@ fn paint_canvas_glow(ui: &mut egui::Ui) {
     painter.rect_filled(highlight, Rounding::ZERO, theme::alpha(theme::ACCENT_WARM, 110));
 }
 
-fn paint_workspace_dot(ui: &mut egui::Ui, color: Color32, radius: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(radius * 2.0), Sense::hover());
-    ui.painter().circle_filled(rect.center(), radius, color);
-}
-
-fn render_count_badge(ui: &mut egui::Ui, accent: Color32, count: usize) {
-    egui::Frame::default()
-        .fill(theme::alpha(accent, 32))
-        .rounding(Rounding::same(999.0))
-        .inner_margin(Margin::symmetric(6.0, 2.0))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(count.to_string())
-                    .color(theme::alpha(accent, 220))
-                    .size(10.0),
-            );
-        });
-}
-
 fn should_create_workspace_from_canvas_gesture(
     triggered: bool,
     canvas_rect: Rect,
@@ -1860,6 +1699,7 @@ fn clamp_rect_to_bounds(rect: Rect, bounds: Rect) -> Rect {
     Rect::from_min_size(min, size)
 }
 
+#[cfg(test)]
 fn workspace_name_from_input(input: &str, fallback_name: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
