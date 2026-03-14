@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use egui::{Align, Button, Context, Id, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Stroke, UiBuilder, Vec2};
-use orbiterm_core::{Board, Config, PanelId, PanelOptions};
+use egui::{
+    Align, Button, Color32, Context, Id, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Stroke, UiBuilder, Vec2,
+};
+use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -16,10 +18,14 @@ const PANEL_COLUMN_SPACING: f32 = 540.0;
 #[cfg(test)]
 const PANEL_ROW_SPACING: f32 = 360.0;
 const RESIZE_HANDLE_SIZE: f32 = 18.0;
+const WS_BG_PAD: f32 = 16.0;
+const WS_TITLE_HEIGHT: f32 = 32.0;
 
 pub struct OrbitermApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
+    workspace_assignments: Vec<(PanelId, WorkspaceId)>,
+    workspace_creates: Vec<PanelId>,
     theme_applied: bool,
     pan_offset: Vec2,
     panel_screen_rects: HashMap<PanelId, Rect>,
@@ -35,6 +41,8 @@ impl OrbitermApp {
         Self {
             board,
             panels_to_close: Vec::new(),
+            workspace_assignments: Vec::new(),
+            workspace_creates: Vec::new(),
             theme_applied: false,
             pan_offset: Vec2::ZERO,
             panel_screen_rects: HashMap::new(),
@@ -59,7 +67,8 @@ impl OrbitermApp {
     }
 
     fn create_panel(&mut self) {
-        if let Err(error) = self.board.create_panel(PanelOptions::default(), None) {
+        let ws_id = self.board.ensure_workspace();
+        if let Err(error) = self.board.create_panel(PanelOptions::default(), ws_id) {
             tracing::error!("failed to create panel: {error}");
         }
     }
@@ -146,6 +155,44 @@ impl OrbitermApp {
                             .color(theme::FG_DIM)
                             .size(10.5),
                     );
+
+                    ui.separator();
+
+                    let ws_info: Vec<_> = self
+                        .board
+                        .workspaces
+                        .iter()
+                        .map(|ws| (ws.id, ws.name.clone(), ws.accent()))
+                        .collect();
+
+                    for (ws_id, ws_name, (r, g, b)) in ws_info {
+                        let ws_color = Color32::from_rgb(r, g, b);
+                        let is_active = self.board.active_workspace == Some(ws_id);
+                        let chip = Button::new(egui::RichText::new(&ws_name).size(10.5).color(if is_active {
+                            theme::FG
+                        } else {
+                            theme::FG_SOFT
+                        }))
+                        .fill(theme::blend(
+                            theme::PANEL_BG_ALT,
+                            ws_color,
+                            if is_active { 0.28 } else { 0.14 },
+                        ))
+                        .stroke(Stroke::new(
+                            1.0,
+                            theme::alpha(ws_color, if is_active { 200 } else { 120 }),
+                        ))
+                        .rounding(Rounding::same(10.0));
+
+                        if ui.add(chip).clicked() {
+                            self.board.focus_workspace(ws_id);
+                        }
+                    }
+
+                    if ui.add(chrome_button("+ Workspace")).clicked() {
+                        let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+                        let _ = self.board.create_workspace(&name);
+                    }
                 });
             });
     }
@@ -212,6 +259,16 @@ impl OrbitermApp {
     fn render_panels(&mut self, ctx: &Context) {
         self.panel_screen_rects.clear();
 
+        let workspaces: Vec<(WorkspaceId, String, Color32)> = self
+            .board
+            .workspaces
+            .iter()
+            .map(|ws| {
+                let (r, g, b) = ws.accent();
+                (ws.id, ws.name.clone(), Color32::from_rgb(r, g, b))
+            })
+            .collect();
+
         let mut panel_order: Vec<_> = self
             .board
             .panels
@@ -226,7 +283,7 @@ impl OrbitermApp {
         let mut panels_to_close = Vec::new();
 
         for (panel_id, title, fallback_index) in panel_order {
-            if self.render_panel(ctx, canvas_rect, panel_id, &title, fallback_index) {
+            if self.render_panel(ctx, canvas_rect, panel_id, &title, fallback_index, &workspaces) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -242,15 +299,22 @@ impl OrbitermApp {
         panel_id: PanelId,
         title: &str,
         _fallback_index: usize,
+        workspaces: &[(WorkspaceId, String, Color32)],
     ) -> bool {
-        let Some((canvas_position, canvas_size)) = self.board.panel(panel_id).map(|panel| {
+        let Some((canvas_position, canvas_size, current_ws_id)) = self.board.panel(panel_id).map(|panel| {
             (
                 Pos2::new(panel.layout.position[0], panel.layout.position[1]),
                 Vec2::new(panel.layout.size[0], panel.layout.size[1]),
+                panel.workspace_id,
             )
         }) else {
             return false;
         };
+
+        let ws_accent = workspaces
+            .iter()
+            .find(|(id, _, _)| *id == current_ws_id)
+            .map(|(_, _, color)| *color);
 
         let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
         let is_focused = self.board.focused == Some(panel_id);
@@ -259,6 +323,8 @@ impl OrbitermApp {
         let mut close_panel = false;
         let mut drag_delta = Vec2::ZERO;
         let mut resize_delta = Vec2::ZERO;
+        let mut ws_assign: Option<WorkspaceId> = None;
+        let mut ws_create = false;
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(screen_rect.min)
@@ -319,6 +385,34 @@ impl OrbitermApp {
                     close_panel = true;
                 }
 
+                drag_response.context_menu(|ui| {
+                    ui.set_min_width(180.0);
+                    ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
+                    ui.separator();
+
+                    for (ws_id, ws_name, ws_color) in workspaces {
+                        let is_current = current_ws_id == *ws_id;
+                        let label = if is_current {
+                            format!("● {ws_name}")
+                        } else {
+                            format!("  {ws_name}")
+                        };
+                        let text = egui::RichText::new(label)
+                            .color(if is_current { *ws_color } else { theme::FG_SOFT })
+                            .size(12.0);
+                        if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                            ws_assign = Some(*ws_id);
+                            ui.close_menu();
+                        }
+                    }
+
+                    ui.separator();
+                    if ui.button("New Workspace").clicked() {
+                        ws_create = true;
+                        ui.close_menu();
+                    }
+                });
+
                 paint_panel_chrome(
                     ui,
                     panel_rect,
@@ -328,6 +422,7 @@ impl OrbitermApp {
                     title,
                     is_focused,
                     close_response.hovered(),
+                    ws_accent,
                 );
 
                 ui.scope_builder(
@@ -358,7 +453,75 @@ impl OrbitermApp {
             self.board.focus(panel_id);
         }
 
+        if ws_create {
+            self.workspace_creates.push(panel_id);
+        }
+        if let Some(ws_id) = ws_assign {
+            self.workspace_assignments.push((panel_id, ws_id));
+        }
+
         close_panel
+    }
+
+    fn render_workspace_backgrounds(&self, ctx: &Context) {
+        let canvas_rect = Self::canvas_rect(ctx);
+
+        for workspace in &self.board.workspaces {
+            let (r, g, b) = workspace.accent();
+            let ws_color = Color32::from_rgb(r, g, b);
+
+            let Some((min, max)) = self.board.workspace_bounds(workspace.id) else {
+                // Empty workspace: draw a small placeholder badge.
+                let badge_pos = Pos2::new(workspace.position[0], workspace.position[1]);
+                let screen_pos = self.canvas_to_screen(canvas_rect, badge_pos);
+                let badge_rect = Rect::from_min_size(screen_pos, Vec2::new(160.0, 36.0));
+
+                egui::Area::new(Id::new(("ws_empty", workspace.id.0)))
+                    .fixed_pos(badge_rect.min)
+                    .constrain(false)
+                    .order(Order::Background)
+                    .show(ctx, |ui| {
+                        let (rect, _) = ui.allocate_exact_size(badge_rect.size(), Sense::hover());
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, Rounding::same(12.0), theme::alpha(ws_color, 12));
+                        painter.rect_stroke(rect, Rounding::same(12.0), Stroke::new(1.0, theme::alpha(ws_color, 40)));
+                        painter.text(
+                            Pos2::new(rect.min.x + 14.0, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            &workspace.name,
+                            egui::FontId::proportional(12.0),
+                            theme::alpha(ws_color, 140),
+                        );
+                    });
+                continue;
+            };
+
+            let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+            let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
+
+            let screen_min = self.canvas_to_screen(canvas_rect, top_left);
+            let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
+            let screen_rect = Rect::from_min_max(screen_min, screen_max);
+
+            egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
+                .fixed_pos(screen_rect.min)
+                .constrain(false)
+                .order(Order::Background)
+                .show(ctx, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
+                    let painter = ui.painter_at(rect);
+
+                    painter.rect_filled(rect, Rounding::same(20.0), theme::alpha(ws_color, 15));
+                    painter.rect_stroke(rect, Rounding::same(20.0), Stroke::new(1.0, theme::alpha(ws_color, 50)));
+                    painter.text(
+                        Pos2::new(rect.min.x + 16.0, rect.min.y + WS_TITLE_HEIGHT * 0.5),
+                        egui::Align2::LEFT_CENTER,
+                        &workspace.name,
+                        egui::FontId::proportional(13.0),
+                        theme::alpha(ws_color, 160),
+                    );
+                });
+        }
     }
 }
 
@@ -378,8 +541,18 @@ impl eframe::App for OrbitermApp {
             self.panel_screen_rects.remove(&panel_id);
         }
 
+        for panel_id in self.workspace_creates.drain(..) {
+            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+            let ws_id = self.board.create_workspace(&name);
+            self.board.assign_panel_to_workspace(panel_id, ws_id);
+        }
+        for (panel_id, ws_id) in self.workspace_assignments.drain(..) {
+            self.board.assign_panel_to_workspace(panel_id, ws_id);
+        }
+
         self.render_toolbar(ctx);
         self.render_canvas(ctx);
+        self.render_workspace_backgrounds(ctx);
         self.render_panels(ctx);
         self.render_canvas_hud(ctx);
 
@@ -412,9 +585,10 @@ fn paint_panel_chrome(
     title: &str,
     focused: bool,
     close_hovered: bool,
+    ws_accent: Option<Color32>,
 ) {
     let painter = ui.painter_at(panel_rect);
-    let accent = if focused { theme::ACCENT } else { theme::BORDER_STRONG };
+    let accent = ws_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG });
 
     painter.rect_filled(panel_rect, Rounding::same(14.0), theme::PANEL_BG);
     painter.rect_stroke(
@@ -427,8 +601,18 @@ fn paint_panel_chrome(
         Rounding::same(14.0),
         theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
     );
+    let title_x = if let Some(ws_color) = ws_accent {
+        painter.circle_filled(
+            Pos2::new(titlebar_rect.min.x + 14.0, titlebar_rect.center().y),
+            4.5,
+            ws_color,
+        );
+        titlebar_rect.min.x + 26.0
+    } else {
+        titlebar_rect.min.x + 12.0
+    };
     painter.text(
-        Pos2::new(titlebar_rect.min.x + 12.0, titlebar_rect.center().y),
+        Pos2::new(title_x, titlebar_rect.center().y),
         egui::Align2::LEFT_CENTER,
         title,
         egui::FontId::proportional(13.0),

@@ -92,7 +92,7 @@ pub struct Panel {
     pub kind: PanelKind,
     pub resume: PanelResume,
     pub layout: PanelLayout,
-    pub workspace_id: Option<WorkspaceId>,
+    pub workspace_id: WorkspaceId,
     pub terminal: Terminal,
     has_custom_name: bool,
     writer: Box<dyn Write + Send>,
@@ -110,7 +110,7 @@ impl Panel {
     ///
     /// Returns an error if the PTY cannot be created, the command cannot be
     /// spawned, or the PTY reader/writer handles cannot be acquired.
-    pub fn spawn(id: PanelId, opts: PanelOptions) -> Result<Self> {
+    pub fn spawn(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Self> {
         let pty_system = native_pty_system();
         let PanelOptions {
             name,
@@ -178,7 +178,7 @@ impl Panel {
                 position: position.unwrap_or_default(),
                 size: size.unwrap_or(DEFAULT_PANEL_SIZE),
             },
-            workspace_id: None,
+            workspace_id,
             terminal: Terminal::with_scrollback(rows, cols, scrollback_limit_for_kind(kind)),
             has_custom_name,
             writer,

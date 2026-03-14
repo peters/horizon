@@ -41,7 +41,12 @@ impl Board {
         let mut board = Self::new();
 
         for ws_cfg in &config.workspaces {
+            let ws_id = board.create_workspace(&ws_cfg.name);
             let workspace_origin = ws_cfg.position.unwrap_or_default();
+
+            if let Some(pos) = ws_cfg.position {
+                board.move_workspace(ws_id, pos);
+            }
 
             for (workspace_index, term_cfg) in ws_cfg.terminals.iter().enumerate() {
                 let relative_position = term_cfg
@@ -62,8 +67,13 @@ impl Board {
                     ]),
                     size: term_cfg.size,
                 };
-                board.create_panel(opts, None)?;
+                board.create_panel(opts, ws_id)?;
             }
+        }
+
+        // Ensure at least one workspace always exists.
+        if board.workspaces.is_empty() {
+            let _ = board.create_workspace("default");
         }
 
         board.focused = board.panels.first().map(|panel| panel.id);
@@ -82,27 +92,36 @@ impl Board {
         id
     }
 
-    /// Create a panel and optionally attach it to a workspace.
+    /// Ensures at least one workspace exists. Returns the active workspace,
+    /// creating a default one if the board has none.
+    pub fn ensure_workspace(&mut self) -> WorkspaceId {
+        if let Some(id) = self.active_workspace {
+            return id;
+        }
+        if let Some(ws) = self.workspaces.first() {
+            let id = ws.id;
+            self.active_workspace = Some(id);
+            return id;
+        }
+        self.create_workspace("default")
+    }
+
+    /// Create a panel inside a workspace.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying PTY-backed panel cannot be spawned.
-    pub fn create_panel(&mut self, opts: PanelOptions, workspace: Option<WorkspaceId>) -> Result<PanelId> {
+    pub fn create_panel(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
-        let layout_position = opts
-            .position
-            .unwrap_or_else(|| self.default_panel_position(workspace, id));
+        let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
         let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
-        let mut panel = Panel::spawn(id, opts)?;
-        panel.workspace_id = workspace;
+        let mut panel = Panel::spawn(id, workspace, opts)?;
         panel.move_to(layout_position);
         panel.resize_layout(layout_size);
         self.panels.push(panel);
 
-        if let Some(ws_id) = workspace
-            && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id)
-        {
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace) {
             ws.add_panel(id);
         }
 
@@ -126,21 +145,42 @@ impl Board {
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
+        // Never remove the last workspace.
+        if self.workspaces.len() <= 1 {
+            return;
+        }
+
+        let Some(target_id) = self.workspaces.iter().find(|ws| ws.id != id).map(|ws| ws.id) else {
+            return;
+        };
+
         if let Some(index) = self.workspaces.iter().position(|workspace| workspace.id == id) {
-            let workspace = self.workspaces.remove(index);
-            for panel_id in workspace.panels {
+            let removed = self.workspaces.remove(index);
+            for panel_id in removed.panels {
                 if let Some(panel) = self.panel_mut(panel_id) {
-                    panel.move_to([
-                        panel.layout.position[0] + workspace.position[0],
-                        panel.layout.position[1] + workspace.position[1],
-                    ]);
-                    panel.workspace_id = None;
+                    panel.workspace_id = target_id;
+                }
+                if let Some(target) = self.workspace_mut(target_id) {
+                    target.add_panel(panel_id);
                 }
             }
         }
+
         self.attention.retain(|item| item.workspace_id != id);
         if self.active_workspace == Some(id) {
-            self.active_workspace = self.workspaces.first().map(|workspace| workspace.id);
+            self.active_workspace = Some(target_id);
+        }
+    }
+
+    pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        for ws in &mut self.workspaces {
+            ws.remove_panel(panel_id);
+        }
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+            ws.add_panel(panel_id);
+        }
+        if let Some(panel) = self.panel_mut(panel_id) {
+            panel.workspace_id = workspace_id;
         }
     }
 
@@ -199,13 +239,34 @@ impl Board {
 
     #[must_use]
     pub fn panel_workspace_id(&self, id: PanelId) -> Option<WorkspaceId> {
-        self.panel(id).and_then(|panel| panel.workspace_id)
+        self.panel(id).map(|panel| panel.workspace_id)
     }
 
     #[must_use]
     pub fn workspace_for_panel(&self, id: PanelId) -> Option<&Workspace> {
         self.panel_workspace_id(id)
             .and_then(|workspace_id| self.workspace(workspace_id))
+    }
+
+    /// Computes the bounding rectangle of all panels in a workspace.
+    /// Returns `(min, max)` in canvas coordinates, or `None` when the
+    /// workspace is empty or does not exist.
+    #[must_use]
+    pub fn workspace_bounds(&self, id: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
+        let workspace = self.workspace(id)?;
+        let mut panels = workspace.panels.iter().filter_map(|pid| self.panel(*pid)).peekable();
+        panels.peek()?;
+
+        let mut min = [f32::MAX, f32::MAX];
+        let mut max = [f32::MIN, f32::MIN];
+        for panel in panels {
+            min[0] = min[0].min(panel.layout.position[0]);
+            min[1] = min[1].min(panel.layout.position[1]);
+            max[0] = max[0].max(panel.layout.position[0] + panel.layout.size[0]);
+            max[1] = max[1].max(panel.layout.position[1] + panel.layout.size[1]);
+        }
+
+        Some((min, max))
     }
 
     pub fn move_workspace(&mut self, id: WorkspaceId, position: [f32; 2]) -> bool {
@@ -281,14 +342,11 @@ impl Board {
             })
     }
 
-    fn default_panel_position(&self, workspace: Option<WorkspaceId>, _panel_id: PanelId) -> [f32; 2] {
-        if let Some(workspace_id) = workspace
-            && let Some(workspace) = self.workspace(workspace_id)
-        {
-            return self.first_free_tile_position(workspace);
+    fn default_panel_position(&self, workspace: WorkspaceId) -> [f32; 2] {
+        if let Some(ws) = self.workspace(workspace) {
+            return self.first_free_tile_position(ws);
         }
-
-        self.first_free_orphan_position()
+        tiled_panel_position(0)
     }
 
     fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
@@ -309,25 +367,6 @@ impl Board {
 
         tiled_panel_position(search_limit)
     }
-
-    fn first_free_orphan_position(&self) -> [f32; 2] {
-        let occupied: Vec<[f32; 2]> = self
-            .panels
-            .iter()
-            .filter(|p| p.workspace_id.is_none())
-            .map(|p| p.layout.position)
-            .collect();
-
-        let search_limit = occupied.len();
-        for index in 0..=search_limit {
-            let candidate = orphan_panel_position(index);
-            if !position_occupied(&occupied, candidate) {
-                return candidate;
-            }
-        }
-
-        orphan_panel_position(search_limit)
-    }
 }
 
 impl Default for Board {
@@ -342,15 +381,6 @@ fn tiled_panel_position(index: usize) -> [f32; 2] {
     [
         90.0 + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
         108.0 + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
-    ]
-}
-
-fn orphan_panel_position(index: usize) -> [f32; 2] {
-    let column = usize_to_f32(index % 3);
-    let row = usize_to_f32(index / 3);
-    [
-        140.0 + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
-        140.0 + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
     ]
 }
 
@@ -427,7 +457,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), Some(workspace_id))
+            .create_panel(PanelOptions::default(), workspace_id)
             .expect("panel should spawn");
 
         board.focus(panel_id);
@@ -440,7 +470,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), Some(workspace_id))
+            .create_panel(PanelOptions::default(), workspace_id)
             .expect("panel should spawn");
         let panel = board.panel(panel_id).expect("panel should exist");
 
