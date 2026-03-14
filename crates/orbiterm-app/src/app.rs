@@ -948,9 +948,11 @@ impl OrbitermApp {
             .id(Id::new(("panel", panel_id.0)))
             .open(&mut open)
             .current_pos(current_screen_position)
-            .fixed_size(screen_size)
+            .default_size(screen_size)
+            .min_size(Vec2::new(DEFAULT_PANEL_WIDTH * 0.4, DEFAULT_PANEL_HEIGHT * 0.4))
             .constrain_to(constrain_rect)
             .collapsible(false)
+            .resizable(true)
             .frame(
                 egui::Frame::default()
                     .fill(theme::PANEL_BG)
@@ -971,8 +973,7 @@ impl OrbitermApp {
             });
 
         if let Some(window) = response {
-            let user_dragged = window.response.dragged() || window.response.drag_stopped();
-            self.sync_live_panel_geometry(panel_id, window.response.rect, user_dragged);
+            self.sync_live_panel_geometry(panel_id, window.response.rect);
 
             let (clicked_terminal, _) = window.inner.unwrap_or((false, false));
             if clicked_terminal || window.response.clicked() || window.response.drag_started() {
@@ -983,7 +984,7 @@ impl OrbitermApp {
         !open
     }
 
-    fn sync_live_panel_geometry(&mut self, panel_id: PanelId, window_rect: Rect, update_model: bool) {
+    fn sync_live_panel_geometry(&mut self, panel_id: PanelId, window_rect: Rect) {
         self.panel_screen_rects.insert(panel_id, window_rect);
         self.panel_connection_points
             .insert(panel_id, Pos2::new(window_rect.center().x, window_rect.min.y + 14.0));
@@ -992,10 +993,6 @@ impl OrbitermApp {
         let canvas_size = Vec2::new(window_rect.width() / self.zoom, window_rect.height() / self.zoom);
         self.panel_canvas_rects
             .insert(panel_id, Rect::from_min_size(canvas_position, canvas_size));
-
-        if !update_model {
-            return;
-        }
 
         if let Some(workspace_id) = self.board.panel_workspace_id(panel_id)
             && let Some(workspace) = self.board.workspace(workspace_id)
@@ -1007,6 +1004,7 @@ impl OrbitermApp {
         } else {
             let _ = self.board.move_panel(panel_id, [canvas_position.x, canvas_position.y]);
         }
+        let _ = self.board.resize_panel(panel_id, [canvas_size.x, canvas_size.y]);
     }
 
     fn preview_panel_states(&self) -> Vec<PreviewPanelState> {
