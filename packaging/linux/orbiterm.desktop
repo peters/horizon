@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Orbiterm
+GenericName=Terminal Workspace Observatory
+Comment=Visual board for multi-agent terminal workspaces
+Exec=orbiterm
+Icon=orbiterm
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true
+StartupWMClass=orbiterm
