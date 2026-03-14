@@ -1,0 +1,20 @@
+workspaces:
+  - name: frontend
+    position: [40, 80]
+    terminals:
+      - name: claude-frontend
+        command: bash
+        cwd: ~/github
+      - name: codex-ui
+        command: bash
+        cwd: ~/github
+
+  - name: backend
+    position: [760, 80]
+    terminals:
+      - name: claude-api
+        command: bash
+        cwd: ~/github
+      - name: codex-services
+        command: bash
+        cwd: ~/github
