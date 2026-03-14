@@ -210,6 +210,33 @@ impl OrbitermApp {
         if ctx.input(|input| input.key_pressed(Key::Num0) && input.modifiers.ctrl) {
             self.fit_view_to_content(ctx);
         }
+
+        let alt_plus =
+            ctx.input(|input| input.modifiers.alt && (input.key_pressed(Key::Plus) || input.key_pressed(Key::Equals)));
+        let alt_minus = ctx.input(|input| input.modifiers.alt && input.key_pressed(Key::Minus));
+
+        if alt_plus || alt_minus {
+            let step = if alt_plus { 1.05 } else { 1.0 / 1.05 };
+            if self.terminal_accepts_keyboard_input(ctx) {
+                self.grow_focused_panel(step);
+            } else {
+                self.zoom = (self.zoom * step).clamp(0.45, 2.5);
+                self.pending_fit_at = None;
+            }
+        }
+    }
+
+    fn grow_focused_panel(&mut self, factor: f32) {
+        let Some(panel_id) = self.board.focused else {
+            return;
+        };
+        let Some(panel) = self.board.panel_mut(panel_id) else {
+            return;
+        };
+        let new_width = (panel.layout.size[0] * factor).clamp(DEFAULT_PANEL_WIDTH * 0.4, 2400.0);
+        let new_height = (panel.layout.size[1] * factor).clamp(DEFAULT_PANEL_HEIGHT * 0.4, 1600.0);
+        panel.resize_layout([new_width, new_height]);
+        self.schedule_fit_board(Duration::ZERO);
     }
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
@@ -921,7 +948,12 @@ impl OrbitermApp {
             });
 
         if let Some(window) = response {
+            let size_changed = panel_size_changed(canvas_size, window.response.rect.size());
             self.sync_live_panel_geometry(panel_id, window.response.rect);
+
+            if window.response.drag_stopped() && size_changed {
+                self.schedule_fit_board(Duration::ZERO);
+            }
 
             let (clicked_terminal, _) = window.inner.unwrap_or((false, false));
             if clicked_terminal || window.response.clicked() || window.response.drag_started() {
@@ -1290,6 +1322,11 @@ impl OrbitermApp {
             return;
         };
         if Instant::now() < run_at {
+            return;
+        }
+
+        if Self::canvas_view_rect(ctx).is_none() {
+            self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
             return;
         }
 
@@ -1840,7 +1877,6 @@ fn agent_panel_defaults(kind: PanelKind) -> (&'static str, PanelResume, bool) {
     }
 }
 
-#[cfg(test)]
 fn panel_size_changed(previous_size: Vec2, current_size: Vec2) -> bool {
     const RESIZE_EPSILON: f32 = 1.0;
 
