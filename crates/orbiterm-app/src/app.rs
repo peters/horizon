@@ -537,25 +537,19 @@ impl OrbitermApp {
     fn render_workspace_badges(&mut self, ctx: &Context) {
         self.workspace_badge_rects.clear();
         self.workspace_canvas_rects.clear();
-        let constrain_rect = Self::canvas_view_rect(ctx).unwrap_or_else(|| viewport_local_rect(ctx));
 
         let workspaces = self.workspace_snapshots();
 
         for (workspace_id, name, accent, _count, position) in workspaces {
             let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
-            let current_pos = self.canvas_to_screen(Pos2::new(position[0], position[1]));
-            let desired_rect = clamp_rect_to_bounds(
-                Rect::from_min_size(current_pos, Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT)),
-                constrain_rect,
-            );
+            let screen_pos = self.canvas_to_screen(Pos2::new(position[0], position[1]));
             let editing = self.is_renaming_workspace(workspace_id);
             let active = self.board.active_workspace == Some(workspace_id);
             let mut add_terminal = false;
             let mut title_rect = Rect::NOTHING;
 
             let area = egui::Area::new(Id::new(("workspace_badge", workspace_id.0)))
-                .current_pos(desired_rect.min)
-                .constrain_to(constrain_rect)
+                .current_pos(screen_pos)
                 .movable(!editing)
                 .sense(Sense::click_and_drag())
                 .order(Order::Foreground)
@@ -586,16 +580,13 @@ impl OrbitermApp {
                         });
                 });
 
-            let constrained_rect = clamp_rect_to_bounds(area.response.rect, constrain_rect);
-            self.workspace_badge_rects.insert(workspace_id, constrained_rect);
-
-            let canvas_position = self.screen_to_canvas(constrained_rect.min);
-            let previous_canvas_position = Pos2::new(position[0], position[1]);
-            let drag_delta = canvas_position - previous_canvas_position;
+            let badge_rect = area.response.rect;
+            self.workspace_badge_rects.insert(workspace_id, badge_rect);
             self.workspace_canvas_rects.insert(
                 workspace_id,
-                Rect::from_min_size(canvas_position, constrained_rect.size() / self.zoom),
+                Rect::from_min_size(self.screen_to_canvas(badge_rect.min), badge_rect.size() / self.zoom),
             );
+
             if area.response.clicked() || area.response.drag_started() {
                 self.board.focus_workspace(workspace_id);
             }
@@ -608,12 +599,12 @@ impl OrbitermApp {
             } else if area.response.double_clicked() {
                 self.fit_view_to_workspace(ctx, workspace_id);
             }
-            if self
-                .board
-                .move_workspace(workspace_id, [canvas_position.x, canvas_position.y])
-                && drag_delta != Vec2::ZERO
-            {
-                self.pending_fit_at = None;
+
+            if area.response.drag_stopped() {
+                let canvas_position = self.screen_to_canvas(badge_rect.min);
+                let _ = self
+                    .board
+                    .move_workspace(workspace_id, [canvas_position.x, canvas_position.y]);
             }
 
             if add_terminal {
@@ -679,29 +670,21 @@ impl OrbitermApp {
     }
 
     fn render_preview_panels(&mut self, ctx: &Context) {
-        let constrain_rect = Self::canvas_view_rect(ctx).unwrap_or_else(|| viewport_local_rect(ctx));
         for preview in self.preview_panel_states() {
-            let constrained_rect = clamp_rect_to_bounds(preview.screen_rect, constrain_rect);
-            let constrained_canvas_rect = Rect::from_min_size(
-                self.screen_to_canvas(constrained_rect.min),
-                constrained_rect.size() / self.zoom,
-            );
-            self.panel_canvas_rects
-                .insert(preview.panel_id, constrained_canvas_rect);
+            let screen_rect = preview.screen_rect;
+            let canvas_rect =
+                Rect::from_min_size(self.screen_to_canvas(screen_rect.min), screen_rect.size() / self.zoom);
+            self.panel_canvas_rects.insert(preview.panel_id, canvas_rect);
             self.panel_connection_points.insert(
                 preview.panel_id,
-                Pos2::new(
-                    constrained_rect.center().x,
-                    constrained_rect.min.y + constrained_rect.height() * 0.10,
-                ),
+                Pos2::new(screen_rect.center().x, screen_rect.min.y + screen_rect.height() * 0.10),
             );
 
             let response = egui::Area::new(Id::new(("panel_preview", preview.panel_id.0)))
-                .current_pos(constrained_rect.min)
-                .constrain_to(constrain_rect)
+                .current_pos(screen_rect.min)
                 .order(Order::Middle)
                 .show(ctx, |ui| {
-                    let (rect, response) = ui.allocate_exact_size(constrained_rect.size(), Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
                     paint_panel_preview(
                         ui,
                         rect,
@@ -725,7 +708,6 @@ impl OrbitermApp {
     }
 
     fn render_live_panels(&mut self, ctx: &Context) {
-        let constrain_rect = Self::canvas_view_rect(ctx).unwrap_or_else(|| viewport_local_rect(ctx));
         let interactive_workspace = self.board.active_workspace.and_then(|workspace_id| {
             (self.workspace_render_mode(workspace_id) == WorkspaceRenderMode::Interactive).then_some(workspace_id)
         });
@@ -751,7 +733,7 @@ impl OrbitermApp {
             let accent = accent.map_or(theme::BORDER_STRONG, |color| {
                 Color32::from_rgb(color.0, color.1, color.2)
             });
-            if self.render_live_panel(ctx, constrain_rect, panel_id, &title, accent, index) {
+            if self.render_live_panel(ctx, panel_id, &title, accent, index) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -762,7 +744,6 @@ impl OrbitermApp {
     fn render_live_panel(
         &mut self,
         ctx: &Context,
-        constrain_rect: Rect,
         panel_id: PanelId,
         title: &str,
         accent: Color32,
@@ -788,7 +769,6 @@ impl OrbitermApp {
             .current_pos(current_screen_position)
             .default_size(screen_size)
             .min_size(Vec2::new(DEFAULT_PANEL_WIDTH * 0.4, DEFAULT_PANEL_HEIGHT * 0.4))
-            .constrain_to(constrain_rect)
             .collapsible(false)
             .resizable(true)
             .frame(
@@ -1687,6 +1667,7 @@ fn should_create_workspace_from_canvas_gesture(
         && workspace_rects.iter().all(|rect| !rect.contains(pointer_position))
 }
 
+#[cfg(test)]
 fn clamp_rect_to_bounds(rect: Rect, bounds: Rect) -> Rect {
     let size = Vec2::new(rect.width().min(bounds.width()), rect.height().min(bounds.height()));
     let max_min_x = bounds.max.x - size.x;
