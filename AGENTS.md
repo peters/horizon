@@ -79,6 +79,12 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
 
+### UI Launch Troubleshooting
+
+- If Orbiterm "doesn't launch", first distinguish a crash from an unmapped window: `ps -C orbiterm` then `xwininfo -root -tree | rg Orbiterm`
+- When `xwininfo -id <window-id> -stats` reports `Map State: IsUnMapped`, the process created a root window but the desktop never surfaced it; inspect first-frame UI/input code before blaming PTY startup
+- When the map state is `IsViewable`, treat it as a focus, placement, or window-manager issue instead of a launch failure
+
 ## Architecture Notes
 
 ### Threading Model

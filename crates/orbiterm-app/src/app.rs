@@ -155,10 +155,24 @@ impl OrbitermApp {
     }
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let scroll_pan_enabled = self.scroll_pan_enabled(ctx);
+        let canvas_rect = Self::canvas_view_rect(ctx);
+        let focused_panel_rect = self
+            .board
+            .focused
+            .and_then(|panel_id| self.panel_screen_rects.get(&panel_id).copied());
+        let wants_keyboard_input = ctx.wants_keyboard_input();
         let pan_delta = ctx.input(|input| {
-            let drag_panning = Self::pointer_in_canvas_region(ctx)
+            let pointer_position = input.pointer.hover_pos();
+            let pointer_in_canvas = pointer_position
+                .zip(canvas_rect)
+                .is_some_and(|(position, rect)| rect.contains(position));
+            let drag_panning = pointer_in_canvas
                 && (input.pointer.middle_down() || (input.modifiers.ctrl && input.pointer.primary_down()));
+            let scroll_pan_enabled = pointer_in_canvas
+                && !wants_keyboard_input
+                && !focused_panel_rect
+                    .zip(pointer_position)
+                    .is_some_and(|(rect, position)| rect.contains(position));
 
             if drag_panning {
                 input.pointer.delta()
@@ -752,30 +766,6 @@ impl OrbitermApp {
         })
     }
 
-    fn pointer_in_canvas_region(ctx: &Context) -> bool {
-        let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
-            return false;
-        };
-
-        Self::canvas_view_rect(ctx).is_some_and(|rect| rect.contains(pointer_position))
-    }
-
-    fn scroll_pan_enabled(&self, ctx: &Context) -> bool {
-        if ctx.wants_keyboard_input() || !Self::pointer_in_canvas_region(ctx) {
-            return false;
-        }
-
-        let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
-            return false;
-        };
-
-        !self
-            .board
-            .focused
-            .and_then(|panel_id| self.panel_screen_rects.get(&panel_id))
-            .is_some_and(|rect| rect.contains(pointer_position))
-    }
-
     fn fit_view_to_content(&mut self, ctx: &Context) {
         let Some(content_bounds) = self.content_bounds() else {
             self.reset_view(ctx);
@@ -826,6 +816,9 @@ impl eframe::App for OrbitermApp {
         if !self.theme_applied {
             theme::apply(ctx);
             self.theme_applied = true;
+            // eframe creates the root window hidden and normally shows it after the first frame.
+            // On some X11 setups that handoff can fail, so we force the root viewport visible here.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
 
         self.handle_zoom(ctx);
