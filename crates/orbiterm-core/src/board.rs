@@ -354,21 +354,14 @@ impl Board {
     }
 
     /// Compute the canvas position for the next workspace so it doesn't
-    /// overlap with existing ones.
+    /// overlap with existing ones.  Uses fixed-width slots so workspaces
+    /// never collide even when fully populated (3 columns).
     fn next_workspace_position(&self) -> [f32; 2] {
         let mut right_edge: f32 = 0.0;
         for ws in &self.workspaces {
-            if let Some((_, max)) = self.workspace_bounds(ws.id) {
-                right_edge = right_edge.max(max[0]);
-            } else {
-                right_edge = right_edge.max(ws.position[0] + DEFAULT_PANEL_SIZE[0] + 2.0 * WS_INNER_PAD);
-            }
+            right_edge = right_edge.max(ws.position[0] + workspace_slot_width());
         }
-        if right_edge > 0.0 {
-            [right_edge + WORKSPACE_GAP, 0.0]
-        } else {
-            [0.0, 0.0]
-        }
+        [right_edge, 0.0]
     }
 
     fn default_panel_position(&self, workspace: WorkspaceId) -> [f32; 2] {
@@ -403,6 +396,13 @@ impl Default for Board {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Fixed horizontal space reserved per workspace (3 panel columns + padding + gap).
+fn workspace_slot_width() -> f32 {
+    let columns = 3.0;
+    let content = columns * DEFAULT_PANEL_SIZE[0] + (columns - 1.0) * TILE_GAP;
+    content + 2.0 * WS_INNER_PAD + WORKSPACE_GAP
 }
 
 fn tiled_panel_position(origin: [f32; 2], index: usize) -> [f32; 2] {
