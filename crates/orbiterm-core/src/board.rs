@@ -5,6 +5,8 @@ use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const TILE_GAP: f32 = 20.0;
+const WS_INNER_PAD: f32 = 20.0;
+const WORKSPACE_GAP: f32 = 80.0;
 
 pub struct Board {
     pub panels: Vec<Panel>,
@@ -42,16 +44,17 @@ impl Board {
 
         for ws_cfg in &config.workspaces {
             let ws_id = board.create_workspace(&ws_cfg.name);
-            let workspace_origin = ws_cfg.position.unwrap_or_default();
 
             if let Some(pos) = ws_cfg.position {
                 board.move_workspace(ws_id, pos);
             }
 
-            for (workspace_index, term_cfg) in ws_cfg.terminals.iter().enumerate() {
-                let relative_position = term_cfg
+            let ws_origin = board.workspace(ws_id).map_or([0.0, 0.0], |ws| ws.position);
+
+            for term_cfg in &ws_cfg.terminals {
+                let position = term_cfg
                     .position
-                    .unwrap_or_else(|| tiled_panel_position(workspace_index));
+                    .map(|pos| [ws_origin[0] + pos[0], ws_origin[1] + pos[1]]);
                 let opts = PanelOptions {
                     name: Some(term_cfg.name.clone()),
                     command: term_cfg.command.clone(),
@@ -61,10 +64,7 @@ impl Board {
                     cols: term_cfg.cols,
                     kind: term_cfg.kind,
                     resume: term_cfg.resume.clone(),
-                    position: Some([
-                        workspace_origin[0] + relative_position[0],
-                        workspace_origin[1] + relative_position[1],
-                    ]),
+                    position,
                     size: term_cfg.size,
                 };
                 board.create_panel(opts, ws_id)?;
@@ -86,9 +86,18 @@ impl Board {
         let id = WorkspaceId(self.next_workspace_id);
         self.next_workspace_id += 1;
         let color_idx = self.workspaces.len();
-        self.workspaces.push(Workspace::new(id, name.to_string(), color_idx));
+        let position = self.next_workspace_position();
+        let mut ws = Workspace::new(id, name.to_string(), color_idx);
+        ws.position = position;
+        self.workspaces.push(ws);
         self.active_workspace.get_or_insert(id);
-        tracing::info!("created workspace '{}' ({})", name, id.0);
+        tracing::info!(
+            "created workspace '{}' ({}) at [{}, {}]",
+            name,
+            id.0,
+            position[0],
+            position[1]
+        );
         id
     }
 
@@ -157,12 +166,7 @@ impl Board {
         if let Some(index) = self.workspaces.iter().position(|workspace| workspace.id == id) {
             let removed = self.workspaces.remove(index);
             for panel_id in removed.panels {
-                if let Some(panel) = self.panel_mut(panel_id) {
-                    panel.workspace_id = target_id;
-                }
-                if let Some(target) = self.workspace_mut(target_id) {
-                    target.add_panel(panel_id);
-                }
+                self.assign_panel_to_workspace(panel_id, target_id);
             }
         }
 
@@ -172,15 +176,22 @@ impl Board {
         }
     }
 
+    /// Move a panel to a different workspace, physically relocating it to
+    /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
         for ws in &mut self.workspaces {
             ws.remove_panel(panel_id);
         }
+
+        // Compute new position before adding, so it finds a truly free tile.
+        let new_position = self.default_panel_position(workspace_id);
+
         if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
             ws.add_panel(panel_id);
         }
         if let Some(panel) = self.panel_mut(panel_id) {
             panel.workspace_id = workspace_id;
+            panel.move_to(new_position);
         }
     }
 
@@ -342,11 +353,29 @@ impl Board {
             })
     }
 
+    /// Compute the canvas position for the next workspace so it doesn't
+    /// overlap with existing ones.
+    fn next_workspace_position(&self) -> [f32; 2] {
+        let mut right_edge: f32 = 0.0;
+        for ws in &self.workspaces {
+            if let Some((_, max)) = self.workspace_bounds(ws.id) {
+                right_edge = right_edge.max(max[0]);
+            } else {
+                right_edge = right_edge.max(ws.position[0] + DEFAULT_PANEL_SIZE[0] + 2.0 * WS_INNER_PAD);
+            }
+        }
+        if right_edge > 0.0 {
+            [right_edge + WORKSPACE_GAP, 0.0]
+        } else {
+            [0.0, 0.0]
+        }
+    }
+
     fn default_panel_position(&self, workspace: WorkspaceId) -> [f32; 2] {
         if let Some(ws) = self.workspace(workspace) {
             return self.first_free_tile_position(ws);
         }
-        tiled_panel_position(0)
+        tiled_panel_position([0.0, 0.0], 0)
     }
 
     fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
@@ -357,15 +386,16 @@ impl Board {
             .map(|p| p.layout.position)
             .collect();
 
+        let origin = workspace.position;
         let search_limit = occupied.len();
         for index in 0..=search_limit {
-            let candidate = tiled_panel_position(index);
+            let candidate = tiled_panel_position(origin, index);
             if !position_occupied(&occupied, candidate) {
                 return candidate;
             }
         }
 
-        tiled_panel_position(search_limit)
+        tiled_panel_position(origin, search_limit)
     }
 }
 
@@ -375,12 +405,12 @@ impl Default for Board {
     }
 }
 
-fn tiled_panel_position(index: usize) -> [f32; 2] {
+fn tiled_panel_position(origin: [f32; 2], index: usize) -> [f32; 2] {
     let column = usize_to_f32(index % 3);
     let row = usize_to_f32(index / 3);
     [
-        90.0 + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
-        108.0 + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
+        origin[0] + WS_INNER_PAD + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
+        origin[1] + WS_INNER_PAD + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
     ]
 }
 
@@ -466,15 +496,53 @@ mod tests {
     }
 
     #[test]
-    fn workspace_panel_positions_are_relative() {
+    fn panels_tile_within_workspace_region() {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
+        let ws_pos = board.workspace(workspace_id).unwrap().position;
+
         let panel_id = board
             .create_panel(PanelOptions::default(), workspace_id)
             .expect("panel should spawn");
         let panel = board.panel(panel_id).expect("panel should exist");
 
-        assert!((panel.layout.position[0] - 90.0).abs() <= f32::EPSILON);
-        assert!((panel.layout.position[1] - 108.0).abs() <= f32::EPSILON);
+        // First panel tiles at workspace origin + inner padding.
+        assert!((panel.layout.position[0] - (ws_pos[0] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+        assert!((panel.layout.position[1] - (ws_pos[1] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn workspaces_are_placed_apart() {
+        let mut board = Board::new();
+        let ws1 = board.create_workspace("first");
+        board
+            .create_panel(PanelOptions::default(), ws1)
+            .expect("panel should spawn");
+        let ws2 = board.create_workspace("second");
+
+        let pos1 = board.workspace(ws1).unwrap().position;
+        let pos2 = board.workspace(ws2).unwrap().position;
+
+        // Second workspace must start to the right of the first.
+        assert!(pos2[0] > pos1[0] + DEFAULT_PANEL_SIZE[0]);
+    }
+
+    #[test]
+    fn assign_panel_moves_it_to_target_workspace() {
+        let mut board = Board::new();
+        let ws1 = board.create_workspace("source");
+        let ws2 = board.create_workspace("target");
+
+        let panel_id = board
+            .create_panel(PanelOptions::default(), ws1)
+            .expect("panel should spawn");
+
+        let ws2_pos = board.workspace(ws2).unwrap().position;
+        board.assign_panel_to_workspace(panel_id, ws2);
+
+        let panel = board.panel(panel_id).unwrap();
+        assert_eq!(panel.workspace_id, ws2);
+        // Panel should be within the target workspace's region.
+        assert!(panel.layout.position[0] >= ws2_pos[0]);
     }
 }
