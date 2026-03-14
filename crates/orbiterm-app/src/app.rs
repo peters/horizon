@@ -15,8 +15,8 @@ const DEFAULT_PANEL_WIDTH: f32 = 520.0;
 const DEFAULT_PANEL_HEIGHT: f32 = 340.0;
 const PANEL_MIN_WIDTH: f32 = 280.0;
 const PANEL_MIN_HEIGHT: f32 = 180.0;
-const PANEL_COLUMN_SPACING: f32 = 340.0;
-const PANEL_ROW_SPACING: f32 = 240.0;
+const PANEL_COLUMN_SPACING: f32 = 540.0;
+const PANEL_ROW_SPACING: f32 = 360.0;
 const TITLEBAR_HEIGHT: f32 = 38.0;
 const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
@@ -1259,7 +1259,7 @@ impl OrbitermApp {
     }
 
     fn fit_view_to_content(&mut self, ctx: &Context) {
-        self.fit_bounds(ctx, self.fit_board_bounds());
+        self.fit_bounds(ctx, self.fit_board_bounds(), 0.45);
     }
 
     fn fit_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
@@ -1268,10 +1268,10 @@ impl OrbitermApp {
             .board
             .workspace(workspace_id)
             .map(|workspace| self.workspace_canvas_bounds(workspace));
-        self.fit_bounds(ctx, bounds);
+        self.fit_bounds(ctx, bounds, 1.0);
     }
 
-    fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>) {
+    fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>, min_zoom: f32) {
         let Some(content_bounds) = bounds else {
             self.reset_view(ctx);
             self.pending_auto_board_action_at = None;
@@ -1291,7 +1291,7 @@ impl OrbitermApp {
         let content_size = content_bounds.size();
         let target_zoom = (available_size.x / content_size.x)
             .min(available_size.y / content_size.y)
-            .clamp(0.45, 2.5);
+            .clamp(min_zoom, 2.5);
 
         self.zoom = target_zoom;
         self.pan_offset = canvas_rect.center().to_vec2() - content_bounds.center().to_vec2() * target_zoom;

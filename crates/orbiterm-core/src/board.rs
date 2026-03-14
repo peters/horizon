@@ -4,6 +4,8 @@ use crate::error::Result;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::workspace::{Workspace, WorkspaceId};
 
+const TILE_GAP: f32 = 20.0;
+
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
@@ -287,20 +289,52 @@ impl Board {
             })
     }
 
-    fn default_panel_position(&self, workspace: Option<WorkspaceId>, panel_id: PanelId) -> [f32; 2] {
+    fn default_panel_position(&self, workspace: Option<WorkspaceId>, _panel_id: PanelId) -> [f32; 2] {
         if let Some(workspace_id) = workspace
             && let Some(workspace) = self.workspace(workspace_id)
         {
-            let panel_index = workspace.panels.len();
-            return tiled_panel_position(panel_index);
+            return self.first_free_tile_position(workspace);
         }
 
-        let fallback_index = self
+        self.first_free_orphan_position()
+    }
+
+    fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
+        let occupied: Vec<[f32; 2]> = workspace
             .panels
             .iter()
-            .position(|panel| panel.id == panel_id)
-            .unwrap_or(self.panels.len());
-        orphan_panel_position(fallback_index)
+            .filter_map(|id| self.panel(*id))
+            .map(|p| p.layout.position)
+            .collect();
+
+        let search_limit = occupied.len();
+        for index in 0..=search_limit {
+            let candidate = tiled_panel_position(index);
+            if !position_occupied(&occupied, candidate) {
+                return candidate;
+            }
+        }
+
+        tiled_panel_position(search_limit)
+    }
+
+    fn first_free_orphan_position(&self) -> [f32; 2] {
+        let occupied: Vec<[f32; 2]> = self
+            .panels
+            .iter()
+            .filter(|p| p.workspace_id.is_none())
+            .map(|p| p.layout.position)
+            .collect();
+
+        let search_limit = occupied.len();
+        for index in 0..=search_limit {
+            let candidate = orphan_panel_position(index);
+            if !position_occupied(&occupied, candidate) {
+                return candidate;
+            }
+        }
+
+        orphan_panel_position(search_limit)
     }
 }
 
@@ -313,13 +347,25 @@ impl Default for Board {
 fn tiled_panel_position(index: usize) -> [f32; 2] {
     let column = usize_to_f32(index % 3);
     let row = usize_to_f32(index / 3);
-    [90.0 + column * 340.0, 108.0 + row * 240.0]
+    [
+        90.0 + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
+        108.0 + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
+    ]
 }
 
 fn orphan_panel_position(index: usize) -> [f32; 2] {
     let column = usize_to_f32(index % 3);
     let row = usize_to_f32(index / 3);
-    [140.0 + column * 340.0, 140.0 + row * 240.0]
+    [
+        140.0 + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
+        140.0 + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
+    ]
+}
+
+fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
+    positions
+        .iter()
+        .any(|pos| (pos[0] - candidate[0]).abs() < 1.0 && (pos[1] - candidate[1]).abs() < 1.0)
 }
 
 fn usize_to_f32(value: usize) -> f32 {
