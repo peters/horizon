@@ -1,11 +1,16 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::error::{Error, Result};
 use crate::terminal::Terminal;
+
+const MAX_OUTPUT_CHUNKS_PER_FRAME: usize = 24;
+const MAX_OUTPUT_BYTES_PER_FRAME: usize = 128 * 1024;
+const PTY_RESIZE_INTERVAL: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
@@ -40,6 +45,8 @@ pub struct Panel {
     writer: Box<dyn Write + Send>,
     output_rx: mpsc::Receiver<Vec<u8>>,
     master: Box<dyn portable_pty::MasterPty + Send>,
+    pending_pty_resize: Option<(u16, u16)>,
+    last_pty_resize_at: Instant,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -107,15 +114,30 @@ impl Panel {
             writer,
             output_rx: rx,
             master: pair.master,
+            pending_pty_resize: None,
+            last_pty_resize_at: Instant::now() - PTY_RESIZE_INTERVAL,
             _child: child,
         })
     }
 
     /// Drain pending PTY output and feed to the terminal emulator.
     pub fn process_output(&mut self) {
-        while let Ok(bytes) = self.output_rx.try_recv() {
+        self.flush_pending_pty_resize();
+
+        let mut processed_bytes = 0_usize;
+        let mut processed_chunks = 0_usize;
+        while processed_chunks < MAX_OUTPUT_CHUNKS_PER_FRAME && processed_bytes < MAX_OUTPUT_BYTES_PER_FRAME {
+            let Ok(bytes) = self.output_rx.try_recv() else {
+                break;
+            };
+
+            processed_bytes += bytes.len();
             self.terminal.process(&bytes);
+            processed_chunks += 1;
         }
+
+        self.flush_pending_pty_resize();
+
         // Only override title from terminal escape sequences if no custom name was set
         if !self.has_custom_name {
             let title = self.terminal.title();
@@ -131,12 +153,30 @@ impl Panel {
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        if rows == self.terminal.rows() && cols == self.terminal.cols() {
+            return;
+        }
+
         self.terminal.resize(rows, cols);
+        self.pending_pty_resize = Some((rows, cols));
+        self.flush_pending_pty_resize();
+    }
+
+    fn flush_pending_pty_resize(&mut self) {
+        if self.last_pty_resize_at.elapsed() < PTY_RESIZE_INTERVAL {
+            return;
+        }
+
+        let Some((rows, cols)) = self.pending_pty_resize.take() else {
+            return;
+        };
+
         let _ = self.master.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         });
+        self.last_pty_resize_at = Instant::now();
     }
 }
