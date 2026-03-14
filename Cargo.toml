@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/tg-core", "crates/tg-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+struct_excessive_bools = "allow"
+wildcard_imports = "allow"
+
+[workspace.dependencies]
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+vt100 = "0.15"
+portable-pty = "0.9"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui = "0.29"
+
+[profile.release]
+lto = true
+strip = true
