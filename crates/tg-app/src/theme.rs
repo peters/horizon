@@ -1,100 +1,116 @@
 use egui::{Color32, Rounding, Shadow, Stroke, Style, Vec2, Visuals, epaint};
 
-// ── Base palette — very dark, matching reference terminal design ─────────────
-pub const BG: Color32 = Color32::from_rgb(12, 12, 18);
-pub const BG_ELEVATED: Color32 = Color32::from_rgb(20, 20, 30);
-pub const PANEL_BG: Color32 = Color32::from_rgb(16, 16, 24);
-pub const FG: Color32 = Color32::from_rgb(190, 195, 210);
-pub const FG_DIM: Color32 = Color32::from_rgb(90, 95, 110);
-pub const CURSOR: Color32 = Color32::from_rgb(200, 200, 220);
-pub const GRID_DOT: Color32 = Color32::from_rgb(30, 30, 42);
-pub const ACCENT: Color32 = Color32::from_rgb(120, 160, 230);
-pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(36, 36, 52);
-pub const TITLEBAR_BG: Color32 = Color32::from_rgb(10, 10, 16);
-pub const TOOLBAR_BG: Color32 = Color32::from_rgb(14, 14, 22);
-pub const STATUSBAR_BG: Color32 = Color32::from_rgb(10, 10, 16);
+pub const BG: Color32 = Color32::from_rgb(7, 10, 16);
+pub const BG_ELEVATED: Color32 = Color32::from_rgb(12, 16, 24);
+pub const PANEL_BG: Color32 = Color32::from_rgb(15, 19, 28);
+pub const PANEL_BG_ALT: Color32 = Color32::from_rgb(21, 26, 37);
+pub const FG: Color32 = Color32::from_rgb(224, 230, 241);
+pub const FG_SOFT: Color32 = Color32::from_rgb(170, 181, 199);
+pub const FG_DIM: Color32 = Color32::from_rgb(108, 120, 142);
+pub const CURSOR: Color32 = Color32::from_rgb(196, 223, 255);
+pub const GRID_DOT: Color32 = Color32::from_rgb(28, 34, 46);
+pub const ACCENT: Color32 = Color32::from_rgb(116, 162, 247);
+pub const ACCENT_WARM: Color32 = Color32::from_rgb(244, 155, 82);
+pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(37, 46, 61);
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(63, 78, 101);
+pub const TITLEBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
+pub const TOOLBAR_BG: Color32 = Color32::from_rgb(11, 15, 22);
+pub const STATUSBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
+pub const VIEWPORT_HANDLE: Color32 = Color32::from_rgb(122, 133, 151);
+pub const CANVAS_COOL_GLOW: Color32 = Color32::from_rgba_premultiplied(77, 112, 220, 20);
+pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_premultiplied(255, 146, 80, 28);
 
-// Traffic-light buttons
-pub const BTN_CLOSE: Color32 = Color32::from_rgb(237, 106, 94);
-pub const BTN_MINIMIZE: Color32 = Color32::from_rgb(245, 191, 79);
-pub const BTN_MAXIMIZE: Color32 = Color32::from_rgb(98, 197, 84);
+pub const BTN_CLOSE: Color32 = Color32::from_rgb(235, 96, 88);
+pub const BTN_MINIMIZE: Color32 = Color32::from_rgb(243, 189, 85);
+pub const BTN_MAXIMIZE: Color32 = Color32::from_rgb(111, 207, 111);
 
-/// Standard 16-color terminal palette — rich, vivid colors on dark background
 const PALETTE: [Color32; 16] = [
-    Color32::from_rgb(50, 52, 66),    // 0  black
-    Color32::from_rgb(220, 90, 90),   // 1  red
-    Color32::from_rgb(90, 200, 90),   // 2  green
-    Color32::from_rgb(220, 190, 100), // 3  yellow
-    Color32::from_rgb(90, 140, 220),  // 4  blue
-    Color32::from_rgb(190, 130, 210), // 5  magenta
-    Color32::from_rgb(90, 200, 190),  // 6  cyan
-    Color32::from_rgb(180, 185, 200), // 7  white
-    Color32::from_rgb(70, 72, 90),    // 8  bright black
-    Color32::from_rgb(240, 110, 110), // 9  bright red
-    Color32::from_rgb(110, 230, 110), // 10 bright green
-    Color32::from_rgb(240, 210, 120), // 11 bright yellow
-    Color32::from_rgb(110, 160, 240), // 12 bright blue
-    Color32::from_rgb(210, 150, 230), // 13 bright magenta
-    Color32::from_rgb(110, 220, 210), // 14 bright cyan
-    Color32::from_rgb(210, 215, 230), // 15 bright white
+    Color32::from_rgb(45, 49, 62),
+    Color32::from_rgb(227, 107, 117),
+    Color32::from_rgb(143, 213, 130),
+    Color32::from_rgb(233, 190, 109),
+    Color32::from_rgb(116, 162, 247),
+    Color32::from_rgb(202, 151, 234),
+    Color32::from_rgb(102, 212, 214),
+    Color32::from_rgb(196, 204, 219),
+    Color32::from_rgb(74, 80, 97),
+    Color32::from_rgb(242, 130, 135),
+    Color32::from_rgb(170, 224, 158),
+    Color32::from_rgb(244, 207, 133),
+    Color32::from_rgb(147, 187, 255),
+    Color32::from_rgb(224, 178, 247),
+    Color32::from_rgb(141, 225, 227),
+    Color32::from_rgb(231, 236, 245),
 ];
 
-/// Apply the full dark theme to egui.
 pub fn apply(ctx: &egui::Context) {
     let mut style = Style::default();
 
-    style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+    style.spacing.item_spacing = Vec2::new(8.0, 8.0);
     style.spacing.window_margin = epaint::Margin::same(0.0);
-    style.spacing.button_padding = Vec2::new(10.0, 4.0);
+    style.spacing.button_padding = Vec2::new(12.0, 6.0);
+    style.visuals = visuals();
 
-    let mut v = Visuals::dark();
-
-    v.window_rounding = Rounding::same(12.0);
-    v.window_shadow = Shadow {
-        offset: [0.0, 8.0].into(),
-        blur: 28.0,
-        spread: 2.0,
-        color: Color32::from_black_alpha(140),
-    };
-    v.window_stroke = Stroke::new(0.5, BORDER_SUBTLE);
-    v.window_fill = PANEL_BG;
-    v.window_highlight_topmost = false;
-
-    v.panel_fill = TOOLBAR_BG;
-
-    v.widgets.noninteractive.bg_fill = BG_ELEVATED;
-    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, FG_DIM);
-    v.widgets.noninteractive.rounding = Rounding::same(6.0);
-
-    v.widgets.inactive.bg_fill = Color32::from_rgb(28, 28, 42);
-    v.widgets.inactive.fg_stroke = Stroke::new(1.0, FG_DIM);
-    v.widgets.inactive.rounding = Rounding::same(6.0);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(24, 24, 38);
-
-    v.widgets.hovered.bg_fill = Color32::from_rgb(38, 38, 56);
-    v.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
-    v.widgets.hovered.rounding = Rounding::same(6.0);
-
-    v.widgets.active.bg_fill = Color32::from_rgb(48, 48, 70);
-    v.widgets.active.fg_stroke = Stroke::new(1.0, FG);
-    v.widgets.active.rounding = Rounding::same(6.0);
-
-    v.selection.bg_fill = Color32::from_rgba_premultiplied(120, 160, 230, 50);
-    v.selection.stroke = Stroke::new(1.0, ACCENT);
-
-    v.extreme_bg_color = BG;
-    v.faint_bg_color = Color32::from_rgb(18, 18, 28);
-    v.popup_shadow = Shadow {
-        offset: [0.0, 4.0].into(),
-        blur: 16.0,
-        spread: 0.0,
-        color: Color32::from_black_alpha(120),
-    };
-
-    v.override_text_color = Some(FG);
-
-    style.visuals = v;
     ctx.set_style(style);
+}
+
+pub fn blend(base: Color32, tint: Color32, tint_amount: f32) -> Color32 {
+    let amount = tint_amount.clamp(0.0, 1.0);
+    let keep = 1.0 - amount;
+
+    Color32::from_rgb(
+        blend_channel(base.r(), tint.r(), keep, amount),
+        blend_channel(base.g(), tint.g(), keep, amount),
+        blend_channel(base.b(), tint.b(), keep, amount),
+    )
+}
+
+pub fn alpha(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+pub fn workspace_fill(accent: Color32) -> Color32 {
+    blend(PANEL_BG_ALT, accent, 0.24)
+}
+
+pub fn workspace_border(accent: Color32, active: bool) -> Color32 {
+    let border = blend(BORDER_STRONG, accent, if active { 0.68 } else { 0.52 });
+    alpha(border, if active { 255 } else { 220 })
+}
+
+pub fn workspace_shadow(accent: Color32) -> Shadow {
+    Shadow {
+        offset: [0.0, 4.0].into(),
+        blur: 18.0,
+        spread: 1.0,
+        color: alpha(accent, 42),
+    }
+}
+
+pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
+    if focused {
+        blend(BORDER_STRONG, accent, 0.78)
+    } else {
+        alpha(blend(BORDER_SUBTLE, accent, 0.32), 196)
+    }
+}
+
+pub fn panel_shadow(accent: Color32, focused: bool) -> Shadow {
+    if focused {
+        Shadow {
+            offset: [0.0, 10.0].into(),
+            blur: 28.0,
+            spread: 2.0,
+            color: alpha(accent, 36),
+        }
+    } else {
+        Shadow {
+            offset: [0.0, 6.0].into(),
+            blur: 18.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(96),
+        }
+    }
 }
 
 pub fn vt100_color_to_egui(color: vt100::Color, is_fg: bool) -> Color32 {
@@ -121,5 +137,69 @@ pub fn vt100_color_to_egui(color: vt100::Color, is_fg: bool) -> Color32 {
             }
         }
         vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+    }
+}
+
+fn visuals() -> Visuals {
+    let mut visuals = Visuals::dark();
+
+    visuals.window_rounding = Rounding::same(14.0);
+    visuals.window_shadow = Shadow {
+        offset: [0.0, 10.0].into(),
+        blur: 28.0,
+        spread: 2.0,
+        color: Color32::from_black_alpha(128),
+    };
+    visuals.window_stroke = Stroke::new(1.0, BORDER_SUBTLE);
+    visuals.window_fill = PANEL_BG;
+    visuals.window_highlight_topmost = false;
+
+    visuals.panel_fill = TOOLBAR_BG;
+    visuals.faint_bg_color = PANEL_BG_ALT;
+    visuals.extreme_bg_color = BG;
+    visuals.code_bg_color = BG_ELEVATED;
+    visuals.override_text_color = Some(FG);
+    visuals.resize_corner_size = 15.0;
+
+    visuals.widgets.noninteractive.bg_fill = BG_ELEVATED;
+    visuals.widgets.noninteractive.weak_bg_fill = PANEL_BG_ALT;
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, FG_DIM);
+    visuals.widgets.noninteractive.rounding = Rounding::same(10.0);
+
+    visuals.widgets.inactive.bg_fill = PANEL_BG_ALT;
+    visuals.widgets.inactive.weak_bg_fill = BG_ELEVATED;
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, FG_SOFT);
+    visuals.widgets.inactive.rounding = Rounding::same(10.0);
+
+    visuals.widgets.hovered.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.16);
+    visuals.widgets.hovered.weak_bg_fill = BG_ELEVATED;
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
+    visuals.widgets.hovered.rounding = Rounding::same(10.0);
+
+    visuals.widgets.active.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.22);
+    visuals.widgets.active.weak_bg_fill = BG_ELEVATED;
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0, FG);
+    visuals.widgets.active.rounding = Rounding::same(10.0);
+
+    visuals.selection.bg_fill = alpha(ACCENT, 54);
+    visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    visuals.popup_shadow = Shadow {
+        offset: [0.0, 6.0].into(),
+        blur: 22.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(118),
+    };
+
+    visuals
+}
+
+fn blend_channel(base: u8, tint: u8, keep: f32, amount: f32) -> u8 {
+    let mixed = ((f32::from(base) * keep) + (f32::from(tint) * amount))
+        .round()
+        .clamp(0.0, 255.0);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        mixed as u8
     }
 }

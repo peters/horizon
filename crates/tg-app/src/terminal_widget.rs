@@ -22,20 +22,18 @@ impl<'a> TerminalView<'a> {
         let char_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
         let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
 
-        // Fit terminal dimensions to available space
         let available = ui.available_size();
-        let new_cols = (available.x / char_width).max(1.0) as u16;
-        let new_rows = (available.y / line_height).max(1.0) as u16;
+        let terminal_rect_size = Vec2::new(available.x.max(char_width), available.y.max(line_height));
+        let new_cols = quantize_dimension(available.x / char_width);
+        let new_rows = quantize_dimension(available.y / line_height);
 
         if new_cols != self.panel.terminal.cols() || new_rows != self.panel.terminal.rows() {
             self.panel.resize(new_rows, new_cols);
         }
 
         let screen = self.panel.terminal.screen();
-        let (rows, cols) = screen.size();
 
-        let desired_size = Vec2::new(f32::from(cols) * char_width, f32::from(rows) * line_height);
-        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(terminal_rect_size, egui::Sense::click());
 
         if response.clicked() {
             response.request_focus();
@@ -91,7 +89,6 @@ struct GridMetrics {
 fn render_grid(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
-    // Terminal background with rounded corners
     painter.rect_filled(rect, Rounding::same(6.0), theme::PANEL_BG);
 
     let (rows, cols) = screen.size();
@@ -143,5 +140,18 @@ fn render_cursor(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &Gr
             Rounding::same(1.0),
             egui::Stroke::new(1.0, theme::CURSOR.gamma_multiply(0.4)),
         );
+    }
+}
+
+fn quantize_dimension(value: f32) -> u16 {
+    let clamped = if value.is_finite() {
+        value.floor().clamp(1.0, f32::from(u16::MAX))
+    } else {
+        1.0
+    };
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        clamped as u16
     }
 }
