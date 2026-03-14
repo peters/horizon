@@ -20,7 +20,6 @@ const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
-const INTERACTIVE_ZOOM_THRESHOLD: f32 = 0.85;
 const AUTO_BOARD_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(160);
 const AUTO_BOARD_ZOOM_STEP: f32 = 0.92;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
@@ -160,6 +159,21 @@ impl OrbitermApp {
     fn reset_view(&mut self, _ctx: &Context) {
         self.zoom = 1.0;
         self.pan_offset = Vec2::ZERO;
+    }
+
+    fn remove_empty_workspaces(&mut self) {
+        let empty_ids: Vec<WorkspaceId> = self
+            .board
+            .workspaces
+            .iter()
+            .filter(|ws| ws.panels.is_empty())
+            .map(|ws| ws.id)
+            .collect();
+        for id in empty_ids {
+            self.board.remove_workspace(id);
+            self.workspace_badge_rects.remove(&id);
+            self.workspace_canvas_rects.remove(&id);
+        }
     }
 
     fn reset_layout_cache(&mut self) {
@@ -1196,7 +1210,7 @@ impl OrbitermApp {
     }
 
     fn workspace_render_mode(&self, workspace_id: WorkspaceId) -> WorkspaceRenderMode {
-        if self.board.active_workspace == Some(workspace_id) && self.zoom >= INTERACTIVE_ZOOM_THRESHOLD {
+        if self.board.active_workspace == Some(workspace_id) {
             WorkspaceRenderMode::Interactive
         } else if self.zoom >= WORKSPACE_PREVIEW_ZOOM {
             WorkspaceRenderMode::Preview
@@ -1404,6 +1418,7 @@ impl eframe::App for OrbitermApp {
         }
 
         if closed_any_panels {
+            self.remove_empty_workspaces();
             if let Some(ws) = self.board.active_workspace {
                 self.pending_fit_workspace = Some(ws);
             } else {
