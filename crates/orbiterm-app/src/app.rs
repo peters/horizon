@@ -6,7 +6,7 @@ use egui::{
     Align, Button, Color32, Context, Id, Key, LayerId, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Shadow,
     Stroke, Vec2, epaint::CubicBezierShape,
 };
-use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
+use orbiterm_core::{Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, Workspace, WorkspaceId};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -21,12 +21,32 @@ const TITLEBAR_HEIGHT: f32 = 38.0;
 const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
+const WORKSPACE_INTERACTIVE_ZOOM: f32 = 0.78;
+const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
     workspace_id: WorkspaceId,
     draft: String,
     should_focus: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceRenderMode {
+    Interactive,
+    Preview,
+    Badge,
+}
+
+struct PreviewPanelState {
+    workspace_id: WorkspaceId,
+    panel_id: PanelId,
+    title: String,
+    accent: Color32,
+    screen_rect: Rect,
+    canvas_rect: Rect,
+    focused: bool,
+    lines: Vec<String>,
 }
 
 pub struct OrbitermApp {
@@ -229,9 +249,7 @@ impl OrbitermApp {
         }
 
         if ctx.input(|input| input.key_pressed(Key::N) && input.modifiers.ctrl && input.modifiers.shift) {
-            let workspace = self.board.workspaces.first().map(|item| item.id);
-            let _ = self.board.create_panel(PanelOptions::default(), workspace);
-            self.schedule_auto_fit();
+            self.create_panel_in_workspace(None);
         }
 
         if ctx.input(|input| input.key_pressed(Key::Comma) && input.modifiers.ctrl) {
@@ -251,6 +269,7 @@ impl OrbitermApp {
         if let Some(workspace) = self.board.workspace_mut(workspace_id) {
             workspace.position = [position.x, position.y];
         }
+        self.board.focus_workspace(workspace_id);
 
         self.schedule_auto_fit();
     }
@@ -264,9 +283,39 @@ impl OrbitermApp {
         self.screen_to_canvas(center + Vec2::new(-180.0, -90.0))
     }
 
+    fn preferred_workspace(&self, workspace_id: Option<WorkspaceId>) -> Option<WorkspaceId> {
+        workspace_id
+            .or(self.board.active_workspace)
+            .or_else(|| self.board.workspaces.first().map(|workspace| workspace.id))
+    }
+
     fn create_panel_in_workspace(&mut self, workspace_id: Option<WorkspaceId>) {
-        let _ = self.board.create_panel(PanelOptions::default(), workspace_id);
-        self.schedule_auto_fit();
+        self.create_panel_with_options(workspace_id, PanelOptions::default());
+    }
+
+    fn create_agent_panel(&mut self, workspace_id: Option<WorkspaceId>, kind: PanelKind) {
+        let (name, resume) = match kind {
+            PanelKind::Codex => ("codex", PanelResume::Last),
+            PanelKind::Claude => ("claude", PanelResume::Last),
+            _ => ("shell", PanelResume::Fresh),
+        };
+        self.create_panel_with_options(
+            workspace_id,
+            PanelOptions {
+                name: Some(name.to_string()),
+                kind,
+                resume,
+                ..PanelOptions::default()
+            },
+        );
+    }
+
+    fn create_panel_with_options(&mut self, workspace_id: Option<WorkspaceId>, opts: PanelOptions) {
+        let target_workspace = self.preferred_workspace(workspace_id);
+        let _ = self.board.create_panel(opts, target_workspace);
+        if let Some(workspace_id) = target_workspace {
+            self.board.focus_workspace(workspace_id);
+        }
     }
 
     fn render_canvas(&self, ctx: &Context) {
@@ -403,14 +452,29 @@ impl OrbitermApp {
                             self.new_workspace_name.clear();
                         }
 
-                        if ui.add(chrome_button("+ Terminal")).clicked() {
-                            let workspace = self.board.workspaces.first().map(|item| item.id);
-                            self.create_panel_in_workspace(workspace);
+                        if ui.add(chrome_button("+ Shell")).clicked() {
+                            self.create_panel_in_workspace(None);
+                        }
+
+                        if ui.add(chrome_button("+ Codex")).clicked() {
+                            self.create_agent_panel(None, PanelKind::Codex);
+                        }
+
+                        if ui.add(chrome_button("+ Claude")).clicked() {
+                            self.create_agent_panel(None, PanelKind::Claude);
                         }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(chrome_button("Fit View")).clicked() {
+                            if ui.add(chrome_button("Fit Board")).clicked() {
                                 self.fit_view_to_content(ctx);
+                            }
+
+                            if ui
+                                .add_enabled(self.board.active_workspace.is_some(), chrome_button("Fit Workspace"))
+                                .clicked()
+                                && let Some(workspace_id) = self.board.active_workspace
+                            {
+                                self.fit_view_to_workspace(ctx, workspace_id);
                             }
                         });
                     });
@@ -440,6 +504,7 @@ impl OrbitermApp {
                                             &name,
                                             Color32::from_rgb(accent.0, accent.1, accent.2),
                                             count,
+                                            self.board.active_workspace == Some(workspace_id),
                                         );
                                     }
                                 });
@@ -456,6 +521,7 @@ impl OrbitermApp {
         name: &str,
         accent: Color32,
         count: usize,
+        active: bool,
     ) {
         let editing = self.is_renaming_workspace(workspace_id);
         let mut add_terminal = false;
@@ -464,7 +530,7 @@ impl OrbitermApp {
             .fill(theme::workspace_fill(accent))
             .rounding(Rounding::same(15.0))
             .inner_margin(Margin::symmetric(10.0, 6.0))
-            .stroke(Stroke::new(1.0, theme::workspace_border(accent, editing)))
+            .stroke(Stroke::new(1.0, theme::workspace_border(accent, editing || active)))
             .shadow(theme::workspace_shadow(accent))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -530,6 +596,9 @@ impl OrbitermApp {
                 )
                 .on_hover_text("Double-click to rename");
 
+            if response.clicked() {
+                self.board.focus_workspace(workspace_id);
+            }
             if response.double_clicked() {
                 self.start_workspace_rename(workspace_id, current_name);
             }
@@ -546,6 +615,7 @@ impl OrbitermApp {
             let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
             let current_pos = self.canvas_to_screen(Pos2::new(position[0], position[1]));
             let editing = self.is_renaming_workspace(workspace_id);
+            let active = self.board.active_workspace == Some(workspace_id);
             let mut add_terminal = false;
 
             let area = egui::Area::new(Id::new(("workspace_badge", workspace_id.0)))
@@ -559,7 +629,7 @@ impl OrbitermApp {
                         .fill(theme::workspace_fill(accent))
                         .rounding(Rounding::same(18.0))
                         .inner_margin(Margin::symmetric(14.0, 9.0))
-                        .stroke(Stroke::new(1.2, theme::workspace_border(accent, editing)))
+                        .stroke(Stroke::new(1.2, theme::workspace_border(accent, editing || active)))
                         .shadow(theme::workspace_shadow(accent))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -590,6 +660,12 @@ impl OrbitermApp {
                 workspace_id,
                 Rect::from_min_size(canvas_position, area.response.rect.size() / self.zoom),
             );
+            if area.response.clicked() || area.response.drag_started() {
+                self.board.focus_workspace(workspace_id);
+            }
+            if area.response.double_clicked() {
+                self.fit_view_to_workspace(ctx, workspace_id);
+            }
             if self
                 .board
                 .move_workspace(workspace_id, [canvas_position.x, canvas_position.y])
@@ -636,16 +712,55 @@ impl OrbitermApp {
         }
     }
 
-    fn render_panels(&mut self, ctx: &Context) {
-        self.panel_screen_rects.clear();
-        self.panel_canvas_rects.clear();
-        self.panel_connection_points.clear();
+    fn render_preview_panels(&mut self, ctx: &Context) {
+        for preview in self.preview_panel_states() {
+            self.panel_canvas_rects.insert(preview.panel_id, preview.canvas_rect);
+            self.panel_connection_points.insert(
+                preview.panel_id,
+                Pos2::new(
+                    preview.screen_rect.center().x,
+                    preview.screen_rect.min.y + preview.screen_rect.height() * 0.10,
+                ),
+            );
 
+            let response = egui::Area::new(Id::new(("panel_preview", preview.panel_id.0)))
+                .current_pos(preview.screen_rect.min)
+                .constrain(false)
+                .order(Order::Middle)
+                .show(ctx, |ui| {
+                    let (rect, response) = ui.allocate_exact_size(preview.screen_rect.size(), Sense::click());
+                    paint_panel_preview(
+                        ui,
+                        rect,
+                        &preview.title,
+                        &preview.lines,
+                        preview.accent,
+                        preview.focused,
+                        self.zoom,
+                    );
+                    response
+                });
+
+            if response.inner.clicked() {
+                self.board.focus(preview.panel_id);
+                self.board.focus_workspace(preview.workspace_id);
+            }
+            if response.inner.double_clicked() {
+                self.fit_view_to_workspace(ctx, preview.workspace_id);
+            }
+        }
+    }
+
+    fn render_live_panels(&mut self, ctx: &Context) {
+        let interactive_workspace = self.board.active_workspace.and_then(|workspace_id| {
+            (self.workspace_render_mode(workspace_id) == WorkspaceRenderMode::Interactive).then_some(workspace_id)
+        });
         let panel_info: Vec<_> = self
             .board
             .panels
             .iter()
             .enumerate()
+            .filter(|(_, panel)| panel.workspace_id.is_none() || panel.workspace_id == interactive_workspace)
             .map(|(index, panel)| {
                 let accent = panel
                     .workspace_id
@@ -693,6 +808,8 @@ impl OrbitermApp {
                 )
                 .show(ctx, |ui| {
                     if let Some(panel) = self.board.panels.iter_mut().find(|item| item.id == panel_id) {
+                        render_pty_controls(ui, panel);
+                        ui.add_space(6.0);
                         TerminalView::new(panel).show(ui, self.board.focused == Some(panel_id))
                     } else {
                         false
@@ -714,10 +831,15 @@ impl OrbitermApp {
                 let _ = self
                     .board
                     .resize_panel(panel_id, [window.response.rect.width(), window.response.rect.height()]);
+
+                let updated_canvas_position = self.panel_canvas_position(panel_id).unwrap_or(current_canvas_position);
                 self.panel_screen_rects.insert(panel_id, window.response.rect);
                 self.panel_canvas_rects.insert(
                     panel_id,
-                    Rect::from_min_size(current_canvas_position, window.response.rect.size()),
+                    Rect::from_min_size(
+                        updated_canvas_position,
+                        Vec2::new(window.response.rect.width(), window.response.rect.height()),
+                    ),
                 );
                 self.panel_connection_points.insert(
                     panel_id,
@@ -735,6 +857,49 @@ impl OrbitermApp {
         }
 
         self.panels_to_close = panels_to_close;
+    }
+
+    fn preview_panel_states(&self) -> Vec<PreviewPanelState> {
+        let mut previews = Vec::new();
+
+        for workspace in &self.board.workspaces {
+            if self.workspace_render_mode(workspace.id) != WorkspaceRenderMode::Preview {
+                continue;
+            }
+
+            let accent = workspace.accent();
+            let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
+            for panel_id in &workspace.panels {
+                let Some(panel) = self.board.panel(*panel_id) else {
+                    continue;
+                };
+
+                let canvas_rect = self.panel_canvas_rect(panel);
+                let screen_rect =
+                    Rect::from_min_size(self.canvas_to_screen(canvas_rect.min), canvas_rect.size() * self.zoom);
+                let line_count = if screen_rect.height() < 140.0 {
+                    3
+                } else if screen_rect.height() < 220.0 {
+                    5
+                } else {
+                    7
+                };
+                let char_budget = ((screen_rect.width() - 24.0) / 7.0).floor().clamp(12.0, 80.0) as usize;
+
+                previews.push(PreviewPanelState {
+                    workspace_id: workspace.id,
+                    panel_id: panel.id,
+                    title: panel.title.clone(),
+                    accent,
+                    screen_rect,
+                    canvas_rect,
+                    focused: self.board.focused == Some(panel.id),
+                    lines: preview_lines(panel, line_count, char_budget),
+                });
+            }
+        }
+
+        previews
     }
 
     fn default_panel_canvas_pos(&self, fallback_index: usize) -> Pos2 {
@@ -896,6 +1061,39 @@ impl OrbitermApp {
         workspaces
     }
 
+    fn workspace_render_mode(&self, workspace_id: WorkspaceId) -> WorkspaceRenderMode {
+        if self.board.active_workspace == Some(workspace_id) && self.zoom >= WORKSPACE_INTERACTIVE_ZOOM {
+            WorkspaceRenderMode::Interactive
+        } else if self.zoom >= WORKSPACE_PREVIEW_ZOOM {
+            WorkspaceRenderMode::Preview
+        } else {
+            WorkspaceRenderMode::Badge
+        }
+    }
+
+    fn workspace_canvas_bounds(&self, workspace: &Workspace) -> Rect {
+        let mut bounds = Rect::from_min_size(
+            Pos2::new(workspace.position[0], workspace.position[1]),
+            Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
+        );
+
+        for panel_id in &workspace.panels {
+            let Some(panel) = self.board.panel(*panel_id) else {
+                continue;
+            };
+            bounds = bounds.union(self.panel_canvas_rect(panel));
+        }
+
+        bounds.expand2(Vec2::new(36.0, 36.0))
+    }
+
+    fn panel_canvas_rect(&self, panel: &orbiterm_core::Panel) -> Rect {
+        let position = self
+            .panel_canvas_position(panel.id)
+            .unwrap_or_else(|| Pos2::new(panel.layout.position[0], panel.layout.position[1]));
+        Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]))
+    }
+
     fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
         self.board.focused.is_some() && !ctx.wants_keyboard_input()
     }
@@ -911,7 +1109,20 @@ impl OrbitermApp {
     }
 
     fn fit_view_to_content(&mut self, ctx: &Context) {
-        let Some(content_bounds) = self.content_bounds() else {
+        self.fit_bounds(ctx, self.content_bounds());
+    }
+
+    fn fit_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
+        self.board.focus_workspace(workspace_id);
+        let bounds = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| self.workspace_canvas_bounds(workspace));
+        self.fit_bounds(ctx, bounds);
+    }
+
+    fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>) {
+        let Some(content_bounds) = bounds else {
             self.reset_view(ctx);
             self.auto_fit_pending = false;
             return;
@@ -941,16 +1152,7 @@ impl OrbitermApp {
         let mut bounds: Option<Rect> = None;
 
         for workspace in &self.board.workspaces {
-            let rect = self
-                .workspace_canvas_rects
-                .get(&workspace.id)
-                .copied()
-                .unwrap_or_else(|| {
-                    Rect::from_min_size(
-                        Pos2::new(workspace.position[0], workspace.position[1]),
-                        Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
-                    )
-                });
+            let rect = self.workspace_canvas_bounds(workspace);
             bounds = Some(match bounds {
                 Some(current) => current.union(rect),
                 None => rect,
@@ -958,6 +1160,9 @@ impl OrbitermApp {
         }
 
         for (index, panel) in self.board.panels.iter().enumerate() {
+            if panel.workspace_id.is_some() {
+                continue;
+            }
             let rect = self.panel_canvas_rects.get(&panel.id).copied().unwrap_or_else(|| {
                 let position = self
                     .panel_canvas_position(panel.id)
@@ -1015,11 +1220,16 @@ impl eframe::App for OrbitermApp {
         self.handle_shortcuts(ctx);
         self.check_config_reload();
 
+        paint_root_backdrop(ctx);
         self.render_titlebar(ctx);
         self.render_toolbar(ctx);
         self.render_canvas(ctx);
+        self.panel_screen_rects.clear();
+        self.panel_canvas_rects.clear();
+        self.panel_connection_points.clear();
         self.render_workspace_badges(ctx);
-        self.render_panels(ctx);
+        self.render_preview_panels(ctx);
+        self.render_live_panels(ctx);
 
         if self.auto_fit_pending && self.pending_viewport_size.is_none() {
             self.fit_view_to_content(ctx);
@@ -1034,6 +1244,15 @@ impl eframe::App for OrbitermApp {
 
         ctx.request_repaint();
     }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::BG.to_normalized_gamma_f32()
+    }
+}
+
+fn paint_root_backdrop(ctx: &Context) {
+    ctx.layer_painter(LayerId::background())
+        .rect_filled(ctx.screen_rect(), Rounding::ZERO, theme::BG);
 }
 
 fn handle_edge_resize(ctx: &Context) {
@@ -1106,6 +1325,137 @@ fn paint_status_pill(ui: &mut egui::Ui, text: &str) {
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).color(theme::FG_DIM).size(10.0));
         });
+}
+
+fn paint_panel_preview(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    title: &str,
+    lines: &[String],
+    accent: Color32,
+    focused: bool,
+    zoom: f32,
+) {
+    let painter = ui.painter_at(rect);
+    let title_height = (26.0 * zoom).clamp(18.0, 30.0);
+    let title_font = (12.5 * zoom).clamp(9.0, 13.5);
+    let body_font = (11.5 * zoom).clamp(7.5, 12.0);
+    let line_step = (13.5 * zoom).clamp(10.0, 15.0);
+    let padding = (12.0 * zoom).clamp(8.0, 14.0);
+
+    painter.rect_filled(rect, Rounding::same(14.0), theme::PANEL_BG);
+    painter.rect_stroke(
+        rect,
+        Rounding::same(14.0),
+        Stroke::new(1.0, theme::panel_border(accent, focused)),
+    );
+
+    let title_rect = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.min.y + title_height));
+    painter.rect_filled(
+        title_rect,
+        Rounding::same(14.0),
+        theme::blend(theme::PANEL_BG_ALT, accent, 0.20),
+    );
+    painter.text(
+        Pos2::new(title_rect.min.x + padding, title_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(title_font),
+        theme::FG,
+    );
+
+    for (index, line) in lines.iter().enumerate() {
+        let y = title_rect.max.y + padding + usize_to_f32(index) * line_step;
+        if y > rect.max.y - padding {
+            break;
+        }
+        painter.text(
+            Pos2::new(rect.min.x + padding, y),
+            egui::Align2::LEFT_TOP,
+            line,
+            egui::FontId::monospace(body_font),
+            theme::alpha(theme::FG_SOFT, 220),
+        );
+    }
+}
+
+fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) {
+    ui.horizontal(|ui| {
+        let auto_label = if panel.auto_resize_pty {
+            "Auto PTY"
+        } else {
+            "Manual PTY"
+        };
+        let toggle_button = if panel.auto_resize_pty {
+            chrome_button(auto_label)
+        } else {
+            primary_button(auto_label)
+        };
+        if ui.add(toggle_button).clicked() {
+            panel.set_auto_resize_pty(!panel.auto_resize_pty);
+        }
+
+        ui.label(
+            egui::RichText::new(format!("{}x{}", panel.terminal.cols(), panel.terminal.rows()))
+                .color(theme::FG_DIM)
+                .size(10.5),
+        );
+
+        if ui.add(icon_button("R-")).on_hover_text("Decrease PTY rows").clicked() {
+            panel.adjust_pty_size(-1, 0);
+        }
+        if ui.add(icon_button("R+")).on_hover_text("Increase PTY rows").clicked() {
+            panel.adjust_pty_size(1, 0);
+        }
+        if ui
+            .add(icon_button("C-"))
+            .on_hover_text("Decrease PTY columns")
+            .clicked()
+        {
+            panel.adjust_pty_size(0, -1);
+        }
+        if ui
+            .add(icon_button("C+"))
+            .on_hover_text("Increase PTY columns")
+            .clicked()
+        {
+            panel.adjust_pty_size(0, 1);
+        }
+    });
+}
+
+fn preview_lines(panel: &orbiterm_core::Panel, max_lines: usize, max_chars: usize) -> Vec<String> {
+    let screen = panel.terminal.screen();
+    let (_, cols) = screen.size();
+    let width = cols.min(u16::try_from(max_chars).unwrap_or(u16::MAX));
+    let rows: Vec<String> = screen.rows(0, width).map(|row| row.trim_end().to_string()).collect();
+    let last_content_row = rows
+        .iter()
+        .rposition(|row| !row.is_empty())
+        .map_or(0, |index| index + 1);
+    let start = last_content_row.saturating_sub(max_lines);
+    let selected = rows
+        .into_iter()
+        .skip(start)
+        .take(max_lines)
+        .map(|row| truncate_preview_line(row, max_chars))
+        .collect::<Vec<_>>();
+
+    if selected.iter().all(String::is_empty) {
+        vec!["terminal idle".to_string()]
+    } else {
+        selected
+    }
+}
+
+fn truncate_preview_line(mut line: String, max_chars: usize) -> String {
+    if line.chars().count() <= max_chars || max_chars <= 3 {
+        return line;
+    }
+
+    line = line.chars().take(max_chars - 3).collect();
+    line.push_str("...");
+    line
 }
 
 fn render_viewport_resize_handles(ctx: &Context) {

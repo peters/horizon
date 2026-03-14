@@ -27,7 +27,9 @@ impl<'a> TerminalView<'a> {
         let new_cols = quantize_dimension(available.x / char_width);
         let new_rows = quantize_dimension(available.y / line_height);
 
-        if new_cols != self.panel.terminal.cols() || new_rows != self.panel.terminal.rows() {
+        if self.panel.auto_resize_pty
+            && (new_cols != self.panel.terminal.cols() || new_rows != self.panel.terminal.rows())
+        {
             self.panel.resize(new_rows, new_cols);
         }
 
@@ -38,7 +40,7 @@ impl<'a> TerminalView<'a> {
         if response.clicked() {
             response.request_focus();
         }
-        if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Tab)) {
+        if is_active_panel && ui.input(|input| input.key_pressed(Key::Tab)) {
             response.request_focus();
         }
 

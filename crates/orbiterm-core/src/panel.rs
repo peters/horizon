@@ -61,6 +61,7 @@ pub struct PanelOptions {
     pub cwd: Option<PathBuf>,
     pub rows: u16,
     pub cols: u16,
+    pub auto_resize_pty: bool,
     pub kind: PanelKind,
     pub resume: PanelResume,
     pub position: Option<[f32; 2]>,
@@ -76,6 +77,7 @@ impl Default for PanelOptions {
             cwd: None,
             rows: 24,
             cols: 80,
+            auto_resize_pty: true,
             kind: PanelKind::default(),
             resume: PanelResume::default(),
             position: None,
@@ -91,6 +93,7 @@ pub struct Panel {
     pub resume: PanelResume,
     pub layout: PanelLayout,
     pub workspace_id: Option<WorkspaceId>,
+    pub auto_resize_pty: bool,
     pub terminal: Terminal,
     has_custom_name: bool,
     writer: Box<dyn Write + Send>,
@@ -117,6 +120,7 @@ impl Panel {
             cwd,
             rows,
             cols,
+            auto_resize_pty,
             kind,
             resume,
             position,
@@ -177,6 +181,7 @@ impl Panel {
                 size: size.unwrap_or(DEFAULT_PANEL_SIZE),
             },
             workspace_id: None,
+            auto_resize_pty,
             terminal: Terminal::new(rows, cols),
             has_custom_name,
             writer,
@@ -228,6 +233,17 @@ impl Panel {
 
     pub fn resize_layout(&mut self, size: [f32; 2]) {
         self.layout.size = size;
+    }
+
+    pub fn set_auto_resize_pty(&mut self, enabled: bool) {
+        self.auto_resize_pty = enabled;
+    }
+
+    pub fn adjust_pty_size(&mut self, row_delta: i16, col_delta: i16) {
+        self.auto_resize_pty = false;
+        let rows = adjust_dimension(self.terminal.rows(), row_delta);
+        let cols = adjust_dimension(self.terminal.cols(), col_delta);
+        self.resize(rows, cols);
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -294,6 +310,11 @@ fn resolve_launch_command(
 
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
+fn adjust_dimension(current: u16, delta: i16) -> u16 {
+    let adjusted = i32::from(current) + i32::from(delta);
+    adjusted.clamp(1, i32::from(u16::MAX)) as u16
 }
 
 #[cfg(test)]

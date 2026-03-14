@@ -31,6 +31,8 @@ pub struct TerminalConfig {
     pub rows: u16,
     #[serde(default = "default_cols")]
     pub cols: u16,
+    #[serde(default = "default_auto_resize_pty")]
+    pub auto_resize_pty: bool,
     #[serde(default)]
     pub kind: PanelKind,
     #[serde(default)]
@@ -45,6 +47,10 @@ fn default_rows() -> u16 {
 
 fn default_cols() -> u16 {
     80
+}
+
+fn default_auto_resize_pty() -> bool {
+    true
 }
 
 impl Config {
@@ -99,6 +105,7 @@ impl Default for Config {
                     cwd: None,
                     rows: default_rows(),
                     cols: default_cols(),
+                    auto_resize_pty: default_auto_resize_pty(),
                     kind: PanelKind::Shell,
                     resume: PanelResume::Fresh,
                     position: None,

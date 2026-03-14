@@ -30,6 +30,7 @@ fn main() -> eframe::Result {
         .with_title(branding::APP_NAME)
         .with_icon(branding::app_icon())
         .with_decorations(false)
+        .with_transparent(false)
         .with_inner_size([1400.0, 900.0])
         .with_min_inner_size([800.0, 600.0])
         .with_resizable(true);

@@ -55,6 +55,7 @@ impl Board {
                     cwd: term_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s)),
                     rows: term_cfg.rows,
                     cols: term_cfg.cols,
+                    auto_resize_pty: term_cfg.auto_resize_pty,
                     kind: term_cfg.kind,
                     resume: term_cfg.resume.clone(),
                     position: term_cfg.position,
@@ -62,6 +63,15 @@ impl Board {
                 };
                 board.create_panel(opts, Some(ws_id))?;
             }
+        }
+
+        if let Some(first_workspace) = board.workspaces.first() {
+            board.active_workspace = Some(first_workspace.id);
+            board.focused = first_workspace
+                .panels
+                .first()
+                .copied()
+                .or_else(|| board.panels.first().map(|panel| panel.id));
         }
 
         Ok(board)
