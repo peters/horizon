@@ -2,3 +2,12 @@
 *.swp
 *.swo
 .DS_Store
+
+# JetBrains IDE — ignore user-specific files, commit shared config
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/shelf/
+.idea/dictionaries/
+.idea/httpRequests/
+.idea/caches/
