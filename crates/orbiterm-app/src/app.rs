@@ -127,7 +127,6 @@ impl OrbitermApp {
                             .color(theme::FG_DIM)
                             .size(10.5),
                     );
-
                     ui.add_space(10.0);
                     if ui.add(primary_button("New Terminal")).clicked() {
                         self.create_panel();
@@ -135,21 +134,65 @@ impl OrbitermApp {
                     if ui.add(chrome_button("Reset View")).clicked() {
                         self.reset_view();
                     }
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(format!("{} panels", self.board.panels.len()))
+                            .color(theme::FG_DIM)
+                            .size(10.5),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new("Middle-drag or scroll empty space to pan")
+                            .color(theme::FG_DIM)
+                            .size(10.5),
+                    );
+                });
+            });
+    }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    fn render_canvas_hud(&self, ctx: &Context) {
+        let view_origin = Pos2::new(-self.pan_offset.x, -self.pan_offset.y);
+        let focused_status = self
+            .board
+            .focused
+            .and_then(|panel_id| self.board.panel(panel_id))
+            .map_or_else(
+                || "none".to_string(),
+                |panel| {
+                    format!(
+                        "{}  {} x {}",
+                        format_grid_position(Pos2::new(panel.layout.position[0], panel.layout.position[1])),
+                        rounded_i32(panel.layout.size[0]),
+                        rounded_i32(panel.layout.size[1]),
+                    )
+                },
+            );
+
+        egui::Area::new(Id::new("canvas_hud"))
+            .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(16.0, -16.0))
+            .interactable(false)
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(theme::alpha(theme::PANEL_BG, 236))
+                    .inner_margin(Margin::symmetric(12.0, 10.0))
+                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG, 210)))
+                    .rounding(Rounding::same(12.0))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Canvas HUD").color(theme::FG).size(11.5).strong());
                         ui.label(
-                            egui::RichText::new(format!("{} panels", self.board.panels.len()))
-                                .color(theme::FG_DIM)
-                                .size(10.5),
+                            egui::RichText::new(format!("view origin  {}", format_grid_position(view_origin)))
+                                .monospace()
+                                .color(theme::FG_SOFT)
+                                .size(11.0),
                         );
-                        ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("Ctrl+N new  |  Middle-drag or scroll empty space to pan")
-                                .color(theme::FG_DIM)
-                                .size(10.5),
+                            egui::RichText::new(format!("focused term {focused_status}"))
+                                .monospace()
+                                .color(theme::FG_SOFT)
+                                .size(11.0),
                         );
                     });
-                });
             });
     }
 
@@ -219,6 +262,7 @@ impl OrbitermApp {
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(screen_rect.min)
+            .constrain(false)
             .order(if is_focused { Order::Foreground } else { Order::Middle })
             .show(ctx, |ui| {
                 let (panel_rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
@@ -337,6 +381,7 @@ impl eframe::App for OrbitermApp {
         self.render_toolbar(ctx);
         self.render_canvas(ctx);
         self.render_panels(ctx);
+        self.render_canvas_hud(ctx);
 
         ctx.request_repaint();
     }
@@ -497,6 +542,20 @@ fn clamp_panel_size(size: Vec2) -> Vec2 {
     Vec2::new(size.x.max(PANEL_MIN_SIZE[0]), size.y.max(PANEL_MIN_SIZE[1]))
 }
 
+fn format_grid_position(position: Pos2) -> String {
+    format!("{}, {}", rounded_i32(position.x), rounded_i32(position.y))
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn rounded_i32(value: f32) -> i32 {
+    let rounded = value.round();
+    if rounded.is_nan() {
+        0
+    } else {
+        rounded.clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    }
+}
+
 fn primary_button(text: &str) -> Button<'_> {
     Button::new(egui::RichText::new(text).size(11.5).color(theme::FG))
         .fill(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28))
@@ -521,7 +580,7 @@ fn usize_to_f32(value: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{PANEL_MIN_SIZE, clamp_panel_size, default_panel_canvas_pos};
+    use super::{PANEL_MIN_SIZE, clamp_panel_size, default_panel_canvas_pos, format_grid_position};
     use egui::{Pos2, Vec2};
 
     #[test]
@@ -537,5 +596,11 @@ mod tests {
 
         assert!((clamped.x - PANEL_MIN_SIZE[0]).abs() <= f32::EPSILON);
         assert!(clamped.y >= PANEL_MIN_SIZE[1]);
+    }
+
+    #[test]
+    fn grid_positions_are_rounded_for_display() {
+        assert_eq!(format_grid_position(Pos2::new(12.4, -7.6)), "12, -8");
+        assert_eq!(format_grid_position(Pos2::new(-3.5, 2.5)), "-4, 3");
     }
 }
