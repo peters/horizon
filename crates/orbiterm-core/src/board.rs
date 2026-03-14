@@ -41,15 +41,12 @@ impl Board {
         let mut board = Self::new();
 
         for ws_cfg in &config.workspaces {
-            let ws_id = board.create_workspace(&ws_cfg.name);
+            let workspace_origin = ws_cfg.position.unwrap_or_default();
 
-            if let Some(pos) = ws_cfg.position
-                && let Some(ws) = board.workspaces.iter_mut().find(|w| w.id == ws_id)
-            {
-                ws.position = pos;
-            }
-
-            for term_cfg in &ws_cfg.terminals {
+            for (workspace_index, term_cfg) in ws_cfg.terminals.iter().enumerate() {
+                let relative_position = term_cfg
+                    .position
+                    .unwrap_or_else(|| tiled_panel_position(workspace_index));
                 let opts = PanelOptions {
                     name: Some(term_cfg.name.clone()),
                     command: term_cfg.command.clone(),
@@ -57,24 +54,19 @@ impl Board {
                     cwd: term_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s)),
                     rows: term_cfg.rows,
                     cols: term_cfg.cols,
-                    auto_resize_pty: term_cfg.auto_resize_pty,
                     kind: term_cfg.kind,
                     resume: term_cfg.resume.clone(),
-                    position: term_cfg.position,
+                    position: Some([
+                        workspace_origin[0] + relative_position[0],
+                        workspace_origin[1] + relative_position[1],
+                    ]),
                     size: term_cfg.size,
                 };
-                board.create_panel(opts, Some(ws_id))?;
+                board.create_panel(opts, None)?;
             }
         }
 
-        if let Some(first_workspace) = board.workspaces.first() {
-            board.active_workspace = Some(first_workspace.id);
-            board.focused = first_workspace
-                .panels
-                .first()
-                .copied()
-                .or_else(|| board.panels.first().map(|panel| panel.id));
-        }
+        board.focused = board.panels.first().map(|panel| panel.id);
 
         Ok(board)
     }

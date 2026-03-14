@@ -10,18 +10,14 @@ pub const FG_DIM: Color32 = Color32::from_rgb(108, 120, 142);
 pub const CURSOR: Color32 = Color32::from_rgb(196, 223, 255);
 pub const GRID_DOT: Color32 = Color32::from_rgb(28, 34, 46);
 pub const ACCENT: Color32 = Color32::from_rgb(116, 162, 247);
-pub const ACCENT_WARM: Color32 = Color32::from_rgb(244, 155, 82);
 pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(37, 46, 61);
 pub const BORDER_STRONG: Color32 = Color32::from_rgb(63, 78, 101);
 pub const TITLEBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
 pub const TOOLBAR_BG: Color32 = Color32::from_rgb(11, 15, 22);
-pub const VIEWPORT_HANDLE: Color32 = Color32::from_rgb(122, 133, 151);
 pub const CANVAS_COOL_GLOW: Color32 = Color32::from_rgba_premultiplied(77, 112, 220, 20);
 pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_premultiplied(255, 146, 80, 28);
 
 pub const BTN_CLOSE: Color32 = Color32::from_rgb(235, 96, 88);
-pub const BTN_MINIMIZE: Color32 = Color32::from_rgb(243, 189, 85);
-pub const BTN_MAXIMIZE: Color32 = Color32::from_rgb(111, 207, 111);
 
 const PALETTE: [Color32; 16] = [
     Color32::from_rgb(45, 49, 62),
@@ -68,48 +64,11 @@ pub fn alpha(color: Color32, alpha: u8) -> Color32 {
     Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
-pub fn workspace_fill(accent: Color32) -> Color32 {
-    blend(PANEL_BG_ALT, accent, 0.24)
-}
-
-pub fn workspace_border(accent: Color32, active: bool) -> Color32 {
-    let border = blend(BORDER_STRONG, accent, if active { 0.68 } else { 0.52 });
-    alpha(border, if active { 255 } else { 220 })
-}
-
-#[allow(dead_code)]
-pub fn workspace_shadow(accent: Color32) -> Shadow {
-    Shadow {
-        offset: [0.0, 4.0].into(),
-        blur: 18.0,
-        spread: 1.0,
-        color: alpha(accent, 42),
-    }
-}
-
 pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
     if focused {
         blend(BORDER_STRONG, accent, 0.78)
     } else {
         alpha(blend(BORDER_SUBTLE, accent, 0.32), 196)
-    }
-}
-
-pub fn panel_shadow(accent: Color32, focused: bool) -> Shadow {
-    if focused {
-        Shadow {
-            offset: [0.0, 10.0].into(),
-            blur: 28.0,
-            spread: 2.0,
-            color: alpha(accent, 36),
-        }
-    } else {
-        Shadow {
-            offset: [0.0, 6.0].into(),
-            blur: 18.0,
-            spread: 0.0,
-            color: Color32::from_black_alpha(96),
-        }
     }
 }
 

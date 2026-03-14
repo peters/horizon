@@ -2,7 +2,7 @@ use egui::IconData;
 
 pub const APP_NAME: &str = "Orbiterm";
 pub const APP_ID: &str = "orbiterm";
-pub const APP_TAGLINE: &str = "agent workspace observatory";
+pub const APP_TAGLINE: &str = "infinite terminal canvas";
 
 const ICON_SIZE: u32 = 256;
 const BG: [u8; 4] = [7, 10, 16, 255];

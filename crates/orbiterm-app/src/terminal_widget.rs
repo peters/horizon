@@ -33,7 +33,9 @@ impl<'a> TerminalView<'a> {
             font_id,
         };
 
-        maybe_resize_pty(self.panel, new_rows, new_cols);
+        if new_cols != self.panel.terminal.cols() || new_rows != self.panel.terminal.rows() {
+            self.panel.resize(new_rows, new_cols);
+        }
         let interaction = terminal_interaction(ui, layout, self.panel.id.0);
         handle_terminal_pointer_input(ui, self.panel, &interaction, is_active_panel, line_height, new_rows);
         let other_widget_has_focus = ui
@@ -98,12 +100,6 @@ fn terminal_layout(available: Vec2, char_width: f32, line_height: f32) -> Termin
     );
 
     TerminalLayout { outer, body, scrollbar }
-}
-
-fn maybe_resize_pty(panel: &mut Panel, new_rows: u16, new_cols: u16) {
-    if panel.auto_resize_pty && (new_cols != panel.terminal.cols() || new_rows != panel.terminal.rows()) {
-        panel.resize(new_rows, new_cols);
-    }
 }
 
 fn terminal_interaction(ui: &mut egui::Ui, layout: TerminalLayout, panel_id: u64) -> TerminalInteraction {

@@ -31,8 +31,6 @@ pub struct TerminalConfig {
     pub rows: u16,
     #[serde(default = "default_cols")]
     pub cols: u16,
-    #[serde(default = "default_auto_resize_pty")]
-    pub auto_resize_pty: bool,
     #[serde(default)]
     pub kind: PanelKind,
     #[serde(default)]
@@ -47,10 +45,6 @@ fn default_rows() -> u16 {
 
 fn default_cols() -> u16 {
     80
-}
-
-fn default_auto_resize_pty() -> bool {
-    false
 }
 
 impl Config {
@@ -105,7 +99,6 @@ impl Default for Config {
                     cwd: None,
                     rows: default_rows(),
                     cols: default_cols(),
-                    auto_resize_pty: default_auto_resize_pty(),
                     kind: PanelKind::Shell,
                     resume: PanelResume::Fresh,
                     position: None,
@@ -151,7 +144,7 @@ fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Config, config_candidates_with_env};
+    use super::config_candidates_with_env;
 
     #[test]
     fn includes_orbiterm_config_candidates() {
@@ -161,12 +154,5 @@ mod tests {
         assert!(candidates.iter().any(|path| path.ends_with("orbiterm/config.yaml")));
         assert!(candidates.iter().any(|path| path.ends_with(".orbiterm.yaml")));
         assert!(candidates.iter().any(|path| path == &PathBuf::from("orbiterm.yaml")));
-    }
-
-    #[test]
-    fn default_config_starts_panels_in_manual_pty_mode() {
-        let config = Config::default();
-
-        assert!(!config.workspaces[0].terminals[0].auto_resize_pty);
     }
 }

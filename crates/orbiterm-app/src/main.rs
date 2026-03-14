@@ -29,7 +29,7 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(branding::APP_NAME)
         .with_icon(branding::app_icon())
-        .with_decorations(false)
+        .with_decorations(true)
         .with_transparent(false)
         .with_inner_size([1600.0, 1000.0])
         .with_min_inner_size([800.0, 600.0])

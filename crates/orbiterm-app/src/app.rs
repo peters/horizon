@@ -1,251 +1,95 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
 
-use egui::{
-    Align, Button, Color32, Context, Id, Key, LayerId, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Shadow,
-    Stroke, Vec2, epaint::CubicBezierShape,
-};
-use orbiterm_core::{Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, Workspace, WorkspaceId};
+use egui::{Align, Button, Context, Id, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Stroke, UiBuilder, Vec2};
+use orbiterm_core::{Board, Config, PanelId, PanelOptions};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
 
-const DEFAULT_PANEL_WIDTH: f32 = 520.0;
-const DEFAULT_PANEL_HEIGHT: f32 = 340.0;
+const TOOLBAR_HEIGHT: f32 = 46.0;
+const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
+const PANEL_PADDING: f32 = 8.0;
+const PANEL_MIN_SIZE: [f32; 2] = [320.0, 220.0];
+#[cfg(test)]
 const PANEL_COLUMN_SPACING: f32 = 540.0;
+#[cfg(test)]
 const PANEL_ROW_SPACING: f32 = 360.0;
-const TITLEBAR_HEIGHT: f32 = 38.0;
-const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
-const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
-const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
-const AUTO_BOARD_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(160);
-type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
+const RESIZE_HANDLE_SIZE: f32 = 18.0;
 
-struct WorkspaceRenameState {
-    workspace_id: WorkspaceId,
-    draft: String,
-    should_focus: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WorkspaceRenderMode {
-    Interactive,
-    Preview,
-    Badge,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TitlebarControlsPlacement {
-    Leading,
-    Trailing,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TitlebarControl {
-    Close,
-    Minimize,
-    Maximize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TitlebarControlsSpec {
-    placement: TitlebarControlsPlacement,
-    controls: [TitlebarControl; 3],
-}
-
-struct PreviewPanelState {
-    workspace_id: WorkspaceId,
-    panel_id: PanelId,
-    title: String,
-    accent: Color32,
-    screen_rect: Rect,
-    focused: bool,
-    lines: Vec<String>,
-}
-
-#[derive(Clone, Copy)]
-struct WorkspaceTitleStyle {
-    text_size: f32,
-    width_bounds: [f32; 2],
-}
-
-#[allow(clippy::struct_excessive_bools)]
 pub struct OrbitermApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
     theme_applied: bool,
-    zoom: f32,
     pan_offset: Vec2,
-    panel_canvas_rects: HashMap<PanelId, Rect>,
     panel_screen_rects: HashMap<PanelId, Rect>,
-    panel_connection_points: HashMap<PanelId, Pos2>,
-    workspace_badge_rects: HashMap<WorkspaceId, Rect>,
-    workspace_canvas_rects: HashMap<WorkspaceId, Rect>,
-    workspace_rename: Option<WorkspaceRenameState>,
-    pending_fit_at: Option<Instant>,
-    last_viewport_size: Option<Vec2>,
-    config_path: Option<PathBuf>,
-    show_config_editor: bool,
-    config_text: String,
-    config_last_modified: Option<SystemTime>,
 }
 
 impl OrbitermApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, _config_path: Option<PathBuf>) -> Self {
         let board = Board::from_config(config).unwrap_or_else(|error| {
             tracing::error!("failed to load config: {error}");
             Board::new()
         });
 
-        let config_text = config_path
-            .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .unwrap_or_default();
-        let config_last_modified = config_path
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .and_then(|metadata| metadata.modified().ok());
-
         Self {
             board,
             panels_to_close: Vec::new(),
             theme_applied: false,
-            zoom: 1.0,
             pan_offset: Vec2::ZERO,
-            panel_canvas_rects: HashMap::new(),
             panel_screen_rects: HashMap::new(),
-            panel_connection_points: HashMap::new(),
-            workspace_badge_rects: HashMap::new(),
-            workspace_canvas_rects: HashMap::new(),
-            workspace_rename: None,
-            pending_fit_at: Some(Instant::now()),
-            last_viewport_size: None,
-            config_path,
-            show_config_editor: false,
-            config_text,
-            config_last_modified,
         }
     }
 
-    fn canvas_to_screen(&self, position: Pos2) -> Pos2 {
-        Pos2::new(
-            position.x * self.zoom + self.pan_offset.x,
-            position.y * self.zoom + self.pan_offset.y,
-        )
-    }
-
-    fn screen_to_canvas(&self, position: Pos2) -> Pos2 {
-        Pos2::new(
-            (position.x - self.pan_offset.x) / self.zoom,
-            (position.y - self.pan_offset.y) / self.zoom,
-        )
-    }
-
-    fn reset_view(&mut self, _ctx: &Context) {
-        self.zoom = 1.0;
+    fn reset_view(&mut self) {
         self.pan_offset = Vec2::ZERO;
     }
 
-    fn remove_empty_workspaces(&mut self) {
-        let empty_ids: Vec<WorkspaceId> = self
-            .board
-            .workspaces
-            .iter()
-            .filter(|ws| ws.panels.is_empty())
-            .map(|ws| ws.id)
-            .collect();
-        for id in empty_ids {
-            self.board.remove_workspace(id);
-            self.workspace_badge_rects.remove(&id);
-            self.workspace_canvas_rects.remove(&id);
+    fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
+        canvas_rect.min + self.pan_offset + position.to_vec2()
+    }
+
+    fn canvas_rect(ctx: &Context) -> Rect {
+        let rect = viewport_local_rect(ctx);
+        Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + TOOLBAR_HEIGHT), rect.max)
+    }
+
+    fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
+        self.board.focused.is_some() && !ctx.wants_keyboard_input()
+    }
+
+    fn create_panel(&mut self) {
+        if let Err(error) = self.board.create_panel(PanelOptions::default(), None) {
+            tracing::error!("failed to create panel: {error}");
         }
     }
 
-    fn reset_layout_cache(&mut self) {
-        self.panel_canvas_rects.clear();
-        self.panel_screen_rects.clear();
-        self.panel_connection_points.clear();
-        self.workspace_badge_rects.clear();
-        self.workspace_canvas_rects.clear();
-        self.workspace_rename = None;
-        self.pending_fit_at = Some(Instant::now());
-        self.last_viewport_size = None;
-    }
-
-    fn start_workspace_rename(&mut self, workspace_id: WorkspaceId, current_name: &str) {
-        self.workspace_rename = Some(WorkspaceRenameState {
-            workspace_id,
-            draft: current_name.to_owned(),
-            should_focus: true,
-        });
-    }
-
-    fn commit_workspace_rename(&mut self) {
-        if let Some(rename) = self.workspace_rename.take() {
-            let _ = self.board.rename_workspace(rename.workspace_id, rename.draft.trim());
-        }
-    }
-
-    fn is_renaming_workspace(&self, workspace_id: WorkspaceId) -> bool {
-        self.workspace_rename
-            .as_ref()
-            .is_some_and(|rename| rename.workspace_id == workspace_id)
-    }
-
-    fn schedule_fit_board(&mut self, delay: Duration) {
-        self.pending_fit_at = Some(Instant::now() + delay);
-    }
-
-    fn handle_zoom(&mut self, ctx: &Context) {
-        let zoom_delta = ctx.input(egui::InputState::zoom_delta);
-        if (zoom_delta - 1.0).abs() > f32::EPSILON {
-            self.zoom = (self.zoom * zoom_delta).clamp(0.45, 2.5);
-            self.pending_fit_at = None;
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::Num0) && input.modifiers.ctrl) {
-            self.fit_view_to_content(ctx);
-        }
-
-        let alt_plus =
-            ctx.input(|input| input.modifiers.alt && (input.key_pressed(Key::Plus) || input.key_pressed(Key::Equals)));
-        let alt_minus = ctx.input(|input| input.modifiers.alt && input.key_pressed(Key::Minus));
-
-        if alt_plus || alt_minus {
-            let step = if alt_plus { 1.05 } else { 1.0 / 1.05 };
-            if self.terminal_accepts_keyboard_input(ctx) {
-                self.grow_focused_panel(step);
-            } else {
-                self.zoom = (self.zoom * step).clamp(0.45, 2.5);
-                self.pending_fit_at = None;
-            }
-        }
-    }
-
-    fn grow_focused_panel(&mut self, factor: f32) {
-        let Some(panel_id) = self.board.focused else {
+    fn handle_shortcuts(&mut self, ctx: &Context) {
+        if self.terminal_accepts_keyboard_input(ctx) {
             return;
-        };
-        let Some(panel) = self.board.panel_mut(panel_id) else {
-            return;
-        };
-        let new_width = (panel.layout.size[0] * factor).clamp(DEFAULT_PANEL_WIDTH * 0.4, 2400.0);
-        let new_height = (panel.layout.size[1] * factor).clamp(DEFAULT_PANEL_HEIGHT * 0.4, 1600.0);
-        panel.resize_layout([new_width, new_height]);
-        self.schedule_fit_board(Duration::ZERO);
+        }
+
+        if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
+            self.create_panel();
+        }
+
+        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
+            self.reset_view();
+        }
     }
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_view_rect(ctx);
+        let canvas_rect = Self::canvas_rect(ctx);
+        let panel_rects: Vec<Rect> = self.panel_screen_rects.values().copied().collect();
         let pan_delta = ctx.input(|input| {
             let pointer_position = input.pointer.hover_pos();
-            let pointer_in_canvas = pointer_position
-                .zip(canvas_rect)
-                .is_some_and(|(position, rect)| rect.contains(position));
+            let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
+            let pointer_over_panel =
+                pointer_position.is_some_and(|position| panel_rects.iter().any(|rect| rect.contains(position)));
             let drag_panning = pointer_in_canvas
-                && (input.pointer.middle_down() || (input.modifiers.ctrl && input.pointer.primary_down()));
-            let scroll_panning = pointer_in_canvas && !input.modifiers.ctrl;
+                && (input.pointer.middle_down() || (input.key_down(egui::Key::Space) && input.pointer.primary_down()));
+            let scroll_panning =
+                pointer_in_canvas && !pointer_over_panel && !input.modifiers.ctrl && !input.modifiers.command;
 
             if drag_panning {
                 input.pointer.delta()
@@ -258,139 +102,55 @@ impl OrbitermApp {
 
         if pan_delta != Vec2::ZERO {
             self.pan_offset += pan_delta;
-            self.pending_fit_at = None;
         }
     }
 
-    fn handle_canvas_workspace_creation(&mut self, ctx: &Context) {
-        let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
-            return;
-        };
-        let should_create = ctx
-            .input(|input| input.modifiers.ctrl && input.pointer.button_double_clicked(egui::PointerButton::Primary));
-        let Some(pointer_position) = ctx.input(|input| input.pointer.latest_pos()) else {
-            return;
-        };
+    fn render_toolbar(&mut self, ctx: &Context) {
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(TOOLBAR_HEIGHT)
+            .frame(
+                egui::Frame::default()
+                    .fill(theme::TITLEBAR_BG)
+                    .inner_margin(Margin::symmetric(14.0, 8.0))
+                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170))),
+            )
+            .show(ctx, |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(crate::branding::APP_NAME)
+                            .color(theme::FG)
+                            .size(14.0)
+                            .strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new(crate::branding::APP_TAGLINE)
+                            .color(theme::FG_DIM)
+                            .size(10.5),
+                    );
 
-        let panel_rects: Vec<Rect> = self.panel_screen_rects.values().copied().collect();
-        let workspace_rects: Vec<Rect> = self.workspace_badge_rects.values().copied().collect();
-        if !should_create_workspace_from_canvas_gesture(
-            should_create,
-            canvas_rect,
-            pointer_position,
-            &panel_rects,
-            &workspace_rects,
-        ) {
-            return;
-        }
+                    ui.add_space(10.0);
+                    if ui.add(primary_button("New Terminal")).clicked() {
+                        self.create_panel();
+                    }
+                    if ui.add(chrome_button("Reset View")).clicked() {
+                        self.reset_view();
+                    }
 
-        let name = self.next_workspace_name();
-        let canvas_position = self.screen_to_canvas(pointer_position);
-        self.create_workspace_at(&name, canvas_position);
-    }
-
-    fn handle_shortcuts(&mut self, ctx: &Context) {
-        if self.terminal_accepts_keyboard_input(ctx) {
-            return;
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::T) && input.modifiers.ctrl) {
-            let name = self.next_workspace_name();
-            self.create_workspace_named(ctx, &name);
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::N) && input.modifiers.ctrl && input.modifiers.shift) {
-            self.create_panel_in_workspace(None);
-        }
-
-        if ctx.input(|input| input.key_pressed(Key::Comma) && input.modifiers.ctrl) {
-            self.show_config_editor = !self.show_config_editor;
-        }
-    }
-
-    fn create_workspace_named(&mut self, ctx: &Context, name: &str) {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-
-        let position = self.suggest_workspace_position(ctx);
-        self.create_workspace_at(trimmed, position);
-    }
-
-    fn next_workspace_name(&self) -> String {
-        let mut index = self.board.workspaces.len() + 1;
-        loop {
-            let candidate = format!("workspace {index}");
-            let exists = self
-                .board
-                .workspaces
-                .iter()
-                .any(|workspace| workspace.name.eq_ignore_ascii_case(&candidate));
-            if !exists {
-                return candidate;
-            }
-            index += 1;
-        }
-    }
-
-    fn create_workspace_at(&mut self, name: &str, position: Pos2) {
-        let workspace_id = self.board.create_workspace(name);
-        if let Some(workspace) = self.board.workspace_mut(workspace_id) {
-            workspace.position = [position.x, position.y];
-        }
-        if self
-            .board
-            .create_panel(PanelOptions::default(), Some(workspace_id))
-            .is_ok()
-        {
-            self.schedule_fit_board(Duration::ZERO);
-        }
-        self.board.focus_workspace(workspace_id);
-    }
-
-    fn suggest_workspace_position(&self, ctx: &Context) -> Pos2 {
-        if let Some(bounds) = self.layout_bounds() {
-            return Pos2::new(bounds.max.x + 120.0, bounds.min.y.max(48.0));
-        }
-
-        let center = Self::canvas_view_rect(ctx).map_or(Pos2::new(280.0, 180.0), |rect| rect.center());
-        self.screen_to_canvas(center + Vec2::new(-180.0, -90.0))
-    }
-
-    fn preferred_workspace(&self, workspace_id: Option<WorkspaceId>) -> Option<WorkspaceId> {
-        workspace_id
-            .or(self.board.active_workspace)
-            .or_else(|| self.board.workspaces.first().map(|workspace| workspace.id))
-    }
-
-    fn create_panel_in_workspace(&mut self, workspace_id: Option<WorkspaceId>) {
-        self.create_panel_with_options(workspace_id, PanelOptions::default());
-    }
-
-    #[allow(dead_code)]
-    fn create_agent_panel(&mut self, workspace_id: Option<WorkspaceId>, kind: PanelKind) {
-        let (name, resume, auto_resize_pty) = agent_panel_defaults(kind);
-        self.create_panel_with_options(
-            workspace_id,
-            PanelOptions {
-                name: Some(name.to_string()),
-                kind,
-                resume,
-                auto_resize_pty,
-                ..PanelOptions::default()
-            },
-        );
-    }
-
-    fn create_panel_with_options(&mut self, workspace_id: Option<WorkspaceId>, opts: PanelOptions) {
-        let target_workspace = self.preferred_workspace(workspace_id);
-        if self.board.create_panel(opts, target_workspace).is_ok() {
-            self.schedule_fit_board(Duration::ZERO);
-        }
-        if let Some(workspace_id) = target_workspace {
-            self.board.focus_workspace(workspace_id);
-        }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{} panels", self.board.panels.len()))
+                                .color(theme::FG_DIM)
+                                .size(10.5),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("Ctrl+N new  |  Middle-drag or scroll empty space to pan")
+                                .color(theme::FG_DIM)
+                                .size(10.5),
+                        );
+                    });
+                });
+            });
     }
 
     fn render_canvas(&self, ctx: &Context) {
@@ -398,339 +158,32 @@ impl OrbitermApp {
             .frame(egui::Frame::default().fill(theme::BG))
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
-                draw_dot_grid(ui, self.pan_offset, self.zoom);
+                draw_dot_grid(ui, self.pan_offset);
+
+                if self.board.panels.is_empty() {
+                    paint_empty_state(ui);
+                }
             });
     }
 
-    fn render_titlebar(&self, ctx: &Context) {
-        let controls = native_titlebar_controls_spec();
-        egui::TopBottomPanel::top("titlebar")
-            .exact_height(TITLEBAR_HEIGHT)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::TITLEBAR_BG)
-                    .inner_margin(Margin::symmetric(14.0, 0.0))
-                    .stroke(Stroke::new(
-                        1.0,
-                        theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.15),
-                    )),
-            )
-            .show(ctx, |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    if controls.placement == TitlebarControlsPlacement::Leading {
-                        ui.add_space(2.0);
-                        render_titlebar_window_controls(ui, ctx, controls.controls);
-                        ui.add_space(14.0);
-                    } else {
-                        ui.add_space(4.0);
-                    }
-                    ui.label(
-                        egui::RichText::new(crate::branding::APP_NAME)
-                            .color(theme::FG_SOFT)
-                            .size(13.0)
-                            .strong(),
-                    );
+    fn render_panels(&mut self, ctx: &Context) {
+        self.panel_screen_rects.clear();
 
-                    ui.add_space(5.0);
-                    let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(3.0), Sense::hover());
-                    ui.painter().circle_filled(dot_rect.center(), 1.5, theme::FG_DIM);
-                    ui.add_space(5.0);
-
-                    ui.label(
-                        egui::RichText::new(crate::branding::APP_TAGLINE)
-                            .color(theme::alpha(theme::FG_DIM, 160))
-                            .size(10.5),
-                    );
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(4.0);
-                        if controls.placement == TitlebarControlsPlacement::Trailing {
-                            render_titlebar_window_controls(ui, ctx, controls.controls);
-                            ui.add_space(10.0);
-                        }
-                        paint_status_pill(ui, &format!("{:.0}%", self.zoom * 100.0));
-                        ui.add_space(2.0);
-                        paint_status_pill(ui, &format!("{} panels", self.board.panels.len()));
-                        ui.add_space(2.0);
-                        paint_status_pill(ui, &format!("{} workspaces", self.board.workspaces.len()));
-
-                        let drag_area = ui.available_rect_before_wrap();
-                        let response = ui.allocate_rect(drag_area, Sense::click_and_drag());
-                        if response.drag_started() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                        }
-                        if response.double_clicked() {
-                            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                        }
-                    });
-                });
-            });
-    }
-
-    fn render_workspace_name_control(
-        &mut self,
-        ui: &mut egui::Ui,
-        workspace_id: WorkspaceId,
-        current_name: &str,
-        accent: Color32,
-        style: WorkspaceTitleStyle,
-        interactive: bool,
-    ) -> Rect {
-        if self.is_renaming_workspace(workspace_id) {
-            let mut commit = false;
-            let mut cancel = false;
-            let mut response_rect = Rect::NOTHING;
-
-            if let Some(rename) = self.workspace_rename.as_mut() {
-                let [min_width, max_width] = style.width_bounds;
-                let desired_width =
-                    (usize_to_f32(rename.draft.chars().count().max(8)) * 8.0).clamp(min_width, max_width);
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut rename.draft)
-                        .id(ui.make_persistent_id(("workspace_rename", workspace_id.0)))
-                        .desired_width(desired_width)
-                        .font(egui::TextStyle::Button),
-                );
-                response_rect = response.rect;
-
-                if rename.should_focus {
-                    response.request_focus();
-                    rename.should_focus = false;
-                }
-
-                commit = ui.input(|input| input.key_pressed(Key::Enter))
-                    || (response.lost_focus() && ui.input(|input| input.pointer.any_released()));
-                cancel = ui.input(|input| input.key_pressed(Key::Escape));
-            }
-
-            if cancel {
-                self.workspace_rename = None;
-            } else if commit {
-                self.commit_workspace_rename();
-            }
-
-            response_rect
-        } else {
-            let title_rect = paint_workspace_title_pill(ui, current_name, accent, style.text_size, style.width_bounds);
-            if interactive {
-                let response = ui.interact(
-                    title_rect,
-                    ui.make_persistent_id(("workspace_name", workspace_id.0)),
-                    Sense::click(),
-                );
-                if response.clicked() {
-                    self.board.focus_workspace(workspace_id);
-                }
-                if response.double_clicked() {
-                    self.start_workspace_rename(workspace_id, current_name);
-                }
-            }
-
-            title_rect
-        }
-    }
-
-    fn render_workspace_badges(&mut self, ctx: &Context) {
-        self.workspace_badge_rects.clear();
-        self.workspace_canvas_rects.clear();
-
-        let workspaces = self.workspace_snapshots();
-
-        for (workspace_id, name, accent, _count, position) in workspaces {
-            let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
-            let screen_pos = self.canvas_to_screen(Pos2::new(position[0], position[1]));
-            let editing = self.is_renaming_workspace(workspace_id);
-            let active = self.board.active_workspace == Some(workspace_id);
-            let mut add_terminal = false;
-            let mut title_rect = Rect::NOTHING;
-
-            let area = egui::Area::new(Id::new(("workspace_badge", workspace_id.0)))
-                .current_pos(screen_pos)
-                .movable(!editing)
-                .sense(Sense::click_and_drag())
-                .order(Order::Foreground)
-                .show(ctx, |ui| {
-                    egui::Frame::default()
-                        .fill(theme::workspace_fill(accent))
-                        .rounding(Rounding::ZERO)
-                        .inner_margin(Margin::symmetric(10.0, 6.0))
-                        .stroke(Stroke::new(1.0, theme::workspace_border(accent, editing || active)))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                title_rect = self.render_workspace_name_control(
-                                    ui,
-                                    workspace_id,
-                                    &name,
-                                    accent,
-                                    WorkspaceTitleStyle {
-                                        text_size: 12.0,
-                                        width_bounds: [60.0, 200.0],
-                                    },
-                                    false,
-                                );
-
-                                if ui.add(icon_button("+")).clicked() {
-                                    add_terminal = true;
-                                }
-                            });
-                        });
-                });
-
-            let badge_rect = area.response.rect;
-            self.workspace_badge_rects.insert(workspace_id, badge_rect);
-            self.workspace_canvas_rects.insert(
-                workspace_id,
-                Rect::from_min_size(self.screen_to_canvas(badge_rect.min), badge_rect.size() / self.zoom),
-            );
-
-            if area.response.clicked() || area.response.drag_started() {
-                self.board.focus_workspace(workspace_id);
-            }
-            let title_was_double_clicked = area.response.double_clicked()
-                && ctx
-                    .input(|input| input.pointer.interact_pos())
-                    .is_some_and(|pointer_position| title_rect.contains(pointer_position));
-            if title_was_double_clicked {
-                self.start_workspace_rename(workspace_id, &name);
-            } else if area.response.double_clicked() {
-                self.fit_view_to_workspace(ctx, workspace_id);
-            }
-
-            if area.response.drag_stopped() {
-                let canvas_position = self.screen_to_canvas(badge_rect.min);
-                let _ = self
-                    .board
-                    .move_workspace(workspace_id, [canvas_position.x, canvas_position.y]);
-            }
-
-            if add_terminal {
-                self.create_panel_in_workspace(Some(workspace_id));
-            }
-        }
-    }
-
-    fn render_island_backgrounds(&mut self, ctx: &Context) {
-        let painter = ctx.layer_painter(LayerId::background());
-
-        for workspace in &self.board.workspaces {
-            if workspace.panels.is_empty() {
-                continue;
-            }
-
-            let accent_rgb = workspace.accent();
-            let accent = Color32::from_rgb(accent_rgb.0, accent_rgb.1, accent_rgb.2);
-            let canvas_rect = self.workspace_canvas_bounds(workspace);
-            let bg_rect = Rect::from_min_max(
-                self.canvas_to_screen(canvas_rect.min),
-                self.canvas_to_screen(canvas_rect.max),
-            );
-
-            let fill = theme::alpha(accent, 14);
-            painter.rect_filled(bg_rect, Rounding::same(16.0 * self.zoom), fill);
-
-            let border_stroke = Stroke::new(1.0, theme::alpha(accent, 40));
-            painter.rect_stroke(bg_rect, Rounding::same(16.0 * self.zoom), border_stroke);
-        }
-    }
-
-    fn draw_connectors(&self, ctx: &Context) {
-        let painter = ctx.layer_painter(LayerId::background());
-
-        for workspace in &self.board.workspaces {
-            let Some(badge_rect) = self.workspace_badge_rects.get(&workspace.id) else {
-                continue;
-            };
-
-            let accent = workspace.accent();
-            let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
-            let start = Pos2::new(badge_rect.right() - 20.0, badge_rect.center().y);
-
-            for panel_id in &workspace.panels {
-                let Some(&end) = self.panel_connection_points.get(panel_id) else {
-                    continue;
-                };
-
-                let bend = ((end.x - start.x).abs() * 0.35).max(70.0);
-                let curve = CubicBezierShape::from_points_stroke(
-                    [start, start + Vec2::new(bend, 0.0), end - Vec2::new(bend, 0.0), end],
-                    false,
-                    Color32::TRANSPARENT,
-                    Stroke::new(1.1, theme::alpha(accent, 118)),
-                );
-
-                painter.add(curve);
-                painter.circle_filled(start, 2.5, theme::alpha(accent, 160));
-                painter.circle_filled(end, 3.0, theme::alpha(accent, 190));
-            }
-        }
-    }
-
-    fn render_preview_panels(&mut self, ctx: &Context) {
-        for preview in self.preview_panel_states() {
-            let screen_rect = preview.screen_rect;
-            let canvas_rect =
-                Rect::from_min_size(self.screen_to_canvas(screen_rect.min), screen_rect.size() / self.zoom);
-            self.panel_canvas_rects.insert(preview.panel_id, canvas_rect);
-            self.panel_connection_points.insert(
-                preview.panel_id,
-                Pos2::new(screen_rect.center().x, screen_rect.min.y + screen_rect.height() * 0.10),
-            );
-
-            let response = egui::Area::new(Id::new(("panel_preview", preview.panel_id.0)))
-                .current_pos(screen_rect.min)
-                .order(Order::Middle)
-                .show(ctx, |ui| {
-                    let (rect, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
-                    paint_panel_preview(
-                        ui,
-                        rect,
-                        &preview.title,
-                        &preview.lines,
-                        preview.accent,
-                        preview.focused,
-                        self.zoom,
-                    );
-                    response
-                });
-
-            if response.inner.clicked() {
-                self.board.focus(preview.panel_id);
-                self.board.focus_workspace(preview.workspace_id);
-            }
-            if response.inner.double_clicked() {
-                self.fit_view_to_workspace(ctx, preview.workspace_id);
-            }
-        }
-    }
-
-    fn render_live_panels(&mut self, ctx: &Context) {
-        let interactive_workspace = self.board.active_workspace.and_then(|workspace_id| {
-            (self.workspace_render_mode(workspace_id) == WorkspaceRenderMode::Interactive).then_some(workspace_id)
-        });
-        let panel_info: Vec<_> = self
+        let mut panel_order: Vec<_> = self
             .board
             .panels
             .iter()
             .enumerate()
-            .filter(|(_, panel)| panel.workspace_id.is_none() || panel.workspace_id == interactive_workspace)
-            .map(|(index, panel)| {
-                let accent = panel
-                    .workspace_id
-                    .and_then(|workspace_id| self.board.workspace(workspace_id))
-                    .map(orbiterm_core::Workspace::accent);
-
-                (panel.id, panel.title.clone(), accent, index)
-            })
+            .map(|(index, panel)| (panel.id, panel.title.clone(), index))
             .collect();
+        let focused = self.board.focused;
+        panel_order.sort_by_key(|(panel_id, _, _)| Some(*panel_id) == focused);
 
+        let canvas_rect = Self::canvas_rect(ctx);
         let mut panels_to_close = Vec::new();
 
-        for (panel_id, title, accent, index) in panel_info {
-            let accent = accent.map_or(theme::BORDER_STRONG, |color| {
-                Color32::from_rgb(color.0, color.1, color.2)
-            });
-            if self.render_live_panel(ctx, panel_id, &title, accent, index) {
+        for (panel_id, title, fallback_index) in panel_order {
+            if self.render_panel(ctx, canvas_rect, panel_id, &title, fallback_index) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -738,429 +191,130 @@ impl OrbitermApp {
         self.panels_to_close = panels_to_close;
     }
 
-    fn render_live_panel(
+    #[allow(clippy::too_many_lines)]
+    fn render_panel(
         &mut self,
         ctx: &Context,
+        canvas_rect: Rect,
         panel_id: PanelId,
         title: &str,
-        accent: Color32,
-        fallback_index: usize,
+        _fallback_index: usize,
     ) -> bool {
-        let current_canvas_position = self
-            .panel_canvas_position(panel_id)
-            .unwrap_or_else(|| Self::default_panel_canvas_pos(fallback_index));
-        let current_screen_position = self.canvas_to_screen(current_canvas_position);
+        let Some((canvas_position, canvas_size)) = self.board.panel(panel_id).map(|panel| {
+            (
+                Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+                Vec2::new(panel.layout.size[0], panel.layout.size[1]),
+            )
+        }) else {
+            return false;
+        };
+
+        let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
         let is_focused = self.board.focused == Some(panel_id);
-        let mut open = true;
-        let canvas_size = self
-            .board
-            .panel(panel_id)
-            .map_or(Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT), |panel| {
-                Vec2::new(panel.layout.size[0], panel.layout.size[1])
-            });
-        let screen_size = canvas_size * self.zoom;
+        let mut clicked_terminal = false;
+        let mut focus_panel = false;
+        let mut close_panel = false;
+        let mut drag_delta = Vec2::ZERO;
+        let mut resize_delta = Vec2::ZERO;
 
-        let response = egui::Window::new(title)
-            .id(Id::new(("panel", panel_id.0)))
-            .open(&mut open)
-            .current_pos(current_screen_position)
-            .default_size(screen_size)
-            .min_size(Vec2::new(DEFAULT_PANEL_WIDTH * 0.4, DEFAULT_PANEL_HEIGHT * 0.4))
-            .collapsible(false)
-            .resizable(true)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::PANEL_BG)
-                    .rounding(Rounding::same(14.0))
-                    .inner_margin(6.0)
-                    .stroke(Stroke::new(1.1, theme::panel_border(accent, is_focused)))
-                    .shadow(theme::panel_shadow(accent, is_focused)),
-            )
+        egui::Area::new(Id::new(("panel", panel_id.0)))
+            .fixed_pos(screen_rect.min)
+            .order(if is_focused { Order::Foreground } else { Order::Middle })
             .show(ctx, |ui| {
-                if let Some(panel) = self.board.panels.iter_mut().find(|item| item.id == panel_id) {
-                    let pty_resized = render_pty_controls(ui, panel);
-                    ui.add_space(6.0);
-                    let clicked_terminal = TerminalView::new(panel).show(ui, self.board.focused == Some(panel_id));
-                    (clicked_terminal, pty_resized)
-                } else {
-                    (false, false)
-                }
-            });
+                let (panel_rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
+                let titlebar_rect = Rect::from_min_max(
+                    panel_rect.min,
+                    Pos2::new(panel_rect.max.x, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT),
+                );
+                let body_rect = Rect::from_min_max(
+                    Pos2::new(panel_rect.min.x + PANEL_PADDING, titlebar_rect.max.y + PANEL_PADDING),
+                    Pos2::new(panel_rect.max.x - PANEL_PADDING, panel_rect.max.y - PANEL_PADDING),
+                );
+                let close_rect = Rect::from_center_size(
+                    Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
+                    Vec2::splat(16.0),
+                );
+                let resize_rect = Rect::from_min_size(
+                    Pos2::new(
+                        panel_rect.max.x - RESIZE_HANDLE_SIZE,
+                        panel_rect.max.y - RESIZE_HANDLE_SIZE,
+                    ),
+                    Vec2::splat(RESIZE_HANDLE_SIZE),
+                );
 
-        if let Some(window) = response {
-            let size_changed = panel_size_changed(canvas_size, window.response.rect.size());
-            self.sync_live_panel_geometry(panel_id, window.response.rect);
+                let drag_response = ui.interact(
+                    titlebar_rect,
+                    ui.make_persistent_id(("panel_drag", panel_id.0)),
+                    Sense::click_and_drag(),
+                );
+                let close_response = ui.interact(
+                    close_rect.expand2(Vec2::splat(4.0)),
+                    ui.make_persistent_id(("panel_close", panel_id.0)),
+                    Sense::click(),
+                );
+                let resize_response = ui.interact(
+                    resize_rect.expand2(Vec2::splat(6.0)),
+                    ui.make_persistent_id(("panel_resize", panel_id.0)),
+                    Sense::click_and_drag(),
+                );
 
-            if window.response.drag_stopped() && size_changed {
-                self.schedule_fit_board(Duration::ZERO);
-            }
-
-            let (clicked_terminal, _) = window.inner.unwrap_or((false, false));
-            if clicked_terminal || window.response.clicked() || window.response.drag_started() {
-                self.board.focus(panel_id);
-            }
-        }
-
-        !open
-    }
-
-    fn sync_live_panel_geometry(&mut self, panel_id: PanelId, window_rect: Rect) {
-        self.panel_screen_rects.insert(panel_id, window_rect);
-        self.panel_connection_points
-            .insert(panel_id, Pos2::new(window_rect.center().x, window_rect.min.y + 14.0));
-
-        let canvas_position = self.screen_to_canvas(window_rect.min);
-        let canvas_size = Vec2::new(window_rect.width() / self.zoom, window_rect.height() / self.zoom);
-        self.panel_canvas_rects
-            .insert(panel_id, Rect::from_min_size(canvas_position, canvas_size));
-
-        if let Some(workspace_id) = self.board.panel_workspace_id(panel_id)
-            && let Some(workspace) = self.board.workspace(workspace_id)
-        {
-            let relative_position = canvas_position - Pos2::new(workspace.position[0], workspace.position[1]);
-            let _ = self
-                .board
-                .move_panel(panel_id, [relative_position.x, relative_position.y]);
-        } else {
-            let _ = self.board.move_panel(panel_id, [canvas_position.x, canvas_position.y]);
-        }
-        let _ = self.board.resize_panel(panel_id, [canvas_size.x, canvas_size.y]);
-    }
-
-    fn preview_panel_states(&self) -> Vec<PreviewPanelState> {
-        let mut previews = Vec::new();
-
-        for workspace in &self.board.workspaces {
-            if self.workspace_render_mode(workspace.id) != WorkspaceRenderMode::Preview {
-                continue;
-            }
-
-            let accent = workspace.accent();
-            let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
-            for panel_id in &workspace.panels {
-                let Some(panel) = self.board.panel(*panel_id) else {
-                    continue;
-                };
-
-                let canvas_rect = self.panel_canvas_rect(panel);
-                let screen_rect =
-                    Rect::from_min_size(self.canvas_to_screen(canvas_rect.min), canvas_rect.size() * self.zoom);
-                let line_count = if screen_rect.height() < 140.0 {
-                    3
-                } else if screen_rect.height() < 220.0 {
-                    5
-                } else {
-                    7
-                };
-                let char_budget = preview_char_budget(screen_rect.width());
-
-                previews.push(PreviewPanelState {
-                    workspace_id: workspace.id,
-                    panel_id: panel.id,
-                    title: panel.title.clone(),
-                    accent,
-                    screen_rect,
-                    focused: self.board.focused == Some(panel.id),
-                    lines: preview_lines(panel, line_count, char_budget),
-                });
-            }
-        }
-
-        previews
-    }
-    fn default_panel_canvas_pos(fallback_index: usize) -> Pos2 {
-        let column = fallback_index % 3;
-        let row = fallback_index / 3;
-        Pos2::new(
-            140.0 + usize_to_f32(column) * PANEL_COLUMN_SPACING,
-            140.0 + usize_to_f32(row) * PANEL_ROW_SPACING,
-        )
-    }
-
-    fn panel_canvas_position(&self, panel_id: PanelId) -> Option<Pos2> {
-        let panel = self.board.panel(panel_id)?;
-        let local_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
-        if let Some(workspace_id) = panel.workspace_id
-            && let Some(workspace) = self.board.workspace(workspace_id)
-        {
-            return Some(Pos2::new(workspace.position[0], workspace.position[1]) + local_position.to_vec2());
-        }
-
-        Some(local_position)
-    }
-
-    fn check_config_reload(&mut self) {
-        let Some(path) = &self.config_path else {
-            return;
-        };
-        let Ok(metadata) = std::fs::metadata(path) else {
-            return;
-        };
-        let Ok(modified) = metadata.modified() else {
-            return;
-        };
-
-        if self
-            .config_last_modified
-            .is_some_and(|last_modified| modified > last_modified)
-        {
-            tracing::info!("config changed on disk, reloading");
-            self.config_last_modified = Some(modified);
-
-            if let Ok(text) = std::fs::read_to_string(path) {
-                self.config_text.clone_from(&text);
-                if let Ok(config) = serde_yaml::from_str::<orbiterm_core::Config>(&text)
-                    && let Ok(board) = Board::from_config(&config)
+                if drag_response.clicked()
+                    || drag_response.drag_started()
+                    || resize_response.drag_started()
+                    || resize_response.clicked()
                 {
-                    self.board = board;
-                    self.reset_layout_cache();
-                    tracing::info!("config reloaded successfully");
+                    focus_panel = true;
                 }
-            }
-        }
-    }
+                if drag_response.dragged() {
+                    drag_delta = ctx.input(|input| input.pointer.delta());
+                }
+                if resize_response.dragged() {
+                    resize_delta = ctx.input(|input| input.pointer.delta());
+                }
+                if close_response.clicked() {
+                    close_panel = true;
+                }
 
-    fn render_config_editor(&mut self, ctx: &Context) {
-        egui::Window::new("Config Editor")
-            .id(Id::new("config_editor"))
-            .default_size([560.0, 420.0])
-            .resizable(true)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::BG_ELEVATED)
-                    .rounding(Rounding::same(12.0))
-                    .inner_margin(10.0)
-                    .stroke(Stroke::new(
-                        1.0,
-                        theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.55),
-                    ))
-                    .shadow(Shadow {
-                        offset: [0.0, 8.0].into(),
-                        blur: 26.0,
-                        spread: 2.0,
-                        color: Color32::from_black_alpha(110),
-                    }),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("Ctrl+, toggles this editor")
-                            .color(theme::FG_DIM)
-                            .size(10.0),
-                    );
+                paint_panel_chrome(
+                    ui,
+                    panel_rect,
+                    titlebar_rect,
+                    close_rect,
+                    resize_rect,
+                    title,
+                    is_focused,
+                    close_response.hovered(),
+                );
 
-                    if let Some(path) = &self.config_path {
-                        ui.label(
-                            egui::RichText::new(path.display().to_string())
-                                .color(theme::FG_DIM)
-                                .size(10.0),
-                        );
-                    }
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(primary_button("Save & Apply")).clicked() {
-                            self.save_and_apply_config();
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(body_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                        if let Some(panel) = self.board.panel_mut(panel_id) {
+                            clicked_terminal = TerminalView::new(panel).show(ui, is_focused);
                         }
-                    });
-                });
-
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.config_text)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(22),
-                    );
-                });
+                    },
+                );
             });
-    }
 
-    fn save_and_apply_config(&mut self) {
-        match serde_yaml::from_str::<orbiterm_core::Config>(&self.config_text) {
-            Ok(config) => {
-                if let Some(path) = &self.config_path {
-                    if let Err(error) = std::fs::write(path, &self.config_text) {
-                        tracing::error!("failed to write config: {error}");
-                        return;
-                    }
+        self.panel_screen_rects.insert(panel_id, screen_rect);
 
-                    self.config_last_modified = std::fs::metadata(path)
-                        .ok()
-                        .and_then(|metadata| metadata.modified().ok());
-                }
-
-                match Board::from_config(&config) {
-                    Ok(board) => {
-                        self.board = board;
-                        self.reset_layout_cache();
-                        tracing::info!("config applied");
-                    }
-                    Err(error) => tracing::error!("failed to apply config: {error}"),
-                }
-            }
-            Err(error) => tracing::error!("invalid YAML: {error}"),
-        }
-    }
-
-    fn workspace_snapshots(&self) -> Vec<WorkspaceSnapshot> {
-        let mut workspaces: Vec<_> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
-                (
-                    workspace.id,
-                    workspace.name.clone(),
-                    workspace.accent(),
-                    workspace.panels.len(),
-                    workspace.position,
-                )
-            })
-            .collect();
-
-        workspaces.sort_by(|left, right| {
-            left.4[1]
-                .total_cmp(&right.4[1])
-                .then_with(|| left.4[0].total_cmp(&right.4[0]))
-        });
-        workspaces
-    }
-
-    fn workspace_render_mode(&self, workspace_id: WorkspaceId) -> WorkspaceRenderMode {
-        if self.board.active_workspace == Some(workspace_id) {
-            WorkspaceRenderMode::Interactive
-        } else if self.zoom >= WORKSPACE_PREVIEW_ZOOM {
-            WorkspaceRenderMode::Preview
-        } else {
-            WorkspaceRenderMode::Badge
-        }
-    }
-
-    fn workspace_canvas_bounds(&self, workspace: &Workspace) -> Rect {
-        let mut bounds = Rect::from_min_size(
-            Pos2::new(workspace.position[0], workspace.position[1]),
-            Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
-        );
-
-        for panel_id in &workspace.panels {
-            let Some(panel) = self.board.panel(*panel_id) else {
-                continue;
-            };
-            bounds = bounds.union(self.panel_canvas_rect(panel));
+        if drag_delta != Vec2::ZERO {
+            let new_position = canvas_position + drag_delta;
+            let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
         }
 
-        bounds.expand2(Vec2::new(36.0, 36.0))
-    }
-
-    fn panel_canvas_rect(&self, panel: &orbiterm_core::Panel) -> Rect {
-        let position = self
-            .panel_canvas_position(panel.id)
-            .unwrap_or_else(|| Pos2::new(panel.layout.position[0], panel.layout.position[1]));
-        Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]))
-    }
-
-    fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
-        self.board.focused.is_some() && !ctx.wants_keyboard_input()
-    }
-
-    fn canvas_view_rect(ctx: &Context) -> Option<Rect> {
-        let rect = viewport_local_rect(ctx);
-        (rect.width() > 0.0 && rect.height() > 0.0)
-            .then(|| Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT), rect.max))
-    }
-
-    fn fit_view_to_content(&mut self, ctx: &Context) {
-        self.fit_bounds(ctx, self.fit_board_bounds(), 0.45);
-    }
-
-    fn fit_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
-        self.board.focus_workspace(workspace_id);
-        let bounds = self
-            .board
-            .workspace(workspace_id)
-            .map(|workspace| self.workspace_canvas_bounds(workspace));
-        self.fit_bounds(ctx, bounds, 0.45);
-    }
-
-    fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>, min_zoom: f32) {
-        let Some(content_bounds) = bounds else {
-            self.reset_view(ctx);
-            self.pending_fit_at = None;
-            return;
-        };
-        let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
-            self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
-            return;
-        };
-
-        let margin = Vec2::new(72.0, 56.0);
-        let available_size = Vec2::new(
-            (canvas_rect.width() - margin.x * 2.0).max(220.0),
-            (canvas_rect.height() - margin.y * 2.0).max(180.0),
-        );
-
-        let content_size = content_bounds.size();
-        let target_zoom = (available_size.x / content_size.x)
-            .min(available_size.y / content_size.y)
-            .clamp(min_zoom, 2.5);
-
-        self.zoom = target_zoom;
-        self.pan_offset = canvas_rect.center().to_vec2() - content_bounds.center().to_vec2() * target_zoom;
-        self.pending_fit_at = None;
-    }
-
-    fn fit_board_bounds(&self) -> Option<Rect> {
-        self.layout_bounds()
-    }
-
-    fn layout_bounds(&self) -> Option<Rect> {
-        let mut bounds: Option<Rect> = None;
-
-        for workspace in &self.board.workspaces {
-            let rect = self.workspace_canvas_bounds(workspace);
-            bounds = Some(match bounds {
-                Some(current) => current.union(rect),
-                None => rect,
-            });
+        if resize_delta != Vec2::ZERO {
+            let new_size = clamp_panel_size(canvas_size + resize_delta);
+            let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
         }
 
-        for (index, panel) in self.board.panels.iter().enumerate() {
-            if panel.workspace_id.is_some() {
-                continue;
-            }
-            let position = self
-                .panel_canvas_position(panel.id)
-                .unwrap_or_else(|| Self::default_panel_canvas_pos(index));
-            let rect = Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]));
-            bounds = Some(match bounds {
-                Some(current) => current.union(rect),
-                None => rect,
-            });
+        if clicked_terminal || focus_panel {
+            self.board.focus(panel_id);
         }
 
-        bounds
-    }
-
-    fn track_viewport_size(&mut self, ctx: &Context) {
-        let viewport_size = viewport_local_rect(ctx).size();
-        self.last_viewport_size.replace(viewport_size);
-    }
-
-    fn maybe_apply_pending_fit(&mut self, ctx: &Context) {
-        let Some(run_at) = self.pending_fit_at else {
-            return;
-        };
-        if Instant::now() < run_at {
-            return;
-        }
-
-        if Self::canvas_view_rect(ctx).is_none() {
-            self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
-            return;
-        }
-
-        self.fit_view_to_content(ctx);
+        close_panel
     }
 }
 
@@ -1170,49 +324,19 @@ impl eframe::App for OrbitermApp {
             theme::apply(ctx);
             self.theme_applied = true;
         }
-        self.handle_zoom(ctx);
-        self.handle_canvas_pan(ctx);
-        self.handle_canvas_workspace_creation(ctx);
-        self.track_viewport_size(ctx);
-        handle_edge_resize(ctx);
 
+        self.handle_canvas_pan(ctx);
+        self.handle_shortcuts(ctx);
         self.board.process_output();
 
-        let mut closed_any_panels = false;
         for panel_id in self.panels_to_close.drain(..) {
             self.board.close_panel(panel_id);
-            self.panel_canvas_rects.remove(&panel_id);
             self.panel_screen_rects.remove(&panel_id);
-            self.panel_connection_points.remove(&panel_id);
-            closed_any_panels = true;
         }
 
-        if closed_any_panels {
-            self.remove_empty_workspaces();
-            self.schedule_fit_board(Duration::ZERO);
-        }
-
-        self.handle_shortcuts(ctx);
-        self.check_config_reload();
-
-        paint_root_backdrop(ctx);
-        self.render_titlebar(ctx);
+        self.render_toolbar(ctx);
         self.render_canvas(ctx);
-        self.panel_screen_rects.clear();
-        self.panel_canvas_rects.clear();
-        self.panel_connection_points.clear();
-        self.render_island_backgrounds(ctx);
-        self.render_workspace_badges(ctx);
-        self.render_preview_panels(ctx);
-        self.render_live_panels(ctx);
-        self.maybe_apply_pending_fit(ctx);
-
-        self.draw_connectors(ctx);
-        render_viewport_resize_handles(ctx);
-
-        if self.show_config_editor {
-            self.render_config_editor(ctx);
-        }
+        self.render_panels(ctx);
 
         ctx.request_repaint();
     }
@@ -1220,11 +344,6 @@ impl eframe::App for OrbitermApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         theme::BG.to_normalized_gamma_f32()
     }
-}
-
-fn paint_root_backdrop(ctx: &Context) {
-    ctx.layer_painter(LayerId::background())
-        .rect_filled(viewport_local_rect(ctx), Rounding::ZERO, theme::BG);
 }
 
 fn viewport_local_rect(ctx: &Context) -> Rect {
@@ -1238,376 +357,104 @@ fn viewport_local_rect(ctx: &Context) -> Rect {
         )
 }
 
-fn handle_edge_resize(ctx: &Context) {
-    let rect = viewport_local_rect(ctx);
-    let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
-        return;
-    };
-
-    let edge_margin = 6.0;
-    let corner_handle_size = 24.0;
-    let handle_bottom = rect.max.y - corner_handle_size;
-    let left = pointer_position.x - rect.min.x <= edge_margin;
-    let right = rect.max.x - pointer_position.x <= edge_margin;
-    let top = pointer_position.y - rect.min.y <= edge_margin;
-    let bottom = rect.max.y - pointer_position.y <= edge_margin;
-
-    let north_west_handle = Rect::from_min_size(rect.min, Vec2::splat(corner_handle_size));
-    let north_east_handle = Rect::from_min_size(
-        Pos2::new(rect.max.x - corner_handle_size, rect.min.y),
-        Vec2::splat(corner_handle_size),
-    );
-    let south_west_handle = Rect::from_min_size(Pos2::new(rect.min.x, handle_bottom), Vec2::splat(corner_handle_size));
-    let south_east_handle = Rect::from_min_size(
-        Pos2::new(rect.max.x - corner_handle_size, handle_bottom),
-        Vec2::splat(corner_handle_size),
-    );
-
-    let direction = if north_west_handle.contains(pointer_position) {
-        Some(egui::ResizeDirection::NorthWest)
-    } else if north_east_handle.contains(pointer_position) {
-        Some(egui::ResizeDirection::NorthEast)
-    } else if south_west_handle.contains(pointer_position) {
-        Some(egui::ResizeDirection::SouthWest)
-    } else if south_east_handle.contains(pointer_position) {
-        Some(egui::ResizeDirection::SouthEast)
-    } else if top {
-        Some(egui::ResizeDirection::North)
-    } else if bottom {
-        Some(egui::ResizeDirection::South)
-    } else if left {
-        Some(egui::ResizeDirection::West)
-    } else if right {
-        Some(egui::ResizeDirection::East)
-    } else {
-        None
-    };
-
-    if let Some(direction) = direction {
-        let cursor_icon = match direction {
-            egui::ResizeDirection::East | egui::ResizeDirection::West => egui::CursorIcon::ResizeHorizontal,
-            egui::ResizeDirection::North | egui::ResizeDirection::South => egui::CursorIcon::ResizeVertical,
-            egui::ResizeDirection::NorthWest | egui::ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
-            egui::ResizeDirection::NorthEast | egui::ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
-        };
-
-        ctx.set_cursor_icon(cursor_icon);
-
-        if ctx.input(|input| input.pointer.primary_pressed()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-        }
-    }
-}
-
-fn paint_status_pill(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::default()
-        .fill(theme::alpha(theme::PANEL_BG_ALT, 180))
-        .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(7.0, 2.0))
-        .stroke(Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 120)))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).color(theme::FG_DIM).size(10.0));
-        });
-}
-
-fn native_titlebar_controls_spec() -> TitlebarControlsSpec {
-    if cfg!(target_os = "macos") {
-        titlebar_controls_spec_for_platform("macos")
-    } else if cfg!(target_os = "windows") {
-        titlebar_controls_spec_for_platform("windows")
-    } else {
-        titlebar_controls_spec_for_platform("linux")
-    }
-}
-
-fn titlebar_controls_spec_for_platform(platform: &str) -> TitlebarControlsSpec {
-    if platform == "macos" {
-        TitlebarControlsSpec {
-            placement: TitlebarControlsPlacement::Leading,
-            controls: [
-                TitlebarControl::Close,
-                TitlebarControl::Minimize,
-                TitlebarControl::Maximize,
-            ],
-        }
-    } else {
-        TitlebarControlsSpec {
-            placement: TitlebarControlsPlacement::Trailing,
-            controls: [
-                TitlebarControl::Close,
-                TitlebarControl::Maximize,
-                TitlebarControl::Minimize,
-            ],
-        }
-    }
-}
-
-fn render_titlebar_window_controls(ui: &mut egui::Ui, ctx: &Context, controls: [TitlebarControl; 3]) {
-    for control in controls {
-        let (rect, response) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::click());
-        let fill = if response.hovered() {
-            titlebar_control_color(control)
-        } else {
-            titlebar_control_color(control).gamma_multiply(0.50)
-        };
-        ui.painter().circle_filled(rect.center(), 6.0, fill);
-
-        if response.clicked() {
-            handle_titlebar_control(ctx, control);
-        }
-
-        ui.add_space(4.0);
-    }
-}
-
-fn titlebar_control_color(control: TitlebarControl) -> Color32 {
-    match control {
-        TitlebarControl::Close => theme::BTN_CLOSE,
-        TitlebarControl::Minimize => theme::BTN_MINIMIZE,
-        TitlebarControl::Maximize => theme::BTN_MAXIMIZE,
-    }
-}
-
-fn handle_titlebar_control(ctx: &Context, control: TitlebarControl) {
-    match control {
-        TitlebarControl::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-        TitlebarControl::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-        TitlebarControl::Maximize => {
-            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-        }
-    }
-}
-
-fn paint_panel_preview(
+#[allow(clippy::too_many_arguments)]
+fn paint_panel_chrome(
     ui: &mut egui::Ui,
-    rect: Rect,
+    panel_rect: Rect,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    resize_rect: Rect,
     title: &str,
-    lines: &[String],
-    accent: Color32,
     focused: bool,
-    zoom: f32,
+    close_hovered: bool,
 ) {
-    let painter = ui.painter_at(rect);
-    let title_height = (26.0 * zoom).clamp(18.0, 30.0);
-    let title_font = (12.5 * zoom).clamp(9.0, 13.5);
-    let body_font = (11.5 * zoom).clamp(7.5, 12.0);
-    let line_step = (13.5 * zoom).clamp(10.0, 15.0);
-    let padding = (12.0 * zoom).clamp(8.0, 14.0);
+    let painter = ui.painter_at(panel_rect);
+    let accent = if focused { theme::ACCENT } else { theme::BORDER_STRONG };
 
-    painter.rect_filled(rect, Rounding::same(14.0), theme::PANEL_BG);
+    painter.rect_filled(panel_rect, Rounding::same(14.0), theme::PANEL_BG);
     painter.rect_stroke(
-        rect,
+        panel_rect,
         Rounding::same(14.0),
-        Stroke::new(1.0, theme::panel_border(accent, focused)),
+        Stroke::new(1.2, theme::panel_border(accent, focused)),
     );
-
-    let title_rect = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.min.y + title_height));
     painter.rect_filled(
-        title_rect,
+        titlebar_rect,
         Rounding::same(14.0),
-        theme::blend(theme::PANEL_BG_ALT, accent, 0.20),
+        theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
     );
     painter.text(
-        Pos2::new(title_rect.min.x + padding, title_rect.center().y),
+        Pos2::new(titlebar_rect.min.x + 12.0, titlebar_rect.center().y),
         egui::Align2::LEFT_CENTER,
         title,
-        egui::FontId::proportional(title_font),
+        egui::FontId::proportional(13.0),
         theme::FG,
     );
 
-    for (index, line) in lines.iter().enumerate() {
-        let y = title_rect.max.y + padding + usize_to_f32(index) * line_step;
-        if y > rect.max.y - padding {
-            break;
-        }
-        painter.text(
-            Pos2::new(rect.min.x + padding, y),
-            egui::Align2::LEFT_TOP,
-            line,
-            egui::FontId::monospace(body_font),
-            theme::alpha(theme::FG_SOFT, 220),
-        );
-    }
-}
-
-fn paint_workspace_title_pill(
-    ui: &mut egui::Ui,
-    title: &str,
-    accent: Color32,
-    text_size: f32,
-    width_bounds: [f32; 2],
-) -> Rect {
-    let [min_width, max_width] = width_bounds;
-    let desired_width = (usize_to_f32(title.chars().count().max(8)) * (text_size * 0.62)).clamp(min_width, max_width);
-    let response = egui::Frame::default()
-        .fill(theme::alpha(accent, 34))
-        .rounding(Rounding::same(999.0))
-        .inner_margin(Margin::symmetric(12.0, 4.0))
-        .stroke(Stroke::new(1.0, theme::alpha(accent, 120)))
-        .show(ui, |ui| {
-            ui.add_sized(
-                [desired_width, text_size + 4.0],
-                egui::Label::new(egui::RichText::new(title).color(theme::FG).size(text_size).strong()).truncate(),
-            )
-        });
-
-    response.response.rect
-}
-
-fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) -> bool {
-    let mut pty_resized = false;
-
-    ui.horizontal(|ui| {
-        let auto_label = if panel.auto_resize_pty {
-            "Auto PTY"
+    painter.circle_filled(
+        close_rect.center(),
+        5.0,
+        if close_hovered {
+            theme::BTN_CLOSE
         } else {
-            "Manual PTY"
-        };
-        let toggle_button = if panel.auto_resize_pty {
-            chrome_button(auto_label)
-        } else {
-            primary_button(auto_label)
-        };
-        if ui.add(toggle_button).clicked() {
-            panel.set_auto_resize_pty(!panel.auto_resize_pty);
-        }
-
-        ui.label(
-            egui::RichText::new(format!("{}x{}", panel.terminal.cols(), panel.terminal.rows()))
-                .color(theme::FG_DIM)
-                .size(10.5),
-        );
-        ui.label(
-            egui::RichText::new(format!(
-                "scroll {}/{}",
-                panel.terminal.scrollback(),
-                panel.terminal.scrollback_limit()
-            ))
-            .color(theme::FG_DIM)
-            .size(10.5),
-        );
-
-        if ui.add(icon_button("R-")).on_hover_text("Decrease PTY rows").clicked() {
-            panel.adjust_pty_size(-1, 0);
-            pty_resized = true;
-        }
-        if ui.add(icon_button("R+")).on_hover_text("Increase PTY rows").clicked() {
-            panel.adjust_pty_size(1, 0);
-            pty_resized = true;
-        }
-        if ui
-            .add(icon_button("C-"))
-            .on_hover_text("Decrease PTY columns")
-            .clicked()
-        {
-            panel.adjust_pty_size(0, -1);
-            pty_resized = true;
-        }
-        if ui
-            .add(icon_button("C+"))
-            .on_hover_text("Increase PTY columns")
-            .clicked()
-        {
-            panel.adjust_pty_size(0, 1);
-            pty_resized = true;
-        }
-    });
-
-    pty_resized
-}
-
-fn preview_lines(panel: &orbiterm_core::Panel, max_lines: usize, max_chars: usize) -> Vec<String> {
-    let screen = panel.terminal.screen();
-    let (_, cols) = screen.size();
-    let width = cols.min(u16::try_from(max_chars).unwrap_or(u16::MAX));
-    let rows: Vec<String> = screen.rows(0, width).map(|row| row.trim_end().to_string()).collect();
-    let last_content_row = rows
-        .iter()
-        .rposition(|row| !row.is_empty())
-        .map_or(0, |index| index + 1);
-    let start = last_content_row.saturating_sub(max_lines);
-    let selected = rows
-        .into_iter()
-        .skip(start)
-        .take(max_lines)
-        .map(|row| truncate_preview_line(row, max_chars))
-        .collect::<Vec<_>>();
-
-    if selected.iter().all(String::is_empty) {
-        vec!["terminal idle".to_string()]
-    } else {
-        selected
-    }
-}
-
-fn truncate_preview_line(mut line: String, max_chars: usize) -> String {
-    if line.chars().count() <= max_chars || max_chars <= 3 {
-        return line;
-    }
-
-    line = line.chars().take(max_chars - 3).collect();
-    line.push_str("...");
-    line
-}
-
-fn render_viewport_resize_handles(ctx: &Context) {
-    let rect = viewport_local_rect(ctx);
-    let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("viewport_handles")));
-    let stroke = Stroke::new(1.0, theme::alpha(theme::VIEWPORT_HANDLE, 180));
-    let inset = 8.0;
-    let size = 14.0;
-
-    paint_corner_bracket(
-        &painter,
-        Pos2::new(rect.min.x + inset, rect.min.y + inset),
-        stroke,
-        size,
-        1.0,
-        1.0,
+            theme::alpha(theme::FG_DIM, 140)
+        },
     );
-    paint_corner_bracket(
-        &painter,
-        Pos2::new(rect.max.x - inset, rect.min.y + inset),
-        stroke,
-        size,
-        -1.0,
-        1.0,
+
+    let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM, 170));
+    painter.line_segment(
+        [
+            resize_rect.right_bottom(),
+            resize_rect.left_top() + Vec2::new(6.0, 12.0),
+        ],
+        handle_stroke,
     );
-    paint_corner_bracket(
-        &painter,
-        Pos2::new(rect.min.x + inset, rect.max.y - inset),
-        stroke,
-        size,
-        1.0,
-        -1.0,
-    );
-    paint_corner_bracket(
-        &painter,
-        Pos2::new(rect.max.x - inset, rect.max.y - inset),
-        stroke,
-        size,
-        -1.0,
-        -1.0,
+    painter.line_segment(
+        [
+            resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
+            resize_rect.left_top() + Vec2::new(12.0, 12.0),
+        ],
+        handle_stroke,
     );
 }
 
-fn paint_corner_bracket(
-    painter: &egui::Painter,
-    corner: Pos2,
-    stroke: Stroke,
-    size: f32,
-    x_direction: f32,
-    y_direction: f32,
-) {
-    painter.line_segment([corner, corner + Vec2::new(size * x_direction, 0.0)], stroke);
-    painter.line_segment([corner, corner + Vec2::new(0.0, size * y_direction)], stroke);
+fn paint_empty_state(ui: &mut egui::Ui) {
+    let rect = ui.max_rect();
+    let card_rect = Rect::from_center_size(rect.center(), Vec2::new(320.0, 110.0));
+    let painter = ui.painter();
+
+    painter.rect_filled(card_rect, Rounding::same(18.0), theme::alpha(theme::PANEL_BG, 236));
+    painter.rect_stroke(
+        card_rect,
+        Rounding::same(18.0),
+        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)),
+    );
+    painter.text(
+        Pos2::new(card_rect.center().x, card_rect.min.y + 34.0),
+        egui::Align2::CENTER_CENTER,
+        "Infinite terminal canvas",
+        egui::FontId::proportional(17.0),
+        theme::FG,
+    );
+    painter.text(
+        Pos2::new(card_rect.center().x, card_rect.min.y + 66.0),
+        egui::Align2::CENTER_CENTER,
+        "Create a terminal, drag it anywhere, and pan for more space.",
+        egui::FontId::proportional(11.5),
+        theme::FG_SOFT,
+    );
+    painter.text(
+        Pos2::new(card_rect.center().x, card_rect.min.y + 86.0),
+        egui::Align2::CENTER_CENTER,
+        "Ctrl+N adds a panel. Middle-drag pans the board.",
+        egui::FontId::proportional(10.5),
+        theme::FG_DIM,
+    );
 }
 
-fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, zoom: f32) {
+fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2) {
     let rect = ui.max_rect();
     let painter = ui.painter();
-    let spacing = (22.0 * zoom).clamp(14.0, 52.0);
+    let spacing = 22.0;
     let dot_radius = 1.15;
     let offset_x = pan_offset.x.rem_euclid(spacing);
     let offset_y = pan_offset.y.rem_euclid(spacing);
@@ -1637,72 +484,17 @@ fn paint_canvas_glow(ui: &mut egui::Ui) {
         rect.height() * 0.28,
         theme::CANVAS_COOL_GLOW,
     );
-
-    let highlight = Rect::from_min_max(
-        Pos2::new(rect.max.x - 6.0, rect.min.y),
-        Pos2::new(rect.max.x, rect.max.y),
-    );
-    painter.rect_filled(highlight, Rounding::ZERO, theme::alpha(theme::ACCENT_WARM, 110));
-}
-
-fn should_create_workspace_from_canvas_gesture(
-    triggered: bool,
-    canvas_rect: Rect,
-    pointer_position: Pos2,
-    panel_rects: &[Rect],
-    workspace_rects: &[Rect],
-) -> bool {
-    triggered
-        && canvas_rect.contains(pointer_position)
-        && panel_rects.iter().all(|rect| !rect.contains(pointer_position))
-        && workspace_rects.iter().all(|rect| !rect.contains(pointer_position))
 }
 
 #[cfg(test)]
-fn clamp_rect_to_bounds(rect: Rect, bounds: Rect) -> Rect {
-    let size = Vec2::new(rect.width().min(bounds.width()), rect.height().min(bounds.height()));
-    let max_min_x = bounds.max.x - size.x;
-    let max_min_y = bounds.max.y - size.y;
-    let min = Pos2::new(
-        rect.min.x.clamp(bounds.min.x, max_min_x),
-        rect.min.y.clamp(bounds.min.y, max_min_y),
-    );
-
-    Rect::from_min_size(min, size)
+fn default_panel_canvas_pos(index: usize) -> Pos2 {
+    let column = usize_to_f32(index % 3);
+    let row = usize_to_f32(index / 3);
+    Pos2::new(120.0 + column * PANEL_COLUMN_SPACING, 120.0 + row * PANEL_ROW_SPACING)
 }
 
-#[cfg(test)]
-fn workspace_name_from_input(input: &str, fallback_name: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        fallback_name.to_owned()
-    } else {
-        trimmed.to_owned()
-    }
-}
-
-fn agent_panel_defaults(kind: PanelKind) -> (&'static str, PanelResume, bool) {
-    match kind {
-        PanelKind::Codex => ("codex", PanelResume::Last, false),
-        PanelKind::Claude => ("claude", PanelResume::Last, false),
-        _ => ("shell", PanelResume::Fresh, false),
-    }
-}
-
-fn panel_size_changed(previous_size: Vec2, current_size: Vec2) -> bool {
-    const RESIZE_EPSILON: f32 = 1.0;
-
-    (current_size.x - previous_size.x).abs() > RESIZE_EPSILON
-        || (current_size.y - previous_size.y).abs() > RESIZE_EPSILON
-}
-
-fn preview_char_budget(screen_width: f32) -> usize {
-    let char_slots = ((screen_width - 24.0) / 7.0).floor().clamp(12.0, 80.0);
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        char_slots as usize
-    }
+fn clamp_panel_size(size: Vec2) -> Vec2 {
+    Vec2::new(size.x.max(PANEL_MIN_SIZE[0]), size.y.max(PANEL_MIN_SIZE[1]))
 }
 
 fn primary_button(text: &str) -> Button<'_> {
@@ -1722,149 +514,28 @@ fn chrome_button(text: &str) -> Button<'_> {
         .rounding(Rounding::same(10.0))
 }
 
-fn icon_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(12.0).color(theme::FG_SOFT))
-        .min_size(Vec2::splat(20.0))
-        .fill(theme::alpha(theme::PANEL_BG_ALT, 220))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 190)))
-        .rounding(Rounding::same(999.0))
-}
-
+#[cfg(test)]
 fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        TitlebarControl, TitlebarControlsPlacement, agent_panel_defaults, clamp_rect_to_bounds, panel_size_changed,
-        preview_char_budget, should_create_workspace_from_canvas_gesture, titlebar_controls_spec_for_platform,
-        workspace_name_from_input,
-    };
-    use egui::{Pos2, Rect, Vec2};
-    use orbiterm_core::{PanelKind, PanelResume};
+    use super::{PANEL_MIN_SIZE, clamp_panel_size, default_panel_canvas_pos};
+    use egui::{Pos2, Vec2};
 
     #[test]
-    fn workspace_creation_gesture_only_fires_on_empty_canvas() {
-        let canvas = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(800.0, 500.0));
-        let panel_rects = [Rect::from_min_size(Pos2::new(200.0, 120.0), Vec2::new(240.0, 180.0))];
-        let workspace_rects = [Rect::from_min_size(Pos2::new(80.0, 72.0), Vec2::new(220.0, 52.0))];
-
-        assert!(should_create_workspace_from_canvas_gesture(
-            true,
-            canvas,
-            Pos2::new(520.0, 240.0),
-            &panel_rects,
-            &workspace_rects,
-        ));
-        assert!(!should_create_workspace_from_canvas_gesture(
-            true,
-            canvas,
-            Pos2::new(260.0, 160.0),
-            &panel_rects,
-            &workspace_rects,
-        ));
-        assert!(!should_create_workspace_from_canvas_gesture(
-            true,
-            canvas,
-            Pos2::new(120.0, 90.0),
-            &panel_rects,
-            &workspace_rects,
-        ));
-        assert!(!should_create_workspace_from_canvas_gesture(
-            false,
-            canvas,
-            Pos2::new(520.0, 240.0),
-            &panel_rects,
-            &workspace_rects,
-        ));
+    fn default_panel_positions_tile_in_rows() {
+        assert_eq!(default_panel_canvas_pos(0), Pos2::new(120.0, 120.0));
+        assert_eq!(default_panel_canvas_pos(1), Pos2::new(660.0, 120.0));
+        assert_eq!(default_panel_canvas_pos(3), Pos2::new(120.0, 480.0));
     }
 
     #[test]
-    fn clamped_rect_stays_inside_bounds() {
-        let bounds = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(600.0, 320.0));
-        let rect = Rect::from_min_size(Pos2::new(-80.0, 0.0), Vec2::new(720.0, 400.0));
+    fn panel_size_is_clamped_to_minimums() {
+        let clamped = clamp_panel_size(Vec2::new(100.0, 120.0));
 
-        let clamped = clamp_rect_to_bounds(rect, bounds);
-
-        assert_eq!(clamped.min, bounds.min);
-        assert_eq!(clamped.max, bounds.max);
-    }
-
-    #[test]
-    fn workspace_name_defaults_when_input_is_blank() {
-        assert_eq!(workspace_name_from_input("   ", "workspace 4"), "workspace 4");
-        assert_eq!(workspace_name_from_input(" agents ", "workspace 4"), "agents");
-    }
-
-    #[test]
-    fn preview_char_budget_stays_within_expected_bounds() {
-        assert_eq!(preview_char_budget(20.0), 12);
-        assert_eq!(preview_char_budget(400.0), 53);
-        assert_eq!(preview_char_budget(900.0), 80);
-    }
-
-    #[test]
-    fn agent_panels_start_with_manual_pty() {
-        assert_eq!(
-            agent_panel_defaults(PanelKind::Codex),
-            ("codex", PanelResume::Last, false)
-        );
-        assert_eq!(
-            agent_panel_defaults(PanelKind::Claude),
-            ("claude", PanelResume::Last, false)
-        );
-        assert_eq!(
-            agent_panel_defaults(PanelKind::Shell),
-            ("shell", PanelResume::Fresh, false)
-        );
-    }
-
-    #[test]
-    fn panel_resize_detection_is_symmetric() {
-        let previous_size = Vec2::new(280.0, 200.0);
-        let current_size = Vec2::new(320.0, 220.0);
-        let smaller_size = Vec2::new(240.0, 180.0);
-        let nearly_same = Vec2::new(280.4, 200.4);
-
-        assert!(panel_size_changed(previous_size, current_size));
-        assert!(panel_size_changed(previous_size, smaller_size));
-        assert!(!panel_size_changed(previous_size, nearly_same));
-    }
-
-    #[test]
-    fn titlebar_controls_follow_platform_conventions() {
-        let linux = titlebar_controls_spec_for_platform("linux");
-        assert_eq!(linux.placement, TitlebarControlsPlacement::Trailing);
-        assert_eq!(
-            linux.controls,
-            [
-                TitlebarControl::Close,
-                TitlebarControl::Maximize,
-                TitlebarControl::Minimize,
-            ]
-        );
-
-        let windows = titlebar_controls_spec_for_platform("windows");
-        assert_eq!(windows.placement, TitlebarControlsPlacement::Trailing);
-        assert_eq!(
-            windows.controls,
-            [
-                TitlebarControl::Close,
-                TitlebarControl::Maximize,
-                TitlebarControl::Minimize,
-            ]
-        );
-
-        let macos = titlebar_controls_spec_for_platform("macos");
-        assert_eq!(macos.placement, TitlebarControlsPlacement::Leading);
-        assert_eq!(
-            macos.controls,
-            [
-                TitlebarControl::Close,
-                TitlebarControl::Minimize,
-                TitlebarControl::Maximize,
-            ]
-        );
+        assert!((clamped.x - PANEL_MIN_SIZE[0]).abs() <= f32::EPSILON);
+        assert!(clamped.y >= PANEL_MIN_SIZE[1]);
     }
 }
