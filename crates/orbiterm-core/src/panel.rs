@@ -79,7 +79,7 @@ impl Default for PanelOptions {
             cwd: None,
             rows: 24,
             cols: 80,
-            auto_resize_pty: true,
+            auto_resize_pty: false,
             kind: PanelKind::default(),
             resume: PanelResume::default(),
             position: None,
@@ -336,8 +336,8 @@ fn adjust_dimension(current: u16, delta: i16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
-        scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelOptions, PanelResume,
+        resolve_launch_command, scrollback_limit_for_kind,
     };
 
     #[test]
@@ -390,5 +390,10 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+    }
+
+    #[test]
+    fn new_panels_start_with_manual_pty() {
+        assert!(!PanelOptions::default().auto_resize_pty);
     }
 }

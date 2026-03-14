@@ -23,6 +23,8 @@ const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 const WORKSPACE_INTERACTIVE_ZOOM: f32 = 0.78;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
+const FIT_BOARD_PANEL_MAX_WIDTH: f32 = 360.0;
+const FIT_BOARD_PANEL_MAX_HEIGHT: f32 = 220.0;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
@@ -281,7 +283,7 @@ impl OrbitermApp {
     }
 
     fn suggest_workspace_position(&self, ctx: &Context) -> Pos2 {
-        if let Some(bounds) = self.content_bounds() {
+        if let Some(bounds) = self.layout_bounds() {
             return Pos2::new(bounds.max.x + 120.0, bounds.min.y.max(48.0));
         }
 
@@ -300,17 +302,14 @@ impl OrbitermApp {
     }
 
     fn create_agent_panel(&mut self, workspace_id: Option<WorkspaceId>, kind: PanelKind) {
-        let (name, resume) = match kind {
-            PanelKind::Codex => ("codex", PanelResume::Last),
-            PanelKind::Claude => ("claude", PanelResume::Last),
-            _ => ("shell", PanelResume::Fresh),
-        };
+        let (name, resume, auto_resize_pty) = agent_panel_defaults(kind);
         self.create_panel_with_options(
             workspace_id,
             PanelOptions {
                 name: Some(name.to_string()),
                 kind,
                 resume,
+                auto_resize_pty,
                 ..PanelOptions::default()
             },
         );
@@ -819,14 +818,14 @@ impl OrbitermApp {
         let current_screen_position = self.canvas_to_screen(current_canvas_position);
         let is_focused = self.board.focused == Some(panel_id);
         let mut open = true;
-        let default_size = self
+        let previous_size = self
             .board
             .panel(panel_id)
             .map_or(Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT), |panel| {
                 Vec2::new(panel.layout.size[0], panel.layout.size[1])
             });
         let desired_rect = clamp_rect_to_bounds(
-            Rect::from_min_size(current_screen_position, default_size),
+            Rect::from_min_size(current_screen_position, previous_size),
             constrain_rect,
         );
 
@@ -850,18 +849,32 @@ impl OrbitermApp {
             )
             .show(ctx, |ui| {
                 if let Some(panel) = self.board.panels.iter_mut().find(|item| item.id == panel_id) {
-                    render_pty_controls(ui, panel);
+                    let pty_resized = render_pty_controls(ui, panel);
                     ui.add_space(6.0);
-                    TerminalView::new(panel).show(ui, self.board.focused == Some(panel_id))
+                    let clicked_terminal = TerminalView::new(panel).show(ui, self.board.focused == Some(panel_id));
+                    (clicked_terminal, pty_resized)
                 } else {
-                    false
+                    (false, false)
                 }
             });
 
         if let Some(window) = response {
             self.sync_live_panel_geometry(panel_id, constrain_rect, window.response.rect);
 
-            if window.inner.unwrap_or(false) || window.response.clicked() || window.response.drag_started() {
+            let (clicked_terminal, pty_resized) = window.inner.unwrap_or((false, false));
+            let should_zoom_out = should_zoom_out_for_edge_resize(
+                window.response.rect,
+                constrain_rect,
+                previous_size,
+                window.response.rect.size(),
+                pty_resized,
+                ctx.input(|input| input.pointer.primary_down()),
+            );
+            if should_zoom_out {
+                self.zoom_out_around(window.response.rect.center());
+            }
+
+            if clicked_terminal || window.response.clicked() || window.response.drag_started() {
                 self.board.focus(panel_id);
             }
         }
@@ -1136,6 +1149,25 @@ impl OrbitermApp {
         bounds.expand2(Vec2::new(36.0, 36.0))
     }
 
+    fn workspace_fit_board_bounds(&self, workspace: &Workspace) -> Rect {
+        let mut bounds = Rect::from_min_size(
+            Pos2::new(workspace.position[0], workspace.position[1]),
+            Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
+        );
+
+        for panel_id in &workspace.panels {
+            let Some(panel) = self.board.panel(*panel_id) else {
+                continue;
+            };
+            let position = self
+                .panel_canvas_position(panel.id)
+                .unwrap_or_else(|| Pos2::new(panel.layout.position[0], panel.layout.position[1]));
+            bounds = bounds.union(Rect::from_min_size(position, fit_board_panel_size(panel.layout.size)));
+        }
+
+        bounds.expand2(Vec2::new(48.0, 48.0))
+    }
+
     fn panel_canvas_rect(&self, panel: &orbiterm_core::Panel) -> Rect {
         let position = self
             .panel_canvas_position(panel.id)
@@ -1158,7 +1190,7 @@ impl OrbitermApp {
     }
 
     fn fit_view_to_content(&mut self, ctx: &Context) {
-        self.fit_bounds(ctx, self.content_bounds());
+        self.fit_bounds(ctx, self.fit_board_bounds());
     }
 
     fn fit_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
@@ -1197,7 +1229,47 @@ impl OrbitermApp {
         self.auto_fit_pending = false;
     }
 
-    fn content_bounds(&self) -> Option<Rect> {
+    fn zoom_out_around(&mut self, screen_point: Pos2) {
+        let anchor = self.screen_to_canvas(screen_point);
+        let next_zoom = (self.zoom * 0.92).clamp(0.45, 2.5);
+        if (next_zoom - self.zoom).abs() <= f32::EPSILON {
+            return;
+        }
+
+        self.zoom = next_zoom;
+        self.pan_offset = screen_point.to_vec2() - anchor.to_vec2() * self.zoom;
+        self.auto_fit_pending = false;
+    }
+
+    fn fit_board_bounds(&self) -> Option<Rect> {
+        let mut bounds: Option<Rect> = None;
+
+        for workspace in &self.board.workspaces {
+            let rect = self.workspace_fit_board_bounds(workspace);
+            bounds = Some(match bounds {
+                Some(current) => current.union(rect),
+                None => rect,
+            });
+        }
+
+        for (index, panel) in self.board.panels.iter().enumerate() {
+            if panel.workspace_id.is_some() {
+                continue;
+            }
+            let position = self
+                .panel_canvas_position(panel.id)
+                .unwrap_or_else(|| Self::default_panel_canvas_pos(index));
+            let rect = Rect::from_min_size(position, fit_board_panel_size(panel.layout.size));
+            bounds = Some(match bounds {
+                Some(current) => current.union(rect),
+                None => rect,
+            });
+        }
+
+        bounds
+    }
+
+    fn layout_bounds(&self) -> Option<Rect> {
         let mut bounds: Option<Rect> = None;
 
         for workspace in &self.board.workspaces {
@@ -1212,19 +1284,17 @@ impl OrbitermApp {
             if panel.workspace_id.is_some() {
                 continue;
             }
-            let rect = self.panel_canvas_rects.get(&panel.id).copied().unwrap_or_else(|| {
-                let position = self
-                    .panel_canvas_position(panel.id)
-                    .unwrap_or_else(|| Self::default_panel_canvas_pos(index));
-                Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]))
-            });
+            let position = self
+                .panel_canvas_position(panel.id)
+                .unwrap_or_else(|| Self::default_panel_canvas_pos(index));
+            let rect = Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]));
             bounds = Some(match bounds {
                 Some(current) => current.union(rect),
                 None => rect,
             });
         }
 
-        bounds.map(|rect| rect.expand2(Vec2::new(48.0, 48.0)))
+        bounds
     }
 }
 
@@ -1427,7 +1497,9 @@ fn paint_panel_preview(
     }
 }
 
-fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) {
+fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) -> bool {
+    let mut pty_resized = false;
+
     ui.horizontal(|ui| {
         let auto_label = if panel.auto_resize_pty {
             "Auto PTY"
@@ -1451,9 +1523,11 @@ fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) {
 
         if ui.add(icon_button("R-")).on_hover_text("Decrease PTY rows").clicked() {
             panel.adjust_pty_size(-1, 0);
+            pty_resized = true;
         }
         if ui.add(icon_button("R+")).on_hover_text("Increase PTY rows").clicked() {
             panel.adjust_pty_size(1, 0);
+            pty_resized = true;
         }
         if ui
             .add(icon_button("C-"))
@@ -1461,6 +1535,7 @@ fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) {
             .clicked()
         {
             panel.adjust_pty_size(0, -1);
+            pty_resized = true;
         }
         if ui
             .add(icon_button("C+"))
@@ -1468,8 +1543,11 @@ fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) {
             .clicked()
         {
             panel.adjust_pty_size(0, 1);
+            pty_resized = true;
         }
     });
+
+    pty_resized
 }
 
 fn preview_lines(panel: &orbiterm_core::Panel, max_lines: usize, max_chars: usize) -> Vec<String> {
@@ -1653,6 +1731,47 @@ fn workspace_name_from_input(input: &str, fallback_name: &str) -> String {
     }
 }
 
+fn agent_panel_defaults(kind: PanelKind) -> (&'static str, PanelResume, bool) {
+    match kind {
+        PanelKind::Codex => ("codex", PanelResume::Last, false),
+        PanelKind::Claude => ("claude", PanelResume::Last, false),
+        _ => ("shell", PanelResume::Fresh, false),
+    }
+}
+
+fn fit_board_panel_size(size: [f32; 2]) -> Vec2 {
+    Vec2::new(
+        size[0].min(FIT_BOARD_PANEL_MAX_WIDTH),
+        size[1].min(FIT_BOARD_PANEL_MAX_HEIGHT),
+    )
+}
+
+fn rect_touches_bounds(rect: Rect, bounds: Rect) -> bool {
+    const EDGE_PADDING: f32 = 12.0;
+
+    rect.min.x <= bounds.min.x + EDGE_PADDING
+        || rect.min.y <= bounds.min.y + EDGE_PADDING
+        || rect.max.x >= bounds.max.x - EDGE_PADDING
+        || rect.max.y >= bounds.max.y - EDGE_PADDING
+}
+
+fn should_zoom_out_for_edge_resize(
+    rect: Rect,
+    bounds: Rect,
+    previous_size: Vec2,
+    current_size: Vec2,
+    pty_resized: bool,
+    pointer_down: bool,
+) -> bool {
+    rect_touches_bounds(rect, bounds) && (pty_resized || (pointer_down && panel_size_grew(previous_size, current_size)))
+}
+
+fn panel_size_grew(previous_size: Vec2, current_size: Vec2) -> bool {
+    const RESIZE_EPSILON: f32 = 1.0;
+
+    current_size.x > previous_size.x + RESIZE_EPSILON || current_size.y > previous_size.y + RESIZE_EPSILON
+}
+
 fn preview_char_budget(screen_width: f32) -> usize {
     let char_slots = ((screen_width - 24.0) / 7.0).floor().clamp(12.0, 80.0);
 
@@ -1694,10 +1813,12 @@ fn usize_to_f32(value: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_rect_to_bounds, preview_char_budget, should_create_workspace_from_canvas_gesture,
-        workspace_name_from_input,
+        FIT_BOARD_PANEL_MAX_HEIGHT, FIT_BOARD_PANEL_MAX_WIDTH, agent_panel_defaults, clamp_rect_to_bounds,
+        fit_board_panel_size, panel_size_grew, preview_char_budget, rect_touches_bounds,
+        should_create_workspace_from_canvas_gesture, should_zoom_out_for_edge_resize, workspace_name_from_input,
     };
     use egui::{Pos2, Rect, Vec2};
+    use orbiterm_core::{PanelKind, PanelResume};
 
     #[test]
     fn workspace_creation_gesture_only_fires_on_empty_canvas() {
@@ -1757,5 +1878,87 @@ mod tests {
         assert_eq!(preview_char_budget(20.0), 12);
         assert_eq!(preview_char_budget(400.0), 53);
         assert_eq!(preview_char_budget(900.0), 80);
+    }
+
+    #[test]
+    fn fit_board_panel_size_caps_large_panels() {
+        assert_eq!(
+            fit_board_panel_size([800.0, 640.0]),
+            Vec2::new(FIT_BOARD_PANEL_MAX_WIDTH, FIT_BOARD_PANEL_MAX_HEIGHT)
+        );
+        assert_eq!(fit_board_panel_size([220.0, 180.0]), Vec2::new(220.0, 180.0));
+    }
+
+    #[test]
+    fn agent_panels_start_with_manual_pty() {
+        assert_eq!(
+            agent_panel_defaults(PanelKind::Codex),
+            ("codex", PanelResume::Last, false)
+        );
+        assert_eq!(
+            agent_panel_defaults(PanelKind::Claude),
+            ("claude", PanelResume::Last, false)
+        );
+        assert_eq!(
+            agent_panel_defaults(PanelKind::Shell),
+            ("shell", PanelResume::Fresh, false)
+        );
+    }
+
+    #[test]
+    fn detects_when_panel_hits_viewport_edge() {
+        let bounds = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(640.0, 360.0));
+
+        assert!(rect_touches_bounds(
+            Rect::from_min_size(Pos2::new(4.0, 80.0), Vec2::new(240.0, 160.0)),
+            bounds,
+        ));
+        assert!(!rect_touches_bounds(
+            Rect::from_min_size(Pos2::new(80.0, 100.0), Vec2::new(240.0, 160.0)),
+            bounds,
+        ));
+    }
+
+    #[test]
+    fn edge_resize_zoom_only_triggers_for_growth_or_manual_pty_changes() {
+        let bounds = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(640.0, 360.0));
+        let edge_rect = Rect::from_min_size(Pos2::new(0.0, 120.0), Vec2::new(320.0, 220.0));
+        let interior_rect = Rect::from_min_size(Pos2::new(120.0, 120.0), Vec2::new(320.0, 220.0));
+        let previous_size = Vec2::new(280.0, 200.0);
+        let current_size = Vec2::new(320.0, 220.0);
+
+        assert!(panel_size_grew(previous_size, current_size));
+        assert!(should_zoom_out_for_edge_resize(
+            edge_rect,
+            bounds,
+            previous_size,
+            current_size,
+            false,
+            true,
+        ));
+        assert!(should_zoom_out_for_edge_resize(
+            edge_rect,
+            bounds,
+            previous_size,
+            previous_size,
+            true,
+            false,
+        ));
+        assert!(!should_zoom_out_for_edge_resize(
+            edge_rect,
+            bounds,
+            previous_size,
+            previous_size,
+            false,
+            true,
+        ));
+        assert!(!should_zoom_out_for_edge_resize(
+            interior_rect,
+            bounds,
+            previous_size,
+            current_size,
+            true,
+            true,
+        ));
     }
 }
