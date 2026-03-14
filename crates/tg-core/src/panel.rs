@@ -1,0 +1,136 @@
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::mpsc;
+
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+use crate::error::{Error, Result};
+use crate::terminal::Terminal;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct PanelId(pub u64);
+
+pub struct PanelOptions {
+    pub name: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub rows: u16,
+    pub cols: u16,
+}
+
+impl Default for PanelOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            command: None,
+            args: Vec::new(),
+            cwd: None,
+            rows: 24,
+            cols: 80,
+        }
+    }
+}
+
+pub struct Panel {
+    pub id: PanelId,
+    pub title: String,
+    pub terminal: Terminal,
+    has_custom_name: bool,
+    writer: Box<dyn Write + Send>,
+    output_rx: mpsc::Receiver<Vec<u8>>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    _child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+impl Panel {
+    pub fn spawn(id: PanelId, opts: PanelOptions) -> Result<Self> {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: opts.rows,
+                cols: opts.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| Error::Pty(e.to_string()))?;
+
+        let program = opts
+            .command
+            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()));
+        let mut cmd = CommandBuilder::new(&program);
+        for arg in &opts.args {
+            cmd.arg(arg);
+        }
+        if let Some(cwd) = &opts.cwd {
+            cmd.cwd(cwd);
+        }
+
+        let child = pair.slave.spawn_command(cmd).map_err(|e| Error::Pty(e.to_string()))?;
+
+        let reader = pair.master.try_clone_reader().map_err(|e| Error::Pty(format!("{e}")))?;
+        let writer = pair.master.take_writer().map_err(|e| Error::Pty(format!("{e}")))?;
+
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            tracing::debug!("PTY reader thread exited");
+        });
+
+        let has_custom_name = opts.name.is_some();
+        let title = opts.name.unwrap_or_else(|| format!("Terminal {}", id.0));
+        tracing::info!("created panel '{}' (id={})", title, id.0);
+
+        Ok(Self {
+            id,
+            title,
+            terminal: Terminal::new(opts.rows, opts.cols),
+            has_custom_name,
+            writer,
+            output_rx: rx,
+            master: pair.master,
+            _child: child,
+        })
+    }
+
+    /// Drain pending PTY output and feed to the terminal emulator.
+    pub fn process_output(&mut self) {
+        while let Ok(bytes) = self.output_rx.try_recv() {
+            self.terminal.process(&bytes);
+        }
+        // Only override title from terminal escape sequences if no custom name was set
+        if !self.has_custom_name {
+            let title = self.terminal.title();
+            if !title.is_empty() {
+                self.title = title.to_string();
+            }
+        }
+    }
+
+    pub fn write_input(&mut self, bytes: &[u8]) {
+        let _ = self.writer.write_all(bytes);
+        let _ = self.writer.flush();
+    }
+
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        self.terminal.resize(rows, cols);
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+    }
+}

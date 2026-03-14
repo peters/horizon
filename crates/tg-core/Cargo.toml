@@ -1,0 +1,16 @@
+[package]
+name = "tg-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+vt100.workspace = true
+portable-pty.workspace = true
