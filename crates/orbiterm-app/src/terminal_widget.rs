@@ -33,8 +33,6 @@ impl<'a> TerminalView<'a> {
             self.panel.resize(new_rows, new_cols);
         }
 
-        let screen = self.panel.terminal.screen();
-
         let (rect, response) = ui.allocate_exact_size(terminal_rect_size, egui::Sense::click());
 
         if response.clicked() {
@@ -42,6 +40,13 @@ impl<'a> TerminalView<'a> {
         }
         if is_active_panel && ui.input(|input| input.key_pressed(Key::Tab)) {
             response.request_focus();
+        }
+        if response.hovered() {
+            let scroll_delta_y = ui.input(|input| input.smooth_scroll_delta.y + input.raw_scroll_delta.y);
+            let scroll_lines = scroll_lines_from_delta(scroll_delta_y, line_height);
+            if scroll_lines != 0 {
+                self.panel.scroll_scrollback_by(scroll_lines);
+            }
         }
 
         let metrics = GridMetrics {
@@ -55,6 +60,7 @@ impl<'a> TerminalView<'a> {
         let has_terminal_focus = response.has_focus() || (is_active_panel && !other_widget_has_focus);
 
         if ui.is_rect_visible(rect) {
+            let screen = self.panel.terminal.screen();
             render_grid(ui, rect, screen, &metrics);
             render_cursor(ui, rect, screen, &metrics, has_terminal_focus);
         }
@@ -164,5 +170,31 @@ fn quantize_dimension(value: f32) -> u16 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         clamped as u16
+    }
+}
+
+fn scroll_lines_from_delta(scroll_delta_y: f32, line_height: f32) -> i32 {
+    if !scroll_delta_y.is_finite() || !line_height.is_finite() || line_height <= 0.0 {
+        return 0;
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    {
+        (scroll_delta_y / line_height)
+            .round()
+            .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scroll_lines_from_delta;
+
+    #[test]
+    fn scroll_delta_maps_to_terminal_lines() {
+        assert_eq!(scroll_lines_from_delta(26.0, 13.0), 2);
+        assert_eq!(scroll_lines_from_delta(-26.0, 13.0), -2);
+        assert_eq!(scroll_lines_from_delta(3.0, 13.0), 0);
+        assert_eq!(scroll_lines_from_delta(5.0, 0.0), 0);
     }
 }

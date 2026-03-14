@@ -323,8 +323,8 @@ fn orphan_panel_position(index: usize) -> [f32; 2] {
 }
 
 fn usize_to_f32(value: usize) -> f32 {
-    let clamped = u32::try_from(value).unwrap_or(u32::MAX);
-    clamped as f32
+    let clamped = u16::try_from(value).unwrap_or(u16::MAX);
+    f32::from(clamped)
 }
 
 #[cfg(test)]
@@ -406,6 +406,7 @@ mod tests {
             .expect("panel should spawn");
         let panel = board.panel(panel_id).expect("panel should exist");
 
-        assert_eq!(panel.layout.position, [90.0, 108.0]);
+        assert!((panel.layout.position[0] - 90.0).abs() <= f32::EPSILON);
+        assert!((panel.layout.position[1] - 108.0).abs() <= f32::EPSILON);
     }
 }

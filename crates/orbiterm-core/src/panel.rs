@@ -14,6 +14,8 @@ const MAX_OUTPUT_CHUNKS_PER_FRAME: usize = 24;
 const MAX_OUTPUT_BYTES_PER_FRAME: usize = 128 * 1024;
 const PTY_RESIZE_INTERVAL: Duration = Duration::from_millis(40);
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
+const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = 8_000;
+const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
@@ -182,7 +184,7 @@ impl Panel {
             },
             workspace_id: None,
             auto_resize_pty,
-            terminal: Terminal::new(rows, cols),
+            terminal: Terminal::with_scrollback(rows, cols, scrollback_limit_for_kind(kind)),
             has_custom_name,
             writer,
             output_rx: rx,
@@ -246,6 +248,10 @@ impl Panel {
         self.resize(rows, cols);
     }
 
+    pub fn scroll_scrollback_by(&mut self, delta: i32) {
+        self.terminal.scroll_scrollback_by(delta);
+    }
+
     pub fn resize(&mut self, rows: u16, cols: u16) {
         if rows == self.terminal.rows() && cols == self.terminal.cols() {
             return;
@@ -288,11 +294,14 @@ fn resolve_launch_command(
     match kind {
         PanelKind::Shell | PanelKind::Command => (default_shell(), args),
         PanelKind::Codex => {
-            let mut launch_args = match resume {
-                PanelResume::Fresh => Vec::new(),
-                PanelResume::Last => vec!["resume".to_string(), "--last".to_string()],
-                PanelResume::Session { session_id } => vec!["resume".to_string(), session_id.clone()],
-            };
+            let mut launch_args = vec!["--no-alt-screen".to_string()];
+            match resume {
+                PanelResume::Fresh => {}
+                PanelResume::Last => launch_args.extend(["resume".to_string(), "--last".to_string()]),
+                PanelResume::Session { session_id } => {
+                    launch_args.extend(["resume".to_string(), session_id.clone()]);
+                }
+            }
             launch_args.extend(args);
             ("codex".to_string(), launch_args)
         }
@@ -312,21 +321,31 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
 }
 
+fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
+    match kind {
+        PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
+        PanelKind::Shell | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
+    }
+}
+
 fn adjust_dimension(current: u16, delta: i16) -> u16 {
     let adjusted = i32::from(current) + i32::from(delta);
-    adjusted.clamp(1, i32::from(u16::MAX)) as u16
+    u16::try_from(adjusted.clamp(1, i32::from(u16::MAX))).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PanelKind, PanelResume, resolve_launch_command};
+    use super::{
+        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
+        scrollback_limit_for_kind,
+    };
 
     #[test]
-    fn codex_last_resume_uses_resume_subcommand() {
+    fn codex_last_resume_uses_resume_subcommand_and_preserves_scrollback() {
         let (program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
 
         assert_eq!(program, "codex");
-        assert_eq!(args, vec!["resume", "--last"]);
+        assert_eq!(args, vec!["--no-alt-screen", "resume", "--last"]);
     }
 
     #[test]
@@ -355,5 +374,21 @@ mod tests {
 
         assert_eq!(program, "python");
         assert_eq!(args, vec!["-m", "http.server"]);
+    }
+
+    #[test]
+    fn agent_panels_get_deeper_scrollback() {
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::Shell),
+            DEFAULT_PANEL_SCROLLBACK_LIMIT
+        );
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::Codex),
+            AGENT_PANEL_SCROLLBACK_LIMIT
+        );
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::Claude),
+            AGENT_PANEL_SCROLLBACK_LIMIT
+        );
     }
 }
