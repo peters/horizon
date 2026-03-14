@@ -99,24 +99,49 @@ impl Default for Config {
 }
 
 fn config_candidates() -> Vec<PathBuf> {
+    config_candidates_with_env(
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+fn config_candidates_with_env(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        paths.push(PathBuf::from(&xdg).join("termgalore/config.yaml"));
-        paths.push(PathBuf::from(&xdg).join("termgalore/config.yml"));
+    if let Some(xdg) = xdg_config_home {
+        push_config_dir_candidates(&mut paths, &xdg.join("orbiterm"));
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        let home = PathBuf::from(home);
-        paths.push(home.join(".config/termgalore/config.yaml"));
-        paths.push(home.join(".config/termgalore/config.yml"));
-        paths.push(home.join(".termgalore.yaml"));
-        paths.push(home.join(".termgalore.yml"));
+    if let Some(home) = home {
+        push_config_dir_candidates(&mut paths, &home.join(".config/orbiterm"));
+        paths.push(home.join(".orbiterm.yaml"));
+        paths.push(home.join(".orbiterm.yml"));
     }
 
-    // Current directory
-    paths.push(PathBuf::from("termgalore.yaml"));
-    paths.push(PathBuf::from("termgalore.yml"));
+    paths.push(PathBuf::from("orbiterm.yaml"));
+    paths.push(PathBuf::from("orbiterm.yml"));
 
     paths
+}
+
+fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
+    paths.push(base.join("config.yaml"));
+    paths.push(base.join("config.yml"));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::config_candidates_with_env;
+
+    #[test]
+    fn includes_orbiterm_config_candidates() {
+        let temp_home = PathBuf::from("/tmp/orbiterm-home");
+        let candidates = config_candidates_with_env(Some(temp_home.join(".config")), Some(temp_home));
+
+        assert!(candidates.iter().any(|path| path.ends_with("orbiterm/config.yaml")));
+        assert!(candidates.iter().any(|path| path.ends_with(".orbiterm.yaml")));
+        assert!(candidates.iter().any(|path| path == &PathBuf::from("orbiterm.yaml")));
+    }
 }

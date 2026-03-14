@@ -1,5 +1,5 @@
 use egui::{FontId, Pos2, Rect, Rounding, Vec2};
-use tg_core::Panel;
+use orbiterm_core::Panel;
 
 use crate::input;
 use crate::theme;
@@ -17,7 +17,7 @@ impl<'a> TerminalView<'a> {
     }
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
-    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+    pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
         let font_id = FontId::monospace(FONT_SIZE);
         let char_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
         let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
@@ -44,20 +44,23 @@ impl<'a> TerminalView<'a> {
             line_height,
             font_id,
         };
+        let has_terminal_focus = response.has_focus() || (is_active_panel && !ui.ctx().wants_keyboard_input());
 
         if ui.is_rect_visible(rect) {
             render_grid(ui, rect, screen, &metrics);
-            render_cursor(ui, rect, screen, &metrics, response.has_focus());
+            render_cursor(ui, rect, screen, &metrics, has_terminal_focus);
         }
 
-        // Handle keyboard input when focused
-        if response.has_focus() {
+        if has_terminal_focus {
             let events: Vec<egui::Event> = ui.input(|i| i.events.clone());
             for event in &events {
                 match event {
                     egui::Event::Text(text) => {
                         self.panel.write_input(text.as_bytes());
                     }
+                    egui::Event::Copy => self.panel.write_input(&[3]),
+                    egui::Event::Cut => self.panel.write_input(&[24]),
+                    egui::Event::Paste(text) => self.panel.write_input(text.as_bytes()),
                     egui::Event::Key {
                         key,
                         pressed: true,

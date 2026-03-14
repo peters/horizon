@@ -1,3 +1,4 @@
+use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
 use crate::panel::{Panel, PanelId, PanelOptions};
@@ -6,9 +7,11 @@ use crate::workspace::{Workspace, WorkspaceId};
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
+    pub attention: Vec<AttentionItem>,
     pub focused: Option<PanelId>,
     next_panel_id: u64,
     next_workspace_id: u64,
+    next_attention_id: u64,
 }
 
 impl Board {
@@ -17,9 +20,11 @@ impl Board {
         Self {
             panels: Vec::new(),
             workspaces: Vec::new(),
+            attention: Vec::new(),
             focused: None,
             next_panel_id: 1,
             next_workspace_id: 1,
+            next_attention_id: 1,
         }
     }
 
@@ -92,6 +97,7 @@ impl Board {
         for ws in &mut self.workspaces {
             ws.remove_panel(id);
         }
+        self.attention.retain(|item| item.panel_id != Some(id));
         if self.focused == Some(id) {
             self.focused = self.panels.last().map(|p| p.id);
         }
@@ -99,6 +105,7 @@ impl Board {
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
         self.workspaces.retain(|w| w.id != id);
+        self.attention.retain(|item| item.workspace_id != id);
     }
 
     #[must_use]
@@ -124,6 +131,52 @@ impl Board {
 
     pub fn focus(&mut self, id: PanelId) {
         self.focused = Some(id);
+    }
+
+    pub fn create_attention(
+        &mut self,
+        workspace_id: WorkspaceId,
+        panel_id: Option<PanelId>,
+        source: impl Into<String>,
+        summary: impl Into<String>,
+        severity: AttentionSeverity,
+    ) -> AttentionId {
+        let id = AttentionId(self.next_attention_id);
+        self.next_attention_id += 1;
+        self.attention.push(AttentionItem::new(
+            id,
+            workspace_id,
+            panel_id,
+            source,
+            summary,
+            severity,
+        ));
+        id
+    }
+
+    #[must_use]
+    pub fn resolve_attention(&mut self, id: AttentionId) -> bool {
+        if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {
+            item.resolve();
+            return true;
+        }
+
+        false
+    }
+
+    pub fn unresolved_attention(&self) -> impl Iterator<Item = &AttentionItem> + '_ {
+        self.attention.iter().filter(|item| item.is_open())
+    }
+
+    #[must_use]
+    pub fn unresolved_attention_for_panel(&self, panel_id: PanelId) -> Option<&AttentionItem> {
+        self.unresolved_attention()
+            .filter(|item| item.panel_id == Some(panel_id))
+            .max_by(|left, right| {
+                left.severity
+                    .cmp(&right.severity)
+                    .then_with(|| left.id.0.cmp(&right.id.0))
+            })
     }
 }
 
@@ -153,5 +206,40 @@ mod tests {
 
         assert!(!board.rename_workspace(workspace_id, "   "));
         assert_eq!(board.workspaces[0].name, "frontend");
+    }
+
+    #[test]
+    fn close_panel_removes_panel_attention() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = PanelId(7);
+
+        board.create_attention(
+            workspace_id,
+            Some(panel_id),
+            "codex-ui",
+            "Needs user feedback",
+            AttentionSeverity::High,
+        );
+
+        board.close_panel(panel_id);
+
+        assert!(board.unresolved_attention().next().is_none());
+    }
+
+    #[test]
+    fn resolve_attention_marks_item_resolved() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let attention_id = board.create_attention(
+            workspace_id,
+            None,
+            "system",
+            "Review build result",
+            AttentionSeverity::Medium,
+        );
+
+        assert!(board.resolve_attention(attention_id));
+        assert!(board.unresolved_attention().next().is_none());
     }
 }

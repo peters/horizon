@@ -1,16 +1,21 @@
 [package]
-name = "tg-core"
+name = "orbiterm-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[[bin]]
+name = "orbiterm"
+path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-thiserror.workspace = true
+orbiterm-core = { path = "../orbiterm-core" }
+eframe.workspace = true
+egui.workspace = true
 tracing.workspace = true
-serde.workspace = true
+tracing-subscriber.workspace = true
 serde_yaml.workspace = true
 vt100.workspace = true
-portable-pty.workspace = true

@@ -1,10 +1,10 @@
-# Termgalore — Agent Guidelines
+# Orbiterm — Agent Guidelines
 
 > **Source of truth** for all contributors and AI agents working on this project.
 
 ## Project Overview
 
-**Termgalore** is a GPU-accelerated terminal board — a visual workspace for managing
+**Orbiterm** is a GPU-accelerated terminal board — a visual workspace for managing
 multiple terminal sessions as freely positioned, resizable panels on a canvas.
 
 **Stack:** Rust (edition 2024) · eframe/egui (wgpu backend) · vt100 · portable-pty
@@ -13,18 +13,18 @@ multiple terminal sessions as freely positioned, resizable panels on a canvas.
 
 ```
 crates/
-  tg-core/      Core: terminal emulation, PTY, board & panel management
-  tg-app/       Binary: eframe application, UI rendering, input handling
+  orbiterm-core/      Core: terminal emulation, PTY, board & panel management
+  orbiterm-app/       Binary: eframe application, UI rendering, input handling
 ```
 
-### tg-core
+### orbiterm-core
 
 - `error.rs` — Typed error enum via thiserror
 - `terminal.rs` — vt100 parser wrapper (screen buffer, resize)
 - `panel.rs` — Panel = terminal + PTY session + identity
 - `board.rs` — Board = collection of panels + focus management
 
-### tg-app
+### orbiterm-app
 
 - `main.rs` — Entry point, tracing init, eframe launch
 - `app.rs` — `eframe::App` impl, toolbar, floating window management
@@ -49,7 +49,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Self-documenting code preferred over comments
 - Typed error enums (thiserror) — no `Box<dyn Error>` or `.unwrap()` in library code
 - `#![forbid(unsafe_code)]` on all crates
-- Consolidate repeated helpers into shared modules in tg-core
+- Consolidate repeated helpers into shared modules in orbiterm-core
 - Minimize allocations in the render hot path (per-frame code)
 - Every `unsafe` block (if ever needed) must have a `// SAFETY:` rationale
 

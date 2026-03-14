@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod attention;
 mod board;
 mod config;
 mod error;
@@ -7,6 +8,7 @@ mod panel;
 mod terminal;
 mod workspace;
 
+pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::Board;
 pub use config::{Config, TerminalConfig, WorkspaceConfig};
 pub use error::{Error, Result};

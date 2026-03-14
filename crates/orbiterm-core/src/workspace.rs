@@ -3,7 +3,7 @@ use crate::panel::PanelId;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
 
-/// A visual cluster ("cloud") of terminal panels on the canvas.
+/// A visual workspace cluster of terminal panels on the canvas.
 /// Workspaces are always visible — no tabs, no hidden state.
 pub struct Workspace {
     pub id: WorkspaceId,
@@ -11,7 +11,7 @@ pub struct Workspace {
     pub color_idx: usize,
     pub panels: Vec<PanelId>,
     pub collapsed: bool,
-    /// Canvas position (top-left) of the cloud container.
+    /// Canvas position (top-left) of the workspace badge.
     pub position: [f32; 2],
 }
 

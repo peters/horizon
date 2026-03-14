@@ -1,20 +1,21 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod branding;
 mod input;
 mod terminal_widget;
 mod theme;
 
 use std::path::PathBuf;
 
-use app::TermgaloreApp;
-use tg_core::Config;
+use app::OrbitermApp;
+use orbiterm_core::Config;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("termgalore=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("orbiterm=info,orbiterm_core=info")),
         )
         .init();
 
@@ -27,7 +28,9 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("termgalore")
+            .with_title(branding::APP_NAME)
+            .with_app_id(branding::APP_ID)
+            .with_icon(branding::app_icon())
             .with_decorations(false)
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([800.0, 600.0])
@@ -38,9 +41,9 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "termgalore",
+        branding::APP_NAME,
         options,
-        Box::new(move |cc| Ok(Box::new(TermgaloreApp::new(cc, &config, config_path)))),
+        Box::new(move |cc| Ok(Box::new(OrbitermApp::new(cc, &config, config_path)))),
     )
 }
 

@@ -6,7 +6,7 @@ use egui::{
     Align, Button, Color32, Context, Id, Key, LayerId, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Shadow,
     Stroke, Vec2, epaint::CubicBezierShape,
 };
-use tg_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
+use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -19,6 +19,9 @@ const PANEL_COLUMN_SPACING: f32 = 340.0;
 const PANEL_ROW_SPACING: f32 = 240.0;
 const WORKSPACE_PANEL_OFFSET_X: f32 = 90.0;
 const WORKSPACE_PANEL_OFFSET_Y: f32 = 108.0;
+const TITLEBAR_HEIGHT: f32 = 34.0;
+const CONTROL_BAR_HEIGHT: f32 = 78.0;
+type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
     workspace_id: WorkspaceId,
@@ -26,7 +29,7 @@ struct WorkspaceRenameState {
     should_focus: bool,
 }
 
-pub struct TermgaloreApp {
+pub struct OrbitermApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
     new_workspace_name: String,
@@ -34,16 +37,20 @@ pub struct TermgaloreApp {
     zoom: f32,
     pan_offset: Vec2,
     panel_canvas_positions: HashMap<PanelId, Pos2>,
+    panel_canvas_rects: HashMap<PanelId, Rect>,
+    panel_screen_rects: HashMap<PanelId, Rect>,
     panel_connection_points: HashMap<PanelId, Pos2>,
     workspace_badge_rects: HashMap<WorkspaceId, Rect>,
+    workspace_canvas_rects: HashMap<WorkspaceId, Rect>,
     workspace_rename: Option<WorkspaceRenameState>,
+    auto_fit_pending: bool,
     config_path: Option<PathBuf>,
     show_config_editor: bool,
     config_text: String,
     config_last_modified: Option<SystemTime>,
 }
 
-impl TermgaloreApp {
+impl OrbitermApp {
     pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
         let board = Board::from_config(config).unwrap_or_else(|error| {
             tracing::error!("failed to load config: {error}");
@@ -67,9 +74,13 @@ impl TermgaloreApp {
             zoom: 1.0,
             pan_offset: Vec2::ZERO,
             panel_canvas_positions: HashMap::new(),
+            panel_canvas_rects: HashMap::new(),
+            panel_screen_rects: HashMap::new(),
             panel_connection_points: HashMap::new(),
             workspace_badge_rects: HashMap::new(),
+            workspace_canvas_rects: HashMap::new(),
             workspace_rename: None,
+            auto_fit_pending: true,
             config_path,
             show_config_editor: false,
             config_text,
@@ -78,24 +89,33 @@ impl TermgaloreApp {
     }
 
     fn canvas_to_screen(&self, position: Pos2) -> Pos2 {
-        position + self.pan_offset
+        Pos2::new(
+            position.x * self.zoom + self.pan_offset.x,
+            position.y * self.zoom + self.pan_offset.y,
+        )
     }
 
     fn screen_to_canvas(&self, position: Pos2) -> Pos2 {
-        position - self.pan_offset
+        Pos2::new(
+            (position.x - self.pan_offset.x) / self.zoom,
+            (position.y - self.pan_offset.y) / self.zoom,
+        )
     }
 
-    fn reset_view(&mut self, ctx: &Context) {
+    fn reset_view(&mut self, _ctx: &Context) {
         self.zoom = 1.0;
         self.pan_offset = Vec2::ZERO;
-        ctx.set_zoom_factor(self.zoom);
     }
 
     fn reset_layout_cache(&mut self) {
         self.panel_canvas_positions.clear();
+        self.panel_canvas_rects.clear();
+        self.panel_screen_rects.clear();
         self.panel_connection_points.clear();
         self.workspace_badge_rects.clear();
+        self.workspace_canvas_rects.clear();
         self.workspace_rename = None;
+        self.auto_fit_pending = true;
     }
 
     fn start_workspace_rename(&mut self, workspace_id: WorkspaceId, current_name: &str) {
@@ -118,22 +138,29 @@ impl TermgaloreApp {
             .is_some_and(|rename| rename.workspace_id == workspace_id)
     }
 
+    fn schedule_auto_fit(&mut self) {
+        self.auto_fit_pending = true;
+    }
+
     fn handle_zoom(&mut self, ctx: &Context) {
         let zoom_delta = ctx.input(egui::InputState::zoom_delta);
         if (zoom_delta - 1.0).abs() > f32::EPSILON {
             self.zoom = (self.zoom * zoom_delta).clamp(0.45, 2.5);
-            ctx.set_zoom_factor(self.zoom);
+            self.auto_fit_pending = false;
         }
 
         if ctx.input(|input| input.key_pressed(Key::Num0) && input.modifiers.ctrl) {
-            self.reset_view(ctx);
+            self.fit_view_to_content(ctx);
         }
     }
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let scroll_pan_enabled = !ctx.is_pointer_over_area();
+        let scroll_pan_enabled = self.scroll_pan_enabled(ctx);
         let pan_delta = ctx.input(|input| {
-            if input.pointer.middle_down() {
+            let drag_panning = Self::pointer_in_canvas_region(ctx)
+                && (input.pointer.middle_down() || (input.modifiers.ctrl && input.pointer.primary_down()));
+
+            if drag_panning {
                 input.pointer.delta()
             } else if scroll_pan_enabled && !input.modifiers.ctrl {
                 input.smooth_scroll_delta + input.raw_scroll_delta
@@ -144,13 +171,19 @@ impl TermgaloreApp {
 
         if pan_delta != Vec2::ZERO {
             self.pan_offset += pan_delta;
+            self.auto_fit_pending = false;
         }
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
+        if self.terminal_accepts_keyboard_input(ctx) {
+            return;
+        }
+
         if ctx.input(|input| input.key_pressed(Key::N) && input.modifiers.ctrl && input.modifiers.shift) {
             let workspace = self.board.workspaces.first().map(|item| item.id);
             let _ = self.board.create_panel(PanelOptions::default(), workspace);
+            self.schedule_auto_fit();
         }
 
         if ctx.input(|input| input.key_pressed(Key::Comma) && input.modifiers.ctrl) {
@@ -174,10 +207,13 @@ impl TermgaloreApp {
         if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
             workspace.position = [position.x, position.y];
         }
+
+        self.schedule_auto_fit();
     }
 
     fn create_panel_in_workspace(&mut self, workspace_id: Option<WorkspaceId>) {
         let _ = self.board.create_panel(PanelOptions::default(), workspace_id);
+        self.schedule_auto_fit();
     }
 
     fn render_canvas(&self, ctx: &Context) {
@@ -185,12 +221,13 @@ impl TermgaloreApp {
             .frame(egui::Frame::default().fill(theme::BG))
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
-                draw_dot_grid(ui, self.pan_offset);
+                draw_dot_grid(ui, self.pan_offset, self.zoom);
             });
     }
 
     fn render_toolbar(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::top("toolbar")
+        egui::TopBottomPanel::bottom("toolbar")
+            .exact_height(CONTROL_BAR_HEIGHT)
             .frame(
                 egui::Frame::default()
                     .fill(theme::TOOLBAR_BG)
@@ -226,8 +263,8 @@ impl TermgaloreApp {
                         }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(chrome_button("Reset View")).clicked() {
-                                self.reset_view(ctx);
+                            if ui.add(chrome_button("Fit View")).clicked() {
+                                self.fit_view_to_content(ctx);
                             }
 
                             ui.label(
@@ -243,26 +280,14 @@ impl TermgaloreApp {
                             );
                             ui.separator();
                             ui.label(
-                                egui::RichText::new("Ctrl+Shift+N new terminal")
+                                egui::RichText::new("Ctrl+drag or scroll pans the observatory")
                                     .color(theme::FG_DIM)
                                     .size(10.0),
                             );
                         });
                     });
 
-                    let workspaces: Vec<_> = self
-                        .board
-                        .workspaces
-                        .iter()
-                        .map(|workspace| {
-                            (
-                                workspace.id,
-                                workspace.name.clone(),
-                                workspace.accent(),
-                                workspace.panels.len(),
-                            )
-                        })
-                        .collect();
+                    let workspaces = self.workspace_snapshots();
 
                     if workspaces.is_empty() {
                         ui.label(egui::RichText::new("No workspaces yet").color(theme::FG_DIM).size(11.0));
@@ -271,7 +296,7 @@ impl TermgaloreApp {
                             .id_salt("workspace_strip")
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    for (workspace_id, name, accent, count) in workspaces {
+                                    for (workspace_id, name, accent, count, _position) in workspaces {
                                         self.render_workspace_chip(
                                             ui,
                                             workspace_id,
@@ -374,78 +399,11 @@ impl TermgaloreApp {
         }
     }
 
-    fn render_statusbar(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::bottom("statusbar")
-            .exact_height(28.0)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::STATUSBAR_BG)
-                    .inner_margin(Margin::symmetric(12.0, 4.0))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 160))),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("termgalore").color(theme::FG_DIM).size(10.5));
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new("scroll or middle-drag canvas")
-                            .color(theme::FG_DIM)
-                            .size(10.5),
-                    );
-
-                    for workspace in &self.board.workspaces {
-                        let accent = workspace.accent();
-                        let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
-                        ui.separator();
-                        paint_workspace_dot(ui, accent, 3.0);
-                        ui.label(
-                            egui::RichText::new(format!("{} {}", workspace.name, workspace.panels.len()))
-                                .color(theme::FG_DIM)
-                                .size(10.5),
-                        );
-                    }
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(icon_button("+")).clicked() {
-                            self.zoom = (self.zoom + 0.1).min(2.5);
-                            ctx.set_zoom_factor(self.zoom);
-                        }
-
-                        ui.label(
-                            egui::RichText::new(format!("{:.0}%", self.zoom * 100.0))
-                                .color(theme::FG_SOFT)
-                                .size(10.5),
-                        );
-
-                        if ui.add(icon_button("-")).clicked() {
-                            self.zoom = (self.zoom - 0.1).max(0.45);
-                            ctx.set_zoom_factor(self.zoom);
-                        }
-
-                        ui.separator();
-                        ui.label(egui::RichText::new("wgpu").color(theme::FG_DIM).size(10.5));
-                    });
-                });
-            });
-    }
-
     fn render_workspace_badges(&mut self, ctx: &Context) {
         self.workspace_badge_rects.clear();
+        self.workspace_canvas_rects.clear();
 
-        let workspaces: Vec<_> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
-                (
-                    workspace.id,
-                    workspace.name.clone(),
-                    workspace.accent(),
-                    workspace.panels.len(),
-                    workspace.position,
-                )
-            })
-            .collect();
+        let workspaces = self.workspace_snapshots();
 
         for (workspace_id, name, accent, count, position) in workspaces {
             let accent = Color32::from_rgb(accent.0, accent.1, accent.2);
@@ -457,6 +415,7 @@ impl TermgaloreApp {
                 .current_pos(current_pos)
                 .constrain(false)
                 .movable(!editing)
+                .sense(Sense::click_and_drag())
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::default()
@@ -488,6 +447,10 @@ impl TermgaloreApp {
             self.workspace_badge_rects.insert(workspace_id, area.response.rect);
 
             let canvas_position = self.screen_to_canvas(area.response.rect.min);
+            self.workspace_canvas_rects.insert(
+                workspace_id,
+                Rect::from_min_size(canvas_position, area.response.rect.size() / self.zoom),
+            );
             if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
                 workspace.position = [canvas_position.x, canvas_position.y];
             }
@@ -531,6 +494,8 @@ impl TermgaloreApp {
     }
 
     fn render_panels(&mut self, ctx: &Context) {
+        self.panel_screen_rects.clear();
+        self.panel_canvas_rects.clear();
         self.panel_connection_points.clear();
 
         let panel_info: Vec<_> = self
@@ -544,7 +509,7 @@ impl TermgaloreApp {
                     .workspaces
                     .iter()
                     .find(|workspace| workspace.panels.contains(&panel.id))
-                    .map(tg_core::Workspace::accent);
+                    .map(orbiterm_core::Workspace::accent);
 
                 (panel.id, panel.title.clone(), accent, index)
             })
@@ -584,15 +549,20 @@ impl TermgaloreApp {
                 )
                 .show(ctx, |ui| {
                     if let Some(panel) = self.board.panels.iter_mut().find(|item| item.id == panel_id) {
-                        TerminalView::new(panel).show(ui)
+                        TerminalView::new(panel).show(ui, self.board.focused == Some(panel_id))
                     } else {
                         false
                     }
                 });
 
             if let Some(window) = response {
-                self.panel_canvas_positions
-                    .insert(panel_id, self.screen_to_canvas(window.response.rect.min));
+                let canvas_position = self.screen_to_canvas(window.response.rect.min);
+                self.panel_canvas_positions.insert(panel_id, canvas_position);
+                self.panel_screen_rects.insert(panel_id, window.response.rect);
+                self.panel_canvas_rects.insert(
+                    panel_id,
+                    Rect::from_min_size(canvas_position, window.response.rect.size() / self.zoom),
+                );
                 self.panel_connection_points.insert(
                     panel_id,
                     Pos2::new(window.response.rect.center().x, window.response.rect.min.y + 14.0),
@@ -651,7 +621,7 @@ impl TermgaloreApp {
 
             if let Ok(text) = std::fs::read_to_string(path) {
                 self.config_text.clone_from(&text);
-                if let Ok(config) = serde_yaml::from_str::<tg_core::Config>(&text)
+                if let Ok(config) = serde_yaml::from_str::<orbiterm_core::Config>(&text)
                     && let Ok(board) = Board::from_config(&config)
                 {
                     self.board = board;
@@ -719,7 +689,7 @@ impl TermgaloreApp {
     }
 
     fn save_and_apply_config(&mut self) {
-        match serde_yaml::from_str::<tg_core::Config>(&self.config_text) {
+        match serde_yaml::from_str::<orbiterm_core::Config>(&self.config_text) {
             Ok(config) => {
                 if let Some(path) = &self.config_path {
                     if let Err(error) = std::fs::write(path, &self.config_text) {
@@ -744,9 +714,114 @@ impl TermgaloreApp {
             Err(error) => tracing::error!("invalid YAML: {error}"),
         }
     }
+
+    fn workspace_snapshots(&self) -> Vec<WorkspaceSnapshot> {
+        let mut workspaces: Vec<_> = self
+            .board
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                (
+                    workspace.id,
+                    workspace.name.clone(),
+                    workspace.accent(),
+                    workspace.panels.len(),
+                    workspace.position,
+                )
+            })
+            .collect();
+
+        workspaces.sort_by(|left, right| {
+            left.4[1]
+                .total_cmp(&right.4[1])
+                .then_with(|| left.4[0].total_cmp(&right.4[0]))
+        });
+        workspaces
+    }
+
+    fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
+        self.board.focused.is_some() && !ctx.wants_keyboard_input()
+    }
+
+    fn canvas_view_rect(ctx: &Context) -> Option<Rect> {
+        ctx.input(|input| input.viewport().inner_rect).map(|rect| {
+            Rect::from_min_max(
+                Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT),
+                Pos2::new(rect.max.x, rect.max.y - CONTROL_BAR_HEIGHT),
+            )
+        })
+    }
+
+    fn pointer_in_canvas_region(ctx: &Context) -> bool {
+        let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
+            return false;
+        };
+
+        Self::canvas_view_rect(ctx).is_some_and(|rect| rect.contains(pointer_position))
+    }
+
+    fn scroll_pan_enabled(&self, ctx: &Context) -> bool {
+        if ctx.wants_keyboard_input() || !Self::pointer_in_canvas_region(ctx) {
+            return false;
+        }
+
+        let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
+            return false;
+        };
+
+        !self
+            .board
+            .focused
+            .and_then(|panel_id| self.panel_screen_rects.get(&panel_id))
+            .is_some_and(|rect| rect.contains(pointer_position))
+    }
+
+    fn fit_view_to_content(&mut self, ctx: &Context) {
+        let Some(content_bounds) = self.content_bounds() else {
+            self.reset_view(ctx);
+            self.auto_fit_pending = false;
+            return;
+        };
+        let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
+            self.auto_fit_pending = true;
+            return;
+        };
+
+        let margin = Vec2::new(72.0, 56.0);
+        let available_size = Vec2::new(
+            (canvas_rect.width() - margin.x * 2.0).max(220.0),
+            (canvas_rect.height() - margin.y * 2.0).max(180.0),
+        );
+
+        let content_size = content_bounds.size();
+        let target_zoom = (available_size.x / content_size.x)
+            .min(available_size.y / content_size.y)
+            .clamp(0.45, 2.5);
+
+        self.zoom = target_zoom;
+        self.pan_offset = canvas_rect.center().to_vec2() - content_bounds.center().to_vec2() * target_zoom;
+        self.auto_fit_pending = false;
+    }
+
+    fn content_bounds(&self) -> Option<Rect> {
+        let mut bounds: Option<Rect> = None;
+
+        for rect in self
+            .workspace_canvas_rects
+            .values()
+            .chain(self.panel_canvas_rects.values())
+        {
+            bounds = Some(match bounds {
+                Some(current) => current.union(*rect),
+                None => *rect,
+            });
+        }
+
+        bounds.map(|rect| rect.expand2(Vec2::new(48.0, 48.0)))
+    }
 }
 
-impl eframe::App for TermgaloreApp {
+impl eframe::App for OrbitermApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         if !self.theme_applied {
             theme::apply(ctx);
@@ -759,10 +834,18 @@ impl eframe::App for TermgaloreApp {
 
         self.board.process_output();
 
+        let mut closed_any_panels = false;
         for panel_id in self.panels_to_close.drain(..) {
             self.board.close_panel(panel_id);
             self.panel_canvas_positions.remove(&panel_id);
+            self.panel_canvas_rects.remove(&panel_id);
+            self.panel_screen_rects.remove(&panel_id);
             self.panel_connection_points.remove(&panel_id);
+            closed_any_panels = true;
+        }
+
+        if closed_any_panels {
+            self.schedule_auto_fit();
         }
 
         self.handle_shortcuts(ctx);
@@ -770,10 +853,14 @@ impl eframe::App for TermgaloreApp {
 
         render_custom_titlebar(ctx);
         self.render_toolbar(ctx);
-        self.render_statusbar(ctx);
         self.render_canvas(ctx);
         self.render_workspace_badges(ctx);
         self.render_panels(ctx);
+
+        if self.auto_fit_pending {
+            self.fit_view_to_content(ctx);
+        }
+
         self.draw_connectors(ctx);
         render_viewport_resize_handles(ctx);
 
@@ -794,21 +881,42 @@ fn handle_edge_resize(ctx: &Context) {
     };
 
     let edge_margin = 6.0;
+    let corner_handle_size = 24.0;
+    let canvas_rect = Rect::from_min_max(
+        Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT),
+        Pos2::new(rect.max.x, rect.max.y - CONTROL_BAR_HEIGHT),
+    );
+    let handle_top = canvas_rect.min.y;
+    let handle_bottom = canvas_rect.max.y - corner_handle_size;
     let left = pointer_position.x - rect.min.x <= edge_margin;
     let right = rect.max.x - pointer_position.x <= edge_margin;
-    let top = pointer_position.y - rect.min.y <= edge_margin;
-    let bottom = rect.max.y - pointer_position.y <= edge_margin;
+    let inside_resize_band = pointer_position.y >= canvas_rect.min.y && pointer_position.y <= canvas_rect.max.y;
 
-    let direction = match (left, right, top, bottom) {
-        (true, _, true, _) => Some(egui::ResizeDirection::NorthWest),
-        (_, true, true, _) => Some(egui::ResizeDirection::NorthEast),
-        (true, _, _, true) => Some(egui::ResizeDirection::SouthWest),
-        (_, true, _, true) => Some(egui::ResizeDirection::SouthEast),
-        (_, _, true, _) => Some(egui::ResizeDirection::North),
-        (_, _, _, true) => Some(egui::ResizeDirection::South),
-        (true, _, _, _) => Some(egui::ResizeDirection::West),
-        (_, true, _, _) => Some(egui::ResizeDirection::East),
-        _ => None,
+    let north_west_handle = Rect::from_min_size(Pos2::new(rect.min.x, handle_top), Vec2::splat(corner_handle_size));
+    let north_east_handle = Rect::from_min_size(
+        Pos2::new(rect.max.x - corner_handle_size, handle_top),
+        Vec2::splat(corner_handle_size),
+    );
+    let south_west_handle = Rect::from_min_size(Pos2::new(rect.min.x, handle_bottom), Vec2::splat(corner_handle_size));
+    let south_east_handle = Rect::from_min_size(
+        Pos2::new(rect.max.x - corner_handle_size, handle_bottom),
+        Vec2::splat(corner_handle_size),
+    );
+
+    let direction = if north_west_handle.contains(pointer_position) {
+        Some(egui::ResizeDirection::NorthWest)
+    } else if north_east_handle.contains(pointer_position) {
+        Some(egui::ResizeDirection::NorthEast)
+    } else if south_west_handle.contains(pointer_position) {
+        Some(egui::ResizeDirection::SouthWest)
+    } else if south_east_handle.contains(pointer_position) {
+        Some(egui::ResizeDirection::SouthEast)
+    } else if left && inside_resize_band {
+        Some(egui::ResizeDirection::West)
+    } else if right && inside_resize_band {
+        Some(egui::ResizeDirection::East)
+    } else {
+        None
     };
 
     if let Some(direction) = direction {
@@ -829,7 +937,7 @@ fn handle_edge_resize(ctx: &Context) {
 
 fn render_custom_titlebar(ctx: &Context) {
     egui::TopBottomPanel::top("titlebar")
-        .exact_height(34.0)
+        .exact_height(TITLEBAR_HEIGHT)
         .frame(
             egui::Frame::default()
                 .fill(theme::TITLEBAR_BG)
@@ -871,14 +979,14 @@ fn render_custom_titlebar(ctx: &Context) {
 
                 ui.add_space(10.0);
                 ui.label(
-                    egui::RichText::new("termgalore")
+                    egui::RichText::new(crate::branding::APP_NAME)
                         .color(theme::FG_SOFT)
                         .size(13.0)
                         .strong(),
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new("visual terminal board")
+                    egui::RichText::new(crate::branding::APP_TAGLINE)
                         .color(theme::FG_DIM)
                         .size(10.5),
                 );
@@ -901,6 +1009,8 @@ fn render_viewport_resize_handles(ctx: &Context) {
         return;
     };
 
+    let top = rect.min.y + TITLEBAR_HEIGHT;
+    let bottom = rect.max.y - CONTROL_BAR_HEIGHT;
     let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("viewport_handles")));
     let stroke = Stroke::new(1.0, theme::alpha(theme::VIEWPORT_HANDLE, 180));
     let inset = 8.0;
@@ -908,7 +1018,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
 
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.min.x + inset, rect.min.y + inset),
+        Pos2::new(rect.min.x + inset, top + inset),
         stroke,
         size,
         1.0,
@@ -916,7 +1026,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.max.x - inset, rect.min.y + inset),
+        Pos2::new(rect.max.x - inset, top + inset),
         stroke,
         size,
         -1.0,
@@ -924,7 +1034,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.min.x + inset, rect.max.y - inset),
+        Pos2::new(rect.min.x + inset, bottom - inset),
         stroke,
         size,
         1.0,
@@ -932,7 +1042,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.max.x - inset, rect.max.y - inset),
+        Pos2::new(rect.max.x - inset, bottom - inset),
         stroke,
         size,
         -1.0,
@@ -952,10 +1062,10 @@ fn paint_corner_bracket(
     painter.line_segment([corner, corner + Vec2::new(0.0, size * y_direction)], stroke);
 }
 
-fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2) {
+fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, zoom: f32) {
     let rect = ui.max_rect();
     let painter = ui.painter();
-    let spacing = 22.0;
+    let spacing = (22.0 * zoom).clamp(14.0, 52.0);
     let dot_radius = 1.15;
     let offset_x = pan_offset.x.rem_euclid(spacing);
     let offset_y = pan_offset.y.rem_euclid(spacing);

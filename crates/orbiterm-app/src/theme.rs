@@ -15,7 +15,6 @@ pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(37, 46, 61);
 pub const BORDER_STRONG: Color32 = Color32::from_rgb(63, 78, 101);
 pub const TITLEBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
 pub const TOOLBAR_BG: Color32 = Color32::from_rgb(11, 15, 22);
-pub const STATUSBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
 pub const VIEWPORT_HANDLE: Color32 = Color32::from_rgb(122, 133, 151);
 pub const CANVAS_COOL_GLOW: Color32 = Color32::from_rgba_premultiplied(77, 112, 220, 20);
 pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_premultiplied(255, 146, 80, 28);
