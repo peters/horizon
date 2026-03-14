@@ -21,6 +21,8 @@ const WORKSPACE_PANEL_OFFSET_X: f32 = 90.0;
 const WORKSPACE_PANEL_OFFSET_Y: f32 = 108.0;
 const TITLEBAR_HEIGHT: f32 = 34.0;
 const CONTROL_BAR_HEIGHT: f32 = 78.0;
+const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
+const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
@@ -44,6 +46,8 @@ pub struct OrbitermApp {
     workspace_canvas_rects: HashMap<WorkspaceId, Rect>,
     workspace_rename: Option<WorkspaceRenameState>,
     auto_fit_pending: bool,
+    viewport_sized_for_display: bool,
+    pending_viewport_size: Option<Vec2>,
     config_path: Option<PathBuf>,
     show_config_editor: bool,
     config_text: String,
@@ -81,6 +85,8 @@ impl OrbitermApp {
             workspace_canvas_rects: HashMap::new(),
             workspace_rename: None,
             auto_fit_pending: true,
+            viewport_sized_for_display: false,
+            pending_viewport_size: None,
             config_path,
             show_config_editor: false,
             config_text,
@@ -140,6 +146,39 @@ impl OrbitermApp {
 
     fn schedule_auto_fit(&mut self) {
         self.auto_fit_pending = true;
+    }
+
+    fn adjust_initial_viewport_for_display(&mut self, ctx: &Context) {
+        if self.viewport_sized_for_display {
+            return;
+        }
+
+        let monitor_size = ctx.input(|input| input.viewport().monitor_size);
+        let outer_rect = ctx.input(|input| input.viewport().outer_rect);
+        let Some(monitor_size) = monitor_size else {
+            return;
+        };
+
+        self.viewport_sized_for_display = true;
+
+        let current_size = ctx.screen_rect().size();
+        let max_size = Vec2::new((monitor_size.x - 96.0).max(800.0), (monitor_size.y - 96.0).max(600.0));
+        let target_size = Vec2::new(
+            (monitor_size.x * 0.62).clamp(1024.0, 2200.0).min(max_size.x),
+            (monitor_size.y * 0.78).clamp(720.0, 1320.0).min(max_size.y),
+        );
+
+        if target_size.x <= current_size.x + 40.0 && target_size.y <= current_size.y + 40.0 {
+            return;
+        }
+
+        if let Some(outer_rect) = outer_rect {
+            let target_outer_rect = Rect::from_center_size(outer_rect.center(), target_size);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target_outer_rect.min));
+        }
+
+        self.pending_viewport_size = Some(target_size);
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target_size));
     }
 
     fn handle_zoom(&mut self, ctx: &Context) {
@@ -212,17 +251,22 @@ impl OrbitermApp {
         }
 
         let workspace_id = self.board.create_workspace(trimmed);
-        let center = ctx
-            .input(|input| input.viewport().inner_rect)
-            .map_or(Pos2::new(280.0, 180.0), |rect| rect.center());
-        let stack_offset = usize_to_f32(self.board.workspaces.len()) * 16.0;
-        let position = self.screen_to_canvas(center + Vec2::new(-180.0 + stack_offset, -90.0 + stack_offset));
+        let position = self.suggest_workspace_position(ctx);
 
         if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
             workspace.position = [position.x, position.y];
         }
 
         self.schedule_auto_fit();
+    }
+
+    fn suggest_workspace_position(&self, ctx: &Context) -> Pos2 {
+        if let Some(bounds) = self.content_bounds() {
+            return Pos2::new(bounds.max.x + 120.0, bounds.min.y.max(48.0));
+        }
+
+        let center = Self::canvas_view_rect(ctx).map_or(Pos2::new(280.0, 180.0), |rect| rect.center());
+        self.screen_to_canvas(center + Vec2::new(-180.0, -90.0))
     }
 
     fn create_panel_in_workspace(&mut self, workspace_id: Option<WorkspaceId>) {
@@ -461,12 +505,23 @@ impl OrbitermApp {
             self.workspace_badge_rects.insert(workspace_id, area.response.rect);
 
             let canvas_position = self.screen_to_canvas(area.response.rect.min);
+            let previous_canvas_position = Pos2::new(position[0], position[1]);
+            let drag_delta = canvas_position - previous_canvas_position;
             self.workspace_canvas_rects.insert(
                 workspace_id,
                 Rect::from_min_size(canvas_position, area.response.rect.size() / self.zoom),
             );
             if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
                 workspace.position = [canvas_position.x, canvas_position.y];
+
+                if drag_delta != Vec2::ZERO {
+                    for panel_id in &workspace.panels {
+                        if let Some(panel_position) = self.panel_canvas_positions.get_mut(panel_id) {
+                            *panel_position += drag_delta;
+                        }
+                    }
+                    self.auto_fit_pending = false;
+                }
             }
 
             if add_terminal {
@@ -758,7 +813,8 @@ impl OrbitermApp {
     }
 
     fn canvas_view_rect(ctx: &Context) -> Option<Rect> {
-        ctx.input(|input| input.viewport().inner_rect).map(|rect| {
+        let rect = ctx.screen_rect();
+        (rect.width() > 0.0 && rect.height() > 0.0).then(|| {
             Rect::from_min_max(
                 Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT),
                 Pos2::new(rect.max.x, rect.max.y - CONTROL_BAR_HEIGHT),
@@ -796,14 +852,35 @@ impl OrbitermApp {
     fn content_bounds(&self) -> Option<Rect> {
         let mut bounds: Option<Rect> = None;
 
-        for rect in self
-            .workspace_canvas_rects
-            .values()
-            .chain(self.panel_canvas_rects.values())
-        {
+        for workspace in &self.board.workspaces {
+            let rect = self
+                .workspace_canvas_rects
+                .get(&workspace.id)
+                .copied()
+                .unwrap_or_else(|| {
+                    Rect::from_min_size(
+                        Pos2::new(workspace.position[0], workspace.position[1]),
+                        Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
+                    )
+                });
             bounds = Some(match bounds {
-                Some(current) => current.union(*rect),
-                None => *rect,
+                Some(current) => current.union(rect),
+                None => rect,
+            });
+        }
+
+        for (index, panel) in self.board.panels.iter().enumerate() {
+            let rect = self.panel_canvas_rects.get(&panel.id).copied().unwrap_or_else(|| {
+                let position = self
+                    .panel_canvas_positions
+                    .get(&panel.id)
+                    .copied()
+                    .unwrap_or_else(|| self.default_panel_canvas_pos(panel.id, index));
+                Rect::from_min_size(position, Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT))
+            });
+            bounds = Some(match bounds {
+                Some(current) => current.union(rect),
+                None => rect,
             });
         }
 
@@ -819,6 +896,15 @@ impl eframe::App for OrbitermApp {
             // eframe creates the root window hidden and normally shows it after the first frame.
             // On some X11 setups that handoff can fail, so we force the root viewport visible here.
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+        self.adjust_initial_viewport_for_display(ctx);
+
+        if let Some(target_size) = self.pending_viewport_size {
+            let current_size = ctx.screen_rect().size();
+            if (current_size.x - target_size.x).abs() <= 1.0 && (current_size.y - target_size.y).abs() <= 1.0 {
+                self.pending_viewport_size = None;
+                self.auto_fit_pending = true;
+            }
         }
 
         self.handle_zoom(ctx);
@@ -850,7 +936,7 @@ impl eframe::App for OrbitermApp {
         self.render_workspace_badges(ctx);
         self.render_panels(ctx);
 
-        if self.auto_fit_pending {
+        if self.auto_fit_pending && self.pending_viewport_size.is_none() {
             self.fit_view_to_content(ctx);
         }
 
@@ -866,28 +952,22 @@ impl eframe::App for OrbitermApp {
 }
 
 fn handle_edge_resize(ctx: &Context) {
-    let Some(rect) = ctx.input(|input| input.viewport().inner_rect) else {
-        return;
-    };
+    let rect = ctx.screen_rect();
     let Some(pointer_position) = ctx.input(|input| input.pointer.hover_pos()) else {
         return;
     };
 
     let edge_margin = 6.0;
     let corner_handle_size = 24.0;
-    let canvas_rect = Rect::from_min_max(
-        Pos2::new(rect.min.x, rect.min.y + TITLEBAR_HEIGHT),
-        Pos2::new(rect.max.x, rect.max.y - CONTROL_BAR_HEIGHT),
-    );
-    let handle_top = canvas_rect.min.y;
-    let handle_bottom = canvas_rect.max.y - corner_handle_size;
+    let handle_bottom = rect.max.y - corner_handle_size;
     let left = pointer_position.x - rect.min.x <= edge_margin;
     let right = rect.max.x - pointer_position.x <= edge_margin;
-    let inside_resize_band = pointer_position.y >= canvas_rect.min.y && pointer_position.y <= canvas_rect.max.y;
+    let top = pointer_position.y - rect.min.y <= edge_margin;
+    let bottom = rect.max.y - pointer_position.y <= edge_margin;
 
-    let north_west_handle = Rect::from_min_size(Pos2::new(rect.min.x, handle_top), Vec2::splat(corner_handle_size));
+    let north_west_handle = Rect::from_min_size(rect.min, Vec2::splat(corner_handle_size));
     let north_east_handle = Rect::from_min_size(
-        Pos2::new(rect.max.x - corner_handle_size, handle_top),
+        Pos2::new(rect.max.x - corner_handle_size, rect.min.y),
         Vec2::splat(corner_handle_size),
     );
     let south_west_handle = Rect::from_min_size(Pos2::new(rect.min.x, handle_bottom), Vec2::splat(corner_handle_size));
@@ -904,9 +984,13 @@ fn handle_edge_resize(ctx: &Context) {
         Some(egui::ResizeDirection::SouthWest)
     } else if south_east_handle.contains(pointer_position) {
         Some(egui::ResizeDirection::SouthEast)
-    } else if left && inside_resize_band {
+    } else if top {
+        Some(egui::ResizeDirection::North)
+    } else if bottom {
+        Some(egui::ResizeDirection::South)
+    } else if left {
         Some(egui::ResizeDirection::West)
-    } else if right && inside_resize_band {
+    } else if right {
         Some(egui::ResizeDirection::East)
     } else {
         None
@@ -998,12 +1082,7 @@ fn render_custom_titlebar(ctx: &Context) {
 }
 
 fn render_viewport_resize_handles(ctx: &Context) {
-    let Some(rect) = ctx.input(|input| input.viewport().inner_rect) else {
-        return;
-    };
-
-    let top = rect.min.y + TITLEBAR_HEIGHT;
-    let bottom = rect.max.y - CONTROL_BAR_HEIGHT;
+    let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("viewport_handles")));
     let stroke = Stroke::new(1.0, theme::alpha(theme::VIEWPORT_HANDLE, 180));
     let inset = 8.0;
@@ -1011,7 +1090,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
 
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.min.x + inset, top + inset),
+        Pos2::new(rect.min.x + inset, rect.min.y + inset),
         stroke,
         size,
         1.0,
@@ -1019,7 +1098,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.max.x - inset, top + inset),
+        Pos2::new(rect.max.x - inset, rect.min.y + inset),
         stroke,
         size,
         -1.0,
@@ -1027,7 +1106,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.min.x + inset, bottom - inset),
+        Pos2::new(rect.min.x + inset, rect.max.y - inset),
         stroke,
         size,
         1.0,
@@ -1035,7 +1114,7 @@ fn render_viewport_resize_handles(ctx: &Context) {
     );
     paint_corner_bracket(
         &painter,
-        Pos2::new(rect.max.x - inset, bottom - inset),
+        Pos2::new(rect.max.x - inset, rect.max.y - inset),
         stroke,
         size,
         -1.0,

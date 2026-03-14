@@ -1,4 +1,4 @@
-use egui::{FontId, Pos2, Rect, Rounding, Vec2};
+use egui::{FontId, Key, Pos2, Rect, Rounding, Vec2};
 use orbiterm_core::Panel;
 
 use crate::input;
@@ -38,13 +38,19 @@ impl<'a> TerminalView<'a> {
         if response.clicked() {
             response.request_focus();
         }
+        if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Tab)) {
+            response.request_focus();
+        }
 
         let metrics = GridMetrics {
             char_width,
             line_height,
             font_id,
         };
-        let has_terminal_focus = response.has_focus() || (is_active_panel && !ui.ctx().wants_keyboard_input());
+        let other_widget_has_focus = ui
+            .memory(|memory| memory.focused())
+            .is_some_and(|focused| focused != response.id);
+        let has_terminal_focus = response.has_focus() || (is_active_panel && !other_widget_has_focus);
 
         if ui.is_rect_visible(rect) {
             render_grid(ui, rect, screen, &metrics);

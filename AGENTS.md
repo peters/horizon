@@ -78,6 +78,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Unit tests close to code (`#[cfg(test)]`)
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
+- For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
 
 ### UI Launch Troubleshooting
 
