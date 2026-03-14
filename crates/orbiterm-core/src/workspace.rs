@@ -30,19 +30,13 @@ pub const WORKSPACE_COLORS: &[(u8, u8, u8)] = &[
 impl Workspace {
     #[must_use]
     pub fn new(id: WorkspaceId, name: String, color_idx: usize) -> Self {
-        // Auto-tile: offset each workspace so they don't stack
-        let col = u8::try_from(color_idx % 3).unwrap_or_default();
-        let row = u16::try_from((color_idx / 3).min(usize::from(u16::MAX))).unwrap_or(u16::MAX);
-        let x = 40.0 + f32::from(col) * 720.0;
-        let y = 80.0 + f32::from(row) * 500.0;
-
         Self {
             id,
             name,
             color_idx,
             panels: Vec::new(),
             collapsed: false,
-            position: [x, y],
+            position: [0.0, 0.0],
         }
     }
 

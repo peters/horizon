@@ -252,6 +252,10 @@ impl Panel {
         self.terminal.scroll_scrollback_by(delta);
     }
 
+    pub fn set_scrollback(&mut self, scrollback: usize) {
+        self.terminal.set_scrollback(scrollback);
+    }
+
     pub fn resize(&mut self, rows: u16, cols: u16) {
         if rows == self.terminal.rows() && cols == self.terminal.cols() {
             return;

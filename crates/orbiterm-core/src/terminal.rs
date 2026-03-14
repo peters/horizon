@@ -46,6 +46,10 @@ impl Terminal {
         self.parser.screen().scrollback()
     }
 
+    pub fn set_scrollback(&mut self, scrollback: usize) {
+        self.parser.set_scrollback(scrollback);
+    }
+
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
         self.parser
             .set_scrollback(next_scrollback_offset(self.scrollback(), delta));

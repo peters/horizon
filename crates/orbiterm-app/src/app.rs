@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use egui::{
     Align, Button, Color32, Context, Id, Key, LayerId, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Shadow,
@@ -21,10 +21,9 @@ const TITLEBAR_HEIGHT: f32 = 38.0;
 const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
-const WORKSPACE_INTERACTIVE_ZOOM: f32 = 0.78;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
-const FIT_BOARD_PANEL_MAX_WIDTH: f32 = 360.0;
-const FIT_BOARD_PANEL_MAX_HEIGHT: f32 = 220.0;
+const AUTO_BOARD_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(160);
+const AUTO_BOARD_ZOOM_STEP: f32 = 0.92;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
 
 struct WorkspaceRenameState {
@@ -40,6 +39,31 @@ enum WorkspaceRenderMode {
     Badge,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutoBoardMode {
+    FitBoard,
+    ZoomPlusOne,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitlebarControlsPlacement {
+    Leading,
+    Trailing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitlebarControl {
+    Close,
+    Minimize,
+    Maximize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TitlebarControlsSpec {
+    placement: TitlebarControlsPlacement,
+    controls: [TitlebarControl; 3],
+}
+
 struct PreviewPanelState {
     workspace_id: WorkspaceId,
     panel_id: PanelId,
@@ -48,6 +72,12 @@ struct PreviewPanelState {
     screen_rect: Rect,
     focused: bool,
     lines: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct WorkspaceTitleStyle {
+    text_size: f32,
+    width_bounds: [f32; 2],
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -64,7 +94,9 @@ pub struct OrbitermApp {
     workspace_badge_rects: HashMap<WorkspaceId, Rect>,
     workspace_canvas_rects: HashMap<WorkspaceId, Rect>,
     workspace_rename: Option<WorkspaceRenameState>,
-    auto_fit_pending: bool,
+    auto_board_mode: AutoBoardMode,
+    pending_auto_board_action_at: Option<Instant>,
+    last_viewport_size: Option<Vec2>,
     config_path: Option<PathBuf>,
     show_config_editor: bool,
     config_text: String,
@@ -100,7 +132,9 @@ impl OrbitermApp {
             workspace_badge_rects: HashMap::new(),
             workspace_canvas_rects: HashMap::new(),
             workspace_rename: None,
-            auto_fit_pending: true,
+            auto_board_mode: AutoBoardMode::FitBoard,
+            pending_auto_board_action_at: Some(Instant::now()),
+            last_viewport_size: None,
             config_path,
             show_config_editor: false,
             config_text,
@@ -134,7 +168,8 @@ impl OrbitermApp {
         self.workspace_badge_rects.clear();
         self.workspace_canvas_rects.clear();
         self.workspace_rename = None;
-        self.auto_fit_pending = true;
+        self.pending_auto_board_action_at = Some(Instant::now());
+        self.last_viewport_size = None;
     }
 
     fn start_workspace_rename(&mut self, workspace_id: WorkspaceId, current_name: &str) {
@@ -157,15 +192,15 @@ impl OrbitermApp {
             .is_some_and(|rename| rename.workspace_id == workspace_id)
     }
 
-    fn schedule_auto_fit(&mut self) {
-        self.auto_fit_pending = true;
+    fn schedule_auto_board_action(&mut self, delay: Duration) {
+        self.pending_auto_board_action_at = Some(Instant::now() + delay);
     }
 
     fn handle_zoom(&mut self, ctx: &Context) {
         let zoom_delta = ctx.input(egui::InputState::zoom_delta);
         if (zoom_delta - 1.0).abs() > f32::EPSILON {
             self.zoom = (self.zoom * zoom_delta).clamp(0.45, 2.5);
-            self.auto_fit_pending = false;
+            self.pending_auto_board_action_at = None;
         }
 
         if ctx.input(|input| input.key_pressed(Key::Num0) && input.modifiers.ctrl) {
@@ -198,7 +233,7 @@ impl OrbitermApp {
 
         if pan_delta != Vec2::ZERO {
             self.pan_offset += pan_delta;
-            self.auto_fit_pending = false;
+            self.pending_auto_board_action_at = None;
         }
     }
 
@@ -226,7 +261,7 @@ impl OrbitermApp {
 
         let name = self.next_workspace_name();
         let canvas_position = self.screen_to_canvas(pointer_position);
-        self.create_workspace_at(ctx, &name, canvas_position, false);
+        self.create_workspace_at(&name, canvas_position);
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
@@ -250,7 +285,7 @@ impl OrbitermApp {
         }
 
         let position = self.suggest_workspace_position(ctx);
-        self.create_workspace_at(ctx, trimmed, position, true);
+        self.create_workspace_at(trimmed, position);
     }
 
     fn next_workspace_name(&self) -> String {
@@ -269,17 +304,19 @@ impl OrbitermApp {
         }
     }
 
-    fn create_workspace_at(&mut self, _ctx: &Context, name: &str, position: Pos2, auto_fit: bool) {
+    fn create_workspace_at(&mut self, name: &str, position: Pos2) {
         let workspace_id = self.board.create_workspace(name);
         if let Some(workspace) = self.board.workspace_mut(workspace_id) {
             workspace.position = [position.x, position.y];
         }
-        self.board.focus_workspace(workspace_id);
-        if auto_fit {
-            self.schedule_auto_fit();
-        } else {
-            self.auto_fit_pending = false;
+        if self
+            .board
+            .create_panel(PanelOptions::default(), Some(workspace_id))
+            .is_ok()
+        {
+            self.schedule_auto_board_action(Duration::ZERO);
         }
+        self.board.focus_workspace(workspace_id);
     }
 
     fn suggest_workspace_position(&self, ctx: &Context) -> Pos2 {
@@ -317,7 +354,9 @@ impl OrbitermApp {
 
     fn create_panel_with_options(&mut self, workspace_id: Option<WorkspaceId>, opts: PanelOptions) {
         let target_workspace = self.preferred_workspace(workspace_id);
-        let _ = self.board.create_panel(opts, target_workspace);
+        if self.board.create_panel(opts, target_workspace).is_ok() {
+            self.schedule_auto_board_action(Duration::ZERO);
+        }
         if let Some(workspace_id) = target_workspace {
             self.board.focus_workspace(workspace_id);
         }
@@ -333,6 +372,7 @@ impl OrbitermApp {
     }
 
     fn render_titlebar(&self, ctx: &Context) {
+        let controls = native_titlebar_controls_spec();
         egui::TopBottomPanel::top("titlebar")
             .exact_height(TITLEBAR_HEIGHT)
             .frame(
@@ -346,36 +386,13 @@ impl OrbitermApp {
             )
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.add_space(2.0);
-                    for (color, action) in [
-                        (theme::BTN_CLOSE, "close"),
-                        (theme::BTN_MINIMIZE, "minimize"),
-                        (theme::BTN_MAXIMIZE, "maximize"),
-                    ] {
-                        let (rect, response) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::click());
-                        let fill = if response.hovered() {
-                            color
-                        } else {
-                            color.gamma_multiply(0.50)
-                        };
-                        ui.painter().circle_filled(rect.center(), 6.0, fill);
-
-                        if response.clicked() {
-                            match action {
-                                "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                                "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                                "maximize" => {
-                                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                                }
-                                _ => {}
-                            }
-                        }
-
+                    if controls.placement == TitlebarControlsPlacement::Leading {
+                        ui.add_space(2.0);
+                        render_titlebar_window_controls(ui, ctx, controls.controls);
+                        ui.add_space(14.0);
+                    } else {
                         ui.add_space(4.0);
                     }
-
-                    ui.add_space(14.0);
                     ui.label(
                         egui::RichText::new(crate::branding::APP_NAME)
                             .color(theme::FG_SOFT)
@@ -396,6 +413,10 @@ impl OrbitermApp {
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(4.0);
+                        if controls.placement == TitlebarControlsPlacement::Trailing {
+                            render_titlebar_window_controls(ui, ctx, controls.controls);
+                            ui.add_space(10.0);
+                        }
                         paint_status_pill(ui, &format!("{:.0}%", self.zoom * 100.0));
                         ui.add_space(2.0);
                         paint_status_pill(ui, &format!("{} panels", self.board.panels.len()));
@@ -469,16 +490,38 @@ impl OrbitermApp {
                         }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(chrome_button("Fit Board")).clicked() {
-                                self.fit_view_to_content(ctx);
-                            }
-
                             if ui
                                 .add_enabled(self.board.active_workspace.is_some(), chrome_button("Fit Workspace"))
                                 .clicked()
                                 && let Some(workspace_id) = self.board.active_workspace
                             {
                                 self.fit_view_to_workspace(ctx, workspace_id);
+                            }
+
+                            if ui.add(chrome_button("Fit Board")).clicked() {
+                                self.fit_view_to_content(ctx);
+                            }
+
+                            if ui
+                                .add(if self.auto_board_mode == AutoBoardMode::ZoomPlusOne {
+                                    primary_button("Auto Zoom +1")
+                                } else {
+                                    chrome_button("Auto Zoom +1")
+                                })
+                                .clicked()
+                            {
+                                self.auto_board_mode = AutoBoardMode::ZoomPlusOne;
+                            }
+
+                            if ui
+                                .add(if self.auto_board_mode == AutoBoardMode::FitBoard {
+                                    primary_button("Auto Fit")
+                                } else {
+                                    chrome_button("Auto Fit")
+                                })
+                                .clicked()
+                            {
+                                self.auto_board_mode = AutoBoardMode::FitBoard;
                             }
                         });
                     });
@@ -491,28 +534,32 @@ impl OrbitermApp {
                         Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 100)),
                     );
                     ui.add_space(6.0);
+                    self.render_workspace_strip(ui);
+                });
+            });
+    }
 
-                    let workspaces = self.workspace_snapshots();
+    fn render_workspace_strip(&mut self, ui: &mut egui::Ui) {
+        let workspaces = self.workspace_snapshots();
 
-                    if workspaces.is_empty() {
-                        ui.label(egui::RichText::new("No workspaces yet").color(theme::FG_DIM).size(11.0));
-                    } else {
-                        egui::ScrollArea::horizontal()
-                            .id_salt("workspace_strip")
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    for (workspace_id, name, accent, count, _position) in workspaces {
-                                        self.render_workspace_chip(
-                                            ui,
-                                            workspace_id,
-                                            &name,
-                                            Color32::from_rgb(accent.0, accent.1, accent.2),
-                                            count,
-                                            self.board.active_workspace == Some(workspace_id),
-                                        );
-                                    }
-                                });
-                            });
+        if workspaces.is_empty() {
+            ui.label(egui::RichText::new("No workspaces yet").color(theme::FG_DIM).size(11.0));
+            return;
+        }
+
+        egui::ScrollArea::horizontal()
+            .id_salt("workspace_strip")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (workspace_id, name, accent, count, _position) in workspaces {
+                        self.render_workspace_chip(
+                            ui,
+                            workspace_id,
+                            &name,
+                            Color32::from_rgb(accent.0, accent.1, accent.2),
+                            count,
+                            self.board.active_workspace == Some(workspace_id),
+                        );
                     }
                 });
             });
@@ -539,7 +586,17 @@ impl OrbitermApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     paint_workspace_dot(ui, accent, 4.5);
-                    self.render_workspace_name_control(ui, workspace_id, name, accent, 12.0, [78.0, 180.0]);
+                    let _ = self.render_workspace_name_control(
+                        ui,
+                        workspace_id,
+                        name,
+                        accent,
+                        WorkspaceTitleStyle {
+                            text_size: 12.0,
+                            width_bounds: [78.0, 180.0],
+                        },
+                        true,
+                    );
                     render_count_badge(ui, accent, count);
 
                     if ui.add(icon_button("+")).clicked() {
@@ -559,15 +616,16 @@ impl OrbitermApp {
         workspace_id: WorkspaceId,
         current_name: &str,
         accent: Color32,
-        text_size: f32,
-        width_bounds: [f32; 2],
-    ) {
+        style: WorkspaceTitleStyle,
+        interactive: bool,
+    ) -> Rect {
         if self.is_renaming_workspace(workspace_id) {
             let mut commit = false;
             let mut cancel = false;
+            let mut response_rect = Rect::NOTHING;
 
             if let Some(rename) = self.workspace_rename.as_mut() {
-                let [min_width, max_width] = width_bounds;
+                let [min_width, max_width] = style.width_bounds;
                 let desired_width =
                     (usize_to_f32(rename.draft.chars().count().max(8)) * 8.0).clamp(min_width, max_width);
                 let response = ui.add(
@@ -576,6 +634,7 @@ impl OrbitermApp {
                         .desired_width(desired_width)
                         .font(egui::TextStyle::Button),
                 );
+                response_rect = response.rect;
 
                 if rename.should_focus {
                     response.request_focus();
@@ -592,20 +651,25 @@ impl OrbitermApp {
             } else if commit {
                 self.commit_workspace_rename();
             }
-        } else {
-            let response = ui
-                .add(
-                    egui::Label::new(egui::RichText::new(current_name).color(accent).size(text_size).strong())
-                        .sense(Sense::click()),
-                )
-                .on_hover_text("Double-click to rename");
 
-            if response.clicked() {
-                self.board.focus_workspace(workspace_id);
+            response_rect
+        } else {
+            let title_rect = paint_workspace_title_pill(ui, current_name, accent, style.text_size, style.width_bounds);
+            if interactive {
+                let response = ui.interact(
+                    title_rect,
+                    ui.make_persistent_id(("workspace_name", workspace_id.0)),
+                    Sense::click(),
+                );
+                if response.clicked() {
+                    self.board.focus_workspace(workspace_id);
+                }
+                if response.double_clicked() {
+                    self.start_workspace_rename(workspace_id, current_name);
+                }
             }
-            if response.double_clicked() {
-                self.start_workspace_rename(workspace_id, current_name);
-            }
+
+            title_rect
         }
     }
 
@@ -626,6 +690,7 @@ impl OrbitermApp {
             let editing = self.is_renaming_workspace(workspace_id);
             let active = self.board.active_workspace == Some(workspace_id);
             let mut add_terminal = false;
+            let mut title_rect = Rect::NOTHING;
 
             let area = egui::Area::new(Id::new(("workspace_badge", workspace_id.0)))
                 .current_pos(desired_rect.min)
@@ -643,13 +708,16 @@ impl OrbitermApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 paint_workspace_dot(ui, accent, 5.5);
-                                self.render_workspace_name_control(
+                                title_rect = self.render_workspace_name_control(
                                     ui,
                                     workspace_id,
                                     &name,
                                     accent,
-                                    13.5,
-                                    [86.0, 220.0],
+                                    WorkspaceTitleStyle {
+                                        text_size: 13.5,
+                                        width_bounds: [86.0, 220.0],
+                                    },
+                                    false,
                                 );
                                 render_count_badge(ui, accent, count);
 
@@ -673,7 +741,13 @@ impl OrbitermApp {
             if area.response.clicked() || area.response.drag_started() {
                 self.board.focus_workspace(workspace_id);
             }
-            if area.response.double_clicked() {
+            let title_was_double_clicked = area.response.double_clicked()
+                && ctx
+                    .input(|input| input.pointer.interact_pos())
+                    .is_some_and(|pointer_position| title_rect.contains(pointer_position));
+            if title_was_double_clicked {
+                self.start_workspace_rename(workspace_id, &name);
+            } else if area.response.double_clicked() {
                 self.fit_view_to_workspace(ctx, workspace_id);
             }
             if self
@@ -681,12 +755,36 @@ impl OrbitermApp {
                 .move_workspace(workspace_id, [canvas_position.x, canvas_position.y])
                 && drag_delta != Vec2::ZERO
             {
-                self.auto_fit_pending = false;
+                self.pending_auto_board_action_at = None;
             }
 
             if add_terminal {
                 self.create_panel_in_workspace(Some(workspace_id));
             }
+        }
+    }
+
+    fn render_island_backgrounds(&mut self, ctx: &Context) {
+        let painter = ctx.layer_painter(LayerId::background());
+
+        for workspace in &self.board.workspaces {
+            if workspace.panels.is_empty() {
+                continue;
+            }
+
+            let accent_rgb = workspace.accent();
+            let accent = Color32::from_rgb(accent_rgb.0, accent_rgb.1, accent_rgb.2);
+            let canvas_rect = self.workspace_canvas_bounds(workspace);
+            let bg_rect = Rect::from_min_max(
+                self.canvas_to_screen(canvas_rect.min),
+                self.canvas_to_screen(canvas_rect.max),
+            );
+
+            let fill = theme::alpha(accent, 14);
+            painter.rect_filled(bg_rect, Rounding::same(16.0 * self.zoom), fill);
+
+            let border_stroke = Stroke::new(1.0, theme::alpha(accent, 40));
+            painter.rect_stroke(bg_rect, Rounding::same(16.0 * self.zoom), border_stroke);
         }
     }
 
@@ -860,20 +958,11 @@ impl OrbitermApp {
 
         if let Some(window) = response {
             self.sync_live_panel_geometry(panel_id, constrain_rect, window.response.rect);
-
-            let (clicked_terminal, pty_resized) = window.inner.unwrap_or((false, false));
-            let should_zoom_out = should_zoom_out_for_edge_resize(
-                window.response.rect,
-                constrain_rect,
-                previous_size,
-                window.response.rect.size(),
-                pty_resized,
-                ctx.input(|input| input.pointer.primary_down()),
-            );
-            if should_zoom_out {
-                self.zoom_out_around(window.response.rect.center());
+            if window.response.drag_stopped() && panel_size_changed(previous_size, window.response.rect.size()) {
+                self.schedule_auto_board_action(Duration::ZERO);
             }
 
+            let (clicked_terminal, _) = window.inner.unwrap_or((false, false));
             if clicked_terminal || window.response.clicked() || window.response.drag_started() {
                 self.board.focus(panel_id);
             }
@@ -963,7 +1052,6 @@ impl OrbitermApp {
 
         previews
     }
-
     fn default_panel_canvas_pos(fallback_index: usize) -> Pos2 {
         let column = fallback_index % 3;
         let row = fallback_index / 3;
@@ -1124,7 +1212,7 @@ impl OrbitermApp {
     }
 
     fn workspace_render_mode(&self, workspace_id: WorkspaceId) -> WorkspaceRenderMode {
-        if self.board.active_workspace == Some(workspace_id) && self.zoom >= WORKSPACE_INTERACTIVE_ZOOM {
+        if self.board.active_workspace == Some(workspace_id) {
             WorkspaceRenderMode::Interactive
         } else if self.zoom >= WORKSPACE_PREVIEW_ZOOM {
             WorkspaceRenderMode::Preview
@@ -1147,25 +1235,6 @@ impl OrbitermApp {
         }
 
         bounds.expand2(Vec2::new(36.0, 36.0))
-    }
-
-    fn workspace_fit_board_bounds(&self, workspace: &Workspace) -> Rect {
-        let mut bounds = Rect::from_min_size(
-            Pos2::new(workspace.position[0], workspace.position[1]),
-            Vec2::new(WORKSPACE_BADGE_WIDTH, WORKSPACE_BADGE_HEIGHT),
-        );
-
-        for panel_id in &workspace.panels {
-            let Some(panel) = self.board.panel(*panel_id) else {
-                continue;
-            };
-            let position = self
-                .panel_canvas_position(panel.id)
-                .unwrap_or_else(|| Pos2::new(panel.layout.position[0], panel.layout.position[1]));
-            bounds = bounds.union(Rect::from_min_size(position, fit_board_panel_size(panel.layout.size)));
-        }
-
-        bounds.expand2(Vec2::new(48.0, 48.0))
     }
 
     fn panel_canvas_rect(&self, panel: &orbiterm_core::Panel) -> Rect {
@@ -1205,11 +1274,11 @@ impl OrbitermApp {
     fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>) {
         let Some(content_bounds) = bounds else {
             self.reset_view(ctx);
-            self.auto_fit_pending = false;
+            self.pending_auto_board_action_at = None;
             return;
         };
         let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
-            self.auto_fit_pending = true;
+            self.schedule_auto_board_action(AUTO_BOARD_RESIZE_SETTLE_DELAY);
             return;
         };
 
@@ -1226,47 +1295,23 @@ impl OrbitermApp {
 
         self.zoom = target_zoom;
         self.pan_offset = canvas_rect.center().to_vec2() - content_bounds.center().to_vec2() * target_zoom;
-        self.auto_fit_pending = false;
+        self.pending_auto_board_action_at = None;
     }
 
     fn zoom_out_around(&mut self, screen_point: Pos2) {
         let anchor = self.screen_to_canvas(screen_point);
-        let next_zoom = (self.zoom * 0.92).clamp(0.45, 2.5);
+        let next_zoom = (self.zoom * AUTO_BOARD_ZOOM_STEP).clamp(0.45, 2.5);
         if (next_zoom - self.zoom).abs() <= f32::EPSILON {
             return;
         }
 
         self.zoom = next_zoom;
         self.pan_offset = screen_point.to_vec2() - anchor.to_vec2() * self.zoom;
-        self.auto_fit_pending = false;
+        self.pending_auto_board_action_at = None;
     }
 
     fn fit_board_bounds(&self) -> Option<Rect> {
-        let mut bounds: Option<Rect> = None;
-
-        for workspace in &self.board.workspaces {
-            let rect = self.workspace_fit_board_bounds(workspace);
-            bounds = Some(match bounds {
-                Some(current) => current.union(rect),
-                None => rect,
-            });
-        }
-
-        for (index, panel) in self.board.panels.iter().enumerate() {
-            if panel.workspace_id.is_some() {
-                continue;
-            }
-            let position = self
-                .panel_canvas_position(panel.id)
-                .unwrap_or_else(|| Self::default_panel_canvas_pos(index));
-            let rect = Rect::from_min_size(position, fit_board_panel_size(panel.layout.size));
-            bounds = Some(match bounds {
-                Some(current) => current.union(rect),
-                None => rect,
-            });
-        }
-
-        bounds
+        self.layout_bounds()
     }
 
     fn layout_bounds(&self) -> Option<Rect> {
@@ -1296,6 +1341,59 @@ impl OrbitermApp {
 
         bounds
     }
+
+    fn handle_viewport_resize(&mut self, ctx: &Context) {
+        let viewport_size = viewport_local_rect(ctx).size();
+        if let Some(last_viewport_size) = self.last_viewport_size.replace(viewport_size) {
+            let width_changed = (last_viewport_size.x - viewport_size.x).abs() > f32::EPSILON;
+            let height_changed = (last_viewport_size.y - viewport_size.y).abs() > f32::EPSILON;
+            if width_changed || height_changed {
+                self.schedule_auto_board_action(AUTO_BOARD_RESIZE_SETTLE_DELAY);
+            }
+        }
+    }
+
+    fn board_overflows_canvas(&self, ctx: &Context) -> bool {
+        let Some(bounds) = self.fit_board_bounds() else {
+            return false;
+        };
+        let Some(canvas_rect) = Self::canvas_view_rect(ctx) else {
+            return false;
+        };
+
+        let content_screen_rect =
+            Rect::from_min_max(self.canvas_to_screen(bounds.min), self.canvas_to_screen(bounds.max));
+        let safe_canvas_rect = canvas_rect.shrink2(Vec2::new(24.0, 24.0));
+
+        !safe_canvas_rect.contains_rect(content_screen_rect)
+    }
+
+    fn run_auto_board_action(&mut self, ctx: &Context) {
+        if !self.board_overflows_canvas(ctx) {
+            self.pending_auto_board_action_at = None;
+            return;
+        }
+
+        match self.auto_board_mode {
+            AutoBoardMode::FitBoard => self.fit_view_to_content(ctx),
+            AutoBoardMode::ZoomPlusOne => {
+                let anchor =
+                    Self::canvas_view_rect(ctx).map_or_else(|| viewport_local_rect(ctx).center(), |rect| rect.center());
+                self.zoom_out_around(anchor);
+            }
+        }
+    }
+
+    fn maybe_apply_pending_auto_board_action(&mut self, ctx: &Context) {
+        let Some(run_at) = self.pending_auto_board_action_at else {
+            return;
+        };
+        if Instant::now() < run_at {
+            return;
+        }
+
+        self.run_auto_board_action(ctx);
+    }
 }
 
 impl eframe::App for OrbitermApp {
@@ -1307,6 +1405,7 @@ impl eframe::App for OrbitermApp {
         self.handle_zoom(ctx);
         self.handle_canvas_pan(ctx);
         self.handle_canvas_workspace_creation(ctx);
+        self.handle_viewport_resize(ctx);
         handle_edge_resize(ctx);
 
         self.board.process_output();
@@ -1321,7 +1420,7 @@ impl eframe::App for OrbitermApp {
         }
 
         if closed_any_panels {
-            self.schedule_auto_fit();
+            self.schedule_auto_board_action(Duration::ZERO);
         }
 
         self.handle_shortcuts(ctx);
@@ -1334,13 +1433,11 @@ impl eframe::App for OrbitermApp {
         self.panel_screen_rects.clear();
         self.panel_canvas_rects.clear();
         self.panel_connection_points.clear();
+        self.render_island_backgrounds(ctx);
         self.render_workspace_badges(ctx);
         self.render_preview_panels(ctx);
         self.render_live_panels(ctx);
-
-        if self.auto_fit_pending {
-            self.fit_view_to_content(ctx);
-        }
+        self.maybe_apply_pending_auto_board_action(ctx);
 
         self.draw_connectors(ctx);
         render_viewport_resize_handles(ctx);
@@ -1445,6 +1542,75 @@ fn paint_status_pill(ui: &mut egui::Ui, text: &str) {
         });
 }
 
+fn native_titlebar_controls_spec() -> TitlebarControlsSpec {
+    if cfg!(target_os = "macos") {
+        titlebar_controls_spec_for_platform("macos")
+    } else if cfg!(target_os = "windows") {
+        titlebar_controls_spec_for_platform("windows")
+    } else {
+        titlebar_controls_spec_for_platform("linux")
+    }
+}
+
+fn titlebar_controls_spec_for_platform(platform: &str) -> TitlebarControlsSpec {
+    if platform == "macos" {
+        TitlebarControlsSpec {
+            placement: TitlebarControlsPlacement::Leading,
+            controls: [
+                TitlebarControl::Close,
+                TitlebarControl::Minimize,
+                TitlebarControl::Maximize,
+            ],
+        }
+    } else {
+        TitlebarControlsSpec {
+            placement: TitlebarControlsPlacement::Trailing,
+            controls: [
+                TitlebarControl::Close,
+                TitlebarControl::Maximize,
+                TitlebarControl::Minimize,
+            ],
+        }
+    }
+}
+
+fn render_titlebar_window_controls(ui: &mut egui::Ui, ctx: &Context, controls: [TitlebarControl; 3]) {
+    for control in controls {
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::click());
+        let fill = if response.hovered() {
+            titlebar_control_color(control)
+        } else {
+            titlebar_control_color(control).gamma_multiply(0.50)
+        };
+        ui.painter().circle_filled(rect.center(), 6.0, fill);
+
+        if response.clicked() {
+            handle_titlebar_control(ctx, control);
+        }
+
+        ui.add_space(4.0);
+    }
+}
+
+fn titlebar_control_color(control: TitlebarControl) -> Color32 {
+    match control {
+        TitlebarControl::Close => theme::BTN_CLOSE,
+        TitlebarControl::Minimize => theme::BTN_MINIMIZE,
+        TitlebarControl::Maximize => theme::BTN_MAXIMIZE,
+    }
+}
+
+fn handle_titlebar_control(ctx: &Context, control: TitlebarControl) {
+    match control {
+        TitlebarControl::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        TitlebarControl::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+        TitlebarControl::Maximize => {
+            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        }
+    }
+}
+
 fn paint_panel_preview(
     ui: &mut egui::Ui,
     rect: Rect,
@@ -1497,6 +1663,30 @@ fn paint_panel_preview(
     }
 }
 
+fn paint_workspace_title_pill(
+    ui: &mut egui::Ui,
+    title: &str,
+    accent: Color32,
+    text_size: f32,
+    width_bounds: [f32; 2],
+) -> Rect {
+    let [min_width, max_width] = width_bounds;
+    let desired_width = (usize_to_f32(title.chars().count().max(8)) * (text_size * 0.62)).clamp(min_width, max_width);
+    let response = egui::Frame::default()
+        .fill(theme::alpha(accent, 34))
+        .rounding(Rounding::same(999.0))
+        .inner_margin(Margin::symmetric(12.0, 4.0))
+        .stroke(Stroke::new(1.0, theme::alpha(accent, 120)))
+        .show(ui, |ui| {
+            ui.add_sized(
+                [desired_width, text_size + 4.0],
+                egui::Label::new(egui::RichText::new(title).color(theme::FG).size(text_size).strong()).truncate(),
+            )
+        });
+
+    response.response.rect
+}
+
 fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) -> bool {
     let mut pty_resized = false;
 
@@ -1519,6 +1709,15 @@ fn render_pty_controls(ui: &mut egui::Ui, panel: &mut orbiterm_core::Panel) -> b
             egui::RichText::new(format!("{}x{}", panel.terminal.cols(), panel.terminal.rows()))
                 .color(theme::FG_DIM)
                 .size(10.5),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "scroll {}/{}",
+                panel.terminal.scrollback(),
+                panel.terminal.scrollback_limit()
+            ))
+            .color(theme::FG_DIM)
+            .size(10.5),
         );
 
         if ui.add(icon_button("R-")).on_hover_text("Decrease PTY rows").clicked() {
@@ -1739,37 +1938,11 @@ fn agent_panel_defaults(kind: PanelKind) -> (&'static str, PanelResume, bool) {
     }
 }
 
-fn fit_board_panel_size(size: [f32; 2]) -> Vec2 {
-    Vec2::new(
-        size[0].min(FIT_BOARD_PANEL_MAX_WIDTH),
-        size[1].min(FIT_BOARD_PANEL_MAX_HEIGHT),
-    )
-}
-
-fn rect_touches_bounds(rect: Rect, bounds: Rect) -> bool {
-    const EDGE_PADDING: f32 = 12.0;
-
-    rect.min.x <= bounds.min.x + EDGE_PADDING
-        || rect.min.y <= bounds.min.y + EDGE_PADDING
-        || rect.max.x >= bounds.max.x - EDGE_PADDING
-        || rect.max.y >= bounds.max.y - EDGE_PADDING
-}
-
-fn should_zoom_out_for_edge_resize(
-    rect: Rect,
-    bounds: Rect,
-    previous_size: Vec2,
-    current_size: Vec2,
-    pty_resized: bool,
-    pointer_down: bool,
-) -> bool {
-    rect_touches_bounds(rect, bounds) && (pty_resized || (pointer_down && panel_size_grew(previous_size, current_size)))
-}
-
-fn panel_size_grew(previous_size: Vec2, current_size: Vec2) -> bool {
+fn panel_size_changed(previous_size: Vec2, current_size: Vec2) -> bool {
     const RESIZE_EPSILON: f32 = 1.0;
 
-    current_size.x > previous_size.x + RESIZE_EPSILON || current_size.y > previous_size.y + RESIZE_EPSILON
+    (current_size.x - previous_size.x).abs() > RESIZE_EPSILON
+        || (current_size.y - previous_size.y).abs() > RESIZE_EPSILON
 }
 
 fn preview_char_budget(screen_width: f32) -> usize {
@@ -1813,9 +1986,9 @@ fn usize_to_f32(value: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        FIT_BOARD_PANEL_MAX_HEIGHT, FIT_BOARD_PANEL_MAX_WIDTH, agent_panel_defaults, clamp_rect_to_bounds,
-        fit_board_panel_size, panel_size_grew, preview_char_budget, rect_touches_bounds,
-        should_create_workspace_from_canvas_gesture, should_zoom_out_for_edge_resize, workspace_name_from_input,
+        TitlebarControl, TitlebarControlsPlacement, agent_panel_defaults, clamp_rect_to_bounds, panel_size_changed,
+        preview_char_budget, should_create_workspace_from_canvas_gesture, titlebar_controls_spec_for_platform,
+        workspace_name_from_input,
     };
     use egui::{Pos2, Rect, Vec2};
     use orbiterm_core::{PanelKind, PanelResume};
@@ -1881,15 +2054,6 @@ mod tests {
     }
 
     #[test]
-    fn fit_board_panel_size_caps_large_panels() {
-        assert_eq!(
-            fit_board_panel_size([800.0, 640.0]),
-            Vec2::new(FIT_BOARD_PANEL_MAX_WIDTH, FIT_BOARD_PANEL_MAX_HEIGHT)
-        );
-        assert_eq!(fit_board_panel_size([220.0, 180.0]), Vec2::new(220.0, 180.0));
-    }
-
-    #[test]
     fn agent_panels_start_with_manual_pty() {
         assert_eq!(
             agent_panel_defaults(PanelKind::Codex),
@@ -1906,59 +2070,50 @@ mod tests {
     }
 
     #[test]
-    fn detects_when_panel_hits_viewport_edge() {
-        let bounds = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(640.0, 360.0));
+    fn panel_resize_detection_is_symmetric() {
+        let previous_size = Vec2::new(280.0, 200.0);
+        let current_size = Vec2::new(320.0, 220.0);
+        let smaller_size = Vec2::new(240.0, 180.0);
+        let nearly_same = Vec2::new(280.4, 200.4);
 
-        assert!(rect_touches_bounds(
-            Rect::from_min_size(Pos2::new(4.0, 80.0), Vec2::new(240.0, 160.0)),
-            bounds,
-        ));
-        assert!(!rect_touches_bounds(
-            Rect::from_min_size(Pos2::new(80.0, 100.0), Vec2::new(240.0, 160.0)),
-            bounds,
-        ));
+        assert!(panel_size_changed(previous_size, current_size));
+        assert!(panel_size_changed(previous_size, smaller_size));
+        assert!(!panel_size_changed(previous_size, nearly_same));
     }
 
     #[test]
-    fn edge_resize_zoom_only_triggers_for_growth_or_manual_pty_changes() {
-        let bounds = Rect::from_min_size(Pos2::new(0.0, 40.0), Vec2::new(640.0, 360.0));
-        let edge_rect = Rect::from_min_size(Pos2::new(0.0, 120.0), Vec2::new(320.0, 220.0));
-        let interior_rect = Rect::from_min_size(Pos2::new(120.0, 120.0), Vec2::new(320.0, 220.0));
-        let previous_size = Vec2::new(280.0, 200.0);
-        let current_size = Vec2::new(320.0, 220.0);
+    fn titlebar_controls_follow_platform_conventions() {
+        let linux = titlebar_controls_spec_for_platform("linux");
+        assert_eq!(linux.placement, TitlebarControlsPlacement::Trailing);
+        assert_eq!(
+            linux.controls,
+            [
+                TitlebarControl::Close,
+                TitlebarControl::Maximize,
+                TitlebarControl::Minimize,
+            ]
+        );
 
-        assert!(panel_size_grew(previous_size, current_size));
-        assert!(should_zoom_out_for_edge_resize(
-            edge_rect,
-            bounds,
-            previous_size,
-            current_size,
-            false,
-            true,
-        ));
-        assert!(should_zoom_out_for_edge_resize(
-            edge_rect,
-            bounds,
-            previous_size,
-            previous_size,
-            true,
-            false,
-        ));
-        assert!(!should_zoom_out_for_edge_resize(
-            edge_rect,
-            bounds,
-            previous_size,
-            previous_size,
-            false,
-            true,
-        ));
-        assert!(!should_zoom_out_for_edge_resize(
-            interior_rect,
-            bounds,
-            previous_size,
-            current_size,
-            true,
-            true,
-        ));
+        let windows = titlebar_controls_spec_for_platform("windows");
+        assert_eq!(windows.placement, TitlebarControlsPlacement::Trailing);
+        assert_eq!(
+            windows.controls,
+            [
+                TitlebarControl::Close,
+                TitlebarControl::Maximize,
+                TitlebarControl::Minimize,
+            ]
+        );
+
+        let macos = titlebar_controls_spec_for_platform("macos");
+        assert_eq!(macos.placement, TitlebarControlsPlacement::Leading);
+        assert_eq!(
+            macos.controls,
+            [
+                TitlebarControl::Close,
+                TitlebarControl::Minimize,
+                TitlebarControl::Maximize,
+            ]
+        );
     }
 }
