@@ -479,6 +479,7 @@ impl OrbitermApp {
                 egui::Area::new(Id::new(("ws_empty", workspace.id.0)))
                     .fixed_pos(badge_rect.min)
                     .constrain(false)
+                    .interactable(false)
                     .order(Order::Background)
                     .show(ctx, |ui| {
                         let (rect, _) = ui.allocate_exact_size(badge_rect.size(), Sense::hover());
@@ -501,11 +502,14 @@ impl OrbitermApp {
 
             let screen_min = self.canvas_to_screen(canvas_rect, top_left);
             let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
-            let screen_rect = Rect::from_min_max(screen_min, screen_max);
+            // Clamp to canvas so workspace backgrounds never overlap the toolbar.
+            let screen_rect =
+                Rect::from_min_max(Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)), screen_max);
 
             egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
                 .fixed_pos(screen_rect.min)
                 .constrain(false)
+                .interactable(false)
                 .order(Order::Background)
                 .show(ctx, |ui| {
                     let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
