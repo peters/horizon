@@ -115,7 +115,9 @@ impl Panel {
             output_rx: rx,
             master: pair.master,
             pending_pty_resize: None,
-            last_pty_resize_at: Instant::now() - PTY_RESIZE_INTERVAL,
+            last_pty_resize_at: Instant::now()
+                .checked_sub(PTY_RESIZE_INTERVAL)
+                .unwrap_or_else(Instant::now),
             _child: child,
         })
     }

@@ -19,8 +19,8 @@ const PANEL_COLUMN_SPACING: f32 = 340.0;
 const PANEL_ROW_SPACING: f32 = 240.0;
 const WORKSPACE_PANEL_OFFSET_X: f32 = 90.0;
 const WORKSPACE_PANEL_OFFSET_Y: f32 = 108.0;
-const TITLEBAR_HEIGHT: f32 = 34.0;
-const CONTROL_BAR_HEIGHT: f32 = 78.0;
+const TITLEBAR_HEIGHT: f32 = 38.0;
+const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
@@ -283,21 +283,114 @@ impl OrbitermApp {
             });
     }
 
+    fn render_titlebar(&self, ctx: &Context) {
+        egui::TopBottomPanel::top("titlebar")
+            .exact_height(TITLEBAR_HEIGHT)
+            .frame(
+                egui::Frame::default()
+                    .fill(theme::TITLEBAR_BG)
+                    .inner_margin(Margin::symmetric(14.0, 0.0))
+                    .stroke(Stroke::new(
+                        1.0,
+                        theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.15),
+                    )),
+            )
+            .show(ctx, |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add_space(2.0);
+                    for (color, action) in [
+                        (theme::BTN_CLOSE, "close"),
+                        (theme::BTN_MINIMIZE, "minimize"),
+                        (theme::BTN_MAXIMIZE, "maximize"),
+                    ] {
+                        let (rect, response) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::click());
+                        let fill = if response.hovered() {
+                            color
+                        } else {
+                            color.gamma_multiply(0.50)
+                        };
+                        ui.painter().circle_filled(rect.center(), 6.0, fill);
+
+                        if response.clicked() {
+                            match action {
+                                "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                                "maximize" => {
+                                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        ui.add_space(4.0);
+                    }
+
+                    ui.add_space(14.0);
+                    ui.label(
+                        egui::RichText::new(crate::branding::APP_NAME)
+                            .color(theme::FG_SOFT)
+                            .size(13.0)
+                            .strong(),
+                    );
+
+                    ui.add_space(5.0);
+                    let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(3.0), Sense::hover());
+                    ui.painter().circle_filled(dot_rect.center(), 1.5, theme::FG_DIM);
+                    ui.add_space(5.0);
+
+                    ui.label(
+                        egui::RichText::new(crate::branding::APP_TAGLINE)
+                            .color(theme::alpha(theme::FG_DIM, 160))
+                            .size(10.5),
+                    );
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        paint_status_pill(ui, &format!("{:.0}%", self.zoom * 100.0));
+                        ui.add_space(2.0);
+                        paint_status_pill(ui, &format!("{} panels", self.board.panels.len()));
+                        ui.add_space(2.0);
+                        paint_status_pill(ui, &format!("{} workspaces", self.board.workspaces.len()));
+
+                        let drag_area = ui.available_rect_before_wrap();
+                        let response = ui.allocate_rect(drag_area, Sense::click_and_drag());
+                        if response.drag_started() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+                        if response.double_clicked() {
+                            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                        }
+                    });
+                });
+            });
+    }
+
     fn render_toolbar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::bottom("toolbar")
             .exact_height(CONTROL_BAR_HEIGHT)
             .frame(
                 egui::Frame::default()
                     .fill(theme::TOOLBAR_BG)
-                    .inner_margin(Margin::symmetric(14.0, 8.0))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 180))),
+                    .inner_margin(Margin::symmetric(14.0, 10.0))
+                    .stroke(Stroke::new(
+                        1.0,
+                        theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.12),
+                    )),
             )
             .show(ctx, |ui| {
                 let input_width = (ui.available_width() * 0.22).clamp(128.0, 220.0);
 
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("workspaces").color(theme::FG_DIM).size(11.0));
+                        ui.label(
+                            egui::RichText::new("workspaces")
+                                .color(theme::FG_DIM)
+                                .size(11.0)
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
 
                         let input_response = ui.add(
                             egui::TextEdit::singleline(&mut self.new_workspace_name)
@@ -324,26 +417,17 @@ impl OrbitermApp {
                             if ui.add(chrome_button("Fit View")).clicked() {
                                 self.fit_view_to_content(ctx);
                             }
-
-                            ui.label(
-                                egui::RichText::new(format!("{:.0}%", self.zoom * 100.0))
-                                    .color(theme::FG_SOFT)
-                                    .size(11.0),
-                            );
-                            ui.separator();
-                            ui.label(
-                                egui::RichText::new(format!("{} panels", self.board.panels.len()))
-                                    .color(theme::FG_DIM)
-                                    .size(11.0),
-                            );
-                            ui.separator();
-                            ui.label(
-                                egui::RichText::new("Ctrl+drag or scroll pans the observatory")
-                                    .color(theme::FG_DIM)
-                                    .size(10.0),
-                            );
                         });
                     });
+
+                    ui.add_space(6.0);
+                    let line_rect = ui.available_rect_before_wrap();
+                    ui.painter().hline(
+                        line_rect.x_range(),
+                        line_rect.top(),
+                        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 100)),
+                    );
+                    ui.add_space(6.0);
 
                     let workspaces = self.workspace_snapshots();
 
@@ -930,7 +1014,7 @@ impl eframe::App for OrbitermApp {
         self.handle_shortcuts(ctx);
         self.check_config_reload();
 
-        render_custom_titlebar(ctx);
+        self.render_titlebar(ctx);
         self.render_toolbar(ctx);
         self.render_canvas(ctx);
         self.render_workspace_badges(ctx);
@@ -1012,72 +1096,14 @@ fn handle_edge_resize(ctx: &Context) {
     }
 }
 
-fn render_custom_titlebar(ctx: &Context) {
-    egui::TopBottomPanel::top("titlebar")
-        .exact_height(TITLEBAR_HEIGHT)
-        .frame(
-            egui::Frame::default()
-                .fill(theme::TITLEBAR_BG)
-                .inner_margin(Margin::symmetric(12.0, 0.0))
-                .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 160))),
-        )
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for (color, action) in [
-                    (theme::BTN_CLOSE, "close"),
-                    (theme::BTN_MINIMIZE, "minimize"),
-                    (theme::BTN_MAXIMIZE, "maximize"),
-                ] {
-                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::click());
-                    ui.painter().circle_filled(
-                        rect.center(),
-                        6.0,
-                        if response.hovered() {
-                            color
-                        } else {
-                            color.gamma_multiply(0.72)
-                        },
-                    );
-
-                    if response.clicked() {
-                        match action {
-                            "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                            "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                            "maximize" => {
-                                let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    ui.add_space(6.0);
-                }
-
-                ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new(crate::branding::APP_NAME)
-                        .color(theme::FG_SOFT)
-                        .size(13.0)
-                        .strong(),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new(crate::branding::APP_TAGLINE)
-                        .color(theme::FG_DIM)
-                        .size(10.5),
-                );
-
-                let drag_area = ui.available_rect_before_wrap();
-                let response = ui.allocate_rect(drag_area, Sense::click_and_drag());
-                if response.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-                if response.double_clicked() {
-                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                }
-            });
+fn paint_status_pill(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::default()
+        .fill(theme::alpha(theme::PANEL_BG_ALT, 180))
+        .rounding(Rounding::same(8.0))
+        .inner_margin(Margin::symmetric(7.0, 2.0))
+        .stroke(Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 120)))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).color(theme::FG_DIM).size(10.0));
         });
 }
 

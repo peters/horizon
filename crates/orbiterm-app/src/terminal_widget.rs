@@ -48,7 +48,7 @@ impl<'a> TerminalView<'a> {
             font_id,
         };
         let other_widget_has_focus = ui
-            .memory(|memory| memory.focused())
+            .memory(egui::Memory::focused)
             .is_some_and(|focused| focused != response.id);
         let has_terminal_focus = response.has_focus() || (is_active_panel && !other_widget_has_focus);
 
