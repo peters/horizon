@@ -1142,15 +1142,9 @@ impl OrbitermApp {
         bounds
     }
 
-    fn handle_viewport_resize(&mut self, ctx: &Context) {
+    fn track_viewport_size(&mut self, ctx: &Context) {
         let viewport_size = viewport_local_rect(ctx).size();
-        if let Some(last_viewport_size) = self.last_viewport_size.replace(viewport_size) {
-            let width_changed = (last_viewport_size.x - viewport_size.x).abs() > f32::EPSILON;
-            let height_changed = (last_viewport_size.y - viewport_size.y).abs() > f32::EPSILON;
-            if width_changed || height_changed {
-                self.schedule_fit_board(AUTO_BOARD_RESIZE_SETTLE_DELAY);
-            }
-        }
+        self.last_viewport_size.replace(viewport_size);
     }
 
     fn maybe_apply_pending_fit(&mut self, ctx: &Context) {
@@ -1179,7 +1173,7 @@ impl eframe::App for OrbitermApp {
         self.handle_zoom(ctx);
         self.handle_canvas_pan(ctx);
         self.handle_canvas_workspace_creation(ctx);
-        self.handle_viewport_resize(ctx);
+        self.track_viewport_size(ctx);
         handle_edge_resize(ctx);
 
         self.board.process_output();
