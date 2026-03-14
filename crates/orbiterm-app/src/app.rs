@@ -238,21 +238,18 @@ impl OrbitermApp {
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_view_rect(ctx);
-        let wants_keyboard_input = ctx.wants_keyboard_input();
         let pan_delta = ctx.input(|input| {
             let pointer_position = input.pointer.hover_pos();
             let pointer_in_canvas = pointer_position
                 .zip(canvas_rect)
                 .is_some_and(|(position, rect)| rect.contains(position));
-            let pointer_over_panel = pointer_position
-                .is_some_and(|position| self.panel_screen_rects.values().any(|rect| rect.contains(position)));
             let drag_panning = pointer_in_canvas
                 && (input.pointer.middle_down() || (input.modifiers.ctrl && input.pointer.primary_down()));
-            let scroll_pan_enabled = pointer_in_canvas && !wants_keyboard_input && !pointer_over_panel;
+            let scroll_panning = pointer_in_canvas && !input.modifiers.ctrl;
 
             if drag_panning {
                 input.pointer.delta()
-            } else if scroll_pan_enabled && !input.modifiers.ctrl {
+            } else if scroll_panning {
                 input.smooth_scroll_delta + input.raw_scroll_delta
             } else {
                 Vec2::ZERO
