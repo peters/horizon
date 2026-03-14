@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::panel::{PanelKind, PanelResume};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -30,6 +31,12 @@ pub struct TerminalConfig {
     pub rows: u16,
     #[serde(default = "default_cols")]
     pub cols: u16,
+    #[serde(default)]
+    pub kind: PanelKind,
+    #[serde(default)]
+    pub resume: PanelResume,
+    pub position: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
 }
 
 fn default_rows() -> u16 {
@@ -92,6 +99,10 @@ impl Default for Config {
                     cwd: None,
                     rows: default_rows(),
                     cols: default_cols(),
+                    kind: PanelKind::Shell,
+                    resume: PanelResume::Fresh,
+                    position: None,
+                    size: None,
                 }],
             }],
         }

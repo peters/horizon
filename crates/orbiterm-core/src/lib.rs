@@ -12,6 +12,6 @@ pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionStat
 pub use board::Board;
 pub use config::{Config, TerminalConfig, WorkspaceConfig};
 pub use error::{Error, Result};
-pub use panel::{Panel, PanelId, PanelOptions};
+pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use terminal::Terminal;
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

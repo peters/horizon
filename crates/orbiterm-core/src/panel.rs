@@ -4,16 +4,55 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
 use crate::terminal::Terminal;
+use crate::workspace::WorkspaceId;
 
 const MAX_OUTPUT_CHUNKS_PER_FRAME: usize = 24;
 const MAX_OUTPUT_BYTES_PER_FRAME: usize = 128 * 1024;
 const PTY_RESIZE_INTERVAL: Duration = Duration::from_millis(40);
+pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelKind {
+    #[default]
+    Shell,
+    Codex,
+    Claude,
+    Command,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub enum PanelResume {
+    #[default]
+    #[serde(rename = "fresh")]
+    Fresh,
+    #[serde(rename = "last")]
+    Last,
+    #[serde(rename = "session")]
+    Session { session_id: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelLayout {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0],
+            size: DEFAULT_PANEL_SIZE,
+        }
+    }
+}
 
 pub struct PanelOptions {
     pub name: Option<String>,
@@ -22,6 +61,10 @@ pub struct PanelOptions {
     pub cwd: Option<PathBuf>,
     pub rows: u16,
     pub cols: u16,
+    pub kind: PanelKind,
+    pub resume: PanelResume,
+    pub position: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
 }
 
 impl Default for PanelOptions {
@@ -33,6 +76,10 @@ impl Default for PanelOptions {
             cwd: None,
             rows: 24,
             cols: 80,
+            kind: PanelKind::default(),
+            resume: PanelResume::default(),
+            position: None,
+            size: None,
         }
     }
 }
@@ -40,6 +87,10 @@ impl Default for PanelOptions {
 pub struct Panel {
     pub id: PanelId,
     pub title: String,
+    pub kind: PanelKind,
+    pub resume: PanelResume,
+    pub layout: PanelLayout,
+    pub workspace_id: Option<WorkspaceId>,
     pub terminal: Terminal,
     has_custom_name: bool,
     writer: Box<dyn Write + Send>,
@@ -59,23 +110,33 @@ impl Panel {
     /// spawned, or the PTY reader/writer handles cannot be acquired.
     pub fn spawn(id: PanelId, opts: PanelOptions) -> Result<Self> {
         let pty_system = native_pty_system();
+        let PanelOptions {
+            name,
+            command,
+            args,
+            cwd,
+            rows,
+            cols,
+            kind,
+            resume,
+            position,
+            size,
+        } = opts;
         let pair = pty_system
             .openpty(PtySize {
-                rows: opts.rows,
-                cols: opts.cols,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
             .map_err(|e| Error::Pty(e.to_string()))?;
 
-        let program = opts
-            .command
-            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()));
+        let (program, launch_args) = resolve_launch_command(command, args, kind, &resume);
         let mut cmd = CommandBuilder::new(&program);
-        for arg in &opts.args {
+        for arg in &launch_args {
             cmd.arg(arg);
         }
-        if let Some(cwd) = &opts.cwd {
+        if let Some(cwd) = &cwd {
             cmd.cwd(cwd);
         }
 
@@ -102,14 +163,21 @@ impl Panel {
             tracing::debug!("PTY reader thread exited");
         });
 
-        let has_custom_name = opts.name.is_some();
-        let title = opts.name.unwrap_or_else(|| format!("Terminal {}", id.0));
+        let has_custom_name = name.is_some();
+        let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
         tracing::info!("created panel '{}' (id={})", title, id.0);
 
         Ok(Self {
             id,
             title,
-            terminal: Terminal::new(opts.rows, opts.cols),
+            kind,
+            resume,
+            layout: PanelLayout {
+                position: position.unwrap_or_default(),
+                size: size.unwrap_or(DEFAULT_PANEL_SIZE),
+            },
+            workspace_id: None,
+            terminal: Terminal::new(rows, cols),
             has_custom_name,
             writer,
             output_rx: rx,
@@ -154,6 +222,14 @@ impl Panel {
         let _ = self.writer.flush();
     }
 
+    pub fn move_to(&mut self, position: [f32; 2]) {
+        self.layout.position = position;
+    }
+
+    pub fn resize_layout(&mut self, size: [f32; 2]) {
+        self.layout.size = size;
+    }
+
     pub fn resize(&mut self, rows: u16, cols: u16) {
         if rows == self.terminal.rows() && cols == self.terminal.cols() {
             return;
@@ -180,5 +256,83 @@ impl Panel {
             pixel_height: 0,
         });
         self.last_pty_resize_at = Instant::now();
+    }
+}
+
+fn resolve_launch_command(
+    command: Option<String>,
+    args: Vec<String>,
+    kind: PanelKind,
+    resume: &PanelResume,
+) -> (String, Vec<String>) {
+    if let Some(program) = command {
+        return (program, args);
+    }
+
+    match kind {
+        PanelKind::Shell | PanelKind::Command => (default_shell(), args),
+        PanelKind::Codex => {
+            let mut launch_args = match resume {
+                PanelResume::Fresh => Vec::new(),
+                PanelResume::Last => vec!["resume".to_string(), "--last".to_string()],
+                PanelResume::Session { session_id } => vec!["resume".to_string(), session_id.clone()],
+            };
+            launch_args.extend(args);
+            ("codex".to_string(), launch_args)
+        }
+        PanelKind::Claude => {
+            let mut launch_args = match resume {
+                PanelResume::Fresh => Vec::new(),
+                PanelResume::Last => vec!["--continue".to_string()],
+                PanelResume::Session { session_id } => vec!["--resume".to_string(), session_id.clone()],
+            };
+            launch_args.extend(args);
+            ("claude".to_string(), launch_args)
+        }
+    }
+}
+
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PanelKind, PanelResume, resolve_launch_command};
+
+    #[test]
+    fn codex_last_resume_uses_resume_subcommand() {
+        let (program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
+
+        assert_eq!(program, "codex");
+        assert_eq!(args, vec!["resume", "--last"]);
+    }
+
+    #[test]
+    fn claude_session_resume_uses_resume_flag() {
+        let (program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            PanelKind::Claude,
+            &PanelResume::Session {
+                session_id: "session-42".to_string(),
+            },
+        );
+
+        assert_eq!(program, "claude");
+        assert_eq!(args, vec!["--resume", "session-42"]);
+    }
+
+    #[test]
+    fn explicit_command_wins_over_kind_defaults() {
+        let (program, args) = resolve_launch_command(
+            Some("python".to_string()),
+            vec!["-m".to_string(), "http.server".to_string()],
+            PanelKind::Codex,
+            &PanelResume::Last,
+        );
+
+        assert_eq!(program, "python");
+        assert_eq!(args, vec!["-m", "http.server"]);
     }
 }

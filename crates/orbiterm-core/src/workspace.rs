@@ -57,6 +57,11 @@ impl Workspace {
         }
     }
 
+    #[must_use]
+    pub fn panel_index(&self, panel_id: PanelId) -> Option<usize> {
+        self.panels.iter().position(|id| *id == panel_id)
+    }
+
     pub fn remove_panel(&mut self, panel_id: PanelId) {
         self.panels.retain(|&id| id != panel_id);
     }

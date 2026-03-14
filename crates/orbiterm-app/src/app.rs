@@ -17,8 +17,6 @@ const PANEL_MIN_WIDTH: f32 = 280.0;
 const PANEL_MIN_HEIGHT: f32 = 180.0;
 const PANEL_COLUMN_SPACING: f32 = 340.0;
 const PANEL_ROW_SPACING: f32 = 240.0;
-const WORKSPACE_PANEL_OFFSET_X: f32 = 90.0;
-const WORKSPACE_PANEL_OFFSET_Y: f32 = 108.0;
 const TITLEBAR_HEIGHT: f32 = 38.0;
 const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
@@ -38,7 +36,6 @@ pub struct OrbitermApp {
     theme_applied: bool,
     zoom: f32,
     pan_offset: Vec2,
-    panel_canvas_positions: HashMap<PanelId, Pos2>,
     panel_canvas_rects: HashMap<PanelId, Rect>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     panel_connection_points: HashMap<PanelId, Pos2>,
@@ -77,7 +74,6 @@ impl OrbitermApp {
             theme_applied: false,
             zoom: 1.0,
             pan_offset: Vec2::ZERO,
-            panel_canvas_positions: HashMap::new(),
             panel_canvas_rects: HashMap::new(),
             panel_screen_rects: HashMap::new(),
             panel_connection_points: HashMap::new(),
@@ -114,7 +110,6 @@ impl OrbitermApp {
     }
 
     fn reset_layout_cache(&mut self) {
-        self.panel_canvas_positions.clear();
         self.panel_canvas_rects.clear();
         self.panel_screen_rects.clear();
         self.panel_connection_points.clear();
@@ -253,7 +248,7 @@ impl OrbitermApp {
         let workspace_id = self.board.create_workspace(trimmed);
         let position = self.suggest_workspace_position(ctx);
 
-        if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
+        if let Some(workspace) = self.board.workspace_mut(workspace_id) {
             workspace.position = [position.x, position.y];
         }
 
@@ -595,17 +590,12 @@ impl OrbitermApp {
                 workspace_id,
                 Rect::from_min_size(canvas_position, area.response.rect.size() / self.zoom),
             );
-            if let Some(workspace) = self.board.workspaces.iter_mut().find(|item| item.id == workspace_id) {
-                workspace.position = [canvas_position.x, canvas_position.y];
-
-                if drag_delta != Vec2::ZERO {
-                    for panel_id in &workspace.panels {
-                        if let Some(panel_position) = self.panel_canvas_positions.get_mut(panel_id) {
-                            *panel_position += drag_delta;
-                        }
-                    }
-                    self.auto_fit_pending = false;
-                }
+            if self
+                .board
+                .move_workspace(workspace_id, [canvas_position.x, canvas_position.y])
+                && drag_delta != Vec2::ZERO
+            {
+                self.auto_fit_pending = false;
             }
 
             if add_terminal {
@@ -657,11 +647,9 @@ impl OrbitermApp {
             .iter()
             .enumerate()
             .map(|(index, panel)| {
-                let accent = self
-                    .board
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.panels.contains(&panel.id))
+                let accent = panel
+                    .workspace_id
+                    .and_then(|workspace_id| self.board.workspace(workspace_id))
                     .map(orbiterm_core::Workspace::accent);
 
                 (panel.id, panel.title.clone(), accent, index)
@@ -674,20 +662,23 @@ impl OrbitermApp {
             let accent = accent.map_or(theme::BORDER_STRONG, |color| {
                 Color32::from_rgb(color.0, color.1, color.2)
             });
-            let default_canvas_position = self.default_panel_canvas_pos(panel_id, index);
-            let current_canvas_position = *self
-                .panel_canvas_positions
-                .entry(panel_id)
-                .or_insert(default_canvas_position);
+            let current_canvas_position = self
+                .panel_canvas_position(panel_id)
+                .unwrap_or_else(|| self.default_panel_canvas_pos(index));
             let current_screen_position = self.canvas_to_screen(current_canvas_position);
             let is_focused = self.board.focused == Some(panel_id);
             let mut open = true;
+            let default_size = self
+                .board
+                .panel(panel_id)
+                .map(|panel| Vec2::new(panel.layout.size[0], panel.layout.size[1]))
+                .unwrap_or(Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT));
 
             let response = egui::Window::new(title)
                 .id(Id::new(("panel", panel_id.0)))
                 .open(&mut open)
                 .current_pos(current_screen_position)
-                .default_size(Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT))
+                .default_size(default_size)
                 .min_size(Vec2::new(PANEL_MIN_WIDTH, PANEL_MIN_HEIGHT))
                 .constrain(false)
                 .collapsible(false)
@@ -710,11 +701,23 @@ impl OrbitermApp {
 
             if let Some(window) = response {
                 let canvas_position = self.screen_to_canvas(window.response.rect.min);
-                self.panel_canvas_positions.insert(panel_id, canvas_position);
+                if let Some(workspace_id) = self.board.panel_workspace_id(panel_id)
+                    && let Some(workspace) = self.board.workspace(workspace_id)
+                {
+                    let relative_position = canvas_position - Pos2::new(workspace.position[0], workspace.position[1]);
+                    let _ = self
+                        .board
+                        .move_panel(panel_id, [relative_position.x, relative_position.y]);
+                } else {
+                    let _ = self.board.move_panel(panel_id, [canvas_position.x, canvas_position.y]);
+                }
+                let _ = self
+                    .board
+                    .resize_panel(panel_id, [window.response.rect.width(), window.response.rect.height()]);
                 self.panel_screen_rects.insert(panel_id, window.response.rect);
                 self.panel_canvas_rects.insert(
                     panel_id,
-                    Rect::from_min_size(canvas_position, window.response.rect.size() / self.zoom),
+                    Rect::from_min_size(current_canvas_position, window.response.rect.size()),
                 );
                 self.panel_connection_points.insert(
                     panel_id,
@@ -734,24 +737,25 @@ impl OrbitermApp {
         self.panels_to_close = panels_to_close;
     }
 
-    fn default_panel_canvas_pos(&self, panel_id: PanelId, fallback_index: usize) -> Pos2 {
-        for workspace in &self.board.workspaces {
-            if let Some(panel_index) = workspace.panels.iter().position(|id| *id == panel_id) {
-                let column = panel_index % 3;
-                let row = panel_index / 3;
-                return Pos2::new(
-                    workspace.position[0] + WORKSPACE_PANEL_OFFSET_X + usize_to_f32(column) * PANEL_COLUMN_SPACING,
-                    workspace.position[1] + WORKSPACE_PANEL_OFFSET_Y + usize_to_f32(row) * PANEL_ROW_SPACING,
-                );
-            }
-        }
-
+    fn default_panel_canvas_pos(&self, fallback_index: usize) -> Pos2 {
         let column = fallback_index % 3;
         let row = fallback_index / 3;
         Pos2::new(
             140.0 + usize_to_f32(column) * PANEL_COLUMN_SPACING,
             140.0 + usize_to_f32(row) * PANEL_ROW_SPACING,
         )
+    }
+
+    fn panel_canvas_position(&self, panel_id: PanelId) -> Option<Pos2> {
+        let panel = self.board.panel(panel_id)?;
+        let local_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+        if let Some(workspace_id) = panel.workspace_id
+            && let Some(workspace) = self.board.workspace(workspace_id)
+        {
+            return Some(Pos2::new(workspace.position[0], workspace.position[1]) + local_position.to_vec2());
+        }
+
+        Some(local_position)
     }
 
     fn check_config_reload(&mut self) {
@@ -956,11 +960,9 @@ impl OrbitermApp {
         for (index, panel) in self.board.panels.iter().enumerate() {
             let rect = self.panel_canvas_rects.get(&panel.id).copied().unwrap_or_else(|| {
                 let position = self
-                    .panel_canvas_positions
-                    .get(&panel.id)
-                    .copied()
-                    .unwrap_or_else(|| self.default_panel_canvas_pos(panel.id, index));
-                Rect::from_min_size(position, Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT))
+                    .panel_canvas_position(panel.id)
+                    .unwrap_or_else(|| self.default_panel_canvas_pos(index));
+                Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]))
             });
             bounds = Some(match bounds {
                 Some(current) => current.union(rect),
@@ -1000,7 +1002,6 @@ impl eframe::App for OrbitermApp {
         let mut closed_any_panels = false;
         for panel_id in self.panels_to_close.drain(..) {
             self.board.close_panel(panel_id);
-            self.panel_canvas_positions.remove(&panel_id);
             self.panel_canvas_rects.remove(&panel_id);
             self.panel_screen_rects.remove(&panel_id);
             self.panel_connection_points.remove(&panel_id);

@@ -1,7 +1,7 @@
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
-use crate::panel::{Panel, PanelId, PanelOptions};
+use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::workspace::{Workspace, WorkspaceId};
 
 pub struct Board {
@@ -9,6 +9,7 @@ pub struct Board {
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
     pub focused: Option<PanelId>,
+    pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
     next_workspace_id: u64,
     next_attention_id: u64,
@@ -22,6 +23,7 @@ impl Board {
             workspaces: Vec::new(),
             attention: Vec::new(),
             focused: None,
+            active_workspace: None,
             next_panel_id: 1,
             next_workspace_id: 1,
             next_attention_id: 1,
@@ -53,6 +55,10 @@ impl Board {
                     cwd: term_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s)),
                     rows: term_cfg.rows,
                     cols: term_cfg.cols,
+                    kind: term_cfg.kind,
+                    resume: term_cfg.resume.clone(),
+                    position: term_cfg.position,
+                    size: term_cfg.size,
                 };
                 board.create_panel(opts, Some(ws_id))?;
             }
@@ -67,6 +73,7 @@ impl Board {
         self.next_workspace_id += 1;
         let color_idx = self.workspaces.len();
         self.workspaces.push(Workspace::new(id, name.to_string(), color_idx));
+        self.active_workspace.get_or_insert(id);
         tracing::info!("created workspace '{}' ({})", name, id.0);
         id
     }
@@ -79,15 +86,23 @@ impl Board {
     pub fn create_panel(&mut self, opts: PanelOptions, workspace: Option<WorkspaceId>) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
-        let panel = Panel::spawn(id, opts)?;
+        let layout_position = opts
+            .position
+            .unwrap_or_else(|| self.default_panel_position(workspace, id));
+        let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
+        let mut panel = Panel::spawn(id, opts)?;
+        panel.workspace_id = workspace;
+        panel.move_to(layout_position);
+        panel.resize_layout(layout_size);
         self.panels.push(panel);
-        self.focused = Some(id);
 
         if let Some(ws_id) = workspace
             && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id)
         {
             ws.add_panel(id);
         }
+
+        self.focus(id);
 
         Ok(id)
     }
@@ -100,12 +115,29 @@ impl Board {
         self.attention.retain(|item| item.panel_id != Some(id));
         if self.focused == Some(id) {
             self.focused = self.panels.last().map(|p| p.id);
+            if let Some(focused) = self.focused {
+                self.active_workspace = self.panel_workspace_id(focused);
+            }
         }
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
-        self.workspaces.retain(|w| w.id != id);
+        if let Some(index) = self.workspaces.iter().position(|workspace| workspace.id == id) {
+            let workspace = self.workspaces.remove(index);
+            for panel_id in workspace.panels {
+                if let Some(panel) = self.panel_mut(panel_id) {
+                    panel.move_to([
+                        panel.layout.position[0] + workspace.position[0],
+                        panel.layout.position[1] + workspace.position[1],
+                    ]);
+                    panel.workspace_id = None;
+                }
+            }
+        }
         self.attention.retain(|item| item.workspace_id != id);
+        if self.active_workspace == Some(id) {
+            self.active_workspace = self.workspaces.first().map(|workspace| workspace.id);
+        }
     }
 
     #[must_use]
@@ -131,6 +163,72 @@ impl Board {
 
     pub fn focus(&mut self, id: PanelId) {
         self.focused = Some(id);
+        self.active_workspace = self.panel_workspace_id(id);
+    }
+
+    pub fn focus_workspace(&mut self, id: WorkspaceId) {
+        self.active_workspace = Some(id);
+        if let Some(workspace) = self.workspace(id)
+            && let Some(&panel_id) = workspace.panels.last()
+        {
+            self.focused = Some(panel_id);
+        }
+    }
+
+    #[must_use]
+    pub fn workspace(&self, id: WorkspaceId) -> Option<&Workspace> {
+        self.workspaces.iter().find(|workspace| workspace.id == id)
+    }
+
+    pub fn workspace_mut(&mut self, id: WorkspaceId) -> Option<&mut Workspace> {
+        self.workspaces.iter_mut().find(|workspace| workspace.id == id)
+    }
+
+    #[must_use]
+    pub fn panel(&self, id: PanelId) -> Option<&Panel> {
+        self.panels.iter().find(|panel| panel.id == id)
+    }
+
+    pub fn panel_mut(&mut self, id: PanelId) -> Option<&mut Panel> {
+        self.panels.iter_mut().find(|panel| panel.id == id)
+    }
+
+    #[must_use]
+    pub fn panel_workspace_id(&self, id: PanelId) -> Option<WorkspaceId> {
+        self.panel(id).and_then(|panel| panel.workspace_id)
+    }
+
+    #[must_use]
+    pub fn workspace_for_panel(&self, id: PanelId) -> Option<&Workspace> {
+        self.panel_workspace_id(id)
+            .and_then(|workspace_id| self.workspace(workspace_id))
+    }
+
+    pub fn move_workspace(&mut self, id: WorkspaceId, position: [f32; 2]) -> bool {
+        if let Some(workspace) = self.workspace_mut(id) {
+            workspace.position = position;
+            return true;
+        }
+
+        false
+    }
+
+    pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
+        if let Some(panel) = self.panel_mut(id) {
+            panel.move_to(position);
+            return true;
+        }
+
+        false
+    }
+
+    pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
+        if let Some(panel) = self.panel_mut(id) {
+            panel.resize_layout(size);
+            return true;
+        }
+
+        false
     }
 
     pub fn create_attention(
@@ -178,12 +276,45 @@ impl Board {
                     .then_with(|| left.id.0.cmp(&right.id.0))
             })
     }
+
+    fn default_panel_position(&self, workspace: Option<WorkspaceId>, panel_id: PanelId) -> [f32; 2] {
+        if let Some(workspace_id) = workspace
+            && let Some(workspace) = self.workspace(workspace_id)
+        {
+            let panel_index = workspace.panels.len();
+            return tiled_panel_position(panel_index);
+        }
+
+        let fallback_index = self
+            .panels
+            .iter()
+            .position(|panel| panel.id == panel_id)
+            .unwrap_or(self.panels.len());
+        orphan_panel_position(fallback_index)
+    }
 }
 
 impl Default for Board {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn tiled_panel_position(index: usize) -> [f32; 2] {
+    let column = usize_to_f32(index % 3);
+    let row = usize_to_f32(index / 3);
+    [90.0 + column * 340.0, 108.0 + row * 240.0]
+}
+
+fn orphan_panel_position(index: usize) -> [f32; 2] {
+    let column = usize_to_f32(index % 3);
+    let row = usize_to_f32(index / 3);
+    [140.0 + column * 340.0, 140.0 + row * 240.0]
+}
+
+fn usize_to_f32(value: usize) -> f32 {
+    let clamped = u32::try_from(value).unwrap_or(u32::MAX);
+    clamped as f32
 }
 
 #[cfg(test)]
@@ -241,5 +372,30 @@ mod tests {
 
         assert!(board.resolve_attention(attention_id));
         assert!(board.unresolved_attention().next().is_none());
+    }
+
+    #[test]
+    fn focusing_panel_tracks_active_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), Some(workspace_id))
+            .expect("panel should spawn");
+
+        board.focus(panel_id);
+
+        assert_eq!(board.active_workspace, Some(workspace_id));
+    }
+
+    #[test]
+    fn workspace_panel_positions_are_relative() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), Some(workspace_id))
+            .expect("panel should spawn");
+        let panel = board.panel(panel_id).expect("panel should exist");
+
+        assert_eq!(panel.layout.position, [90.0, 108.0]);
     }
 }
