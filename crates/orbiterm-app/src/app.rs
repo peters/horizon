@@ -13,8 +13,6 @@ use crate::theme;
 
 const DEFAULT_PANEL_WIDTH: f32 = 520.0;
 const DEFAULT_PANEL_HEIGHT: f32 = 340.0;
-const PANEL_MIN_WIDTH: f32 = 280.0;
-const PANEL_MIN_HEIGHT: f32 = 180.0;
 const PANEL_COLUMN_SPACING: f32 = 540.0;
 const PANEL_ROW_SPACING: f32 = 360.0;
 const TITLEBAR_HEIGHT: f32 = 38.0;
@@ -22,6 +20,7 @@ const CONTROL_BAR_HEIGHT: f32 = 92.0;
 const WORKSPACE_BADGE_WIDTH: f32 = 220.0;
 const WORKSPACE_BADGE_HEIGHT: f32 = 52.0;
 const WORKSPACE_PREVIEW_ZOOM: f32 = 0.22;
+const INTERACTIVE_ZOOM_THRESHOLD: f32 = 0.85;
 const AUTO_BOARD_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(160);
 const AUTO_BOARD_ZOOM_STEP: f32 = 0.92;
 type WorkspaceSnapshot = (WorkspaceId, String, (u8, u8, u8), usize, [f32; 2]);
@@ -96,6 +95,7 @@ pub struct OrbitermApp {
     workspace_rename: Option<WorkspaceRenameState>,
     auto_board_mode: AutoBoardMode,
     pending_auto_board_action_at: Option<Instant>,
+    pending_fit_workspace: Option<WorkspaceId>,
     last_viewport_size: Option<Vec2>,
     config_path: Option<PathBuf>,
     show_config_editor: bool,
@@ -134,6 +134,7 @@ impl OrbitermApp {
             workspace_rename: None,
             auto_board_mode: AutoBoardMode::FitBoard,
             pending_auto_board_action_at: Some(Instant::now()),
+            pending_fit_workspace: None,
             last_viewport_size: None,
             config_path,
             show_config_editor: false,
@@ -169,6 +170,7 @@ impl OrbitermApp {
         self.workspace_canvas_rects.clear();
         self.workspace_rename = None;
         self.pending_auto_board_action_at = Some(Instant::now());
+        self.pending_fit_workspace = None;
         self.last_viewport_size = None;
     }
 
@@ -314,7 +316,7 @@ impl OrbitermApp {
             .create_panel(PanelOptions::default(), Some(workspace_id))
             .is_ok()
         {
-            self.schedule_auto_board_action(Duration::ZERO);
+            self.pending_fit_workspace = Some(workspace_id);
         }
         self.board.focus_workspace(workspace_id);
     }
@@ -355,7 +357,11 @@ impl OrbitermApp {
     fn create_panel_with_options(&mut self, workspace_id: Option<WorkspaceId>, opts: PanelOptions) {
         let target_workspace = self.preferred_workspace(workspace_id);
         if self.board.create_panel(opts, target_workspace).is_ok() {
-            self.schedule_auto_board_action(Duration::ZERO);
+            if let Some(ws_id) = target_workspace {
+                self.pending_fit_workspace = Some(ws_id);
+            } else {
+                self.schedule_auto_board_action(Duration::ZERO);
+            }
         }
         if let Some(workspace_id) = target_workspace {
             self.board.focus_workspace(workspace_id);
@@ -916,27 +922,21 @@ impl OrbitermApp {
         let current_screen_position = self.canvas_to_screen(current_canvas_position);
         let is_focused = self.board.focused == Some(panel_id);
         let mut open = true;
-        let previous_size = self
+        let canvas_size = self
             .board
             .panel(panel_id)
             .map_or(Vec2::new(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT), |panel| {
                 Vec2::new(panel.layout.size[0], panel.layout.size[1])
             });
-        let desired_rect = clamp_rect_to_bounds(
-            Rect::from_min_size(current_screen_position, previous_size),
-            constrain_rect,
-        );
+        let screen_size = canvas_size * self.zoom;
 
         let response = egui::Window::new(title)
             .id(Id::new(("panel", panel_id.0)))
             .open(&mut open)
-            .current_pos(desired_rect.min)
-            .default_size(desired_rect.size())
-            .max_size(constrain_rect.size())
-            .min_size(Vec2::new(PANEL_MIN_WIDTH, PANEL_MIN_HEIGHT))
+            .current_pos(current_screen_position)
+            .fixed_size(screen_size)
             .constrain_to(constrain_rect)
             .collapsible(false)
-            .resizable(true)
             .frame(
                 egui::Frame::default()
                     .fill(theme::PANEL_BG)
@@ -957,10 +957,8 @@ impl OrbitermApp {
             });
 
         if let Some(window) = response {
-            self.sync_live_panel_geometry(panel_id, constrain_rect, window.response.rect);
-            if window.response.drag_stopped() && panel_size_changed(previous_size, window.response.rect.size()) {
-                self.schedule_auto_board_action(Duration::ZERO);
-            }
+            let user_dragged = window.response.dragged() || window.response.drag_stopped();
+            self.sync_live_panel_geometry(panel_id, window.response.rect, user_dragged);
 
             let (clicked_terminal, _) = window.inner.unwrap_or((false, false));
             if clicked_terminal || window.response.clicked() || window.response.drag_started() {
@@ -971,9 +969,20 @@ impl OrbitermApp {
         !open
     }
 
-    fn sync_live_panel_geometry(&mut self, panel_id: PanelId, constrain_rect: Rect, window_rect: Rect) {
-        let constrained_rect = clamp_rect_to_bounds(window_rect, constrain_rect);
-        let canvas_position = self.screen_to_canvas(constrained_rect.min);
+    fn sync_live_panel_geometry(&mut self, panel_id: PanelId, window_rect: Rect, update_model: bool) {
+        self.panel_screen_rects.insert(panel_id, window_rect);
+        self.panel_connection_points
+            .insert(panel_id, Pos2::new(window_rect.center().x, window_rect.min.y + 14.0));
+
+        let canvas_position = self.screen_to_canvas(window_rect.min);
+        let canvas_size = Vec2::new(window_rect.width() / self.zoom, window_rect.height() / self.zoom);
+        self.panel_canvas_rects
+            .insert(panel_id, Rect::from_min_size(canvas_position, canvas_size));
+
+        if !update_model {
+            return;
+        }
+
         if let Some(workspace_id) = self.board.panel_workspace_id(panel_id)
             && let Some(workspace) = self.board.workspace(workspace_id)
         {
@@ -984,31 +993,6 @@ impl OrbitermApp {
         } else {
             let _ = self.board.move_panel(panel_id, [canvas_position.x, canvas_position.y]);
         }
-        let _ = self
-            .board
-            .resize_panel(panel_id, [constrained_rect.width(), constrained_rect.height()]);
-
-        let updated_canvas_position = if let Some(workspace_id) = self.board.panel_workspace_id(panel_id) {
-            if let Some(workspace) = self.board.workspace(workspace_id) {
-                constrained_rect.min - Pos2::new(workspace.position[0], workspace.position[1])
-            } else {
-                constrained_rect.min.to_vec2()
-            }
-        } else {
-            constrained_rect.min.to_vec2()
-        };
-        self.panel_screen_rects.insert(panel_id, constrained_rect);
-        self.panel_canvas_rects.insert(
-            panel_id,
-            Rect::from_min_size(
-                Pos2::new(updated_canvas_position.x, updated_canvas_position.y),
-                Vec2::new(constrained_rect.width(), constrained_rect.height()),
-            ),
-        );
-        self.panel_connection_points.insert(
-            panel_id,
-            Pos2::new(constrained_rect.center().x, constrained_rect.min.y + 14.0),
-        );
     }
 
     fn preview_panel_states(&self) -> Vec<PreviewPanelState> {
@@ -1212,7 +1196,7 @@ impl OrbitermApp {
     }
 
     fn workspace_render_mode(&self, workspace_id: WorkspaceId) -> WorkspaceRenderMode {
-        if self.board.active_workspace == Some(workspace_id) {
+        if self.board.active_workspace == Some(workspace_id) && self.zoom >= INTERACTIVE_ZOOM_THRESHOLD {
             WorkspaceRenderMode::Interactive
         } else if self.zoom >= WORKSPACE_PREVIEW_ZOOM {
             WorkspaceRenderMode::Preview
@@ -1268,7 +1252,7 @@ impl OrbitermApp {
             .board
             .workspace(workspace_id)
             .map(|workspace| self.workspace_canvas_bounds(workspace));
-        self.fit_bounds(ctx, bounds, 1.0);
+        self.fit_bounds(ctx, bounds, 0.45);
     }
 
     fn fit_bounds(&mut self, ctx: &Context, bounds: Option<Rect>, min_zoom: f32) {
@@ -1420,7 +1404,11 @@ impl eframe::App for OrbitermApp {
         }
 
         if closed_any_panels {
-            self.schedule_auto_board_action(Duration::ZERO);
+            if let Some(ws) = self.board.active_workspace {
+                self.pending_fit_workspace = Some(ws);
+            } else {
+                self.schedule_auto_board_action(Duration::ZERO);
+            }
         }
 
         self.handle_shortcuts(ctx);
@@ -1437,7 +1425,11 @@ impl eframe::App for OrbitermApp {
         self.render_workspace_badges(ctx);
         self.render_preview_panels(ctx);
         self.render_live_panels(ctx);
-        self.maybe_apply_pending_auto_board_action(ctx);
+        if let Some(workspace_id) = self.pending_fit_workspace.take() {
+            self.fit_view_to_workspace(ctx, workspace_id);
+        } else {
+            self.maybe_apply_pending_auto_board_action(ctx);
+        }
 
         self.draw_connectors(ctx);
         render_viewport_resize_handles(ctx);
@@ -1938,6 +1930,7 @@ fn agent_panel_defaults(kind: PanelKind) -> (&'static str, PanelResume, bool) {
     }
 }
 
+#[cfg(test)]
 fn panel_size_changed(previous_size: Vec2, current_size: Vec2) -> bool {
     const RESIZE_EPSILON: f32 = 1.0;
 
