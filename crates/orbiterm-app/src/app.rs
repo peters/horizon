@@ -75,6 +75,7 @@ pub struct OrbitermApp {
     presets: Vec<PresetConfig>,
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
+    config_dirty_since: Option<std::time::Instant>,
 }
 
 impl OrbitermApp {
@@ -104,6 +105,7 @@ impl OrbitermApp {
             presets: config.presets.clone(),
             settings: None,
             pending_preset_pick: None,
+            config_dirty_since: None,
         }
     }
 
@@ -716,6 +718,20 @@ impl OrbitermApp {
         self.config_from_board_yaml()
     }
 
+    fn mark_config_dirty(&mut self) {
+        self.config_dirty_since.get_or_insert_with(std::time::Instant::now);
+    }
+
+    fn flush_config_if_dirty(&mut self) {
+        const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+        if let Some(since) = self.config_dirty_since
+            && since.elapsed() >= SAVE_DEBOUNCE
+        {
+            self.config_dirty_since = None;
+            self.auto_save_config();
+        }
+    }
+
     fn auto_save_config(&self) {
         let yaml = self.config_from_board_yaml();
         if let Err(error) = atomic_write(&self.config_path, &yaml) {
@@ -1228,11 +1244,13 @@ impl OrbitermApp {
         if drag_delta != Vec2::ZERO {
             let new_position = canvas_position + drag_delta;
             let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
+            self.mark_config_dirty();
         }
 
         if resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(canvas_size + resize_delta);
             let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
+            self.mark_config_dirty();
         }
 
         if clicked_terminal || focus_panel {
@@ -1295,6 +1313,7 @@ impl OrbitermApp {
             let name = self.rename_buffer.trim().to_string();
             if !name.is_empty() {
                 let _ = self.board.rename_workspace(ws_id, &name);
+                self.mark_config_dirty();
             }
             self.rename_buffer.clear();
         }
@@ -1305,6 +1324,7 @@ impl OrbitermApp {
 
         for (workspace_id, delta) in pending_workspace_moves {
             let _ = self.board.translate_workspace(workspace_id, [delta.x, delta.y]);
+            self.mark_config_dirty();
         }
     }
 
@@ -1403,10 +1423,11 @@ impl eframe::App for OrbitermApp {
             self.render_canvas_hud(ctx);
         }
 
-        // Auto-save config when board structure changes
+        // Mark dirty on structural changes (immediate save) or layout changes (debounced)
         if self.board.workspaces.len() != ws_count_before || self.board.panels.len() != panel_count_before {
             self.auto_save_config();
         }
+        self.flush_config_if_dirty();
 
         ctx.request_repaint();
     }
