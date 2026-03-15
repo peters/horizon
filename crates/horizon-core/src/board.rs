@@ -384,7 +384,10 @@ impl Board {
         let mut panels = workspace.panels.iter().filter_map(|pid| self.panel(*pid)).peekable();
         panels.peek()?;
 
-        let mut min = [f32::MAX, f32::MAX];
+        // Anchor min to the workspace origin so the frame doesn't chase
+        // panels when they are dragged past the workspace position.
+        let origin = workspace.position;
+        let mut min = [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD];
         let mut max = [f32::MIN, f32::MIN];
         for panel in panels {
             min[0] = min[0].min(panel.layout.position[0]);
