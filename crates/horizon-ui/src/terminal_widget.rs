@@ -234,10 +234,11 @@ fn handle_terminal_pointer_input(
                     panel.write_input(&bytes);
                 }
             }
-            egui::Event::MouseWheel { delta, modifiers, .. } => {
+            egui::Event::MouseWheel { delta, unit, modifiers } => {
                 if let Some(point) = hovered_point
                     && let Some(action) = input::wheel_action(
                         *delta,
+                        *unit,
                         Vec2::new(metrics.char_width, metrics.line_height),
                         *modifiers,
                         terminal_mode,

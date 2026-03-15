@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 
 use alacritty_terminal::term::TermMode;
-use egui::{Key, Modifiers, PointerButton, Vec2};
+use egui::{Key, Modifiers, MouseWheelUnit, PointerButton, Vec2};
 
 pub struct KeyTranslation {
     pub bytes: Vec<u8>,
@@ -157,13 +157,14 @@ pub fn mouse_motion_report(
 
 pub fn wheel_action(
     delta: Vec2,
+    unit: MouseWheelUnit,
     cell_size: Vec2,
     modifiers: Modifiers,
     mode: TermMode,
     point: GridPoint,
 ) -> Option<WheelAction> {
-    let vertical = discrete_scroll_steps(delta.y, cell_size.y);
-    let horizontal = discrete_scroll_steps(delta.x, cell_size.x);
+    let vertical = discrete_scroll_steps(delta.y, unit, cell_size.y);
+    let horizontal = discrete_scroll_steps(delta.x, unit, cell_size.x);
 
     if vertical == 0 && horizontal == 0 {
         return None;
@@ -267,14 +268,22 @@ fn append_mouse_position(bytes: &mut Vec<u8>, position: usize, utf8: bool) {
     bytes.push(32 + 1 + u8::try_from(position).unwrap_or(u8::MAX));
 }
 
-fn discrete_scroll_steps(delta: f32, cell_extent: f32) -> i32 {
-    if !delta.is_finite() || !cell_extent.is_finite() || cell_extent <= 0.0 {
+fn discrete_scroll_steps(delta: f32, unit: MouseWheelUnit, cell_extent: f32) -> i32 {
+    if !delta.is_finite() {
         return 0;
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    {
-        (delta / cell_extent).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    match unit {
+        MouseWheelUnit::Line | MouseWheelUnit::Page => {
+            delta.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
+        }
+        MouseWheelUnit::Point => {
+            if !cell_extent.is_finite() || cell_extent <= 0.0 {
+                return 0;
+            }
+            (delta / cell_extent).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
+        }
     }
 }
 
@@ -787,7 +796,7 @@ mod tests {
         GridPoint, PointerButtons, WheelAction, mouse_button_report, paste_bytes, translate_key_event, wheel_action,
     };
     use alacritty_terminal::term::TermMode;
-    use egui::{Key, Modifiers, PointerButton, Vec2};
+    use egui::{Key, Modifiers, MouseWheelUnit, PointerButton, Vec2};
 
     #[test]
     fn app_cursor_mode_uses_ss3_sequences() {
@@ -843,6 +852,7 @@ mod tests {
     fn wheel_uses_mouse_reporting_when_enabled() {
         let action = wheel_action(
             Vec2::new(0.0, 12.0),
+            MouseWheelUnit::Point,
             Vec2::new(8.0, 12.0),
             Modifiers::NONE,
             TermMode::MOUSE_REPORT_CLICK,
@@ -860,6 +870,7 @@ mod tests {
     fn wheel_falls_back_to_scrollback_without_mouse_mode() {
         let action = wheel_action(
             Vec2::new(0.0, 32.0),
+            MouseWheelUnit::Point,
             Vec2::new(8.0, 16.0),
             Modifiers::NONE,
             TermMode::NONE,
