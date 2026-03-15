@@ -317,7 +317,7 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
 fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, CornerRadius::same(6), theme::PANEL_BG);
+    painter.rect_filled(rect, CornerRadius::same(8), theme::PANEL_BG);
 
     for indexed in content.display_iter {
         let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {

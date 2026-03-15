@@ -87,7 +87,7 @@ pub fn terminal_color_to_egui(color: TerminalColor, colors: &Colors) -> Color32 
 fn visuals() -> Visuals {
     let mut visuals = Visuals::dark();
 
-    visuals.window_corner_radius = CornerRadius::same(14);
+    visuals.window_corner_radius = CornerRadius::same(16);
     visuals.window_shadow = Shadow {
         offset: [0, 10],
         blur: 28,
@@ -108,22 +108,22 @@ fn visuals() -> Visuals {
     visuals.widgets.noninteractive.bg_fill = BG_ELEVATED;
     visuals.widgets.noninteractive.weak_bg_fill = PANEL_BG_ALT;
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, FG_DIM);
-    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(10);
+    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.inactive.bg_fill = PANEL_BG_ALT;
     visuals.widgets.inactive.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, FG_SOFT);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.hovered.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.16);
     visuals.widgets.hovered.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.active.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.22);
     visuals.widgets.active.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.active.corner_radius = CornerRadius::same(10);
+    visuals.widgets.active.corner_radius = CornerRadius::same(12);
 
     visuals.selection.bg_fill = alpha(ACCENT, 54);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);

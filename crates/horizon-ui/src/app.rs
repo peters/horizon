@@ -83,7 +83,31 @@ pub struct HorizonApp {
 }
 
 impl HorizonApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
+        let mut fonts = egui::FontDefinitions::default();
+
+        fonts.font_data.insert(
+            "inter".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/InterVariable.ttf")).into(),
+        );
+        fonts.font_data.insert(
+            "jetbrains-mono".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")).into(),
+        );
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "inter".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "jetbrains-mono".to_owned());
+
+        cc.egui_ctx.set_fonts(fonts);
+
         let board = Board::from_config(config).unwrap_or_else(|error| {
             tracing::error!("failed to load config: {error}");
             Board::new()
@@ -583,13 +607,13 @@ impl HorizonApp {
                             if is_active {
                                 ui.painter_at(ws_bg).rect_filled(
                                     ws_bg,
-                                    CornerRadius::same(8),
+                                    CornerRadius::same(10),
                                     theme::alpha(theme::blend(theme::PANEL_BG_ALT, ws_color, 0.12), 140),
                                 );
                             } else if ws_sense.hovered() {
                                 ui.painter_at(ws_bg).rect_filled(
                                     ws_bg,
-                                    CornerRadius::same(8),
+                                    CornerRadius::same(10),
                                     theme::alpha(theme::PANEL_BG_ALT, 160),
                                 );
                             }
@@ -697,7 +721,7 @@ impl HorizonApp {
                                 if is_focused {
                                     ui.painter_at(bg_rect).rect_filled(
                                         bg_rect,
-                                        CornerRadius::same(8),
+                                        CornerRadius::same(10),
                                         theme::alpha(theme::blend(theme::PANEL_BG_ALT, ws_color, 0.22), 200),
                                     );
                                     // Left accent edge
@@ -709,7 +733,7 @@ impl HorizonApp {
                                 } else if item_response.response.hovered() {
                                     ui.painter_at(bg_rect).rect_filled(
                                         bg_rect,
-                                        CornerRadius::same(8),
+                                        CornerRadius::same(10),
                                         theme::alpha(theme::PANEL_BG_ALT, 180),
                                     );
                                 }
@@ -1586,16 +1610,16 @@ fn paint_panel_chrome(
     let painter = ui.painter_at(panel_rect);
     let accent = ws_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG });
 
-    painter.rect_filled(panel_rect, CornerRadius::same(14), theme::PANEL_BG);
+    painter.rect_filled(panel_rect, CornerRadius::same(16), theme::PANEL_BG);
     painter.rect_stroke(
         panel_rect,
-        CornerRadius::same(14),
+        CornerRadius::same(16),
         Stroke::new(1.2, theme::panel_border(accent, focused)),
         StrokeKind::Outside,
     );
     painter.rect_filled(
         titlebar_rect,
-        CornerRadius::same(14),
+        CornerRadius::same(16),
         theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
     );
     let title_x = if let Some(ws_color) = ws_accent {
@@ -1738,10 +1762,10 @@ fn paint_empty_state(ui: &mut egui::Ui) {
     let card_rect = Rect::from_center_size(rect.center(), Vec2::new(380.0, 120.0));
     let painter = ui.painter();
 
-    painter.rect_filled(card_rect, CornerRadius::same(18), theme::alpha(theme::PANEL_BG, 236));
+    painter.rect_filled(card_rect, CornerRadius::same(20), theme::alpha(theme::PANEL_BG, 236));
     painter.rect_stroke(
         card_rect,
-        CornerRadius::same(18),
+        CornerRadius::same(20),
         Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)),
         StrokeKind::Outside,
     );
@@ -1874,7 +1898,7 @@ fn render_workspace_visual(
 
 fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool, _is_empty: bool) {
     let painter = ui.painter_at(rect);
-    let corner_radius = CornerRadius::same(16);
+    let corner_radius = CornerRadius::same(20);
     let border_alpha = if is_active { 110 } else { 55 };
     let fill_alpha = if is_active { 24 } else { 14 };
     let frame_fill = theme::alpha(theme::blend(theme::PANEL_BG, color, 0.12), fill_alpha);
@@ -1909,10 +1933,10 @@ fn paint_workspace_label_bg(
     let fill = theme::blend(theme::PANEL_BG_ALT, color, tint);
     let border_alpha = if is_active || hovered { 160 } else { 90 };
 
-    painter.rect_filled(rect, CornerRadius::same(8), fill);
+    painter.rect_filled(rect, CornerRadius::same(10), fill);
     painter.rect_stroke(
         rect,
-        CornerRadius::same(8),
+        CornerRadius::same(10),
         Stroke::new(1.0, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
     );
