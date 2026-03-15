@@ -217,7 +217,9 @@ fn resolve_launch_command(
         }
         PanelKind::Codex => {
             let program = command.unwrap_or_else(|| "codex".to_string());
-            let mut launch_args = Vec::new();
+            // Global flags (e.g. --no-alt-screen) must come before the
+            // resume subcommand.
+            let mut launch_args = args;
             match resume {
                 PanelResume::Fresh => {}
                 PanelResume::Last => launch_args.extend(["resume".to_string(), "--last".to_string()]),
@@ -225,7 +227,6 @@ fn resolve_launch_command(
                     launch_args.extend(["resume".to_string(), session_id.clone()]);
                 }
             }
-            launch_args.extend(args);
             wrap_in_login_shell(program, launch_args)
         }
         PanelKind::Claude => {
@@ -308,6 +309,21 @@ mod tests {
         assert_eq!(args[0], "-ic");
         assert!(args[1].contains("claude"));
         assert!(args[1].contains("--resume session-42"));
+    }
+
+    #[test]
+    fn codex_global_flags_come_before_resume_subcommand() {
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--no-alt-screen".to_string()],
+            PanelKind::Codex,
+            &PanelResume::Last,
+        );
+
+        let cmd = &args[1];
+        let flag_pos = cmd.find("--no-alt-screen").expect("flag present");
+        let resume_pos = cmd.find("resume --last").expect("resume present");
+        assert!(flag_pos < resume_pos, "global flags must precede resume subcommand: {cmd}");
     }
 
     #[test]
