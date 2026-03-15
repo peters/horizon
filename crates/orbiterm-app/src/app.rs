@@ -49,6 +49,7 @@ pub struct OrbitermApp {
     theme_applied: bool,
     pan_offset: Vec2,
     panel_screen_rects: HashMap<PanelId, Rect>,
+    workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
 }
 
 impl OrbitermApp {
@@ -66,6 +67,7 @@ impl OrbitermApp {
             theme_applied: false,
             pan_offset: Vec2::ZERO,
             panel_screen_rects: HashMap::new(),
+            workspace_screen_rects: Vec::new(),
         }
     }
 
@@ -75,6 +77,13 @@ impl OrbitermApp {
 
     fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
         canvas_rect.min + self.pan_offset + position.to_vec2()
+    }
+
+    fn screen_to_canvas(&self, canvas_rect: Rect, screen_pos: Pos2) -> Pos2 {
+        Pos2::new(
+            screen_pos.x - canvas_rect.min.x - self.pan_offset.x,
+            screen_pos.y - canvas_rect.min.y - self.pan_offset.y,
+        )
     }
 
     fn canvas_rect(ctx: &Context) -> Rect {
@@ -104,6 +113,53 @@ impl OrbitermApp {
 
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
             self.reset_view();
+        }
+    }
+
+    fn handle_canvas_double_click(&mut self, ctx: &Context) {
+        let canvas_rect = Self::canvas_rect(ctx);
+        let ctrl_double_click = ctx.input(|input| {
+            let ctrl = input.modifiers.ctrl || input.modifiers.command;
+            let double = input
+                .pointer
+                .button_double_clicked(egui::PointerButton::Primary);
+            let pos = input.pointer.interact_pos();
+            if ctrl && double {
+                pos.filter(|p| canvas_rect.contains(*p))
+            } else {
+                None
+            }
+        });
+
+        let Some(screen_pos) = ctrl_double_click else {
+            return;
+        };
+
+        // Check if click is inside any workspace
+        let hit_workspace = self
+            .workspace_screen_rects
+            .iter()
+            .find(|(_, rect)| rect.contains(screen_pos))
+            .map(|(id, _)| *id);
+
+        if let Some(ws_id) = hit_workspace {
+            // Inside a workspace: create a new panel there
+            let canvas_pos = self.screen_to_canvas(canvas_rect, screen_pos);
+            let opts = PanelOptions {
+                position: Some([canvas_pos.x, canvas_pos.y]),
+                ..PanelOptions::default()
+            };
+            if let Err(error) = self.board.create_panel(opts, ws_id) {
+                tracing::error!("failed to create panel: {error}");
+            }
+        } else {
+            // Outside all workspaces: create a new workspace at click position
+            let canvas_pos = self.screen_to_canvas(canvas_rect, screen_pos);
+            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+            let ws_id = self.board.create_workspace_at(&name, [canvas_pos.x, canvas_pos.y]);
+            if let Err(error) = self.board.create_panel(PanelOptions::default(), ws_id) {
+                tracing::error!("failed to create panel: {error}");
+            }
         }
     }
 
@@ -487,11 +543,14 @@ impl OrbitermApp {
         let canvas_rect = Self::canvas_rect(ctx);
         let visuals = self.workspace_visuals(canvas_rect);
 
+        self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
         let mut focus_workspace = None;
 
-        for workspace in visuals {
-            let interaction = render_workspace_visual(ctx, &workspace);
+        for workspace in &visuals {
+            self.workspace_screen_rects
+                .push((workspace.id, workspace.screen_rect));
+            let interaction = render_workspace_visual(ctx, workspace);
 
             if interaction.activate_workspace {
                 focus_workspace = Some(workspace.id);
@@ -585,6 +644,7 @@ impl eframe::App for OrbitermApp {
         self.render_toolbar(ctx);
         self.render_canvas(ctx);
         self.render_workspace_backgrounds(ctx);
+        self.handle_canvas_double_click(ctx);
         self.render_panels(ctx);
         self.render_canvas_hud(ctx);
 

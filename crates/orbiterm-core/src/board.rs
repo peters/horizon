@@ -101,6 +101,16 @@ impl Board {
         id
     }
 
+    /// Create a workspace at a specific canvas position.
+    #[must_use]
+    pub fn create_workspace_at(&mut self, name: &str, position: [f32; 2]) -> WorkspaceId {
+        let id = self.create_workspace(name);
+        if let Some(ws) = self.workspace_mut(id) {
+            ws.position = position;
+        }
+        id
+    }
+
     /// Ensures at least one workspace exists. Returns the active workspace,
     /// creating a default one if the board has none.
     pub fn ensure_workspace(&mut self) -> WorkspaceId {
