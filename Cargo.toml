@@ -38,7 +38,7 @@ egui = "0.33.3"
 tempfile = "3.20.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 uuid = { version = "1.22.0", features = ["serde", "v4"] }
-wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
+wgpu = { version = "28.0.0", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
 
 [profile.release]
 lto = true
