@@ -63,6 +63,16 @@ impl<'a> TerminalView<'a> {
             window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
         self.panel.set_focused(has_terminal_focus);
 
+        // Prevent egui from using arrow keys to move focus away from the terminal.
+        if has_terminal_focus {
+            ui.memory_mut(|mem| mem.set_focus_lock_filter(interaction.body.id, egui::EventFilter {
+                tab: true,
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                escape: false,
+            }));
+        }
+
         if ui.is_rect_visible(interaction.layout.outer) {
             let history_size = self.panel.terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
