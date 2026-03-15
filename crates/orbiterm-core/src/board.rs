@@ -45,13 +45,16 @@ impl Board {
         for ws_cfg in &config.workspaces {
             let ws_id = board.create_workspace(&ws_cfg.name);
 
-            if let Some(pos) = ws_cfg.position {
-                board.move_workspace(ws_id, pos);
-            }
-            if let Some(cwd) = &ws_cfg.cwd
-                && let Some(ws) = board.workspace_mut(ws_id)
-            {
-                ws.cwd = Some(Config::expand_tilde(cwd));
+            // Apply saved position directly — don't use the auto-computed
+            // position from create_workspace, as saved positions may be
+            // anywhere on the virtual canvas.
+            if let Some(ws) = board.workspace_mut(ws_id) {
+                if let Some(pos) = ws_cfg.position {
+                    ws.position = pos;
+                }
+                if let Some(cwd) = &ws_cfg.cwd {
+                    ws.cwd = Some(Config::expand_tilde(cwd));
+                }
             }
 
             let ws_origin = board.workspace(ws_id).map_or([0.0, 0.0], |ws| ws.position);
