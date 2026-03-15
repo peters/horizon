@@ -89,11 +89,11 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             workspaces: vec![WorkspaceConfig {
-                name: "default".to_string(),
+                name: "Workspace 1".to_string(),
                 color: None,
                 position: None,
                 terminals: vec![TerminalConfig {
-                    name: "shell".to_string(),
+                    name: String::new(),
                     command: None,
                     args: Vec::new(),
                     cwd: None,

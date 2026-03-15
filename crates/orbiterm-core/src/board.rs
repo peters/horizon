@@ -55,8 +55,13 @@ impl Board {
                 let position = term_cfg
                     .position
                     .map(|pos| [ws_origin[0] + pos[0], ws_origin[1] + pos[1]]);
+                let name = if term_cfg.name.is_empty() {
+                    None
+                } else {
+                    Some(term_cfg.name.clone())
+                };
                 let opts = PanelOptions {
-                    name: Some(term_cfg.name.clone()),
+                    name,
                     command: term_cfg.command.clone(),
                     args: term_cfg.args.clone(),
                     cwd: term_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s)),
@@ -73,7 +78,7 @@ impl Board {
 
         // Ensure at least one workspace always exists.
         if board.workspaces.is_empty() {
-            let _ = board.create_workspace("default");
+            let _ = board.create_workspace("Workspace 1");
         }
 
         board.focused = board.panels.first().map(|panel| panel.id);
@@ -122,7 +127,8 @@ impl Board {
             self.active_workspace = Some(id);
             return id;
         }
-        self.create_workspace("default")
+        let name = format!("Workspace {}", self.workspaces.len() + 1);
+        self.create_workspace(&name)
     }
 
     /// Create a panel inside a workspace.
