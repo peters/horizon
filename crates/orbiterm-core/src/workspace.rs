@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::panel::PanelId;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -13,6 +15,8 @@ pub struct Workspace {
     pub collapsed: bool,
     /// Canvas position (top-left) of the workspace badge.
     pub position: [f32; 2],
+    /// Default working directory for new terminals in this workspace.
+    pub cwd: Option<PathBuf>,
 }
 
 /// Predefined accent colors for workspace clusters.
@@ -37,6 +41,7 @@ impl Workspace {
             panels: Vec::new(),
             collapsed: false,
             position: [0.0, 0.0],
+            cwd: None,
         }
     }
 

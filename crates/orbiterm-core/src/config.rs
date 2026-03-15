@@ -5,12 +5,98 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
+    #[serde(default = "default_presets")]
+    pub presets: Vec<PresetConfig>,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            shortcuts: ShortcutsConfig::default(),
+            presets: default_presets(),
+            workspaces: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PresetConfig {
+    pub name: String,
+    #[serde(default)]
+    pub alias: Option<String>,
+    #[serde(default)]
+    pub kind: PanelKind,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub resume: PanelResume,
+}
+
+impl PresetConfig {
+    /// Convert this preset into `PanelOptions` for panel creation.
+    #[must_use]
+    pub fn to_panel_options(&self) -> crate::panel::PanelOptions {
+        crate::panel::PanelOptions {
+            command: self.command.clone(),
+            args: self.args.clone(),
+            kind: self.kind,
+            resume: self.resume.clone(),
+            ..crate::panel::PanelOptions::default()
+        }
+    }
+}
+
+fn default_presets() -> Vec<PresetConfig> {
+    vec![
+        PresetConfig {
+            name: "Shell".to_string(),
+            alias: Some("sh".to_string()),
+            kind: PanelKind::Shell,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+        },
+        PresetConfig {
+            name: "Codex".to_string(),
+            alias: Some("cx".to_string()),
+            kind: PanelKind::Codex,
+            command: None,
+            args: vec!["--no-alt-screen".to_string()],
+            resume: PanelResume::Last,
+        },
+        PresetConfig {
+            name: "Codex (YOLO)".to_string(),
+            alias: Some("cxy".to_string()),
+            kind: PanelKind::Codex,
+            command: None,
+            args: vec!["--full-auto".to_string(), "--no-alt-screen".to_string()],
+            resume: PanelResume::Fresh,
+        },
+        PresetConfig {
+            name: "Claude Code".to_string(),
+            alias: Some("cc".to_string()),
+            kind: PanelKind::Claude,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Last,
+        },
+        PresetConfig {
+            name: "Claude Code (Auto)".to_string(),
+            alias: Some("cca".to_string()),
+            kind: PanelKind::Claude,
+            command: None,
+            args: vec!["--dangerously-skip-permissions".to_string()],
+            resume: PanelResume::Fresh,
+        },
+    ]
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -44,6 +130,8 @@ pub struct WorkspaceConfig {
     pub name: String,
     #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
     #[serde(default)]
     pub position: Option<[f32; 2]>,
     #[serde(default)]
@@ -106,23 +194,27 @@ impl Config {
     ///
     /// Returns an error if a discovered config file cannot be read or parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        if let Some(p) = path {
+        let config = if let Some(p) = path {
             let contents = std::fs::read_to_string(p)?;
-            return serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()));
-        }
-
-        // Search standard locations
-        for candidate in config_candidates() {
-            if candidate.exists() {
-                let contents = std::fs::read_to_string(&candidate)?;
-                tracing::info!("loaded config from {}", candidate.display());
-                return serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()));
+            serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?
+        } else {
+            let mut found = None;
+            for candidate in config_candidates() {
+                if candidate.exists() {
+                    let contents = std::fs::read_to_string(&candidate)?;
+                    tracing::info!("loaded config from {}", candidate.display());
+                    found =
+                        Some(serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?);
+                    break;
+                }
             }
-        }
+            found.unwrap_or_else(|| {
+                tracing::info!("no config found, using defaults");
+                Self::default()
+            })
+        };
 
-        // Default: one workspace with one shell terminal
-        tracing::info!("no config found, using defaults");
-        Ok(Self::default())
+        Ok(config)
     }
 
     /// Serialize this config to YAML.

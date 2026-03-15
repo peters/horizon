@@ -48,6 +48,11 @@ impl Board {
             if let Some(pos) = ws_cfg.position {
                 board.move_workspace(ws_id, pos);
             }
+            if let Some(cwd) = &ws_cfg.cwd
+                && let Some(ws) = board.workspace_mut(ws_id)
+            {
+                ws.cwd = Some(Config::expand_tilde(cwd));
+            }
 
             let ws_origin = board.workspace(ws_id).map_or([0.0, 0.0], |ws| ws.position);
 
@@ -131,9 +136,17 @@ impl Board {
     /// # Errors
     ///
     /// Returns an error if the underlying PTY-backed panel cannot be spawned.
-    pub fn create_panel(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
+    pub fn create_panel(&mut self, mut opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
+
+        // Inherit workspace cwd if the panel doesn't specify one.
+        if opts.cwd.is_none()
+            && let Some(ws) = self.workspace(workspace)
+        {
+            opts.cwd.clone_from(&ws.cwd);
+        }
+
         let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
         let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
         let mut panel = Panel::spawn(id, workspace, opts)?;
