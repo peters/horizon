@@ -87,6 +87,8 @@ pub struct Terminal {
     title: String,
     clipboard_contents: String,
     selection_contents: String,
+    pending_pty_resize: Option<std::time::Instant>,
+    pty_resized: bool,
 }
 
 impl Terminal {
@@ -151,6 +153,8 @@ impl Terminal {
             title: String::new(),
             clipboard_contents: String::new(),
             selection_contents: String::new(),
+            pending_pty_resize: None,
+            pty_resized: false,
         };
         terminal.process_events();
         Ok(terminal)
@@ -160,6 +164,7 @@ impl Terminal {
         while let Ok(event) = self.event_rx.try_recv() {
             self.handle_event(event);
         }
+        self.flush_pending_pty_resize();
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
@@ -180,6 +185,7 @@ impl Terminal {
         let cell_height = cell_height.max(1);
 
         if rows == self.rows && cols == self.cols && cell_width == self.cell_width && cell_height == self.cell_height {
+            self.flush_pending_pty_resize();
             return;
         }
 
@@ -188,8 +194,34 @@ impl Terminal {
         self.cell_width = cell_width;
         self.cell_height = cell_height;
 
+        // Resize the terminal grid immediately for smooth visual feedback.
         self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
 
+        if self.pty_resized {
+            // Debounce subsequent PTY resizes to avoid flooding the child
+            // process during drag-resize.
+            self.pending_pty_resize = Some(std::time::Instant::now());
+        } else {
+            // First resize after spawn — send immediately so the child
+            // starts with the correct terminal dimensions.
+            self.pty_resized = true;
+            let _ = self
+                .event_sender
+                .send(Msg::Resize(self.window_size()))
+                .map_err(|error| tracing::debug!("failed to resize terminal PTY: {error}"));
+        }
+    }
+
+    fn flush_pending_pty_resize(&mut self) {
+        const PTY_RESIZE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(80);
+
+        let Some(requested_at) = self.pending_pty_resize else {
+            return;
+        };
+        if requested_at.elapsed() < PTY_RESIZE_DEBOUNCE {
+            return;
+        }
+        self.pending_pty_resize = None;
         let _ = self
             .event_sender
             .send(Msg::Resize(self.window_size()))
@@ -353,9 +385,10 @@ impl Drop for Terminal {
             .send(Msg::Shutdown)
             .map_err(|error| tracing::debug!("failed to stop terminal event loop: {error}"));
 
-        if let Some(handle) = self.event_loop_handle.take() {
-            let _ = handle.join();
-        }
+        // Detach the event loop thread instead of joining it — joining can
+        // block the main thread indefinitely if the child process is still
+        // starting up or the PTY is stuck on I/O.
+        drop(self.event_loop_handle.take());
     }
 }
 

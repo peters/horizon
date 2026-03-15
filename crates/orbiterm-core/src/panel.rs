@@ -190,13 +190,17 @@ fn resolve_launch_command(
     kind: PanelKind,
     resume: &PanelResume,
 ) -> (String, Vec<String>) {
-    if let Some(program) = command {
-        return (program, args);
-    }
-
     match kind {
-        PanelKind::Shell | PanelKind::Command => (default_shell(), args),
+        PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
+        PanelKind::Command => {
+            if let Some(program) = command {
+                (program, args)
+            } else {
+                (default_shell(), args)
+            }
+        }
         PanelKind::Codex => {
+            let program = command.unwrap_or_else(|| "codex".to_string());
             let mut launch_args = Vec::new();
             match resume {
                 PanelResume::Fresh => {}
@@ -206,17 +210,40 @@ fn resolve_launch_command(
                 }
             }
             launch_args.extend(args);
-            ("codex".to_string(), launch_args)
+            wrap_in_login_shell(program, launch_args)
         }
         PanelKind::Claude => {
+            let program = command.unwrap_or_else(|| "claude".to_string());
             let mut launch_args = match resume {
                 PanelResume::Fresh => Vec::new(),
                 PanelResume::Last => vec!["--continue".to_string()],
                 PanelResume::Session { session_id } => vec!["--resume".to_string(), session_id.clone()],
             };
             launch_args.extend(args);
-            ("claude".to_string(), launch_args)
+            wrap_in_login_shell(program, launch_args)
         }
+    }
+}
+
+/// Wrap a command in an interactive shell (`-ic`) so that the user's
+/// full PATH (nvm, cargo, etc. from `~/.bashrc`) is available.
+fn wrap_in_login_shell(program: String, args: Vec<String>) -> (String, Vec<String>) {
+    let shell = default_shell();
+    let mut cmd_parts = vec![program];
+    cmd_parts.extend(args);
+    let joined = cmd_parts
+        .iter()
+        .map(|a| shell_escape(a))
+        .collect::<Vec<_>>()
+        .join(" ");
+    (shell, vec!["-ic".to_string(), joined])
+}
+
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() || s.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"' || c == '\\' || c == '$') {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.to_string()
     }
 }
 
@@ -240,15 +267,18 @@ mod tests {
 
     #[test]
     fn codex_last_resume_uses_resume_subcommand() {
-        let (program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
+        let (_program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
 
-        assert_eq!(program, "codex");
-        assert_eq!(args, vec!["resume", "--last"]);
+        // Codex is launched via login shell: shell -lc "codex resume --last"
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("codex"));
+        assert!(args[1].contains("resume --last"));
     }
 
     #[test]
     fn claude_session_resume_uses_resume_flag() {
-        let (program, args) = resolve_launch_command(
+        let (_program, args) = resolve_launch_command(
             None,
             Vec::new(),
             PanelKind::Claude,
@@ -257,21 +287,27 @@ mod tests {
             },
         );
 
-        assert_eq!(program, "claude");
-        assert_eq!(args, vec!["--resume", "session-42"]);
+        // Claude is launched via login shell: shell -lc "claude --resume session-42"
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("claude"));
+        assert!(args[1].contains("--resume session-42"));
     }
 
     #[test]
     fn explicit_command_wins_over_kind_defaults() {
-        let (program, args) = resolve_launch_command(
+        let (_program, args) = resolve_launch_command(
             Some("python".to_string()),
             vec!["-m".to_string(), "http.server".to_string()],
             PanelKind::Codex,
             &PanelResume::Last,
         );
 
-        assert_eq!(program, "python");
-        assert_eq!(args, vec!["-m", "http.server"]);
+        // Explicit command is still wrapped in login shell for agent kinds
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("python"));
+        assert!(args[1].contains("-m"));
+        assert!(args[1].contains("http.server"));
     }
 
     #[test]
