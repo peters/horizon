@@ -36,6 +36,7 @@ portable-pty = "0.9.0"
 filedescriptor = "0.8.3"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.33.3"
+tempfile = "3.20.0"
 wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
 
 [profile.release]

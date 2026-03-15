@@ -20,4 +20,5 @@ wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_yaml.workspace = true
+tempfile.workspace = true
 vt100.workspace = true
