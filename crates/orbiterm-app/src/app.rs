@@ -5,7 +5,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2,
 };
-use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
+use orbiterm_core::{Board, Config, PanelId, PanelOptions, TerminalConfig, WorkspaceConfig, WorkspaceId};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -44,6 +44,19 @@ struct WorkspaceInteraction {
     finish_rename: bool,
 }
 
+enum SettingsStatus {
+    None,
+    LivePreview,
+    Saved,
+    Error(String),
+}
+
+struct SettingsEditor {
+    buffer: String,
+    original: String,
+    status: SettingsStatus,
+}
+
 pub struct OrbitermApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
@@ -55,16 +68,21 @@ pub struct OrbitermApp {
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
+    hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
+    config_path: PathBuf,
+    settings: Option<SettingsEditor>,
 }
 
 impl OrbitermApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, _config_path: Option<PathBuf>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
         let board = Board::from_config(config).unwrap_or_else(|error| {
             tracing::error!("failed to load config: {error}");
             Board::new()
         });
+        let resolved_path =
+            config_path.unwrap_or_else(|| Config::default_path().unwrap_or_else(|| PathBuf::from("orbiterm.yaml")));
 
         Self {
             board,
@@ -77,8 +95,11 @@ impl OrbitermApp {
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
+            hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),
+            config_path: resolved_path,
+            settings: None,
         }
     }
 
@@ -159,16 +180,23 @@ impl OrbitermApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
+        // Global toggles work even when terminal has focus.
+        if ctx.input(|input| input.key_pressed(egui::Key::Comma) && input.modifiers.ctrl) {
+            self.toggle_settings();
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::B) && input.modifiers.ctrl) {
+            self.sidebar_visible = !self.sidebar_visible;
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::H) && input.modifiers.ctrl) {
+            self.hud_visible = !self.hud_visible;
+        }
+
         if self.terminal_accepts_keyboard_input(ctx) {
             return;
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
             self.create_panel();
-        }
-
-        if ctx.input(|input| input.key_pressed(egui::Key::B) && input.modifiers.ctrl) {
-            self.sidebar_visible = !self.sidebar_visible;
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
@@ -251,39 +279,60 @@ impl OrbitermApp {
     }
 
     fn render_toolbar(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(TOOLBAR_HEIGHT)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::TITLEBAR_BG)
-                    .inner_margin(Margin::symmetric(14, 8))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170))),
-            )
+        let viewport = viewport_local_rect(ctx);
+        egui::Area::new(Id::new("toolbar"))
+            .fixed_pos(viewport.min)
+            .constrain(false)
+            .order(Order::Tooltip)
             .show(ctx, |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(crate::branding::APP_NAME)
-                            .color(theme::FG)
-                            .size(14.0)
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new(crate::branding::APP_TAGLINE)
-                            .color(theme::FG_DIM)
-                            .size(10.5),
-                    );
-                    ui.add_space(10.0);
-                    if ui.add(primary_button("New Terminal")).clicked() {
-                        self.create_panel();
-                    }
-                    if ui.add(chrome_button("New Workspace")).clicked() {
-                        let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                        let _ = self.board.create_workspace(&name);
-                    }
-                    if ui.add(chrome_button("Reset View")).clicked() {
-                        self.reset_view();
-                    }
-                });
+                ui.set_min_size(Vec2::new(viewport.width(), TOOLBAR_HEIGHT));
+                ui.set_max_size(Vec2::new(viewport.width(), TOOLBAR_HEIGHT));
+                ui.painter().rect_filled(
+                    Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), TOOLBAR_HEIGHT)),
+                    CornerRadius::ZERO,
+                    theme::TITLEBAR_BG,
+                );
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
+                        Pos2::new(viewport.max.x, viewport.min.y + TOOLBAR_HEIGHT),
+                    ],
+                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
+                );
+
+                let content_rect = Rect::from_min_max(
+                    Pos2::new(viewport.min.x + 14.0, viewport.min.y + 8.0),
+                    Pos2::new(viewport.max.x - 14.0, viewport.min.y + TOOLBAR_HEIGHT - 8.0),
+                );
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(content_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(crate::branding::APP_NAME)
+                                .color(theme::FG)
+                                .size(14.0)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::branding::APP_TAGLINE)
+                                .color(theme::FG_DIM)
+                                .size(10.5),
+                        );
+                        ui.add_space(10.0);
+                        if ui.add(chrome_button("Reset View")).clicked() {
+                            self.reset_view();
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(8.0);
+                            if ui.add(chrome_button("Settings")).clicked() {
+                                self.toggle_settings();
+                            }
+                        });
+                    },
+                );
             });
     }
 
@@ -298,17 +347,30 @@ impl OrbitermApp {
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
 
-        egui::SidePanel::left("sidebar")
-            .exact_width(SIDEBAR_WIDTH)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::BG_ELEVATED)
-                    .inner_margin(Margin::ZERO)
-                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE)),
-            )
+        let viewport = viewport_local_rect(ctx);
+        let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
+        let sidebar_size = Vec2::new(SIDEBAR_WIDTH, viewport.height() - TOOLBAR_HEIGHT);
+
+        egui::Area::new(Id::new("sidebar"))
+            .fixed_pos(sidebar_origin)
+            .constrain(false)
+            .order(Order::Tooltip)
             .show(ctx, |ui| {
+                ui.set_min_size(sidebar_size);
+                ui.set_max_size(sidebar_size);
+                ui.painter().rect_filled(
+                    Rect::from_min_size(sidebar_origin, sidebar_size),
+                    CornerRadius::ZERO,
+                    theme::BG_ELEVATED,
+                );
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(sidebar_origin.x + SIDEBAR_WIDTH, sidebar_origin.y),
+                        Pos2::new(sidebar_origin.x + SIDEBAR_WIDTH, sidebar_origin.y + sidebar_size.y),
+                    ],
+                    Stroke::new(1.0, theme::BORDER_SUBTLE),
+                );
+
                 // ── Header ──
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
@@ -537,7 +599,251 @@ impl OrbitermApp {
         }
     }
 
+    fn toggle_settings(&mut self) {
+        if let Some(editor) = self.settings.take() {
+            if let Ok(config) = serde_yaml::from_str::<Config>(&editor.original) {
+                Self::sync_workspace_names(&mut self.board, &config);
+            }
+        } else {
+            let content = self.load_or_generate_config_yaml();
+            self.settings = Some(SettingsEditor {
+                original: content.clone(),
+                buffer: content,
+                status: SettingsStatus::None,
+            });
+        }
+    }
+
+    /// Load config YAML from disk. If the file is missing, empty, or invalid,
+    /// generate a default config that includes the current workspaces.
+    fn load_or_generate_config_yaml(&self) -> String {
+        if let Ok(content) = std::fs::read_to_string(&self.config_path)
+            && serde_yaml::from_str::<Config>(&content).is_ok()
+        {
+            return content;
+        }
+        self.config_from_board_yaml()
+    }
+
+    fn auto_save_config(&self) {
+        let yaml = self.config_from_board_yaml();
+        if let Err(error) = atomic_write(&self.config_path, &yaml) {
+            tracing::error!("failed to auto-save config: {error}");
+        }
+    }
+
+    fn config_from_board_yaml(&self) -> String {
+        let workspaces = self
+            .board
+            .workspaces
+            .iter()
+            .map(|ws| {
+                let terminals = ws
+                    .panels
+                    .iter()
+                    .filter_map(|pid| self.board.panel(*pid))
+                    .map(|panel| TerminalConfig {
+                        name: panel.title.clone(),
+                        ..TerminalConfig::default()
+                    })
+                    .collect();
+                WorkspaceConfig {
+                    name: ws.name.clone(),
+                    color: None,
+                    position: None,
+                    terminals,
+                }
+            })
+            .collect();
+
+        let config = Config {
+            workspaces,
+            ..Config::default()
+        };
+        config
+            .to_yaml()
+            .unwrap_or_else(|_| "workspaces: []\n".to_string())
+    }
+
+    fn sync_workspace_names(board: &mut Board, config: &Config) {
+        for (index, ws_cfg) in config.workspaces.iter().enumerate() {
+            if let Some(ws) = board.workspaces.get_mut(index)
+                && ws.name != ws_cfg.name
+            {
+                ws_cfg.name.clone_into(&mut ws.name);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn render_settings(&mut self, ctx: &Context) {
+        let Some(editor) = self.settings.as_mut() else {
+            return;
+        };
+
+        // Parse once per frame, reuse for validity + live preview
+        let parsed = serde_yaml::from_str::<Config>(&editor.buffer);
+        let is_valid = parsed.is_ok();
+        if let Ok(config) = &parsed {
+            Self::sync_workspace_names(&mut self.board, config);
+            if !matches!(editor.status, SettingsStatus::Saved) {
+                editor.status = SettingsStatus::LivePreview;
+            }
+        }
+
+        let has_changes = editor.buffer != editor.original;
+
+        // Collect status display before splitting borrow
+        let (status_text, status_color) = match &editor.status {
+            SettingsStatus::None => (String::new(), theme::FG_DIM),
+            SettingsStatus::LivePreview => ("Live preview".to_string(), theme::FG_DIM),
+            SettingsStatus::Saved => ("Saved".to_string(), theme::PALETTE_GREEN),
+            SettingsStatus::Error(msg) => (msg.clone(), theme::PALETTE_RED),
+        };
+
+        // Bottom bar
+        egui::TopBottomPanel::bottom("settings_bar")
+            .exact_height(48.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(theme::BG_ELEVATED)
+                    .inner_margin(Margin::symmetric(24, 8))
+                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 100))),
+            )
+            .show(ctx, |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if !status_text.is_empty() {
+                        ui.label(egui::RichText::new(&status_text).color(status_color).size(12.0));
+                    }
+                    if !is_valid {
+                        ui.label(
+                            egui::RichText::new("Invalid YAML")
+                                .color(theme::PALETTE_RED)
+                                .size(12.0),
+                        );
+                    }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let mut close = false;
+                        let mut revert = false;
+                        let mut save = false;
+
+                        if ui
+                            .add(
+                                Button::new(egui::RichText::new("Close").size(12.0).color(theme::FG_SOFT))
+                                    .fill(theme::PANEL_BG_ALT)
+                                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+                                    .corner_radius(8),
+                            )
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                        if has_changes && ui.add(chrome_button("Revert")).clicked() {
+                            revert = true;
+                        }
+                        if ui.add(primary_button("Save")).clicked() {
+                            save = true;
+                        }
+
+                        // Defer state mutations to avoid borrow conflicts
+                        if close {
+                            if let Some(editor) = self.settings.take()
+                                && let Ok(config) = serde_yaml::from_str::<Config>(&editor.original)
+                            {
+                                Self::sync_workspace_names(&mut self.board, &config);
+                            }
+                        } else if revert {
+                            if let Some(editor) = self.settings.as_mut() {
+                                let original = editor.original.clone();
+                                if let Ok(config) = serde_yaml::from_str::<Config>(&original) {
+                                    Self::sync_workspace_names(&mut self.board, &config);
+                                }
+                                editor.buffer = original;
+                                editor.status = SettingsStatus::None;
+                            }
+                        } else if save {
+                            if let Some(parent) = self.config_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            if let Some(editor) = self.settings.as_mut() {
+                                match atomic_write(&self.config_path, &editor.buffer) {
+                                    Ok(()) => {
+                                        editor.original = editor.buffer.clone();
+                                        editor.status = SettingsStatus::Saved;
+                                        tracing::info!("config saved to {}", self.config_path.display());
+                                    }
+                                    Err(error) => {
+                                        editor.status = SettingsStatus::Error(format!("Write error: {error}"));
+                                        tracing::error!("failed to write config: {error}");
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+
+        // Main editor area
+        let Some(editor) = self.settings.as_mut() else {
+            return;
+        };
+
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(theme::BG_ELEVATED))
+            .show(ctx, |ui| {
+                let content_rect = Rect::from_min_max(
+                    Pos2::new(canvas_rect.min.x + 24.0, canvas_rect.min.y + 16.0),
+                    Pos2::new(canvas_rect.max.x - 24.0, ui.max_rect().max.y),
+                );
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(content_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Config File").color(theme::FG).size(18.0).strong());
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(self.config_path.display().to_string())
+                            .color(theme::FG_DIM)
+                            .size(12.0)
+                            .monospace(),
+                    );
+                });
+                ui.add_space(12.0);
+
+                let available = ui.available_size() - Vec2::new(0.0, 8.0);
+                egui::Frame::default()
+                    .fill(theme::PANEL_BG)
+                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+                    .corner_radius(8)
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(available.y)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut editor.buffer)
+                                        .font(egui::FontId::monospace(13.0))
+                                        .text_color(theme::FG)
+                                        .desired_width(available.x)
+                                        .desired_rows(40)
+                                        .frame(false),
+                                );
+                            });
+                    });
+                    },
+                );
+            });
+    }
+
     fn render_canvas_hud(&self, ctx: &Context) {
+        if !self.hud_visible {
+            return;
+        }
         let view_origin = Pos2::new(-self.pan_offset.x, -self.pan_offset.y);
         let focused_status = self
             .board
@@ -954,6 +1260,9 @@ impl eframe::App for OrbitermApp {
         self.handle_shortcuts(ctx);
         self.board.process_output();
 
+        let ws_count_before = self.board.workspaces.len();
+        let panel_count_before = self.board.panels.len();
+
         for panel_id in self.panels_to_close.drain(..) {
             self.board.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
@@ -973,6 +1282,10 @@ impl eframe::App for OrbitermApp {
 
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
+        } else if self.settings.is_some() {
+            self.render_toolbar(ctx);
+            self.render_sidebar(ctx);
+            self.render_settings(ctx);
         } else {
             self.handle_canvas_pan(ctx);
             self.render_toolbar(ctx);
@@ -982,6 +1295,13 @@ impl eframe::App for OrbitermApp {
             self.handle_canvas_double_click(ctx);
             self.render_panels(ctx);
             self.render_canvas_hud(ctx);
+        }
+
+        // Auto-save config when board structure changes
+        if self.board.workspaces.len() != ws_count_before
+            || self.board.panels.len() != panel_count_before
+        {
+            self.auto_save_config();
         }
 
         ctx.request_repaint();
@@ -1077,7 +1397,7 @@ fn paint_panel_chrome(
 
 fn paint_empty_state(ui: &mut egui::Ui) {
     let rect = ui.max_rect();
-    let card_rect = Rect::from_center_size(rect.center(), Vec2::new(320.0, 110.0));
+    let card_rect = Rect::from_center_size(rect.center(), Vec2::new(380.0, 120.0));
     let painter = ui.painter();
 
     painter.rect_filled(card_rect, CornerRadius::same(18), theme::alpha(theme::PANEL_BG, 236));
@@ -1088,23 +1408,30 @@ fn paint_empty_state(ui: &mut egui::Ui) {
         StrokeKind::Outside,
     );
     painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 34.0),
+        Pos2::new(card_rect.center().x, card_rect.min.y + 30.0),
         egui::Align2::CENTER_CENTER,
         "Infinite terminal canvas",
         egui::FontId::proportional(17.0),
         theme::FG,
     );
     painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 66.0),
+        Pos2::new(card_rect.center().x, card_rect.min.y + 60.0),
         egui::Align2::CENTER_CENTER,
-        "Create a terminal, drag it anywhere, and pan for more space.",
+        "Ctrl+double-click to create a workspace.",
         egui::FontId::proportional(11.5),
         theme::FG_SOFT,
     );
     painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 86.0),
+        Pos2::new(card_rect.center().x, card_rect.min.y + 80.0),
         egui::Align2::CENTER_CENTER,
-        "Ctrl+N adds a panel. Middle-drag pans the board.",
+        "Ctrl+double-click inside a workspace to add a terminal.",
+        egui::FontId::proportional(11.5),
+        theme::FG_SOFT,
+    );
+    painter.text(
+        Pos2::new(card_rect.center().x, card_rect.min.y + 102.0),
+        egui::Align2::CENTER_CENTER,
+        "Middle-drag or scroll to pan the board.",
         egui::FontId::proportional(10.5),
         theme::FG_DIM,
     );
@@ -1417,6 +1744,22 @@ fn chrome_button(text: &str) -> Button<'_> {
 #[cfg(test)]
 fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
+}
+
+/// Write `content` to `path` atomically: write to a temp file in the same
+/// directory, then rename over the target. This prevents partial writes on
+/// crash and is safe against concurrent readers.
+fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
