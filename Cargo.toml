@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/orbiterm-core", "crates/orbiterm-app"]
+members = ["crates/horizon-core", "crates/horizon-ui"]
 
 [workspace.package]
 version = "0.1.0"

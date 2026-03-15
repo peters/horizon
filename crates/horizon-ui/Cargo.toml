@@ -1,18 +1,18 @@
 [package]
-name = "orbiterm-app"
+name = "horizon-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "orbiterm"
+name = "horizon"
 path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-orbiterm-core = { path = "../orbiterm-core" }
+horizon-core = { path = "../horizon-core" }
 eframe.workspace = true
 egui.workspace = true
 # Ensure native renderer backends are enabled for eframe's wgpu stack.

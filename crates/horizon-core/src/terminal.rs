@@ -276,7 +276,9 @@ impl Terminal {
         let mut current_row: Option<usize> = None;
 
         for indexed in content.display_iter {
-            let row = indexed.point.line.0 as usize;
+            let Ok(row) = usize::try_from(indexed.point.line.0) else {
+                continue;
+            };
             if row >= rows {
                 continue;
             }

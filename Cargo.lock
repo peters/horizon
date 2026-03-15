@@ -1040,6 +1040,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-core"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "horizon-ui"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "eframe",
+ "egui",
+ "horizon-core",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1841,32 +1867,6 @@ checksum = "59aed3b33578edcfa1bc96a321d590d31832b6ad55a26f0313362ce687e9abd6"
 dependencies = [
  "libc",
  "libredox",
-]
-
-[[package]]
-name = "orbiterm-app"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "eframe",
- "egui",
- "orbiterm-core",
- "serde_yaml",
- "tempfile",
- "tracing",
- "tracing-subscriber",
- "wgpu",
-]
-
-[[package]]
-name = "orbiterm-core"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "serde",
- "serde_yaml",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

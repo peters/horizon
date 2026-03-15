@@ -227,8 +227,7 @@ impl Config {
                 if candidate.exists() {
                     let contents = std::fs::read_to_string(&candidate)?;
                     tracing::info!("loaded config from {}", candidate.display());
-                    found =
-                        Some(serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?);
+                    found = Some(serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?);
                     break;
                 }
             }
@@ -250,11 +249,11 @@ impl Config {
         serde_yaml::to_string(self).map_err(|e| Error::Config(e.to_string()))
     }
 
-    /// Return the default config file path (`~/.config/orbiterm/config.yaml`).
+    /// Return the default config file path (`~/.config/horizon/config.yaml`).
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
         if let Ok(home) = std::env::var("HOME") {
-            Some(PathBuf::from(home).join(".config/orbiterm/config.yaml"))
+            Some(PathBuf::from(home).join(".config/horizon/config.yaml"))
         } else {
             None
         }
@@ -282,17 +281,17 @@ fn config_candidates_with_env(xdg_config_home: Option<PathBuf>, home: Option<Pat
     let mut paths = Vec::new();
 
     if let Some(xdg) = xdg_config_home {
-        push_config_dir_candidates(&mut paths, &xdg.join("orbiterm"));
+        push_config_dir_candidates(&mut paths, &xdg.join("horizon"));
     }
 
     if let Some(home) = home {
-        push_config_dir_candidates(&mut paths, &home.join(".config/orbiterm"));
-        paths.push(home.join(".orbiterm.yaml"));
-        paths.push(home.join(".orbiterm.yml"));
+        push_config_dir_candidates(&mut paths, &home.join(".config/horizon"));
+        paths.push(home.join(".horizon.yaml"));
+        paths.push(home.join(".horizon.yml"));
     }
 
-    paths.push(PathBuf::from("orbiterm.yaml"));
-    paths.push(PathBuf::from("orbiterm.yml"));
+    paths.push(PathBuf::from("horizon.yaml"));
+    paths.push(PathBuf::from("horizon.yml"));
 
     paths
 }
@@ -309,12 +308,12 @@ mod tests {
     use super::config_candidates_with_env;
 
     #[test]
-    fn includes_orbiterm_config_candidates() {
-        let temp_home = PathBuf::from("/tmp/orbiterm-home");
+    fn includes_horizon_config_candidates() {
+        let temp_home = PathBuf::from("/tmp/horizon-home");
         let candidates = config_candidates_with_env(Some(temp_home.join(".config")), Some(temp_home));
 
-        assert!(candidates.iter().any(|path| path.ends_with("orbiterm/config.yaml")));
-        assert!(candidates.iter().any(|path| path.ends_with(".orbiterm.yaml")));
-        assert!(candidates.iter().any(|path| path == &PathBuf::from("orbiterm.yaml")));
+        assert!(candidates.iter().any(|path| path.ends_with("horizon/config.yaml")));
+        assert!(candidates.iter().any(|path| path.ends_with(".horizon.yaml")));
+        assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
     }
 }

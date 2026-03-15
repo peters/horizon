@@ -1,18 +1,20 @@
 use egui::IconData;
 
-pub const APP_NAME: &str = "Orbiterm";
-pub const APP_ID: &str = "orbiterm";
-pub const APP_TAGLINE: &str = "infinite terminal canvas";
+pub const APP_NAME: &str = "Horizon";
+pub const APP_ID: &str = "horizon";
+pub const APP_TAGLINE: &str = "spatial terminal observatory";
 
 const ICON_SIZE: u32 = 256;
-const BG: [u8; 4] = [7, 10, 16, 255];
-const BOARD: [u8; 4] = [15, 19, 28, 255];
-const BOARD_STROKE: [u8; 4] = [58, 77, 107, 255];
-const ORBIT: [u8; 4] = [243, 162, 88, 255];
-const PROMPT: [u8; 4] = [121, 183, 255, 255];
-const TEXT: [u8; 4] = [236, 242, 248, 255];
-const SATELLITE: [u8; 4] = [126, 218, 193, 255];
-const GLOW: [u8; 4] = [62, 88, 146, 120];
+const BG: [u8; 4] = [10, 22, 34, 255];
+const SHELL: [u8; 4] = [17, 32, 48, 255];
+const SHELL_STROKE: [u8; 4] = [54, 88, 122, 255];
+const PANEL: [u8; 4] = [20, 38, 56, 255];
+const PANEL_STROKE: [u8; 4] = [94, 132, 173, 255];
+const HORIZON: [u8; 4] = [118, 216, 255, 255];
+const SUNSET: [u8; 4] = [255, 170, 114, 255];
+const AGENT: [u8; 4] = [126, 225, 198, 255];
+const TEXT: [u8; 4] = [239, 245, 251, 255];
+const GLOW: [u8; 4] = [70, 122, 196, 138];
 
 #[derive(Clone, Copy)]
 struct IconRect {
@@ -31,9 +33,9 @@ pub fn app_icon() -> IconData {
             let px = icon_coord(x);
             let py = icon_coord(y);
             let center_x = 128.0;
-            let center_y = 126.0;
+            let center_y = 116.0;
             let distance = ((px - center_x).powi(2) + (py - center_y).powi(2)).sqrt();
-            let vignette = unit_to_u8((distance / 170.0).clamp(0.0, 1.0) * 26.0);
+            let vignette = unit_to_u8((distance / 170.0).clamp(0.0, 1.0) * 28.0);
             let base = [
                 BG[0].saturating_add(vignette / 4),
                 BG[1].saturating_add(vignette / 3),
@@ -45,36 +47,81 @@ pub fn app_icon() -> IconData {
     }
 
     let outer_shell = IconRect {
-        left: 26,
-        top: 26,
-        width: 204,
-        height: 204,
-        radius: 42.0,
+        left: 24,
+        top: 24,
+        width: 208,
+        height: 208,
+        radius: 46.0,
     };
-    fill_rounded_rect(&mut pixels, outer_shell, BOARD);
-    stroke_rounded_rect(&mut pixels, outer_shell, 3.0, BOARD_STROKE);
-    paint_glow(&mut pixels, 128.0, 132.0, 78.0, GLOW);
-    stroke_ellipse(&mut pixels, 128.0, 126.0, 78.0, 58.0, 5.0, ORBIT);
-    fill_circle(&mut pixels, 192.0, 88.0, 11.0, SATELLITE);
-    fill_circle(&mut pixels, 192.0, 88.0, 5.0, TEXT);
+    fill_rounded_rect(&mut pixels, outer_shell, SHELL);
+    stroke_rounded_rect(&mut pixels, outer_shell, 3.0, SHELL_STROKE);
+    paint_glow(&mut pixels, 128.0, 118.0, 94.0, GLOW);
+
+    stroke_ellipse(&mut pixels, 128.0, 96.0, 56.0, 24.0, 3.0, SHELL_STROKE);
+    fill_circle(&mut pixels, 90.0, 74.0, 10.0, AGENT);
+    fill_circle(&mut pixels, 90.0, 74.0, 4.0, TEXT);
+    fill_circle(&mut pixels, 128.0, 60.0, 10.0, HORIZON);
+    fill_circle(&mut pixels, 128.0, 60.0, 4.0, TEXT);
+    fill_circle(&mut pixels, 166.0, 74.0, 10.0, SUNSET);
+    fill_circle(&mut pixels, 166.0, 74.0, 4.0, TEXT);
+
+    stroke_ellipse(&mut pixels, 128.0, 168.0, 96.0, 42.0, 6.0, HORIZON);
+    stroke_ellipse(&mut pixels, 128.0, 180.0, 130.0, 60.0, 4.0, SUNSET);
 
     let terminal_frame = IconRect {
         left: 66,
-        top: 78,
+        top: 88,
         width: 124,
-        height: 92,
-        radius: 18.0,
+        height: 84,
+        radius: 22.0,
     };
-    fill_rounded_rect(&mut pixels, terminal_frame, BOARD);
-    stroke_rounded_rect(&mut pixels, terminal_frame, 3.0, PROMPT);
+    fill_rounded_rect(&mut pixels, terminal_frame, PANEL);
+    stroke_rounded_rect(&mut pixels, terminal_frame, 3.0, PANEL_STROKE);
+    draw_line(&mut pixels, 84.0, 108.0, 170.0, 108.0, 4.0, SHELL_STROKE);
+    fill_circle(&mut pixels, 82.0, 108.0, 3.0, SUNSET);
+    fill_circle(&mut pixels, 94.0, 108.0, 3.0, AGENT);
+    fill_circle(&mut pixels, 106.0, 108.0, 3.0, HORIZON);
 
-    draw_line(&mut pixels, 94.0, 113.0, 116.0, 129.0, 7.0, PROMPT);
-    draw_line(&mut pixels, 94.0, 145.0, 116.0, 129.0, 7.0, PROMPT);
-    draw_line(&mut pixels, 130.0, 147.0, 164.0, 147.0, 7.0, TEXT);
-    draw_line(&mut pixels, 84.0, 94.0, 140.0, 94.0, 4.0, BOARD_STROKE);
-    fill_circle(&mut pixels, 82.0, 94.0, 3.0, ORBIT);
-    fill_circle(&mut pixels, 94.0, 94.0, 3.0, SATELLITE);
-    fill_circle(&mut pixels, 106.0, 94.0, 3.0, PROMPT);
+    let agent_frames = [
+        (
+            IconRect {
+                left: 84,
+                top: 122,
+                width: 24,
+                height: 18,
+                radius: 6.0,
+            },
+            AGENT,
+        ),
+        (
+            IconRect {
+                left: 116,
+                top: 122,
+                width: 24,
+                height: 18,
+                radius: 6.0,
+            },
+            HORIZON,
+        ),
+        (
+            IconRect {
+                left: 148,
+                top: 122,
+                width: 24,
+                height: 18,
+                radius: 6.0,
+            },
+            SUNSET,
+        ),
+    ];
+    for (frame, stroke) in agent_frames {
+        fill_rounded_rect(&mut pixels, frame, SHELL);
+        stroke_rounded_rect(&mut pixels, frame, 2.0, stroke);
+    }
+
+    draw_line(&mut pixels, 88.0, 152.0, 102.0, 140.0, 5.0, HORIZON);
+    draw_line(&mut pixels, 88.0, 152.0, 102.0, 164.0, 5.0, HORIZON);
+    draw_line(&mut pixels, 114.0, 152.0, 164.0, 152.0, 6.0, TEXT);
 
     IconData {
         rgba: pixels,

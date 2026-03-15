@@ -1,25 +1,25 @@
-# Orbiterm Feature Research
+# Horizon Feature Research
 
 Reviewed on 2026-03-15.
 
 This note combines:
 
 - Current official-product research across modern terminals and terminal-adjacent tools.
-- A repo-specific read of Orbiterm's current architecture.
+- A repo-specific read of Horizon's current architecture.
 - A prioritized recommendation set for features that fit this codebase instead of generic terminal parity work.
 
-## Orbiterm Baseline
+## Horizon Baseline
 
-Orbiterm already has the beginnings of a differentiated product:
+Horizon already has the beginnings of a differentiated product:
 
-- A freeform canvas with draggable and resizable terminal panels in `crates/orbiterm-app/src/app.rs`.
-- Always-visible workspace clusters in `crates/orbiterm-core/src/board.rs` and `crates/orbiterm-core/src/workspace.rs`.
-- Config-backed startup layouts in `crates/orbiterm-core/src/config.rs`.
-- PTY-backed panels with shell, `codex`, `claude`, and generic command modes in `crates/orbiterm-core/src/panel.rs`.
-- A custom terminal renderer and input layer in `crates/orbiterm-app/src/terminal_widget.rs` and `crates/orbiterm-app/src/input.rs`.
-- An existing but currently unused attention model in `crates/orbiterm-core/src/attention.rs` and `crates/orbiterm-core/src/board.rs`.
+- A freeform canvas with draggable and resizable terminal panels in `crates/horizon-ui/src/app.rs`.
+- Always-visible workspace clusters in `crates/horizon-core/src/board.rs` and `crates/horizon-core/src/workspace.rs`.
+- Config-backed startup layouts in `crates/horizon-core/src/config.rs`.
+- PTY-backed panels with shell, `codex`, `claude`, and generic command modes in `crates/horizon-core/src/panel.rs`.
+- A custom terminal renderer and input layer in `crates/horizon-ui/src/terminal_widget.rs` and `crates/horizon-ui/src/input.rs`.
+- An existing but currently unused attention model in `crates/horizon-core/src/attention.rs` and `crates/horizon-core/src/board.rs`.
 
-That means Orbiterm should not spend its next cycle copying tabbed terminals. The better path is to turn the board into a command-aware operational workspace.
+That means Horizon should not spend its next cycle copying tabbed terminals. The better path is to turn the board into a command-aware operational workspace.
 
 ## What Current Products Suggest
 
@@ -51,7 +51,7 @@ Priority: `P1`
 Why it matters:
 
 - This is the foundation for most of the higher-level UX now seen in modern terminals.
-- Without command boundaries and cwd tracking, Orbiterm cannot reliably build search, attention, replay, or task-aware workspace features.
+- Without command boundaries and cwd tracking, Horizon cannot reliably build search, attention, replay, or task-aware workspace features.
 
 What to build:
 
@@ -62,7 +62,7 @@ What to build:
 - "Jump to last failure" and "jump to last command" actions.
 - Optional sticky header showing cwd, last exit code, and running state.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - Panels already have independent PTYs and titles.
 - The canvas metaphor becomes much more useful when each panel can advertise operational state at a glance.
@@ -72,7 +72,7 @@ Implementation shape:
 
 - Add command-state metadata to `Panel`.
 - Start with shell integration scripts and OSC-based markers rather than trying to infer prompts purely from raw output.
-- Surface lightweight badges in the panel chrome in `crates/orbiterm-app/src/app.rs`.
+- Surface lightweight badges in the panel chrome in `crates/horizon-ui/src/app.rs`.
 
 ### 2. Attention Inbox, Rules, and Workspace Badges
 
@@ -80,7 +80,7 @@ Priority: `P1`
 
 Why it matters:
 
-- Orbiterm already has an attention model but does not currently emit or display it.
+- Horizon already has an attention model but does not currently emit or display it.
 - This is a high-value feature with relatively little conceptual risk because the domain model exists already.
 
 What to build:
@@ -91,7 +91,7 @@ What to build:
 - Click-through navigation from an attention item to the owning panel.
 - "Resolve on focus" or explicit resolve actions.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - Spatial workspaces are a natural place for attention routing.
 - The board model already tracks workspace ownership and unresolved attention.
@@ -118,7 +118,7 @@ What to build:
 - Resume policy per panel: fresh, last session, or exact session if the backend supports it.
 - Optional lightweight scrollback checkpointing for non-agent panels.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - The config layer already serializes a board-shaped model.
 - Panel resume behavior already exists for agent-oriented backends.
@@ -136,7 +136,7 @@ Priority: `P1` to `P2`
 Why it matters:
 
 - Modern terminals are converging with lightweight documentation systems.
-- Orbiterm can do better than linear notebooks because notes can sit spatially next to the exact live terminals they control.
+- Horizon can do better than linear notebooks because notes can sit spatially next to the exact live terminals they control.
 
 What to build:
 
@@ -145,7 +145,7 @@ What to build:
 - Saved workspace templates that combine notes and live terminals.
 - File links, issue links, and checklist state for operational workflows.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - The board metaphor is already better suited to runbooks than traditional tabbed terminals.
 - This creates a differentiated product story: operational canvases instead of just windows with shells.
@@ -172,9 +172,9 @@ What to build:
 - "Copy last command output" and "select output block".
 - Optional pinned excerpts that can be kept visible on the canvas.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
-- The custom renderer means Orbiterm controls its own interaction layer.
+- The custom renderer means Horizon controls its own interaction layer.
 - Spatial pinning of output excerpts is a feature traditional terminals do not naturally support.
 
 Implementation shape:
@@ -188,7 +188,7 @@ Priority: `P2`
 
 Why it matters:
 
-- Orbiterm already has explicit `Codex` and `Claude` panel kinds.
+- Horizon already has explicit `Codex` and `Claude` panel kinds.
 - Most terminals are not yet truly good at agent-heavy workflows, which is a credible place for differentiation.
 
 What to build:
@@ -198,7 +198,7 @@ What to build:
 - Workspace presets like "planner + implementer + verifier".
 - A lightweight activity strip showing which agent panel produced output recently.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - The current panel model already encodes agent-oriented launches and resume rules.
 - The canvas makes multi-agent orchestration much more legible than a stack of tabs.
@@ -223,7 +223,7 @@ What to build:
 - Distinct visual identity for target environments.
 - Reconnect and reopen flows for boards containing remote panels.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - Remote environments map naturally to workspaces.
 - Spatial grouping by environment is more useful than flat tab lists.
@@ -247,7 +247,7 @@ What to build:
 - A scrubber that rewinds panel content and focus state.
 - Exportable incident timeline views for a workspace.
 
-Why Orbiterm fits it:
+Why Horizon fits it:
 
 - Replay across a whole board is more novel than replay within a single terminal buffer.
 
@@ -259,7 +259,7 @@ Implementation shape:
 ## What Not To Prioritize First
 
 - Conventional tabs/splits parity.
-  Orbiterm already has the more interesting spatial model.
+  Horizon already has the more interesting spatial model.
 
 - Inline graphics protocol support.
   Useful eventually, but lower leverage than command metadata, attention, and persistence.
@@ -273,14 +273,14 @@ This is a sensible scaling investment, but it is not a user-facing feature and s
 
 Current state:
 
-- Orbiterm currently creates one PTY reader thread per panel in `crates/orbiterm-core/src/panel.rs`.
+- Horizon currently creates one PTY reader thread per panel in `crates/horizon-core/src/panel.rs`.
 - Output is forwarded through an `mpsc` channel and then drained on the main thread during `Board::process_output()`.
 
 Recommendation:
 
 - Treat "replace 50 reader threads with one readiness loop" as `P2` infrastructure work, not as a headline roadmap item.
 - It becomes worth doing when profiling shows thread count, wakeups, or memory overhead are actually limiting multi-panel scale.
-- If the goal is portability, prefer a selector abstraction rather than hard-coding raw `epoll`; `epoll` is fine only if Orbiterm is intentionally Linux-only for PTY internals.
+- If the goal is portability, prefer a selector abstraction rather than hard-coding raw `epoll`; `epoll` is fine only if Horizon is intentionally Linux-only for PTY internals.
 
 Why it still matters:
 
@@ -347,6 +347,6 @@ The recommendations above were informed by current official docs reviewed on 202
 
 The most defensible product direction is:
 
-Build Orbiterm into a command-aware, attention-routing terminal board with persistence and runbooks.
+Build Horizon into a command-aware, attention-routing terminal board with persistence and runbooks.
 
 That direction uses the product's existing spatial strengths and avoids wasting time on generic terminal parity features that stronger incumbents already cover.

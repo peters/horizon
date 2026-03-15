@@ -8,14 +8,14 @@ mod theme;
 
 use std::path::PathBuf;
 
-use app::OrbitermApp;
-use orbiterm_core::Config;
+use app::HorizonApp;
+use horizon_core::Config;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("orbiterm=info,orbiterm_core=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info")),
         )
         .init();
 
@@ -43,7 +43,7 @@ fn main() -> eframe::Result {
         viewport = viewport.with_position([x, y]);
     }
 
-    if running_on_wayland() {
+    if cfg!(target_os = "linux") {
         viewport = viewport.with_app_id(branding::APP_ID);
     }
 
@@ -58,13 +58,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         branding::APP_NAME,
         options,
-        Box::new(move |cc| Ok(Box::new(OrbitermApp::new(cc, &config, config_path)))),
+        Box::new(move |cc| Ok(Box::new(HorizonApp::new(cc, &config, config_path)))),
     )
-}
-
-fn running_on_wayland() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || matches!(std::env::var("XDG_SESSION_TYPE").as_deref(), Ok("wayland"))
 }
 
 fn parse_config_arg() -> Option<PathBuf> {

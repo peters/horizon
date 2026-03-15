@@ -4,7 +4,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
 use alacritty_terminal::vte::ansi::CursorShape;
 use egui::{CornerRadius, FontId, Key, Pos2, Rect, StrokeKind, Vec2};
-use orbiterm_core::Panel;
+use horizon_core::Panel;
 
 use crate::input;
 use crate::theme;
@@ -65,12 +65,17 @@ impl<'a> TerminalView<'a> {
 
         // Prevent egui from using arrow keys to move focus away from the terminal.
         if has_terminal_focus {
-            ui.memory_mut(|mem| mem.set_focus_lock_filter(interaction.body.id, egui::EventFilter {
-                tab: true,
-                horizontal_arrows: true,
-                vertical_arrows: true,
-                escape: false,
-            }));
+            ui.memory_mut(|mem| {
+                mem.set_focus_lock_filter(
+                    interaction.body.id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: false,
+                    },
+                );
+            });
         }
 
         if ui.is_rect_visible(interaction.layout.outer) {

@@ -1,0 +1,41 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="92" y1="48" x2="408" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1B2A"/>
+      <stop offset="1" stop-color="#14354B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 236) rotate(90) scale(196)">
+      <stop stop-color="#4A7FD0" stop-opacity="0.52"/>
+      <stop offset="1" stop-color="#4A7FD0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="48" y="48" width="416" height="416" rx="92" fill="url(#bg)"/>
+  <rect x="48" y="48" width="416" height="416" rx="92" stroke="#36587C" stroke-width="6"/>
+  <circle cx="256" cy="236" r="196" fill="url(#glow)"/>
+
+  <path d="M144 192A112 48 0 0 1 368 192" stroke="#36587C" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="180" cy="148" r="20" fill="#7EE1C6"/>
+  <circle cx="180" cy="148" r="8" fill="#EFF5FB"/>
+  <circle cx="256" cy="120" r="20" fill="#76D8FF"/>
+  <circle cx="256" cy="120" r="8" fill="#EFF5FB"/>
+  <circle cx="332" cy="148" r="20" fill="#FFAA72"/>
+  <circle cx="332" cy="148" r="8" fill="#EFF5FB"/>
+
+  <path d="M64 336A192 84 0 0 1 448 336" stroke="#76D8FF" stroke-width="14" stroke-linecap="round"/>
+  <path d="M12 368A244 112 0 0 1 500 368" stroke="#FFAA72" stroke-width="10" stroke-linecap="round"/>
+
+  <rect x="132" y="176" width="248" height="168" rx="44" fill="#142638" stroke="#5E84AD" stroke-width="8"/>
+  <line x1="168" y1="216" x2="340" y2="216" stroke="#36587C" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="160" cy="216" r="6" fill="#FFAA72"/>
+  <circle cx="184" cy="216" r="6" fill="#7EE1C6"/>
+  <circle cx="208" cy="216" r="6" fill="#76D8FF"/>
+
+  <rect x="168" y="244" width="48" height="36" rx="12" fill="#102030" stroke="#7EE1C6" stroke-width="4"/>
+  <rect x="232" y="244" width="48" height="36" rx="12" fill="#102030" stroke="#76D8FF" stroke-width="4"/>
+  <rect x="296" y="244" width="48" height="36" rx="12" fill="#102030" stroke="#FFAA72" stroke-width="4"/>
+
+  <path d="M176 304L204 280" stroke="#76D8FF" stroke-width="10" stroke-linecap="round"/>
+  <path d="M176 304L204 328" stroke="#76D8FF" stroke-width="10" stroke-linecap="round"/>
+  <line x1="228" y1="304" x2="328" y2="304" stroke="#EFF5FB" stroke-width="12" stroke-linecap="round"/>
+</svg>

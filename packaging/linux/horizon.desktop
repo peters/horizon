@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Horizon
+GenericName=Agent Workspace Observatory
+Comment=Spatial terminal observatory for multi-agent development
+Exec=horizon
+Icon=horizon
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true
+StartupWMClass=horizon

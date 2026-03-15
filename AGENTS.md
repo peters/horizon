@@ -1,10 +1,10 @@
-# Orbiterm — Agent Guidelines
+# Horizon — Agent Guidelines
 
 > **Source of truth** for all contributors and AI agents working on this project.
 
 ## Project Overview
 
-**Orbiterm** is a GPU-accelerated terminal board — a visual workspace for managing
+**Horizon** is a GPU-accelerated terminal board — a visual workspace for managing
 multiple terminal sessions as freely positioned, resizable panels on a canvas.
 
 **Stack:** Rust (edition 2024) · eframe/egui (wgpu backend) · vt100 · portable-pty
@@ -13,18 +13,18 @@ multiple terminal sessions as freely positioned, resizable panels on a canvas.
 
 ```
 crates/
-  orbiterm-core/      Core: terminal emulation, PTY, board & panel management
-  orbiterm-app/       Binary: eframe application, UI rendering, input handling
+  horizon-core/       Core: terminal emulation, PTY, board & panel management
+  horizon-ui/         Binary: eframe application, UI rendering, input handling
 ```
 
-### orbiterm-core
+### horizon-core
 
 - `error.rs` — Typed error enum via thiserror
 - `terminal.rs` — vt100 parser wrapper (screen buffer, resize)
 - `panel.rs` — Panel = terminal + PTY session + identity
 - `board.rs` — Board = collection of panels + focus management
 
-### orbiterm-app
+### horizon-ui
 
 - `main.rs` — Entry point, tracing init, eframe launch
 - `app.rs` — `eframe::App` impl, toolbar, floating window management
@@ -49,7 +49,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Self-documenting code preferred over comments
 - Typed error enums (thiserror) — no `Box<dyn Error>` or `.unwrap()` in library code
 - `#![forbid(unsafe_code)]` on all crates
-- Consolidate repeated helpers into shared modules in orbiterm-core
+- Consolidate repeated helpers into shared modules in horizon-core
 - Minimize allocations in the render hot path (per-frame code)
 - Every `unsafe` block (if ever needed) must have a `// SAFETY:` rationale
 
@@ -82,7 +82,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 ### UI Launch Troubleshooting
 
-- If Orbiterm "doesn't launch", first distinguish a crash from an unmapped window: `ps -C orbiterm` then `xwininfo -root -tree | rg Orbiterm`
+- If Horizon "doesn't launch", first distinguish a crash from an unmapped window: `ps -C horizon` then `xwininfo -root -tree | rg Horizon`
 - When `xwininfo -id <window-id> -stats` reports `Map State: IsUnMapped`, the process created a root window but the desktop never surfaced it; inspect first-frame UI/input code before blaming PTY startup
 - When the map state is `IsViewable`, treat it as a focus, placement, or window-manager issue instead of a launch failure
 
