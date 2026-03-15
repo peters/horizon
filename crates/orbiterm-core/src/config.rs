@@ -8,6 +8,8 @@ use crate::panel::{PanelKind, PanelResume};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
+    pub window: WindowConfig,
+    #[serde(default)]
     pub shortcuts: ShortcutsConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
@@ -18,6 +20,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            window: WindowConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
@@ -51,6 +54,26 @@ impl PresetConfig {
             kind: self.kind,
             resume: self.resume.clone(),
             ..crate::panel::PanelOptions::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WindowConfig {
+    pub width: f32,
+    pub height: f32,
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            width: 1600.0,
+            height: 1000.0,
+            x: None,
+            y: None,
         }
     }
 }

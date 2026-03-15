@@ -26,26 +26,32 @@ fn main() -> eframe::Result {
         Config::default()
     });
 
+    let window = &config.window;
+    // Clamp to reasonable bounds so we don't open larger than the screen.
+    let width = window.width.clamp(800.0, 7680.0);
+    let height = window.height.clamp(600.0, 4320.0);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(branding::APP_NAME)
         .with_icon(branding::app_icon())
         .with_decorations(true)
         .with_transparent(false)
-        .with_inner_size([1600.0, 1000.0])
+        .with_inner_size([width, height])
         .with_min_inner_size([800.0, 600.0])
         .with_resizable(true);
 
+    if let (Some(x), Some(y)) = (window.x, window.y) {
+        viewport = viewport.with_position([x, y]);
+    }
+
     if running_on_wayland() {
-        // `with_app_id` is intended for Wayland desktop integration.
-        // On this eframe/egui-winit stack under X11 it leaves the instance
-        // part of WM_CLASS empty, which breaks desktop/taskbar identification.
         viewport = viewport.with_app_id(branding::APP_ID);
     }
 
+    let has_saved_position = window.x.is_some();
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
-        centered: true,
+        centered: !has_saved_position,
         ..Default::default()
     };
 

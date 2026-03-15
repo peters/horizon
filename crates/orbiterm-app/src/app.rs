@@ -6,8 +6,8 @@ use egui::{
     StrokeKind, UiBuilder, Vec2,
 };
 use orbiterm_core::{
-    Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, TerminalConfig, WorkspaceConfig,
-    WorkspaceId,
+    Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, TerminalConfig, WindowConfig,
+    WorkspaceConfig, WorkspaceId,
 };
 
 use crate::terminal_widget::TerminalView;
@@ -76,6 +76,7 @@ pub struct OrbitermApp {
     rename_buffer: String,
     config_path: PathBuf,
     presets: Vec<PresetConfig>,
+    window_config: WindowConfig,
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     config_dirty_since: Option<std::time::Instant>,
@@ -106,6 +107,7 @@ impl OrbitermApp {
             rename_buffer: String::new(),
             config_path: resolved_path,
             presets: config.presets.clone(),
+            window_config: config.window.clone(),
             settings: None,
             pending_preset_pick: None,
             config_dirty_since: None,
@@ -786,6 +788,7 @@ impl OrbitermApp {
             .collect();
 
         let config = Config {
+            window: self.window_config.clone(),
             presets: self.presets.clone(),
             workspaces,
             ..Config::default()
@@ -1440,6 +1443,39 @@ impl eframe::App for OrbitermApp {
             self.render_preset_picker(ctx);
             self.render_canvas_hud(ctx);
         }
+
+        // Track window size/position for persistence.
+        ctx.input(|input| {
+            if let Some(rect) = input.viewport().inner_rect {
+                let new_w = rect.width();
+                let new_h = rect.height();
+                if (new_w - self.window_config.width).abs() > 1.0
+                    || (new_h - self.window_config.height).abs() > 1.0
+                {
+                    self.window_config.width = new_w;
+                    self.window_config.height = new_h;
+                    self.mark_config_dirty();
+                }
+            }
+            if let Some(pos) = input.viewport().outer_rect {
+                let new_x = pos.min.x;
+                let new_y = pos.min.y;
+                let changed = self.window_config.x.is_none()
+                    || self
+                        .window_config
+                        .x
+                        .is_some_and(|x| (x - new_x).abs() > 1.0)
+                    || self
+                        .window_config
+                        .y
+                        .is_some_and(|y| (y - new_y).abs() > 1.0);
+                if changed {
+                    self.window_config.x = Some(new_x);
+                    self.window_config.y = Some(new_y);
+                    self.mark_config_dirty();
+                }
+            }
+        });
 
         // Mark dirty on structural changes (immediate save) or layout changes (debounced)
         if self.board.workspaces.len() != ws_count_before || self.board.panels.len() != panel_count_before {
