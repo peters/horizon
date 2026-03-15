@@ -209,8 +209,7 @@ impl Terminal {
                 tracing::warn!("terminal event loop panicked during shutdown");
                 true
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => false,
-            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => false,
         }
     }
 

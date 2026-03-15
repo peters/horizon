@@ -574,13 +574,12 @@ fn scan_claude_session_reader<R: BufRead>(mut reader: R, limit: Option<usize>, s
         }
         buffer.clear();
         match reader.read_until(b'\n', &mut buffer) {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(_) => {
                 let line = String::from_utf8_lossy(&buffer);
                 summary.apply_line(line.trim_end_matches(['\r', '\n']));
                 index += 1;
             }
-            Err(_) => break,
         }
     }
 }
