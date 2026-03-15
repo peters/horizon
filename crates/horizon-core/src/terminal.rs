@@ -83,6 +83,7 @@ pub struct Terminal {
     event_sender: EventLoopSender,
     event_rx: mpsc::Receiver<Event>,
     event_loop_handle: Option<JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>>,
+    child_pid: Option<u32>,
     rows: u16,
     cols: u16,
     cell_width: u16,
@@ -143,6 +144,10 @@ impl Terminal {
         }
         let pty =
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
+        #[cfg(not(windows))]
+        let child_pid = Some(pty.child().id());
+        #[cfg(windows)]
+        let child_pid = None;
         let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
             .map_err(|error| Error::Pty(format!("failed to initialize terminal event loop: {error}")))?;
         let event_sender = event_loop.channel();
@@ -153,6 +158,7 @@ impl Terminal {
             event_sender,
             event_rx,
             event_loop_handle,
+            child_pid,
             rows,
             cols,
             cell_width,
@@ -372,6 +378,11 @@ impl Terminal {
     }
 
     #[must_use]
+    pub fn current_cwd(&self) -> Option<PathBuf> {
+        current_cwd_for_pid(self.child_pid?)
+    }
+
+    #[must_use]
     pub fn title(&self) -> &str {
         &self.title
     }
@@ -558,6 +569,19 @@ fn replay_terminal_bytes(term: &Arc<FairMutex<Term<TerminalEventProxy>>>, bytes:
     parser.advance(&mut *term.lock(), bytes);
 }
 
+fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 const TERMINAL_BASE_COLORS: [Rgb; 16] = [
     rgb(0x1d, 0x1f, 0x21),
     rgb(0xcc, 0x66, 0x66),
@@ -585,7 +609,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 mod tests {
     use std::time::Duration;
 
-    use super::{Terminal, TerminalDimensions, TerminalSpawnOptions, default_terminal_rgb};
+    use super::{Terminal, TerminalDimensions, TerminalSpawnOptions, current_cwd_for_pid, default_terminal_rgb};
     use alacritty_terminal::grid::Dimensions;
 
     #[test]
@@ -621,5 +645,12 @@ mod tests {
         .expect("terminal should spawn");
 
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn current_cwd_for_pid_reads_procfs_cwd() {
+        let cwd = current_cwd_for_pid(std::process::id()).expect("cwd");
+        assert_eq!(cwd, std::env::current_dir().expect("current dir"));
     }
 }
