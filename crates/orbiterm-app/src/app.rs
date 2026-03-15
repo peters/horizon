@@ -39,6 +39,8 @@ struct WorkspaceVisual {
 struct WorkspaceInteraction {
     activate_workspace: bool,
     drag_delta: Vec2,
+    start_rename: bool,
+    finish_rename: bool,
 }
 
 pub struct OrbitermApp {
@@ -51,6 +53,8 @@ pub struct OrbitermApp {
     panel_screen_rects: HashMap<PanelId, Rect>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
+    renaming_workspace: Option<WorkspaceId>,
+    rename_buffer: String,
 }
 
 impl OrbitermApp {
@@ -70,6 +74,8 @@ impl OrbitermApp {
             panel_screen_rects: HashMap::new(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
+            renaming_workspace: None,
+            rename_buffer: String::new(),
         }
     }
 
@@ -603,11 +609,19 @@ impl OrbitermApp {
         self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
         let mut focus_workspace = None;
+        let mut start_rename_ws = None;
+        let mut finish_rename = false;
 
         for workspace in &visuals {
             self.workspace_screen_rects
                 .push((workspace.id, workspace.screen_rect));
-            let interaction = render_workspace_visual(ctx, workspace);
+
+            let is_renaming = self.renaming_workspace == Some(workspace.id);
+            let interaction = if is_renaming {
+                render_workspace_visual(ctx, workspace, Some(&mut self.rename_buffer))
+            } else {
+                render_workspace_visual(ctx, workspace, None)
+            };
 
             if interaction.activate_workspace {
                 focus_workspace = Some(workspace.id);
@@ -616,6 +630,29 @@ impl OrbitermApp {
             if interaction.drag_delta != Vec2::ZERO {
                 pending_workspace_moves.push((workspace.id, interaction.drag_delta));
             }
+
+            if interaction.start_rename {
+                start_rename_ws = Some((workspace.id, workspace.name.clone()));
+            }
+
+            if interaction.finish_rename {
+                finish_rename = true;
+            }
+        }
+
+        if let Some((ws_id, current_name)) = start_rename_ws {
+            self.renaming_workspace = Some(ws_id);
+            self.rename_buffer = current_name;
+        }
+
+        if finish_rename
+            && let Some(ws_id) = self.renaming_workspace.take()
+        {
+            let name = self.rename_buffer.trim().to_string();
+            if !name.is_empty() {
+                let _ = self.board.rename_workspace(ws_id, &name);
+            }
+            self.rename_buffer.clear();
         }
 
         if let Some(workspace_id) = focus_workspace {
@@ -836,7 +873,11 @@ fn paint_empty_state(ui: &mut egui::Ui) {
     );
 }
 
-fn render_workspace_visual(ctx: &Context, workspace: &WorkspaceVisual) -> WorkspaceInteraction {
+fn render_workspace_visual(
+    ctx: &Context,
+    workspace: &WorkspaceVisual,
+    rename_buffer: Option<&mut String>,
+) -> WorkspaceInteraction {
     egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
         .fixed_pos(workspace.screen_rect.min)
         .constrain(false)
@@ -862,31 +903,68 @@ fn render_workspace_visual(ctx: &Context, workspace: &WorkspaceVisual) -> Worksp
                 Sense::click_and_drag(),
             );
 
-            if label_response.hovered() || label_response.dragged() {
-                ui.ctx().set_cursor_icon(if label_response.dragged() {
-                    CursorIcon::Grabbing
-                } else {
-                    CursorIcon::Grab
-                });
-            }
+            if let Some(buffer) = rename_buffer {
+                paint_workspace_label_bg(ui, rect, workspace.color, true, false, false);
 
-            paint_workspace_label(
-                ui,
-                rect,
-                &workspace.name,
-                workspace.color,
-                workspace.is_active,
-                label_response.hovered(),
-                label_response.dragged(),
-            );
+                let text_rect = Rect::from_min_max(
+                    Pos2::new(rect.min.x + 12.0, rect.min.y + 2.0),
+                    Pos2::new(rect.max.x - 8.0, rect.max.y - 2.0),
+                );
+                let mut ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(text_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                let edit = egui::TextEdit::singleline(buffer)
+                    .font(egui::FontId::proportional(12.5))
+                    .text_color(theme::FG)
+                    .frame(false)
+                    .desired_width(text_rect.width())
+                    .margin(Margin::ZERO);
+                let response = ui.add(edit);
+                if !response.has_focus() {
+                    response.request_focus();
+                }
 
-            WorkspaceInteraction {
-                activate_workspace: label_response.clicked() || label_response.drag_started(),
-                drag_delta: if label_response.dragged() {
-                    ctx.input(|input| input.pointer.delta())
-                } else {
-                    Vec2::ZERO
-                },
+                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                let lost_focus = response.lost_focus();
+
+                WorkspaceInteraction {
+                    activate_workspace: false,
+                    drag_delta: Vec2::ZERO,
+                    start_rename: false,
+                    finish_rename: enter || escape || lost_focus,
+                }
+            } else {
+                if label_response.hovered() || label_response.dragged() {
+                    ui.ctx().set_cursor_icon(if label_response.dragged() {
+                        CursorIcon::Grabbing
+                    } else {
+                        CursorIcon::Grab
+                    });
+                }
+
+                paint_workspace_label(
+                    ui,
+                    rect,
+                    &workspace.name,
+                    workspace.color,
+                    workspace.is_active,
+                    label_response.hovered(),
+                    label_response.dragged(),
+                );
+
+                WorkspaceInteraction {
+                    activate_workspace: label_response.clicked() || label_response.drag_started(),
+                    drag_delta: if label_response.dragged() {
+                        ctx.input(|input| input.pointer.delta())
+                    } else {
+                        Vec2::ZERO
+                    },
+                    start_rename: label_response.double_clicked(),
+                    finish_rename: false,
+                }
             }
         })
         .inner
@@ -908,10 +986,9 @@ fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_activ
     );
 }
 
-fn paint_workspace_label(
+fn paint_workspace_label_bg(
     ui: &mut egui::Ui,
     rect: Rect,
-    name: &str,
     color: Color32,
     is_active: bool,
     hovered: bool,
@@ -929,7 +1006,6 @@ fn paint_workspace_label(
     };
     let fill = theme::blend(theme::PANEL_BG_ALT, color, tint);
     let border_alpha = if is_active || hovered { 160 } else { 90 };
-    let grip_center = Pos2::new(rect.max.x - 14.0, rect.center().y);
 
     painter.rect_filled(rect, CornerRadius::same(8), fill);
     painter.rect_stroke(
@@ -938,6 +1014,21 @@ fn paint_workspace_label(
         Stroke::new(1.0, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
     );
+}
+
+fn paint_workspace_label(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    name: &str,
+    color: Color32,
+    is_active: bool,
+    hovered: bool,
+    dragging: bool,
+) {
+    paint_workspace_label_bg(ui, rect, color, is_active, hovered, dragging);
+
+    let painter = ui.painter();
+    let grip_center = Pos2::new(rect.max.x - 14.0, rect.center().y);
 
     painter.circle_filled(
         Pos2::new(rect.min.x + 14.0, rect.center().y),
