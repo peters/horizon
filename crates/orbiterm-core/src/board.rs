@@ -150,6 +150,7 @@ impl Board {
     }
 
     pub fn close_panel(&mut self, id: PanelId) {
+        let ws_id = self.panel_workspace_id(id);
         self.panels.retain(|p| p.id != id);
         for ws in &mut self.workspaces {
             ws.remove_panel(id);
@@ -159,6 +160,21 @@ impl Board {
             self.focused = self.panels.last().map(|p| p.id);
             if let Some(focused) = self.focused {
                 self.active_workspace = self.panel_workspace_id(focused);
+            }
+        }
+
+        // Remove workspace if it has no panels left.
+        if let Some(ws_id) = ws_id {
+            let is_empty = self
+                .workspaces
+                .iter()
+                .any(|ws| ws.id == ws_id && ws.panels.is_empty());
+            if is_empty {
+                self.workspaces.retain(|ws| ws.id != ws_id);
+                self.attention.retain(|item| item.workspace_id != ws_id);
+                if self.active_workspace == Some(ws_id) {
+                    self.active_workspace = self.workspaces.first().map(|ws| ws.id);
+                }
             }
         }
     }
