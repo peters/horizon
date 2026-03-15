@@ -135,8 +135,9 @@ impl DirPicker {
         }
 
         // ── Card dimensions ──
-        let visible_rows = self.results.len().min(MAX_VISIBLE_ROWS);
-        let results_height = usize_to_f32(visible_rows) * ROW_HEIGHT;
+        // Use a fixed results area height to prevent the card from jumping
+        // when the result count changes between searches.
+        let results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT;
         let footer_height = 36.0;
         let card_height = (INPUT_HEIGHT + 16.0 + results_height + footer_height + 44.0).min(PICKER_MAX_HEIGHT);
 

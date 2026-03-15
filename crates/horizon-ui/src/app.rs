@@ -453,10 +453,7 @@ impl HorizonApp {
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
             let ws_id = self.board.ensure_workspace();
             if let Some(preset) = self.presets.first().cloned() {
-                self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
-                    workspace_id: ws_id,
-                    preset,
-                }));
+                self.add_panel_to_workspace(ws_id, preset);
             } else {
                 // No presets configured — create a plain shell panel
                 self.create_panel();
@@ -557,7 +554,14 @@ impl HorizonApp {
 
         if let Some(purpose) = open_dir_picker {
             self.pending_preset_pick = None;
-            self.dir_picker = Some(DirPicker::new(purpose));
+            match purpose {
+                DirPickerPurpose::AddPanel { workspace_id, preset } => {
+                    self.add_panel_to_workspace(workspace_id, preset);
+                }
+                purpose @ DirPickerPurpose::NewWorkspace { .. } => {
+                    self.dir_picker = Some(DirPicker::new(purpose));
+                }
+            }
         } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
             let popup_rect = area_response.response.rect;
             let clicked_outside = ctx.input(|input| {
@@ -1011,10 +1015,7 @@ impl HorizonApp {
             }
         }
         if let Some((ws_id, preset)) = create_from_preset {
-            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
-                workspace_id: ws_id,
-                preset,
-            }));
+            self.add_panel_to_workspace(ws_id, preset);
         }
     }
 
