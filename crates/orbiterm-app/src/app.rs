@@ -844,6 +844,7 @@ impl OrbitermApp {
                         let mut close = false;
                         let mut revert = false;
                         let mut save = false;
+                        let mut reset = false;
 
                         if ui
                             .add(
@@ -858,6 +859,9 @@ impl OrbitermApp {
                         }
                         if has_changes && ui.add(chrome_button("Revert")).clicked() {
                             revert = true;
+                        }
+                        if ui.add(chrome_button("Reset Defaults")).clicked() {
+                            reset = true;
                         }
                         if ui.add(primary_button("Save")).clicked() {
                             save = true;
@@ -878,6 +882,12 @@ impl OrbitermApp {
                                 }
                                 editor.buffer = original;
                                 editor.status = SettingsStatus::None;
+                            }
+                        } else if reset {
+                            let default_yaml = self.config_from_board_yaml();
+                            if let Some(editor) = self.settings.as_mut() {
+                                editor.buffer = default_yaml;
+                                editor.status = SettingsStatus::LivePreview;
                             }
                         } else if save {
                             if let Some(parent) = self.config_path.parent() {
