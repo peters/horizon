@@ -1,31 +1,63 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
+    pub shortcuts: ShortcutsConfig,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ShortcutsConfig {
+    pub new_terminal: String,
+    pub toggle_sidebar: String,
+    pub toggle_hud: String,
+    pub toggle_settings: String,
+    pub reset_view: String,
+    pub fullscreen_panel: String,
+    pub fullscreen_window: String,
+}
+
+impl Default for ShortcutsConfig {
+    fn default() -> Self {
+        Self {
+            new_terminal: "Ctrl+N".to_string(),
+            toggle_sidebar: "Ctrl+B".to_string(),
+            toggle_hud: "Ctrl+H".to_string(),
+            toggle_settings: "Ctrl+,".to_string(),
+            reset_view: "Ctrl+0".to_string(),
+            fullscreen_panel: "F11".to_string(),
+            fullscreen_window: "Ctrl+F11".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WorkspaceConfig {
     pub name: String,
+    #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
     pub position: Option<[f32; 2]>,
     #[serde(default)]
     pub terminals: Vec<TerminalConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TerminalConfig {
     pub name: String,
+    #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default = "default_rows")]
     pub rows: u16,
@@ -35,8 +67,27 @@ pub struct TerminalConfig {
     pub kind: PanelKind,
     #[serde(default)]
     pub resume: PanelResume,
+    #[serde(default)]
     pub position: Option<[f32; 2]>,
+    #[serde(default)]
     pub size: Option<[f32; 2]>,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: None,
+            args: Vec::new(),
+            cwd: None,
+            rows: default_rows(),
+            cols: default_cols(),
+            kind: PanelKind::default(),
+            resume: PanelResume::default(),
+            position: None,
+            size: None,
+        }
+    }
 }
 
 fn default_rows() -> u16 {
@@ -74,6 +125,25 @@ impl Config {
         Ok(Self::default())
     }
 
+    /// Serialize this config to YAML.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
+    pub fn to_yaml(&self) -> Result<String> {
+        serde_yaml::to_string(self).map_err(|e| Error::Config(e.to_string()))
+    }
+
+    /// Return the default config file path (`~/.config/orbiterm/config.yaml`).
+    #[must_use]
+    pub fn default_path() -> Option<PathBuf> {
+        if let Ok(home) = std::env::var("HOME") {
+            Some(PathBuf::from(home).join(".config/orbiterm/config.yaml"))
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub fn expand_tilde(s: &str) -> PathBuf {
         if let Some(rest) = s.strip_prefix("~/")
@@ -82,30 +152,6 @@ impl Config {
             return PathBuf::from(home).join(rest);
         }
         PathBuf::from(s)
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            workspaces: vec![WorkspaceConfig {
-                name: "Workspace 1".to_string(),
-                color: None,
-                position: None,
-                terminals: vec![TerminalConfig {
-                    name: String::new(),
-                    command: None,
-                    args: Vec::new(),
-                    cwd: None,
-                    rows: default_rows(),
-                    cols: default_cols(),
-                    kind: PanelKind::Shell,
-                    resume: PanelResume::Fresh,
-                    position: None,
-                    size: None,
-                }],
-            }],
-        }
     }
 }
 

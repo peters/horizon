@@ -12,7 +12,7 @@ mod workspace;
 
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::Board;
-pub use config::{Config, TerminalConfig, WorkspaceConfig};
+pub use config::{Config, ShortcutsConfig, TerminalConfig, WorkspaceConfig};
 pub use error::{Error, Result};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use terminal::Terminal;

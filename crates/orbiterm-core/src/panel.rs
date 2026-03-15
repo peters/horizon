@@ -20,7 +20,7 @@ const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelKind {
     #[default]
@@ -30,7 +30,7 @@ pub enum PanelKind {
     Command,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub enum PanelResume {
     #[default]
     #[serde(rename = "fresh")]
