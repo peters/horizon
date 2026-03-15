@@ -4,7 +4,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
 use alacritty_terminal::vte::ansi::CursorShape;
 use egui::{CornerRadius, FontId, Key, Pos2, Rect, StrokeKind, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use crate::input;
 use crate::theme;
@@ -159,7 +159,7 @@ fn terminal_interaction(ui: &mut egui::Ui, layout: TerminalLayout, panel_id: u64
     let body = ui.interact(
         layout.body,
         ui.make_persistent_id(("terminal_body", panel_id)),
-        egui::Sense::click(),
+        egui::Sense::click_and_drag(),
     );
     let scrollbar = ui.interact(
         layout.scrollbar.expand2(Vec2::new(2.0, 2.0)),
@@ -205,7 +205,42 @@ fn handle_terminal_pointer_input(
             grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
         });
 
-    for event in &events {
+    let mouse_mode_active = |modifiers: &egui::Modifiers| -> bool {
+        !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
+    };
+
+    handle_pointer_events(
+        &events,
+        panel,
+        interaction,
+        metrics,
+        visible_rows,
+        visible_cols,
+        terminal_mode,
+        pointer_buttons,
+        current_modifiers,
+        hovered_point,
+        &mouse_mode_active,
+    );
+
+    handle_scrollbar_drag(ui, panel, interaction, visible_rows);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_pointer_events(
+    events: &[egui::Event],
+    panel: &mut Panel,
+    interaction: &TerminalInteraction,
+    metrics: &GridMetrics,
+    visible_rows: u16,
+    visible_cols: u16,
+    terminal_mode: alacritty_terminal::term::TermMode,
+    pointer_buttons: input::PointerButtons,
+    current_modifiers: egui::Modifiers,
+    hovered_point: Option<input::GridPoint>,
+    mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
+) {
+    for event in events {
         match event {
             egui::Event::PointerButton {
                 pos,
@@ -216,22 +251,40 @@ fn handle_terminal_pointer_input(
                 if *pressed {
                     interaction.body.request_focus();
                 }
-                if let Some(point) =
-                    grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
-                    && let Some(bytes) = input::mouse_button_report(*button, *pressed, *modifiers, terminal_mode, point)
-                    && !bytes.is_empty()
-                {
-                    panel.write_input(&bytes);
-                }
+                handle_pointer_button(
+                    panel,
+                    interaction,
+                    *pos,
+                    *button,
+                    *pressed,
+                    *modifiers,
+                    metrics,
+                    visible_rows,
+                    visible_cols,
+                    terminal_mode,
+                    mouse_mode_active,
+                );
             }
-            egui::Event::PointerMoved(pos) if interaction.layout.body.contains(*pos) => {
-                if let Some(point) =
-                    grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
-                    && let Some(bytes) =
-                        input::mouse_motion_report(pointer_buttons, current_modifiers, terminal_mode, point)
-                    && !bytes.is_empty()
-                {
-                    panel.write_input(&bytes);
+            egui::Event::PointerMoved(pos) => {
+                let inside = interaction.layout.body.contains(*pos);
+                if inside && mouse_mode_active(&current_modifiers) {
+                    if let Some(point) =
+                        grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
+                        && let Some(bytes) =
+                            input::mouse_motion_report(pointer_buttons, current_modifiers, terminal_mode, point)
+                        && !bytes.is_empty()
+                    {
+                        panel.write_input(&bytes);
+                    }
+                } else if interaction.body.dragged() && panel.terminal.has_selection() {
+                    handle_pointer_selection_drag(
+                        panel,
+                        *pos,
+                        interaction.layout.body,
+                        metrics,
+                        visible_rows,
+                        visible_cols,
+                    );
                 }
             }
             egui::Event::MouseWheel { delta, unit, modifiers } => {
@@ -255,7 +308,45 @@ fn handle_terminal_pointer_input(
             _ => {}
         }
     }
+}
 
+#[allow(clippy::too_many_arguments)]
+fn handle_pointer_button(
+    panel: &mut Panel,
+    interaction: &TerminalInteraction,
+    pos: Pos2,
+    button: egui::PointerButton,
+    pressed: bool,
+    modifiers: egui::Modifiers,
+    metrics: &GridMetrics,
+    visible_rows: u16,
+    visible_cols: u16,
+    terminal_mode: alacritty_terminal::term::TermMode,
+    mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
+) {
+    if mouse_mode_active(&modifiers) {
+        if let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
+            && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, terminal_mode, point)
+            && !bytes.is_empty()
+        {
+            panel.write_input(&bytes);
+        }
+    } else if button == egui::PointerButton::Primary
+        && pressed
+        && let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
+    {
+        let sel_type = if interaction.body.triple_clicked() {
+            SelectionType::Lines
+        } else if interaction.body.double_clicked() {
+            SelectionType::Semantic
+        } else {
+            SelectionType::Simple
+        };
+        panel.terminal.start_selection(sel_type, point.line, point.column);
+    }
+}
+
+fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &TerminalInteraction, visible_rows: u16) {
     if (interaction.scrollbar.dragged() || interaction.scrollbar.clicked())
         && let Some(pointer_position) = ui.input(|input| input.pointer.interact_pos())
     {
@@ -273,6 +364,51 @@ fn handle_terminal_pointer_input(
     }
 }
 
+fn handle_pointer_selection_drag(
+    panel: &mut Panel,
+    pos: Pos2,
+    body_rect: Rect,
+    metrics: &GridMetrics,
+    visible_rows: u16,
+    visible_cols: u16,
+) {
+    if pos.y < body_rect.min.y {
+        // Pointer is above the terminal — scroll up and pin selection to top-left.
+        let overshoot = body_rect.min.y - pos.y;
+        let lines = (overshoot / metrics.line_height).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = (lines as i32).min(5);
+        panel.scroll_scrollback_by(lines);
+        panel.terminal.update_selection(0, 0, TerminalSide::Left);
+    } else if pos.y > body_rect.max.y {
+        // Pointer is below the terminal — scroll down and pin selection to bottom-right.
+        let overshoot = pos.y - body_rect.max.y;
+        let lines = (overshoot / metrics.line_height).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lines = (lines as i32).min(5);
+        panel.scroll_scrollback_by(-lines);
+        let last_row = visible_rows.saturating_sub(1);
+        let last_col = visible_cols.saturating_sub(1);
+        panel
+            .terminal
+            .update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
+    } else if let Some(point) = grid_point_from_position(body_rect, pos, metrics, visible_rows, visible_cols) {
+        let side = cell_side(pos, body_rect, metrics, point);
+        panel.terminal.update_selection(point.line, point.column, side);
+    }
+}
+
+/// Determine which side of a cell the pointer is on (left or right half).
+fn cell_side(pos: Pos2, body_rect: Rect, metrics: &GridMetrics, point: input::GridPoint) -> TerminalSide {
+    let cell_x = body_rect.min.x + usize_to_f32(point.column) * metrics.char_width;
+    let mid = cell_x + metrics.char_width / 2.0;
+    if pos.x < mid {
+        TerminalSide::Left
+    } else {
+        TerminalSide::Right
+    }
+}
+
 fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
     let mode = panel.terminal.mode();
@@ -284,15 +420,34 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
                 if suppressed_text.front().is_some_and(|expected| expected == text) {
                     suppressed_text.pop_front();
                 } else {
+                    panel.terminal.clear_selection();
                     panel.write_input(text.as_bytes());
                 }
             }
             egui::Event::Paste(text) => {
+                panel.terminal.clear_selection();
                 let bytes = input::paste_bytes(text, mode, true);
                 panel.write_input(&bytes);
             }
-            egui::Event::Copy => panel.write_input(&[3]),
-            egui::Event::Cut => panel.write_input(&[24]),
+            egui::Event::Copy => {
+                // If there is an active selection, copy it to the clipboard
+                // instead of sending Ctrl-C to the terminal.
+                if let Some(text) = panel.terminal.selection_to_string() {
+                    ui.ctx().copy_text(text);
+                    panel.terminal.clear_selection();
+                } else {
+                    panel.write_input(&[3]);
+                }
+            }
+            egui::Event::Cut => {
+                // Copy selection to clipboard on Cut too, then send the
+                // key to the terminal.
+                if let Some(text) = panel.terminal.selection_to_string() {
+                    ui.ctx().copy_text(text);
+                    panel.terminal.clear_selection();
+                }
+                panel.write_input(&[24]);
+            }
             egui::Event::Key {
                 key,
                 pressed,

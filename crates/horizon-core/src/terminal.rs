@@ -8,8 +8,10 @@ use std::time::Duration;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode};
+use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode, viewport_to_point};
 use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::Rgb;
 
@@ -404,6 +406,43 @@ impl Terminal {
 
     pub fn reset_damage(&self) {
         self.term.lock().reset_damage();
+    }
+
+    /// Start a new text selection at the given viewport-relative row and column.
+    pub fn start_selection(&self, sel_type: SelectionType, row: usize, col: usize) {
+        let mut term = self.term.lock();
+        let display_offset = term.grid().display_offset();
+        let point = viewport_to_point(display_offset, Point::new(row, Column(col)));
+        let side = Side::Left;
+        term.selection = Some(Selection::new(sel_type, point, side));
+    }
+
+    /// Update the active selection to the given viewport-relative row and column.
+    pub fn update_selection(&self, row: usize, col: usize, side: Side) {
+        let mut term = self.term.lock();
+        let display_offset = term.grid().display_offset();
+        let point = viewport_to_point(display_offset, Point::new(row, Column(col)));
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+            selection.include_all();
+        }
+    }
+
+    /// Clear any active selection.
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+    }
+
+    /// Return whether a selection is currently active.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        self.term.lock().selection.is_some()
+    }
+
+    /// Extract the currently selected text, if any.
+    #[must_use]
+    pub fn selection_to_string(&self) -> Option<String> {
+        self.term.lock().selection_to_string()
     }
 
     fn handle_event(&mut self, event: Event) {
