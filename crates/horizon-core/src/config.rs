@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub window: WindowConfig,
@@ -123,7 +123,7 @@ fn default_presets() -> Vec<PresetConfig> {
     ]
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShortcutsConfig {
     pub new_terminal: String,
@@ -149,7 +149,7 @@ impl Default for ShortcutsConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkspaceConfig {
     pub name: String,
     #[serde(default)]
@@ -162,7 +162,7 @@ pub struct WorkspaceConfig {
     pub terminals: Vec<TerminalConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TerminalConfig {
     pub name: String,
     #[serde(default)]

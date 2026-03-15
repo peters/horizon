@@ -31,10 +31,13 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
+serde_json = "1.0.149"
 alacritty_terminal = "0.25.1"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.33.3"
 tempfile = "3.20.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+uuid = { version = "1.22.0", features = ["serde", "v4"] }
 wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
 
 [profile.release]

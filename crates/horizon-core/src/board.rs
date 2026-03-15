@@ -2,6 +2,7 @@ use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
+use crate::runtime_state::{RuntimeState, WorkspaceState};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const TILE_GAP: f32 = 20.0;
@@ -40,51 +41,38 @@ impl Board {
     ///
     /// Returns an error if any configured panel fails to spawn.
     pub fn from_config(config: &Config) -> Result<Self> {
+        Self::from_runtime_state(&RuntimeState::from_config(config))
+    }
+
+    /// Build a board from a persisted runtime state snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured panel fails to spawn.
+    pub fn from_runtime_state(state: &RuntimeState) -> Result<Self> {
         let mut board = Self::new();
 
-        for ws_cfg in &config.workspaces {
-            let ws_id = board.create_workspace(&ws_cfg.name);
-
-            // Apply saved position directly — don't use the auto-computed
-            // position from create_workspace, as saved positions may be
-            // anywhere on the virtual canvas.
-            if let Some(ws) = board.workspace_mut(ws_id) {
-                if let Some(pos) = ws_cfg.position {
-                    ws.position = pos;
-                }
-                if let Some(cwd) = &ws_cfg.cwd {
-                    ws.cwd = Some(Config::expand_tilde(cwd));
-                }
-            }
-
-            let ws_origin = board.workspace(ws_id).map_or([0.0, 0.0], |ws| ws.position);
-
-            for term_cfg in &ws_cfg.terminals {
-                let position = term_cfg
-                    .position
-                    .map(|pos| [ws_origin[0] + pos[0], ws_origin[1] + pos[1]]);
-                let name = if term_cfg.name.is_empty() {
-                    None
-                } else {
-                    Some(term_cfg.name.clone())
-                };
-                let opts = PanelOptions {
-                    name,
-                    command: term_cfg.command.clone(),
-                    args: term_cfg.args.clone(),
-                    cwd: term_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s)),
-                    rows: term_cfg.rows,
-                    cols: term_cfg.cols,
-                    kind: term_cfg.kind,
-                    resume: term_cfg.resume.clone(),
-                    position,
-                    size: term_cfg.size,
-                };
-                board.create_panel(opts, ws_id)?;
+        for workspace_state in &state.workspaces {
+            let ws_id = board.create_workspace_record(workspace_state);
+            for panel_state in &workspace_state.panels {
+                board.create_panel(panel_state.to_panel_options(), ws_id)?;
             }
         }
 
-        board.focused = board.panels.first().map(|panel| panel.id);
+        if let Some(local_id) = &state.active_workspace_local_id
+            && let Some(workspace_id) = board.workspace_id_by_local_id(local_id)
+        {
+            board.active_workspace = Some(workspace_id);
+        }
+
+        if let Some(local_id) = &state.focused_panel_local_id
+            && let Some(panel_id) = board.panel_id_by_local_id(local_id)
+        {
+            board.focused = Some(panel_id);
+            board.active_workspace = board.panel_workspace_id(panel_id);
+        } else {
+            board.focused = board.panels.first().map(|panel| panel.id);
+        }
 
         Ok(board)
     }
@@ -330,6 +318,22 @@ impl Board {
             .and_then(|workspace_id| self.workspace(workspace_id))
     }
 
+    #[must_use]
+    pub fn workspace_id_by_local_id(&self, local_id: &str) -> Option<WorkspaceId> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.local_id == local_id)
+            .map(|workspace| workspace.id)
+    }
+
+    #[must_use]
+    pub fn panel_id_by_local_id(&self, local_id: &str) -> Option<PanelId> {
+        self.panels
+            .iter()
+            .find(|panel| panel.local_id == local_id)
+            .map(|panel| panel.id)
+    }
+
     /// Computes the bounding rectangle of all panels in a workspace.
     /// Returns `(min, max)` in canvas coordinates, or `None` when the
     /// workspace is empty or does not exist.
@@ -483,6 +487,17 @@ impl Board {
         }
 
         tiled_panel_position(origin, search_limit)
+    }
+
+    fn create_workspace_record(&mut self, workspace_state: &WorkspaceState) -> WorkspaceId {
+        let id = self.create_workspace(&workspace_state.name);
+        if let Some(workspace) = self.workspace_mut(id) {
+            workspace.local_id.clone_from(&workspace_state.local_id);
+            workspace.position = workspace_state.position.unwrap_or(workspace.position);
+            workspace.cwd = workspace_state.cwd.as_deref().map(Config::expand_tilde);
+            workspace.template.clone_from(&workspace_state.template);
+        }
+        id
     }
 }
 

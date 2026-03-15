@@ -1,8 +1,10 @@
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
 use crate::error::Result;
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id, new_session_binding};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::workspace::WorkspaceId;
 
@@ -16,7 +18,7 @@ const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub u64);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelKind {
     #[default]
@@ -24,6 +26,13 @@ pub enum PanelKind {
     Codex,
     Claude,
     Command,
+}
+
+impl PanelKind {
+    #[must_use]
+    pub fn is_agent(self) -> bool {
+        matches!(self, Self::Codex | Self::Claude)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
@@ -63,6 +72,9 @@ pub struct PanelOptions {
     pub resume: PanelResume,
     pub position: Option<[f32; 2]>,
     pub size: Option<[f32; 2]>,
+    pub local_id: Option<String>,
+    pub session_binding: Option<AgentSessionBinding>,
+    pub template: Option<PanelTemplateRef>,
 }
 
 impl Default for PanelOptions {
@@ -78,18 +90,25 @@ impl Default for PanelOptions {
             resume: PanelResume::default(),
             position: None,
             size: None,
+            local_id: None,
+            session_binding: None,
+            template: None,
         }
     }
 }
 
 pub struct Panel {
     pub id: PanelId,
+    pub local_id: String,
     pub title: String,
     pub kind: PanelKind,
     pub resume: PanelResume,
     pub layout: PanelLayout,
     pub workspace_id: WorkspaceId,
     pub terminal: Terminal,
+    pub session_binding: Option<AgentSessionBinding>,
+    pub template: Option<PanelTemplateRef>,
+    pub launched_at_millis: i64,
     has_custom_name: bool,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
@@ -117,6 +136,9 @@ impl Panel {
             resume,
             position,
             size,
+            local_id,
+            mut session_binding,
+            template,
         } = opts;
 
         // Save original launch params for persistence before they're
@@ -124,8 +146,27 @@ impl Panel {
         let saved_command = command.clone();
         let saved_args = args.clone();
         let saved_cwd = cwd.clone();
+        let saved_cwd_string = saved_cwd.as_ref().map(|path| path.display().to_string());
+        let should_resume_binding = session_binding.is_some() || matches!(resume, PanelResume::Session { .. });
 
-        let (program, launch_args) = resolve_launch_command(command, args, kind, &resume);
+        if session_binding.is_none() {
+            session_binding = match (&resume, kind) {
+                (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude) => Some(
+                    AgentSessionBinding::new(kind, session_id.clone(), saved_cwd_string.clone(), name.clone(), None),
+                ),
+                (_, PanelKind::Claude) => new_session_binding(kind, saved_cwd_string.clone(), name.clone()),
+                _ => None,
+            };
+        }
+
+        let (program, launch_args) = resolve_launch_command(
+            command,
+            args,
+            kind,
+            &resume,
+            session_binding.as_ref(),
+            should_resume_binding,
+        );
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
         let terminal = Terminal::spawn(TerminalSpawnOptions {
@@ -144,6 +185,7 @@ impl Panel {
 
         Ok(Self {
             id,
+            local_id: local_id.unwrap_or_else(new_local_id),
             title,
             kind,
             resume,
@@ -153,6 +195,9 @@ impl Panel {
             },
             workspace_id,
             terminal,
+            session_binding,
+            template,
+            launched_at_millis: current_unix_millis(),
             has_custom_name,
             launch_command: saved_command,
             launch_args: saved_args,
@@ -181,6 +226,10 @@ impl Panel {
 
     pub fn resize_layout(&mut self, size: [f32; 2]) {
         self.layout.size = size;
+    }
+
+    pub fn set_session_binding(&mut self, session_binding: Option<AgentSessionBinding>) {
+        self.session_binding = session_binding;
     }
 
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
@@ -238,6 +287,8 @@ fn resolve_launch_command(
     args: Vec<String>,
     kind: PanelKind,
     resume: &PanelResume,
+    session_binding: Option<&AgentSessionBinding>,
+    should_resume_binding: bool,
 ) -> (String, Vec<String>) {
     match kind {
         PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
@@ -253,26 +304,39 @@ fn resolve_launch_command(
             // Global flags (e.g. --no-alt-screen) must come before the
             // resume subcommand.
             let mut launch_args = args;
-            match resume {
-                PanelResume::Fresh => {}
-                PanelResume::Last => launch_args.extend(["resume".to_string(), "--last".to_string()]),
-                PanelResume::Session { session_id } => {
-                    launch_args.extend(["resume".to_string(), session_id.clone()]);
+            if should_resume_binding {
+                if let Some(binding) = session_binding {
+                    launch_args.extend(["resume".to_string(), binding.session_id.clone()]);
                 }
+            } else if let PanelResume::Session { session_id } = resume {
+                launch_args.extend(["resume".to_string(), session_id.clone()]);
             }
             wrap_in_login_shell(program, launch_args)
         }
         PanelKind::Claude => {
             let program = command.unwrap_or_else(|| "claude".to_string());
-            let mut launch_args = match resume {
-                PanelResume::Fresh => Vec::new(),
-                PanelResume::Last => vec!["--continue".to_string()],
-                PanelResume::Session { session_id } => vec!["--resume".to_string(), session_id.clone()],
-            };
+            let mut launch_args = Vec::new();
+            if let Some(binding) = session_binding {
+                if should_resume_binding {
+                    launch_args.extend(["--resume".to_string(), binding.session_id.clone()]);
+                } else {
+                    launch_args.extend(["--session-id".to_string(), binding.session_id.clone()]);
+                }
+            } else if let PanelResume::Session { session_id } = resume {
+                launch_args.extend(["--resume".to_string(), session_id.clone()]);
+            }
             launch_args.extend(args);
             wrap_in_login_shell(program, launch_args)
         }
     }
+}
+
+fn current_unix_millis() -> i64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    i64::try_from(now).unwrap_or(i64::MAX)
 }
 
 /// Wrap a command in an interactive shell (`-ic`) so that the user's
@@ -306,24 +370,28 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime_state::AgentSessionBinding;
+
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
         scrollback_limit_for_kind,
     };
 
     #[test]
-    fn codex_last_resume_uses_resume_subcommand() {
-        let (_program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
+    fn codex_without_exact_binding_starts_fresh() {
+        let (_program, args) =
+            resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last, None, false);
 
-        // Codex is launched via login shell: shell -lc "codex resume --last"
+        // Codex is launched via login shell without resume when no exact session is bound.
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-ic");
         assert!(args[1].contains("codex"));
-        assert!(args[1].contains("resume --last"));
+        assert!(!args[1].contains("resume"));
     }
 
     #[test]
     fn claude_session_resume_uses_resume_flag() {
+        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-42".to_string(), None, None, None);
         let (_program, args) = resolve_launch_command(
             None,
             Vec::new(),
@@ -331,6 +399,8 @@ mod tests {
             &PanelResume::Session {
                 session_id: "session-42".to_string(),
             },
+            Some(&binding),
+            true,
         );
 
         // Claude is launched via login shell: shell -lc "claude --resume session-42"
@@ -341,17 +411,20 @@ mod tests {
     }
 
     #[test]
-    fn codex_global_flags_come_before_resume_subcommand() {
+    fn codex_global_flags_come_before_exact_resume_subcommand() {
+        let binding = AgentSessionBinding::new(PanelKind::Codex, "thread-7".to_string(), None, None, None);
         let (_program, args) = resolve_launch_command(
             None,
             vec!["--no-alt-screen".to_string()],
             PanelKind::Codex,
             &PanelResume::Last,
+            Some(&binding),
+            true,
         );
 
         let cmd = &args[1];
         let flag_pos = cmd.find("--no-alt-screen").expect("flag present");
-        let resume_pos = cmd.find("resume --last").expect("resume present");
+        let resume_pos = cmd.find("resume thread-7").expect("resume present");
         assert!(
             flag_pos < resume_pos,
             "global flags must precede resume subcommand: {cmd}"
@@ -365,6 +438,8 @@ mod tests {
             vec!["-m".to_string(), "http.server".to_string()],
             PanelKind::Codex,
             &PanelResume::Last,
+            None,
+            false,
         );
 
         // Explicit command is still wrapped in login shell for agent kinds

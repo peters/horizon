@@ -9,7 +9,7 @@ mod theme;
 use std::path::PathBuf;
 
 use app::HorizonApp;
-use horizon_core::Config;
+use horizon_core::{Config, RuntimeState, runtime_state_path_for_config};
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -25,8 +25,18 @@ fn main() -> eframe::Result {
         tracing::error!("failed to load config: {e}");
         Config::default()
     });
+    let resolved_config_path =
+        config_path.unwrap_or_else(|| Config::default_path().unwrap_or_else(|| PathBuf::from("horizon.yaml")));
+    let runtime_state_path =
+        runtime_state_path_for_config(&resolved_config_path).unwrap_or_else(|| PathBuf::from(".horizon-runtime.yaml"));
+    let runtime_state = RuntimeState::load(&runtime_state_path)
+        .unwrap_or_else(|error| {
+            tracing::warn!("failed to load runtime state {}: {error}", runtime_state_path.display());
+            None
+        })
+        .unwrap_or_else(|| RuntimeState::from_config(&config));
 
-    let window = &config.window;
+    let window = runtime_state.window_or(&config.window);
     // Clamp to reasonable bounds so we don't open larger than the screen.
     let width = window.width.clamp(800.0, 7680.0);
     let height = window.height.clamp(600.0, 4320.0);
@@ -58,7 +68,15 @@ fn main() -> eframe::Result {
     eframe::run_native(
         branding::APP_NAME,
         options,
-        Box::new(move |cc| Ok(Box::new(HorizonApp::new(cc, &config, config_path)))),
+        Box::new(move |cc| {
+            Ok(Box::new(HorizonApp::new(
+                cc,
+                &config,
+                resolved_config_path.clone(),
+                runtime_state_path.clone(),
+                runtime_state.clone(),
+            )))
+        }),
     )
 }
 

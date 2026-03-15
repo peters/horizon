@@ -1,13 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2,
 };
 use horizon_core::{
-    Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, TerminalConfig, WindowConfig,
-    WorkspaceConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PanelKind, PanelOptions, PanelState,
+    PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
 };
 
 use crate::terminal_widget::TerminalView;
@@ -75,15 +76,26 @@ pub struct HorizonApp {
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
     config_path: PathBuf,
+    runtime_state_path: PathBuf,
+    template_config: Config,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
+    session_catalog: AgentSessionCatalog,
+    last_session_catalog_refresh: Option<Instant>,
+    pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
-    config_dirty_since: Option<std::time::Instant>,
+    runtime_dirty_since: Option<Instant>,
 }
 
 impl HorizonApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: &Config, config_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        config: &Config,
+        config_path: PathBuf,
+        runtime_state_path: PathBuf,
+        mut runtime_state: RuntimeState,
+    ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
 
         fonts.font_data.insert(
@@ -108,12 +120,15 @@ impl HorizonApp {
 
         cc.egui_ctx.set_fonts(fonts);
 
-        let board = Board::from_config(config).unwrap_or_else(|error| {
+        let session_catalog = AgentSessionCatalog::load().unwrap_or_else(|error| {
+            tracing::warn!("failed to load agent session catalog: {error}");
+            AgentSessionCatalog::default()
+        });
+        runtime_state.bootstrap_missing_agent_bindings(&session_catalog);
+        let board = Board::from_runtime_state(&runtime_state).unwrap_or_else(|error| {
             tracing::error!("failed to load config: {error}");
             Board::new()
         });
-        let resolved_path =
-            config_path.unwrap_or_else(|| Config::default_path().unwrap_or_else(|| PathBuf::from("horizon.yaml")));
 
         Self {
             board,
@@ -121,7 +136,6 @@ impl HorizonApp {
             workspace_assignments: Vec::new(),
             workspace_creates: Vec::new(),
             theme_applied: false,
-            pan_offset: Vec2::ZERO,
             panel_screen_rects: HashMap::new(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
@@ -129,17 +143,30 @@ impl HorizonApp {
             hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),
-            config_path: resolved_path,
+            config_path,
+            runtime_state_path,
+            template_config: config.clone(),
             presets: config.presets.clone(),
-            window_config: config.window.clone(),
+            window_config: runtime_state.window_or(&config.window).clone(),
+            session_catalog,
+            last_session_catalog_refresh: None,
+            pending_session_rebinds: Vec::new(),
             settings: None,
             pending_preset_pick: None,
-            config_dirty_since: None,
+            pan_offset: runtime_state
+                .pan_offset
+                .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
+            runtime_dirty_since: Some(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap_or_else(Instant::now),
+            ),
         }
     }
 
     fn reset_view(&mut self) {
         self.pan_offset = Vec2::ZERO;
+        self.mark_runtime_dirty();
     }
 
     fn pan_to_canvas_pos(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2) {
@@ -149,6 +176,7 @@ impl HorizonApp {
             canvas_rect.width() * 0.5 - center.x,
             canvas_rect.height() * 0.5 - center.y,
         );
+        self.mark_runtime_dirty();
     }
 
     fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
@@ -375,6 +403,7 @@ impl HorizonApp {
 
         if pan_delta != Vec2::ZERO {
             self.pan_offset += pan_delta;
+            self.mark_runtime_dirty();
         }
     }
 
@@ -691,7 +720,7 @@ impl HorizonApp {
                                         let text = egui::RichText::new(other_ws_name).size(12.0).color(theme::FG_SOFT);
                                         if ui.add(Button::new(text).frame(false)).clicked() {
                                             self.board.assign_panel_to_workspace(panel_id, *other_ws_id);
-                                            self.mark_config_dirty();
+                                            self.mark_runtime_dirty();
                                             ui.close();
                                         }
                                     }
@@ -804,97 +833,252 @@ impl HorizonApp {
     }
 
     /// Load config YAML from disk. If the file is missing, empty, or invalid,
-    /// generate a default config that includes the current workspaces.
+    /// fall back to the in-memory template config.
     fn load_or_generate_config_yaml(&self) -> String {
         if let Ok(content) = std::fs::read_to_string(&self.config_path)
             && serde_yaml::from_str::<Config>(&content).is_ok()
         {
             return content;
         }
-        self.config_from_board_yaml()
+        self.template_config_yaml()
     }
 
-    fn mark_config_dirty(&mut self) {
-        self.config_dirty_since.get_or_insert_with(std::time::Instant::now);
+    fn template_config_yaml(&self) -> String {
+        self.template_config.to_yaml().unwrap_or_else(|_| {
+            Config::default()
+                .to_yaml()
+                .unwrap_or_else(|_| "workspaces: []\n".to_string())
+        })
     }
 
-    fn flush_config_if_dirty(&mut self) {
-        const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
-        if let Some(since) = self.config_dirty_since
+    fn mark_runtime_dirty(&mut self) {
+        self.runtime_dirty_since.get_or_insert_with(Instant::now);
+    }
+
+    fn flush_runtime_if_dirty(&mut self) {
+        const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+        if let Some(since) = self.runtime_dirty_since
             && since.elapsed() >= SAVE_DEBOUNCE
         {
-            self.config_dirty_since = None;
-            self.auto_save_config();
+            self.runtime_dirty_since = None;
+            self.auto_save_runtime_state();
         }
     }
 
-    fn auto_save_config(&self) {
-        let yaml = self.config_from_board_yaml();
-        if let Err(error) = atomic_write(&self.config_path, &yaml) {
-            tracing::error!("failed to auto-save config: {error}");
+    fn auto_save_runtime_state(&self) {
+        let yaml = match self.runtime_state_from_board().to_yaml() {
+            Ok(yaml) => yaml,
+            Err(error) => {
+                tracing::error!("failed to serialize runtime state: {error}");
+                return;
+            }
+        };
+
+        if let Some(parent) = self.runtime_state_path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            tracing::error!("failed to create runtime state dir {}: {error}", parent.display());
+            return;
+        }
+
+        if let Err(error) = atomic_write(&self.runtime_state_path, &yaml) {
+            tracing::error!("failed to auto-save runtime state: {error}");
         }
     }
 
-    fn config_from_board_yaml(&self) -> String {
+    fn runtime_state_from_board(&self) -> RuntimeState {
         let workspaces = self
             .board
             .workspaces
             .iter()
             .map(|ws| {
-                // Save panel positions relative to workspace origin,
-                // since from_config adds the workspace origin back.
-                let ws_origin = ws.position;
-                let terminals = ws
+                let panels = ws
                     .panels
                     .iter()
                     .filter_map(|pid| self.board.panel(*pid))
-                    .map(|panel| TerminalConfig {
+                    .map(|panel| PanelState {
+                        local_id: panel.local_id.clone(),
                         name: panel.title.clone(),
+                        kind: panel.kind,
                         command: panel.launch_command.clone(),
                         args: panel.launch_args.clone(),
-                        cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
-                        kind: panel.kind,
-                        // Agent panels should always resume on restart,
-                        // regardless of how they were initially launched.
-                        resume: match panel.kind {
-                            PanelKind::Codex | PanelKind::Claude => PanelResume::Last,
-                            _ => panel.resume.clone(),
-                        },
-                        position: Some([
-                            panel.layout.position[0] - ws_origin[0],
-                            panel.layout.position[1] - ws_origin[1],
-                        ]),
+                        cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
+                        rows: panel.terminal.rows(),
+                        cols: panel.terminal.cols(),
+                        resume: panel.resume.clone(),
+                        position: Some(panel.layout.position),
                         size: Some(panel.layout.size),
-                        ..TerminalConfig::default()
+                        session_binding: panel.session_binding.clone(),
+                        template: panel.template.clone(),
                     })
                     .collect();
-                WorkspaceConfig {
+                WorkspaceState {
+                    local_id: ws.local_id.clone(),
                     name: ws.name.clone(),
-                    color: None,
                     cwd: ws.cwd.as_ref().map(|p| p.display().to_string()),
                     position: Some(ws.position),
-                    terminals,
+                    template: ws.template.clone(),
+                    panels,
                 }
             })
             .collect();
 
-        let config = Config {
-            window: self.window_config.clone(),
-            presets: self.presets.clone(),
+        RuntimeState {
+            window: Some(self.window_config.clone()),
+            pan_offset: Some([self.pan_offset.x, self.pan_offset.y]),
+            active_workspace_local_id: self
+                .board
+                .active_workspace
+                .and_then(|workspace_id| self.board.workspace(workspace_id))
+                .map(|workspace| workspace.local_id.clone()),
+            focused_panel_local_id: self
+                .board
+                .focused
+                .and_then(|panel_id| self.board.panel(panel_id))
+                .map(|panel| panel.local_id.clone()),
             workspaces,
-            ..Config::default()
-        };
-        config.to_yaml().unwrap_or_else(|_| "workspaces: []\n".to_string())
+            ..RuntimeState::default()
+        }
     }
 
     fn sync_workspace_metadata(board: &mut Board, config: &Config) {
-        for (index, ws_cfg) in config.workspaces.iter().enumerate() {
-            if let Some(ws) = board.workspaces.get_mut(index) {
+        for ws in &mut board.workspaces {
+            if let Some(template) = &ws.template
+                && let Some(ws_cfg) = config.workspaces.get(template.workspace_index)
+            {
                 if ws.name != ws_cfg.name {
                     ws_cfg.name.clone_into(&mut ws.name);
                 }
                 ws.cwd = ws_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s));
             }
+        }
+    }
+
+    fn maybe_refresh_session_catalog(&mut self) {
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+        let has_unbound_codex = self
+            .board
+            .panels
+            .iter()
+            .any(|panel| panel.kind == PanelKind::Codex && panel.session_binding.is_none());
+        let should_refresh = self
+            .last_session_catalog_refresh
+            .is_none_or(|last_refresh| last_refresh.elapsed() >= REFRESH_INTERVAL);
+
+        if !has_unbound_codex && !should_refresh {
+            return;
+        }
+
+        match AgentSessionCatalog::load() {
+            Ok(catalog) => {
+                self.session_catalog = catalog;
+                self.last_session_catalog_refresh = Some(Instant::now());
+                self.capture_new_codex_bindings();
+            }
+            Err(error) => tracing::warn!("failed to refresh agent session catalog: {error}"),
+        }
+    }
+
+    fn capture_new_codex_bindings(&mut self) {
+        let mut used_session_ids: HashSet<String> = self
+            .board
+            .panels
+            .iter()
+            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
+            .collect();
+        let mut pending_panels: HashMap<String, Vec<(PanelId, i64)>> = HashMap::new();
+
+        for panel in &self.board.panels {
+            if panel.kind == PanelKind::Codex && panel.session_binding.is_none() {
+                let cwd = panel
+                    .launch_cwd
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default();
+                pending_panels
+                    .entry(cwd)
+                    .or_default()
+                    .push((panel.id, panel.launched_at_millis));
+            }
+        }
+
+        let mut assignments = Vec::new();
+        for (cwd, mut panels) in pending_panels {
+            panels.sort_by(|left, right| right.1.cmp(&left.1));
+            let oldest_launch = panels.iter().map(|(_, launched_at)| *launched_at).min().unwrap_or(0);
+            let mut candidates = self
+                .session_catalog
+                .recent_for(PanelKind::Codex, empty_string_as_none(&cwd));
+            candidates.retain(|candidate| {
+                !used_session_ids.contains(&candidate.session_id)
+                    && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
+            });
+            candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+            for ((panel_id, _), candidate) in panels.into_iter().zip(candidates) {
+                used_session_ids.insert(candidate.session_id.clone());
+                assignments.push((panel_id, candidate.into_binding()));
+            }
+        }
+
+        if assignments.is_empty() {
+            return;
+        }
+
+        for (panel_id, binding) in assignments {
+            if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.set_session_binding(Some(binding));
+            }
+        }
+        self.mark_runtime_dirty();
+    }
+
+    fn session_rebind_options(&self, panel_id: PanelId) -> Vec<(String, AgentSessionBinding)> {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return Vec::new();
+        };
+        if !panel.kind.is_agent() {
+            return Vec::new();
+        }
+
+        let cwd = panel.launch_cwd.as_ref().map(|path| path.display().to_string());
+        let current_session_id = panel
+            .session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.as_str());
+        self.session_catalog
+            .recent_for(panel.kind, cwd.as_deref())
+            .into_iter()
+            .filter(|session| Some(session.session_id.as_str()) != current_session_id)
+            .take(8)
+            .map(|session| {
+                let short_id = short_session_id(&session.session_id);
+                let label = truncate_session_label(
+                    &session
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| format!("{} session", panel_kind_name(panel.kind))),
+                );
+                (format!("{label} · {short_id}"), session.into_binding())
+            })
+            .collect()
+    }
+
+    fn apply_pending_session_rebinds(&mut self) {
+        if self.pending_session_rebinds.is_empty() {
+            return;
+        }
+
+        let mut changed = false;
+        for (panel_id, binding) in self.pending_session_rebinds.drain(..) {
+            if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.set_session_binding(Some(binding));
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.mark_runtime_dirty();
         }
     }
 
@@ -986,7 +1170,9 @@ impl HorizonApp {
                                 editor.status = SettingsStatus::None;
                             }
                         } else if reset {
-                            let default_yaml = self.config_from_board_yaml();
+                            let default_yaml = Config::default()
+                                .to_yaml()
+                                .unwrap_or_else(|_| "workspaces: []\n".to_string());
                             if let Some(editor) = self.settings.as_mut() {
                                 editor.buffer = default_yaml;
                                 editor.status = SettingsStatus::LivePreview;
@@ -998,6 +1184,10 @@ impl HorizonApp {
                             if let Some(editor) = self.settings.as_mut() {
                                 match atomic_write(&self.config_path, &editor.buffer) {
                                     Ok(()) => {
+                                        if let Ok(config) = serde_yaml::from_str::<Config>(&editor.buffer) {
+                                            self.template_config = config.clone();
+                                            self.presets.clone_from(&config.presets);
+                                        }
                                         editor.original = editor.buffer.clone();
                                         editor.status = SettingsStatus::Saved;
                                         tracing::info!("config saved to {}", self.config_path.display());
@@ -1229,6 +1419,7 @@ impl HorizonApp {
 
         let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
         let is_focused = self.board.focused == Some(panel_id);
+        let rebind_options = self.session_rebind_options(panel_id);
         let mut clicked_terminal = false;
         let mut focus_panel = false;
         let mut close_panel = false;
@@ -1318,6 +1509,21 @@ impl HorizonApp {
                     }
 
                     ui.separator();
+                    if !rebind_options.is_empty() {
+                        ui.menu_button("Rebind Session", |ui| {
+                            ui.set_min_width(220.0);
+                            for (label, binding) in &rebind_options {
+                                let button =
+                                    egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT))
+                                        .frame(false);
+                                if ui.add(button).clicked() {
+                                    self.pending_session_rebinds.push((panel_id, binding.clone()));
+                                    ui.close();
+                                }
+                            }
+                        });
+                        ui.separator();
+                    }
                     if ui.button("New Workspace").clicked() {
                         ws_create = true;
                         ui.close();
@@ -1356,13 +1562,13 @@ impl HorizonApp {
         if drag_delta != Vec2::ZERO {
             let new_position = canvas_position + drag_delta;
             let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
-            self.mark_config_dirty();
+            self.mark_runtime_dirty();
         }
 
         if resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(canvas_size + resize_delta);
             let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
-            self.mark_config_dirty();
+            self.mark_runtime_dirty();
         }
 
         if clicked_terminal || focus_panel {
@@ -1425,7 +1631,7 @@ impl HorizonApp {
             let name = self.rename_buffer.trim().to_string();
             if !name.is_empty() {
                 let _ = self.board.rename_workspace(ws_id, &name);
-                self.mark_config_dirty();
+                self.mark_runtime_dirty();
             }
             self.rename_buffer.clear();
         }
@@ -1436,7 +1642,7 @@ impl HorizonApp {
 
         for (workspace_id, delta) in pending_workspace_moves {
             let _ = self.board.translate_workspace(workspace_id, [delta.x, delta.y]);
-            self.mark_config_dirty();
+            self.mark_runtime_dirty();
         }
     }
 
@@ -1503,6 +1709,7 @@ impl eframe::App for HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.board.process_output();
+        self.maybe_refresh_session_catalog();
 
         let ws_count_before = self.board.workspaces.len();
         let panel_count_before = self.board.panels.len();
@@ -1523,6 +1730,7 @@ impl eframe::App for HorizonApp {
         for (panel_id, ws_id) in self.workspace_assignments.drain(..) {
             self.board.assign_panel_to_workspace(panel_id, ws_id);
         }
+        self.apply_pending_session_rebinds();
 
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
@@ -1550,7 +1758,7 @@ impl eframe::App for HorizonApp {
                 if (new_w - self.window_config.width).abs() > 1.0 || (new_h - self.window_config.height).abs() > 1.0 {
                     self.window_config.width = new_w;
                     self.window_config.height = new_h;
-                    self.mark_config_dirty();
+                    self.mark_runtime_dirty();
                 }
             }
             if let Some(pos) = input.viewport().outer_rect {
@@ -1562,16 +1770,16 @@ impl eframe::App for HorizonApp {
                 if changed {
                     self.window_config.x = Some(new_x);
                     self.window_config.y = Some(new_y);
-                    self.mark_config_dirty();
+                    self.mark_runtime_dirty();
                 }
             }
         });
 
         // Mark dirty on structural changes (immediate save) or layout changes (debounced)
         if self.board.workspaces.len() != ws_count_before || self.board.panels.len() != panel_count_before {
-            self.auto_save_config();
+            self.auto_save_runtime_state();
         }
-        self.flush_config_if_dirty();
+        self.flush_runtime_if_dirty();
 
         ctx.request_repaint();
     }
@@ -1590,6 +1798,34 @@ fn viewport_local_rect(ctx: &Context) -> Rect {
             },
             |rect| Rect::from_min_size(Pos2::ZERO, rect.size()),
         )
+}
+
+fn empty_string_as_none(value: &str) -> Option<&str> {
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn short_session_id(session_id: &str) -> &str {
+    session_id.get(..8).unwrap_or(session_id)
+}
+
+fn panel_kind_name(kind: PanelKind) -> &'static str {
+    match kind {
+        PanelKind::Shell => "Shell",
+        PanelKind::Codex => "Codex",
+        PanelKind::Claude => "Claude",
+        PanelKind::Command => "Command",
+    }
+}
+
+fn truncate_session_label(label: &str) -> String {
+    const MAX_CHARS: usize = 40;
+    if label.chars().count() <= MAX_CHARS {
+        return label.to_string();
+    }
+
+    let mut truncated = label.chars().take(MAX_CHARS - 1).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 #[allow(clippy::too_many_arguments)]

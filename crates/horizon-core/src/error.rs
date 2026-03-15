@@ -8,6 +8,9 @@ pub enum Error {
     #[error("Config error: {0}")]
     Config(String),
 
+    #[error("State error: {0}")]
+    State(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

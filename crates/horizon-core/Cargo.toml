@@ -12,4 +12,7 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+serde_json.workspace = true
 alacritty_terminal.workspace = true
+rusqlite.workspace = true
+uuid.workspace = true

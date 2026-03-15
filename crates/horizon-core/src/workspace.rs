@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::panel::PanelId;
+use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
@@ -9,6 +10,7 @@ pub struct WorkspaceId(pub u64);
 /// Workspaces are always visible — no tabs, no hidden state.
 pub struct Workspace {
     pub id: WorkspaceId,
+    pub local_id: String,
     pub name: String,
     pub color_idx: usize,
     pub panels: Vec<PanelId>,
@@ -17,6 +19,7 @@ pub struct Workspace {
     pub position: [f32; 2],
     /// Default working directory for new terminals in this workspace.
     pub cwd: Option<PathBuf>,
+    pub template: Option<WorkspaceTemplateRef>,
 }
 
 /// Predefined accent colors for workspace clusters.
@@ -36,12 +39,14 @@ impl Workspace {
     pub fn new(id: WorkspaceId, name: String, color_idx: usize) -> Self {
         Self {
             id,
+            local_id: new_local_id(),
             name,
             color_idx,
             panels: Vec::new(),
             collapsed: false,
             position: [0.0, 0.0],
             cwd: None,
+            template: None,
         }
     }
 

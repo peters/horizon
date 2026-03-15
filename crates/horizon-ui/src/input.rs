@@ -275,9 +275,7 @@ fn discrete_scroll_steps(delta: f32, unit: MouseWheelUnit, cell_extent: f32) -> 
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     match unit {
-        MouseWheelUnit::Line | MouseWheelUnit::Page => {
-            delta.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
-        }
+        MouseWheelUnit::Line | MouseWheelUnit::Page => delta.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32,
         MouseWheelUnit::Point => {
             if !cell_extent.is_finite() || cell_extent <= 0.0 {
                 return 0;
