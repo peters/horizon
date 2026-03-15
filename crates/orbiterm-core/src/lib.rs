@@ -5,6 +5,8 @@ mod board;
 mod config;
 mod error;
 mod panel;
+#[cfg(unix)]
+mod pty_io;
 mod terminal;
 mod workspace;
 

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -146,24 +146,7 @@ impl Panel {
 
         let reader = pair.master.try_clone_reader().map_err(|e| Error::Pty(format!("{e}")))?;
         let writer = pair.master.take_writer().map_err(|e| Error::Pty(format!("{e}")))?;
-
-        let (tx, rx) = mpsc::channel();
-
-        std::thread::spawn(move || {
-            let mut reader = reader;
-            let mut buf = [0u8; 4096];
-            loop {
-                match std::io::Read::read(&mut reader, &mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-            tracing::debug!("PTY reader thread exited");
-        });
+        let rx = attach_output_reader(id, &*pair.master, reader)?;
 
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
@@ -269,6 +252,13 @@ impl Panel {
     }
 }
 
+impl Drop for Panel {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        crate::pty_io::unregister_reader(self.id.0);
+    }
+}
+
 fn resolve_launch_command(
     command: Option<String>,
     args: Vec<String>,
@@ -316,12 +306,55 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     }
 }
 
+fn attach_output_reader(
+    panel_id: PanelId,
+    master: &dyn portable_pty::MasterPty,
+    reader: Box<dyn Read + Send>,
+) -> Result<mpsc::Receiver<Vec<u8>>> {
+    #[cfg(not(unix))]
+    {
+        let _ = panel_id;
+        let _ = master;
+    }
+
+    let (tx, rx) = mpsc::channel();
+
+    #[cfg(unix)]
+    if let Some(fd) = master.as_raw_fd() {
+        crate::pty_io::register_reader(panel_id.0, fd, reader, tx)?;
+        return Ok(rx);
+    }
+
+    spawn_reader_thread(reader, tx);
+    Ok(rx)
+}
+
+fn spawn_reader_thread(reader: Box<dyn Read + Send>, tx: mpsc::Sender<Vec<u8>>) {
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(bytes_read) => {
+                    if tx.send(buf[..bytes_read].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        tracing::debug!("PTY reader thread exited");
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
-        scrollback_limit_for_kind,
+        scrollback_limit_for_kind, spawn_reader_thread,
     };
+    use std::io::Cursor;
+    use std::sync::mpsc;
 
     #[test]
     fn codex_last_resume_uses_resume_subcommand_and_preserves_scrollback() {
@@ -373,5 +406,20 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+    }
+
+    #[test]
+    fn output_reader_thread_forwards_bytes_and_disconnects() {
+        let (tx, rx) = mpsc::channel();
+        spawn_reader_thread(Box::new(Cursor::new(b"hello".to_vec())), tx);
+
+        let output = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("reader output");
+        assert_eq!(output, b"hello");
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
     }
 }
