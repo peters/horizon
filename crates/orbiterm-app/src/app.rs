@@ -729,6 +729,9 @@ impl OrbitermApp {
             .workspaces
             .iter()
             .map(|ws| {
+                // Save panel positions relative to workspace origin,
+                // since from_config adds the workspace origin back.
+                let ws_origin = ws.position;
                 let terminals = ws
                     .panels
                     .iter()
@@ -740,7 +743,10 @@ impl OrbitermApp {
                         cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
                         kind: panel.kind,
                         resume: panel.resume.clone(),
-                        position: Some(panel.layout.position),
+                        position: Some([
+                            panel.layout.position[0] - ws_origin[0],
+                            panel.layout.position[1] - ws_origin[1],
+                        ]),
                         size: Some(panel.layout.size),
                         ..TerminalConfig::default()
                     })
