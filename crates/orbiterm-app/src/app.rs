@@ -5,7 +5,10 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2,
 };
-use orbiterm_core::{Board, Config, PanelId, PanelOptions, PresetConfig, TerminalConfig, WorkspaceConfig, WorkspaceId};
+use orbiterm_core::{
+    Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, TerminalConfig, WorkspaceConfig,
+    WorkspaceId,
+};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -758,7 +761,12 @@ impl OrbitermApp {
                         args: panel.launch_args.clone(),
                         cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
                         kind: panel.kind,
-                        resume: panel.resume.clone(),
+                        // Agent panels should always resume on restart,
+                        // regardless of how they were initially launched.
+                        resume: match panel.kind {
+                            PanelKind::Codex | PanelKind::Claude => PanelResume::Last,
+                            _ => panel.resume.clone(),
+                        },
                         position: Some([
                             panel.layout.position[0] - ws_origin[0],
                             panel.layout.position[1] - ws_origin[1],
