@@ -109,10 +109,7 @@ impl OrbitermApp {
 
     fn pan_to_canvas_pos(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let center = Pos2::new(
-            canvas_pos.x + canvas_size.x * 0.5,
-            canvas_pos.y + canvas_size.y * 0.5,
-        );
+        let center = Pos2::new(canvas_pos.x + canvas_size.x * 0.5, canvas_pos.y + canvas_size.y * 0.5);
         self.pan_offset = Vec2::new(
             canvas_rect.width() * 0.5 - center.x,
             canvas_rect.height() * 0.5 - center.y,
@@ -180,7 +177,10 @@ impl OrbitermApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
-        // Global toggles work even when terminal has focus.
+        if self.terminal_accepts_keyboard_input(ctx) {
+            return;
+        }
+
         if ctx.input(|input| input.key_pressed(egui::Key::Comma) && input.modifiers.ctrl) {
             self.toggle_settings();
         }
@@ -189,10 +189,6 @@ impl OrbitermApp {
         }
         if ctx.input(|input| input.key_pressed(egui::Key::H) && input.modifiers.ctrl) {
             self.hud_visible = !self.hud_visible;
-        }
-
-        if self.terminal_accepts_keyboard_input(ctx) {
-            return;
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
@@ -208,9 +204,7 @@ impl OrbitermApp {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let ctrl_double_click = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl || input.modifiers.command;
-            let double = input
-                .pointer
-                .button_double_clicked(egui::PointerButton::Primary);
+            let double = input.pointer.button_double_clicked(egui::PointerButton::Primary);
             let pos = input.pointer.interact_pos();
             if ctrl && double {
                 pos.filter(|p| canvas_rect.contains(*p))
@@ -483,10 +477,7 @@ impl OrbitermApp {
                                     // Terminal prompt icon
                                     ui.label(
                                         egui::RichText::new(">_")
-                                            .color(theme::alpha(
-                                                ws_color,
-                                                if is_focused { 200 } else { 80 },
-                                            ))
+                                            .color(theme::alpha(ws_color, if is_focused { 200 } else { 80 }))
                                             .size(10.0)
                                             .monospace()
                                             .strong(),
@@ -495,38 +486,26 @@ impl OrbitermApp {
 
                                     ui.label(
                                         egui::RichText::new(&title)
-                                            .color(if is_focused {
-                                                theme::FG
-                                            } else {
-                                                theme::FG_SOFT
-                                            })
+                                            .color(if is_focused { theme::FG } else { theme::FG_SOFT })
                                             .size(12.5),
                                     );
 
                                     // Close button
-                                    ui.with_layout(
-                                        Layout::right_to_left(Align::Center),
-                                        |ui| {
-                                            ui.add_space(14.0);
-                                            let close = ui.add(
-                                                Button::new(
-                                                    egui::RichText::new("×")
-                                                        .size(16.0)
-                                                        .color(theme::FG_DIM),
-                                                )
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.add_space(14.0);
+                                        let close = ui.add(
+                                            Button::new(egui::RichText::new("×").size(16.0).color(theme::FG_DIM))
                                                 .frame(false),
-                                            );
-                                            if close.clicked() {
-                                                close_panel = Some(panel_id);
-                                            }
-                                        },
-                                    );
+                                        );
+                                        if close.clicked() {
+                                            close_panel = Some(panel_id);
+                                        }
+                                    });
                                 });
 
                                 // Row click (only if close wasn't clicked)
-                                let row_clicked =
-                                    item_response.response.interact(Sense::click()).clicked()
-                                        && close_panel != Some(panel_id);
+                                let row_clicked = item_response.response.interact(Sense::click()).clicked()
+                                    && close_panel != Some(panel_id);
                                 if row_clicked {
                                     focus_panel = Some(panel_id);
                                     pan_to_panel = Some(panel_id);
@@ -542,21 +521,14 @@ impl OrbitermApp {
                                     ui.painter_at(bg_rect).rect_filled(
                                         bg_rect,
                                         CornerRadius::same(8),
-                                        theme::alpha(
-                                            theme::blend(theme::PANEL_BG_ALT, ws_color, 0.22),
-                                            200,
-                                        ),
+                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT, ws_color, 0.22), 200),
                                     );
                                     // Left accent edge
                                     let edge = Rect::from_min_size(
                                         Pos2::new(bg_rect.min.x, bg_rect.min.y + 4.0),
                                         Vec2::new(2.0, bg_rect.height() - 8.0),
                                     );
-                                    ui.painter().rect_filled(
-                                        edge,
-                                        CornerRadius::same(1),
-                                        ws_color,
-                                    );
+                                    ui.painter().rect_filled(edge, CornerRadius::same(1), ws_color);
                                 } else if item_response.response.hovered() {
                                     ui.painter_at(bg_rect).rect_filled(
                                         bg_rect,
@@ -660,9 +632,7 @@ impl OrbitermApp {
             workspaces,
             ..Config::default()
         };
-        config
-            .to_yaml()
-            .unwrap_or_else(|_| "workspaces: []\n".to_string())
+        config.to_yaml().unwrap_or_else(|_| "workspaces: []\n".to_string())
     }
 
     fn sync_workspace_names(board: &mut Board, config: &Config) {
@@ -716,11 +686,7 @@ impl OrbitermApp {
                         ui.label(egui::RichText::new(&status_text).color(status_color).size(12.0));
                     }
                     if !is_valid {
-                        ui.label(
-                            egui::RichText::new("Invalid YAML")
-                                .color(theme::PALETTE_RED)
-                                .size(12.0),
-                        );
+                        ui.label(egui::RichText::new("Invalid YAML").color(theme::PALETTE_RED).size(12.0));
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -802,39 +768,39 @@ impl OrbitermApp {
                         .max_rect(content_rect)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Config File").color(theme::FG).size(18.0).strong());
-                    ui.add_space(12.0);
-                    ui.label(
-                        egui::RichText::new(self.config_path.display().to_string())
-                            .color(theme::FG_DIM)
-                            .size(12.0)
-                            .monospace(),
-                    );
-                });
-                ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Config File").color(theme::FG).size(18.0).strong());
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new(self.config_path.display().to_string())
+                                    .color(theme::FG_DIM)
+                                    .size(12.0)
+                                    .monospace(),
+                            );
+                        });
+                        ui.add_space(12.0);
 
-                let available = ui.available_size() - Vec2::new(0.0, 8.0);
-                egui::Frame::default()
-                    .fill(theme::PANEL_BG)
-                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
-                    .corner_radius(8)
-                    .inner_margin(Margin::same(12))
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .max_height(available.y)
-                            .auto_shrink([false, false])
+                        let available = ui.available_size() - Vec2::new(0.0, 8.0);
+                        egui::Frame::default()
+                            .fill(theme::PANEL_BG)
+                            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+                            .corner_radius(8)
+                            .inner_margin(Margin::same(12))
                             .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut editor.buffer)
-                                        .font(egui::FontId::monospace(13.0))
-                                        .text_color(theme::FG)
-                                        .desired_width(available.x)
-                                        .desired_rows(40)
-                                        .frame(false),
-                                );
+                                egui::ScrollArea::vertical()
+                                    .max_height(available.y)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut editor.buffer)
+                                                .font(egui::FontId::monospace(13.0))
+                                                .text_color(theme::FG)
+                                                .desired_width(available.x)
+                                                .desired_rows(40)
+                                                .frame(false),
+                                        );
+                                    });
                             });
-                    });
                     },
                 );
             });
@@ -1152,8 +1118,7 @@ impl OrbitermApp {
         let mut finish_rename = false;
 
         for workspace in &visuals {
-            self.workspace_screen_rects
-                .push((workspace.id, workspace.screen_rect));
+            self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
 
             let is_renaming = self.renaming_workspace == Some(workspace.id);
             let interaction = if is_renaming {
@@ -1184,9 +1149,7 @@ impl OrbitermApp {
             self.rename_buffer = current_name;
         }
 
-        if finish_rename
-            && let Some(ws_id) = self.renaming_workspace.take()
-        {
+        if finish_rename && let Some(ws_id) = self.renaming_workspace.take() {
             let name = self.rename_buffer.trim().to_string();
             if !name.is_empty() {
                 let _ = self.board.rename_workspace(ws_id, &name);
@@ -1298,9 +1261,7 @@ impl eframe::App for OrbitermApp {
         }
 
         // Auto-save config when board structure changes
-        if self.board.workspaces.len() != ws_count_before
-            || self.board.panels.len() != panel_count_before
-        {
+        if self.board.workspaces.len() != ws_count_before || self.board.panels.len() != panel_count_before {
             self.auto_save_config();
         }
 

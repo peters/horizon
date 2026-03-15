@@ -166,10 +166,7 @@ impl Board {
 
         // Remove workspace if it has no panels left.
         if let Some(ws_id) = ws_id {
-            let is_empty = self
-                .workspaces
-                .iter()
-                .any(|ws| ws.id == ws_id && ws.panels.is_empty());
+            let is_empty = self.workspaces.iter().any(|ws| ws.id == ws_id && ws.panels.is_empty());
             if is_empty {
                 self.workspaces.retain(|ws| ws.id != ws_id);
                 self.attention.retain(|item| item.workspace_id != ws_id);

@@ -1,3 +1,8 @@
+use std::collections::VecDeque;
+
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
+use alacritty_terminal::vte::ansi::CursorShape;
 use egui::{CornerRadius, FontId, Key, Pos2, Rect, StrokeKind, Vec2};
 use orbiterm_core::Panel;
 
@@ -22,10 +27,10 @@ impl<'a> TerminalView<'a> {
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
     pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
         let font_id = FontId::monospace(FONT_SIZE);
-        let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'M'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'M'));
         let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
         let layout = terminal_layout(ui.available_size(), char_width, line_height);
-        let new_cols = quantize_dimension(layout.body.width() / char_width);
+        let new_cols = quantize_dimension(layout.body.width() / char_width).max(2);
         let new_rows = quantize_dimension(layout.body.height() / line_height);
         let metrics = GridMetrics {
             char_width,
@@ -33,28 +38,55 @@ impl<'a> TerminalView<'a> {
             font_id,
         };
 
-        if new_cols != self.panel.terminal.cols() || new_rows != self.panel.terminal.rows() {
-            self.panel.resize(new_rows, new_cols);
-        }
+        self.panel.resize(
+            new_rows,
+            new_cols,
+            quantize_dimension(char_width),
+            quantize_dimension(line_height),
+        );
+
         let interaction = terminal_interaction(ui, layout, self.panel.id.0);
-        handle_terminal_pointer_input(ui, self.panel, &interaction, is_active_panel, line_height, new_rows);
+        handle_terminal_pointer_input(
+            ui,
+            self.panel,
+            &interaction,
+            is_active_panel,
+            &metrics,
+            new_rows,
+            new_cols,
+        );
+        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
             .memory(egui::Memory::focused)
             .is_some_and(|focused| focused != interaction.body.id);
-        let has_terminal_focus = interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus);
+        let has_terminal_focus =
+            window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
+        self.panel.set_focused(has_terminal_focus);
 
         if ui.is_rect_visible(interaction.layout.outer) {
-            let screen = self.panel.terminal.screen();
-            render_grid(ui, interaction.layout.body, screen, &metrics);
-            render_cursor(ui, interaction.layout.body, screen, &metrics, has_terminal_focus);
-            render_scrollbar(
-                ui,
-                interaction.layout.scrollbar,
-                self.panel.terminal.scrollback(),
-                usize::from(new_rows),
-                self.panel.terminal.scrollback_limit(),
-                interaction.scrollbar.hovered() || interaction.scrollbar.dragged(),
-            );
+            let scrollbar_limit = self.panel.terminal.scrollback_limit();
+            let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
+            self.panel.terminal.with_renderable_content(|content| {
+                let cursor = content.cursor;
+                let display_offset = content.display_offset;
+                render_grid(ui, interaction.layout.body, content, &metrics);
+                render_cursor(
+                    ui,
+                    interaction.layout.body,
+                    cursor,
+                    display_offset,
+                    &metrics,
+                    has_terminal_focus,
+                );
+                render_scrollbar(
+                    ui,
+                    interaction.layout.scrollbar,
+                    display_offset,
+                    usize::from(new_rows),
+                    scrollbar_limit,
+                    scrollbar_highlighted,
+                );
+            });
         }
 
         if has_terminal_focus {
@@ -132,8 +164,9 @@ fn handle_terminal_pointer_input(
     panel: &mut Panel,
     interaction: &TerminalInteraction,
     is_active_panel: bool,
-    line_height: f32,
+    metrics: &GridMetrics,
     visible_rows: u16,
+    visible_cols: u16,
 ) {
     if interaction.body.clicked() {
         interaction.body.request_focus();
@@ -141,13 +174,72 @@ fn handle_terminal_pointer_input(
     if is_active_panel && ui.input(|input| input.key_pressed(Key::Tab)) {
         interaction.body.request_focus();
     }
-    if interaction.body.hovered() {
-        let scroll_delta_y = ui.input(|input| input.smooth_scroll_delta.y + input.raw_scroll_delta.y);
-        let scroll_lines = scroll_lines_from_delta(scroll_delta_y, line_height);
-        if scroll_lines != 0 {
-            panel.scroll_scrollback_by(scroll_lines);
+
+    let terminal_mode = panel.terminal.mode();
+    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+    let pointer_buttons = ui.input(|input| input::PointerButtons {
+        primary: input.pointer.primary_down(),
+        middle: input.pointer.middle_down(),
+        secondary: input.pointer.secondary_down(),
+    });
+    let current_modifiers = ui.input(|input| input.modifiers);
+    let hovered_point = ui
+        .input(|input| input.pointer.hover_pos())
+        .filter(|position| interaction.layout.body.contains(*position))
+        .and_then(|position| {
+            grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
+        });
+
+    for event in &events {
+        match event {
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers,
+            } if interaction.layout.body.contains(*pos) => {
+                if *pressed {
+                    interaction.body.request_focus();
+                }
+                if let Some(point) =
+                    grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
+                    && let Some(bytes) = input::mouse_button_report(*button, *pressed, *modifiers, terminal_mode, point)
+                    && !bytes.is_empty()
+                {
+                    panel.write_input(&bytes);
+                }
+            }
+            egui::Event::PointerMoved(pos) if interaction.layout.body.contains(*pos) => {
+                if let Some(point) =
+                    grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
+                    && let Some(bytes) =
+                        input::mouse_motion_report(pointer_buttons, current_modifiers, terminal_mode, point)
+                    && !bytes.is_empty()
+                {
+                    panel.write_input(&bytes);
+                }
+            }
+            egui::Event::MouseWheel { delta, modifiers, .. } => {
+                if let Some(point) = hovered_point
+                    && let Some(action) = input::wheel_action(
+                        *delta,
+                        Vec2::new(metrics.char_width, metrics.line_height),
+                        *modifiers,
+                        terminal_mode,
+                        point,
+                    )
+                {
+                    match action {
+                        input::WheelAction::Pty(bytes) if !bytes.is_empty() => panel.write_input(&bytes),
+                        input::WheelAction::Pty(_) => {}
+                        input::WheelAction::Scrollback(lines) => panel.scroll_scrollback_by(lines),
+                    }
+                }
+            }
+            _ => {}
         }
     }
+
     if (interaction.scrollbar.dragged() || interaction.scrollbar.clicked())
         && let Some(pointer_position) = ui.input(|input| input.pointer.interact_pos())
     {
@@ -167,22 +259,38 @@ fn handle_terminal_pointer_input(
 
 fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+    let mode = panel.terminal.mode();
+    let mut suppressed_text = VecDeque::new();
+
     for event in &events {
         match event {
-            egui::Event::Text(text) | egui::Event::Paste(text) => panel.write_input(text.as_bytes()),
+            egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                if suppressed_text.front().is_some_and(|expected| expected == text) {
+                    suppressed_text.pop_front();
+                } else {
+                    panel.write_input(text.as_bytes());
+                }
+            }
+            egui::Event::Paste(text) => {
+                let bytes = input::paste_bytes(text, mode, true);
+                panel.write_input(&bytes);
+            }
             egui::Event::Copy => panel.write_input(&[3]),
             egui::Event::Cut => panel.write_input(&[24]),
             egui::Event::Key {
                 key,
-                pressed: true,
+                pressed,
+                repeat,
                 modifiers,
                 ..
             } => {
-                if modifiers.ctrl && modifiers.shift {
-                    continue;
-                }
-                if let Some(bytes) = input::key_to_bytes(*key, *modifiers) {
-                    panel.write_input(&bytes);
+                if let Some(translation) = input::translate_key_event(*key, *pressed, *repeat, *modifiers, mode) {
+                    if let Some(text) = translation.suppress_text {
+                        suppressed_text.push_back(text);
+                    }
+                    if !translation.bytes.is_empty() {
+                        panel.write_input(&translation.bytes);
+                    }
                 }
             }
             _ => {}
@@ -190,61 +298,93 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
     }
 }
 
-fn render_grid(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &GridMetrics) {
+fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, CornerRadius::same(6), theme::PANEL_BG);
 
-    let (rows, cols) = screen.size();
+    for indexed in content.display_iter {
+        let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
+            continue;
+        };
+        let x = rect.min.x + usize_to_f32(point.column.0) * metrics.char_width;
+        let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
+        let width = if indexed.cell.flags.contains(Flags::WIDE_CHAR) {
+            metrics.char_width * 2.0
+        } else {
+            metrics.char_width
+        };
+        let cell_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, metrics.line_height));
+        let selected = content
+            .selection
+            .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
+        let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
 
-    for row in 0..rows {
-        for col in 0..cols {
-            if let Some(cell) = screen.cell(row, col) {
-                let x = rect.min.x + f32::from(col) * metrics.char_width;
-                let y = rect.min.y + f32::from(row) * metrics.line_height;
-
-                let bg = theme::vt100_color_to_egui(cell.bgcolor(), false);
-                if bg != theme::PANEL_BG {
-                    let cell_rect =
-                        Rect::from_min_size(Pos2::new(x, y), Vec2::new(metrics.char_width, metrics.line_height));
-                    painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
-                }
-
-                let contents = cell.contents();
-                if !contents.is_empty() && contents != " " {
-                    let fg = theme::vt100_color_to_egui(cell.fgcolor(), true);
-                    painter.text(
-                        Pos2::new(x, y),
-                        egui::Align2::LEFT_TOP,
-                        contents,
-                        metrics.font_id.clone(),
-                        fg,
-                    );
-                }
-            }
+        if bg != theme::PANEL_BG || selected {
+            painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
         }
+
+        if let Some(text) = cell_text(indexed.cell)
+            && !text.is_empty()
+        {
+            painter.text(
+                Pos2::new(x, y),
+                egui::Align2::LEFT_TOP,
+                text,
+                metrics.font_id.clone(),
+                fg,
+            );
+        }
+
+        paint_cell_decoration(&painter, cell_rect, indexed.cell, content.colors, fg);
     }
 }
 
-fn render_cursor(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &GridMetrics, has_focus: bool) {
-    let (cursor_row, cursor_col) = screen.cursor_position();
-    let cx = rect.min.x + f32::from(cursor_col) * metrics.char_width;
-    let cy = rect.min.y + f32::from(cursor_row) * metrics.line_height;
-    let cursor_rect = Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(metrics.char_width, metrics.line_height));
+fn render_cursor(
+    ui: &egui::Ui,
+    rect: Rect,
+    cursor: RenderableCursor,
+    display_offset: usize,
+    metrics: &GridMetrics,
+    has_focus: bool,
+) {
+    if cursor.shape == CursorShape::Hidden {
+        return;
+    }
 
+    let Some(point) = point_to_viewport(display_offset, cursor.point) else {
+        return;
+    };
+    let x = rect.min.x + usize_to_f32(point.column.0) * metrics.char_width;
+    let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
+    let cursor_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(metrics.char_width, metrics.line_height));
     let painter = ui.painter_at(rect);
+    let stroke = egui::Stroke::new(1.2, theme::CURSOR.gamma_multiply(0.82));
 
-    if has_focus {
-        // Solid block cursor when focused
-        painter.rect_filled(cursor_rect, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.8));
-    } else {
-        // Hollow rectangle when not focused
-        painter.rect_stroke(
-            cursor_rect,
-            CornerRadius::same(1),
-            egui::Stroke::new(1.0, theme::CURSOR.gamma_multiply(0.4)),
-            StrokeKind::Outside,
-        );
+    if !has_focus {
+        painter.rect_stroke(cursor_rect, CornerRadius::same(1), stroke, StrokeKind::Outside);
+        return;
+    }
+
+    match cursor.shape {
+        CursorShape::Block => {
+            painter.rect_filled(cursor_rect, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.8));
+        }
+        CursorShape::Underline => {
+            let underline = Rect::from_min_size(
+                Pos2::new(cursor_rect.min.x, cursor_rect.max.y - 2.0),
+                Vec2::new(cursor_rect.width(), 2.0),
+            );
+            painter.rect_filled(underline, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.9));
+        }
+        CursorShape::Beam => {
+            let beam = Rect::from_min_size(cursor_rect.min, Vec2::new(2.0, cursor_rect.height()));
+            painter.rect_filled(beam, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.9));
+        }
+        CursorShape::HollowBlock => {
+            painter.rect_stroke(cursor_rect, CornerRadius::same(1), stroke, StrokeKind::Outside);
+        }
+        CursorShape::Hidden => {}
     }
 }
 
@@ -314,6 +454,115 @@ fn scrollbar_pointer_to_scrollback(
     f32_to_usize((ratio * usize_to_f32(scrollback_limit.max(1))).round())
 }
 
+fn cell_colors(
+    cell: &Cell,
+    selected: bool,
+    colors: &alacritty_terminal::term::color::Colors,
+) -> (egui::Color32, egui::Color32) {
+    let mut fg = theme::terminal_color_to_egui(cell.fg, colors);
+    let mut bg = theme::terminal_color_to_egui(cell.bg, colors);
+
+    if cell.flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+
+    if cell.flags.contains(Flags::DIM) {
+        fg = fg.gamma_multiply(0.82);
+    }
+
+    if cell.flags.contains(Flags::HIDDEN) {
+        fg = bg;
+    }
+
+    if selected {
+        std::mem::swap(&mut fg, &mut bg);
+        bg = theme::alpha(theme::ACCENT, 76);
+        fg = theme::FG;
+    }
+
+    (fg, bg)
+}
+
+fn cell_text(cell: &Cell) -> Option<String> {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
+    {
+        return None;
+    }
+
+    if cell.c == ' ' && cell.zerowidth().is_none() {
+        return None;
+    }
+
+    let mut text = String::new();
+    text.push(cell.c);
+    if let Some(chars) = cell.zerowidth() {
+        for ch in chars {
+            text.push(*ch);
+        }
+    }
+
+    Some(text)
+}
+
+fn paint_cell_decoration(
+    painter: &egui::Painter,
+    cell_rect: Rect,
+    cell: &Cell,
+    colors: &alacritty_terminal::term::color::Colors,
+    color: egui::Color32,
+) {
+    if cell.flags.intersects(
+        Flags::UNDERLINE
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::UNDERCURL
+            | Flags::DOTTED_UNDERLINE
+            | Flags::DASHED_UNDERLINE,
+    ) {
+        let underline_color = cell
+            .underline_color()
+            .map_or(color, |underline| theme::terminal_color_to_egui(underline, colors));
+        let y = cell_rect.max.y - 1.5;
+        painter.line_segment(
+            [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
+            egui::Stroke::new(1.0, underline_color),
+        );
+    }
+
+    if cell.flags.contains(Flags::STRIKEOUT) {
+        let y = cell_rect.center().y;
+        painter.line_segment(
+            [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
+            egui::Stroke::new(1.0, color),
+        );
+    }
+}
+
+fn grid_point_from_position(
+    rect: Rect,
+    position: Pos2,
+    metrics: &GridMetrics,
+    visible_rows: u16,
+    visible_cols: u16,
+) -> Option<input::GridPoint> {
+    if !rect.contains(position) {
+        return None;
+    }
+
+    let relative = position - rect.min;
+    let row = (relative.y / metrics.line_height).floor().max(0.0);
+    let column = (relative.x / metrics.char_width).floor().max(0.0);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        Some(input::GridPoint {
+            line: (row as usize).min(usize::from(visible_rows.saturating_sub(1))),
+            column: (column as usize).min(usize::from(visible_cols.saturating_sub(1))),
+        })
+    }
+}
+
 fn quantize_dimension(value: f32) -> u16 {
     let clamped = if value.is_finite() {
         value.floor().clamp(1.0, f32::from(u16::MAX))
@@ -331,19 +580,6 @@ fn quantize_visible_rows(value: usize) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
 
-fn scroll_lines_from_delta(scroll_delta_y: f32, line_height: f32) -> i32 {
-    if !scroll_delta_y.is_finite() || !line_height.is_finite() || line_height <= 0.0 {
-        return 0;
-    }
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    {
-        (scroll_delta_y / line_height)
-            .round()
-            .clamp(i32::MIN as f32, i32::MAX as f32) as i32
-    }
-}
-
 fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
@@ -352,18 +588,5 @@ fn f32_to_usize(value: f32) -> usize {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         value as usize
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scroll_lines_from_delta;
-
-    #[test]
-    fn scroll_delta_maps_to_terminal_lines() {
-        assert_eq!(scroll_lines_from_delta(26.0, 13.0), 2);
-        assert_eq!(scroll_lines_from_delta(-26.0, 13.0), -2);
-        assert_eq!(scroll_lines_from_delta(3.0, 13.0), 0);
-        assert_eq!(scroll_lines_from_delta(5.0, 0.0), 0);
     }
 }

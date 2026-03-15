@@ -1,69 +1,234 @@
-#[derive(Default)]
-struct TerminalCallbacks {
-    title: String,
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
+use std::thread::JoinHandle;
+
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode};
+use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
+use alacritty_terminal::vte::ansi::Rgb;
+
+use crate::error::{Error, Result};
+
+#[cfg(not(windows))]
+type TerminalPty = tty::Pty;
+#[cfg(windows)]
+type TerminalPty = tty::Pty;
+
+type TerminalEventLoop = EventLoop<TerminalPty, TerminalEventProxy>;
+type TerminalEventLoopState = State;
+
+pub struct TerminalSpawnOptions {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub rows: u16,
+    pub cols: u16,
+    pub cell_width: u16,
+    pub cell_height: u16,
+    pub scrollback_limit: usize,
+    pub window_id: u64,
 }
 
-impl vt100::Callbacks for TerminalCallbacks {
-    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
-        self.title = String::from_utf8_lossy(title).into_owned();
+#[derive(Clone)]
+struct TerminalEventProxy {
+    event_tx: mpsc::Sender<Event>,
+}
+
+impl EventListener for TerminalEventProxy {
+    fn send_event(&self, event: Event) {
+        let _ = self.event_tx.send(event);
     }
 }
 
-const DEFAULT_SCROLLBACK_LIMIT: usize = 8_000;
+#[derive(Clone, Copy)]
+struct TerminalDimensions {
+    rows: usize,
+    cols: usize,
+}
+
+impl TerminalDimensions {
+    fn new(rows: u16, cols: u16) -> Self {
+        Self {
+            rows: usize::from(rows.max(1)),
+            cols: usize::from(cols.max(2)),
+        }
+    }
+}
+
+impl Dimensions for TerminalDimensions {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
 
 pub struct Terminal {
-    parser: vt100::Parser<TerminalCallbacks>,
-    cols: u16,
+    term: Arc<FairMutex<Term<TerminalEventProxy>>>,
+    event_sender: EventLoopSender,
+    event_rx: mpsc::Receiver<Event>,
+    event_loop_handle: Option<JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>>,
     rows: u16,
+    cols: u16,
+    cell_width: u16,
+    cell_height: u16,
     scrollback_limit: usize,
+    title: String,
+    clipboard_contents: String,
+    selection_contents: String,
 }
 
 impl Terminal {
-    #[must_use]
-    pub fn new(rows: u16, cols: u16) -> Self {
-        Self::with_scrollback(rows, cols, DEFAULT_SCROLLBACK_LIMIT)
-    }
+    /// Spawn a terminal session backed by `alacritty_terminal`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PTY or event loop cannot be created.
+    pub fn spawn(options: TerminalSpawnOptions) -> Result<Self> {
+        let rows = options.rows.max(1);
+        let cols = options.cols.max(2);
+        let scrollback_limit = options.scrollback_limit.max(1);
+        let cell_width = options.cell_width.max(1);
+        let cell_height = options.cell_height.max(1);
+        let window_size = WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width,
+            cell_height,
+        };
+        let dimensions = TerminalDimensions::new(rows, cols);
+        let terminal_config = term::Config {
+            scrolling_history: scrollback_limit,
+            kitty_keyboard: true,
+            ..term::Config::default()
+        };
+        let (event_tx, event_rx) = mpsc::channel();
+        let term_proxy = TerminalEventProxy {
+            event_tx: event_tx.clone(),
+        };
+        let event_loop_proxy = TerminalEventProxy { event_tx };
 
-    #[must_use]
-    pub fn with_scrollback(rows: u16, cols: u16, scrollback_limit: usize) -> Self {
-        let scrollback_limit = scrollback_limit.max(1);
-        Self {
-            parser: vt100::Parser::new_with_callbacks(rows, cols, scrollback_limit, TerminalCallbacks::default()),
-            cols,
+        tty::setup_env();
+
+        let pty_options = PtyOptions {
+            shell: Some(Shell::new(options.program, options.args)),
+            working_directory: options.cwd,
+            drain_on_exit: true,
+            env: HashMap::new(),
+            #[cfg(target_os = "windows")]
+            escape_args: true,
+        };
+
+        let term = Arc::new(FairMutex::new(Term::new(terminal_config, &dimensions, term_proxy)));
+        let pty =
+            tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
+        let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
+            .map_err(|error| Error::Pty(format!("failed to initialize terminal event loop: {error}")))?;
+        let event_sender = event_loop.channel();
+        let event_loop_handle = Some(event_loop.spawn());
+
+        let mut terminal = Self {
+            term,
+            event_sender,
+            event_rx,
+            event_loop_handle,
             rows,
+            cols,
+            cell_width,
+            cell_height,
             scrollback_limit,
+            title: String::new(),
+            clipboard_contents: String::new(),
+            selection_contents: String::new(),
+        };
+        terminal.process_events();
+        Ok(terminal)
+    }
+
+    pub fn process_events(&mut self) {
+        while let Ok(event) = self.event_rx.try_recv() {
+            self.handle_event(event);
         }
     }
 
-    pub fn process(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
-    }
-
-    #[must_use]
-    pub fn screen(&self) -> &vt100::Screen {
-        self.parser.screen()
-    }
-
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        if rows != self.rows || cols != self.cols {
-            self.rows = rows;
-            self.cols = cols;
-            self.parser.screen_mut().set_size(rows, cols);
+    pub fn write_input(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
         }
+
+        let _ = self
+            .event_sender
+            .send(Msg::Input(Cow::Owned(bytes.to_vec())))
+            .map_err(|error| tracing::debug!("failed to forward terminal input: {error}"));
+    }
+
+    pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
+        let rows = rows.max(1);
+        let cols = cols.max(2);
+        let cell_width = cell_width.max(1);
+        let cell_height = cell_height.max(1);
+
+        if rows == self.rows && cols == self.cols && cell_width == self.cell_width && cell_height == self.cell_height {
+            return;
+        }
+
+        self.rows = rows;
+        self.cols = cols;
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+
+        self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
+
+        let _ = self
+            .event_sender
+            .send(Msg::Resize(self.window_size()))
+            .map_err(|error| tracing::debug!("failed to resize terminal PTY: {error}"));
     }
 
     #[must_use]
     pub fn scrollback(&self) -> usize {
-        self.parser.screen().scrollback()
+        self.term.lock().grid().display_offset()
     }
 
     pub fn set_scrollback(&mut self, scrollback: usize) {
-        self.parser.screen_mut().set_scrollback(scrollback);
+        let current = self.scrollback();
+        if current == scrollback {
+            return;
+        }
+
+        let current = isize::try_from(current).unwrap_or(isize::MAX);
+        let target = isize::try_from(scrollback).unwrap_or(isize::MAX);
+        let delta = target.saturating_sub(current);
+        let delta = delta.clamp(i32::MIN as isize, i32::MAX as isize);
+        #[allow(clippy::cast_possible_truncation)]
+        let delta = delta as i32;
+
+        self.term.lock().scroll_display(Scroll::Delta(delta));
     }
 
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
-        let next = next_scrollback_offset(self.scrollback(), delta);
-        self.parser.screen_mut().set_scrollback(next);
+        if delta == 0 {
+            return;
+        }
+
+        let current = self.scrollback();
+        let target = if delta.is_positive() {
+            current.saturating_add(usize::try_from(delta).unwrap_or(usize::MAX))
+        } else {
+            current.saturating_sub(usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX))
+        };
+        self.set_scrollback(target);
     }
 
     #[must_use]
@@ -83,42 +248,192 @@ impl Terminal {
 
     #[must_use]
     pub fn title(&self) -> &str {
-        &self.parser.callbacks().title
+        &self.title
+    }
+
+    #[must_use]
+    pub fn mode(&self) -> TermMode {
+        *self.term.lock().mode()
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        let mode = {
+            let mut term = self.term.lock();
+            if term.is_focused == focused {
+                return;
+            }
+
+            term.is_focused = focused;
+            *term.mode()
+        };
+
+        if mode.contains(TermMode::FOCUS_IN_OUT) {
+            let sequence = if focused { b"\x1b[I" } else { b"\x1b[O" };
+            self.write_input(sequence);
+        }
+    }
+
+    pub fn with_renderable_content<R>(&self, render: impl FnOnce(RenderableContent<'_>) -> R) -> R {
+        let term = self.term.lock();
+        render(term.renderable_content())
+    }
+
+    pub fn with_damage<R>(&self, update: impl FnOnce(TermDamage<'_>) -> R) -> R {
+        let mut term = self.term.lock();
+        update(term.damage())
+    }
+
+    pub fn reset_damage(&self) {
+        self.term.lock().reset_damage();
+    }
+
+    fn handle_event(&mut self, event: Event) {
+        match event {
+            Event::Title(title) => {
+                self.title = title;
+            }
+            Event::ResetTitle => {
+                self.title.clear();
+            }
+            Event::ClipboardStore(clipboard, contents) => match clipboard {
+                term::ClipboardType::Clipboard => self.clipboard_contents = contents,
+                term::ClipboardType::Selection => self.selection_contents = contents,
+            },
+            Event::ClipboardLoad(clipboard, formatter) => {
+                let contents = match clipboard {
+                    term::ClipboardType::Clipboard => self.clipboard_contents.as_str(),
+                    term::ClipboardType::Selection => self.selection_contents.as_str(),
+                };
+                self.write_input(formatter(contents).as_bytes());
+            }
+            Event::ColorRequest(index, formatter) => {
+                let color = self.color_for_request(index);
+                self.write_input(formatter(color).as_bytes());
+            }
+            Event::PtyWrite(text) => {
+                self.write_input(text.as_bytes());
+            }
+            Event::TextAreaSizeRequest(formatter) => {
+                self.write_input(formatter(self.window_size()).as_bytes());
+            }
+            Event::MouseCursorDirty
+            | Event::CursorBlinkingChange
+            | Event::Wakeup
+            | Event::Bell
+            | Event::Exit
+            | Event::ChildExit(_) => {}
+        }
+    }
+
+    fn color_for_request(&self, index: usize) -> Rgb {
+        self.term.lock().colors().lookup(index)
+    }
+
+    fn window_size(&self) -> WindowSize {
+        WindowSize {
+            num_lines: self.rows,
+            num_cols: self.cols,
+            cell_width: self.cell_width,
+            cell_height: self.cell_height,
+        }
     }
 }
 
-fn next_scrollback_offset(current: usize, delta: i32) -> usize {
-    if delta >= 0 {
-        current.saturating_add(usize::try_from(delta).unwrap_or(usize::MAX))
-    } else {
-        current.saturating_sub(usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX))
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self
+            .event_sender
+            .send(Msg::Shutdown)
+            .map_err(|error| tracing::debug!("failed to stop terminal event loop: {error}"));
+
+        if let Some(handle) = self.event_loop_handle.take() {
+            let _ = handle.join();
+        }
     }
+}
+
+trait ColorLookup {
+    fn lookup(&self, index: usize) -> Rgb;
+}
+
+impl ColorLookup for alacritty_terminal::term::color::Colors {
+    fn lookup(&self, index: usize) -> Rgb {
+        self[index].unwrap_or_else(|| default_terminal_rgb(index))
+    }
+}
+
+fn default_terminal_rgb(index: usize) -> Rgb {
+    if let Some(color) = TERMINAL_BASE_COLORS.get(index) {
+        return *color;
+    }
+
+    match index {
+        16..=231 => {
+            let idx = index - 16;
+            let steps = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+            Rgb {
+                r: steps[idx / 36],
+                g: steps[(idx % 36) / 6],
+                b: steps[idx % 6],
+            }
+        }
+        232..=255 => {
+            let value = 8 + ((index - 232) * 10);
+            let value = u8::try_from(value).unwrap_or(u8::MAX);
+            Rgb {
+                r: value,
+                g: value,
+                b: value,
+            }
+        }
+        256 | 267 => Rgb { r: 224, g: 230, b: 241 },
+        257 | 268 => Rgb { r: 15, g: 19, b: 28 },
+        258 => Rgb { r: 196, g: 223, b: 255 },
+        _ => Rgb { r: 255, g: 255, b: 255 },
+    }
+}
+
+const TERMINAL_BASE_COLORS: [Rgb; 16] = [
+    rgb(0x1d, 0x1f, 0x21),
+    rgb(0xcc, 0x66, 0x66),
+    rgb(0xb5, 0xbd, 0x68),
+    rgb(0xf0, 0xc6, 0x74),
+    rgb(0x81, 0xa2, 0xbe),
+    rgb(0xb2, 0x94, 0xbb),
+    rgb(0x8a, 0xbe, 0xb7),
+    rgb(0xc5, 0xc8, 0xc6),
+    rgb(0x66, 0x66, 0x66),
+    rgb(0xd5, 0x4e, 0x53),
+    rgb(0xb9, 0xca, 0x4a),
+    rgb(0xe7, 0xc5, 0x47),
+    rgb(0x7a, 0xa6, 0xda),
+    rgb(0xc3, 0x97, 0xd8),
+    rgb(0x70, 0xc0, 0xb1),
+    rgb(0xea, 0xea, 0xea),
+];
+
+const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+    Rgb { r, g, b }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Terminal, next_scrollback_offset};
+    use super::{TerminalDimensions, default_terminal_rgb};
+    use alacritty_terminal::grid::Dimensions;
 
     #[test]
-    fn scrollback_offset_moves_in_both_directions() {
-        assert_eq!(next_scrollback_offset(4, 3), 7);
-        assert_eq!(next_scrollback_offset(4, -2), 2);
-        assert_eq!(next_scrollback_offset(1, -5), 0);
+    fn terminal_dimensions_clamp_to_supported_minimums() {
+        let dimensions = TerminalDimensions::new(0, 1);
+
+        assert_eq!(dimensions.screen_lines(), 1);
+        assert_eq!(dimensions.columns(), 2);
+        assert_eq!(dimensions.total_lines(), 1);
     }
 
     #[test]
-    fn terminal_uses_requested_scrollback_limit() {
-        let terminal = Terminal::with_scrollback(24, 80, 12_345);
+    fn indexed_color_cube_matches_xterm_steps() {
+        let color = default_terminal_rgb(21);
 
-        assert_eq!(terminal.scrollback_limit(), 12_345);
-    }
-
-    #[test]
-    fn terminal_tracks_title_via_callbacks() {
-        let mut terminal = Terminal::new(24, 80);
-
-        terminal.process(b"\x1b]2;Build Output\x07");
-
-        assert_eq!(terminal.title(), "Build Output");
+        assert_eq!((color.r, color.g, color.b), (0, 0, 255));
     }
 }

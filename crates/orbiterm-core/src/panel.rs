@@ -1,18 +1,14 @@
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Deserialize;
 
-use crate::error::{Error, Result};
-use crate::terminal::Terminal;
+use crate::error::Result;
+use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::workspace::WorkspaceId;
 
-const MAX_OUTPUT_CHUNKS_PER_FRAME: usize = 24;
-const MAX_OUTPUT_BYTES_PER_FRAME: usize = 128 * 1024;
-const PTY_RESIZE_INTERVAL: Duration = Duration::from_millis(40);
+const DEFAULT_CELL_WIDTH: u16 = 8;
+const DEFAULT_CELL_HEIGHT: u16 = 17;
+
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
 const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = 8_000;
 const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
@@ -95,12 +91,6 @@ pub struct Panel {
     pub workspace_id: WorkspaceId,
     pub terminal: Terminal,
     has_custom_name: bool,
-    writer: Box<dyn Write + Send>,
-    output_rx: mpsc::Receiver<Vec<u8>>,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    pending_pty_resize: Option<(u16, u16)>,
-    last_pty_resize_at: Instant,
-    _child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 impl Panel {
@@ -108,10 +98,8 @@ impl Panel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the PTY cannot be created, the command cannot be
-    /// spawned, or the PTY reader/writer handles cannot be acquired.
+    /// Returns an error if the terminal runtime cannot be created.
     pub fn spawn(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Self> {
-        let pty_system = native_pty_system();
         let PanelOptions {
             name,
             command,
@@ -124,32 +112,21 @@ impl Panel {
             position,
             size,
         } = opts;
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| Error::Pty(e.to_string()))?;
-
         let (program, launch_args) = resolve_launch_command(command, args, kind, &resume);
-        let mut cmd = CommandBuilder::new(&program);
-        for arg in &launch_args {
-            cmd.arg(arg);
-        }
-        if let Some(cwd) = &cwd {
-            cmd.cwd(cwd);
-        }
-
-        let child = pair.slave.spawn_command(cmd).map_err(|e| Error::Pty(e.to_string()))?;
-
-        let reader = pair.master.try_clone_reader().map_err(|e| Error::Pty(format!("{e}")))?;
-        let writer = pair.master.take_writer().map_err(|e| Error::Pty(format!("{e}")))?;
-        let rx = attach_output_reader(id, &*pair.master, reader)?;
-
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
+        let terminal = Terminal::spawn(TerminalSpawnOptions {
+            program,
+            args: launch_args,
+            cwd,
+            rows,
+            cols,
+            cell_width: DEFAULT_CELL_WIDTH,
+            cell_height: DEFAULT_CELL_HEIGHT,
+            scrollback_limit: scrollback_limit_for_kind(kind),
+            window_id: id.0,
+        })?;
+
         tracing::info!("created panel '{}' (id={})", title, id.0);
 
         Ok(Self {
@@ -162,38 +139,14 @@ impl Panel {
                 size: size.unwrap_or(DEFAULT_PANEL_SIZE),
             },
             workspace_id,
-            terminal: Terminal::with_scrollback(rows, cols, scrollback_limit_for_kind(kind)),
+            terminal,
             has_custom_name,
-            writer,
-            output_rx: rx,
-            master: pair.master,
-            pending_pty_resize: None,
-            last_pty_resize_at: Instant::now()
-                .checked_sub(PTY_RESIZE_INTERVAL)
-                .unwrap_or_else(Instant::now),
-            _child: child,
         })
     }
 
-    /// Drain pending PTY output and feed to the terminal emulator.
     pub fn process_output(&mut self) {
-        self.flush_pending_pty_resize();
+        self.terminal.process_events();
 
-        let mut processed_bytes = 0_usize;
-        let mut processed_chunks = 0_usize;
-        while processed_chunks < MAX_OUTPUT_CHUNKS_PER_FRAME && processed_bytes < MAX_OUTPUT_BYTES_PER_FRAME {
-            let Ok(bytes) = self.output_rx.try_recv() else {
-                break;
-            };
-
-            processed_bytes += bytes.len();
-            self.terminal.process(&bytes);
-            processed_chunks += 1;
-        }
-
-        self.flush_pending_pty_resize();
-
-        // Only override title from terminal escape sequences if no custom name was set
         if !self.has_custom_name {
             let title = self.terminal.title();
             if !title.is_empty() {
@@ -203,8 +156,7 @@ impl Panel {
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        self.terminal.write_input(bytes);
     }
 
     pub fn move_to(&mut self, position: [f32; 2]) {
@@ -223,39 +175,12 @@ impl Panel {
         self.terminal.set_scrollback(scrollback);
     }
 
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        if rows == self.terminal.rows() && cols == self.terminal.cols() {
-            return;
-        }
-
-        self.terminal.resize(rows, cols);
-        self.pending_pty_resize = Some((rows, cols));
-        self.flush_pending_pty_resize();
+    pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
+        self.terminal.resize(rows, cols, cell_width, cell_height);
     }
 
-    fn flush_pending_pty_resize(&mut self) {
-        if self.last_pty_resize_at.elapsed() < PTY_RESIZE_INTERVAL {
-            return;
-        }
-
-        let Some((rows, cols)) = self.pending_pty_resize.take() else {
-            return;
-        };
-
-        let _ = self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
-        self.last_pty_resize_at = Instant::now();
-    }
-}
-
-impl Drop for Panel {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        crate::pty_io::unregister_reader(self.id.0);
+    pub fn set_focused(&mut self, focused: bool) {
+        self.terminal.set_focused(focused);
     }
 }
 
@@ -272,7 +197,7 @@ fn resolve_launch_command(
     match kind {
         PanelKind::Shell | PanelKind::Command => (default_shell(), args),
         PanelKind::Codex => {
-            let mut launch_args = vec!["--no-alt-screen".to_string()];
+            let mut launch_args = Vec::new();
             match resume {
                 PanelResume::Fresh => {}
                 PanelResume::Last => launch_args.extend(["resume".to_string(), "--last".to_string()]),
@@ -306,62 +231,19 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     }
 }
 
-fn attach_output_reader(
-    panel_id: PanelId,
-    master: &dyn portable_pty::MasterPty,
-    reader: Box<dyn Read + Send>,
-) -> Result<mpsc::Receiver<Vec<u8>>> {
-    #[cfg(not(unix))]
-    {
-        let _ = panel_id;
-        let _ = master;
-    }
-
-    let (tx, rx) = mpsc::channel();
-
-    #[cfg(unix)]
-    if let Some(fd) = master.as_raw_fd() {
-        crate::pty_io::register_reader(panel_id.0, fd, reader, tx)?;
-        return Ok(rx);
-    }
-
-    spawn_reader_thread(reader, tx);
-    Ok(rx)
-}
-
-fn spawn_reader_thread(reader: Box<dyn Read + Send>, tx: mpsc::Sender<Vec<u8>>) {
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        let mut buf = [0_u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(bytes_read) => {
-                    if tx.send(buf[..bytes_read].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        tracing::debug!("PTY reader thread exited");
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
-        scrollback_limit_for_kind, spawn_reader_thread,
+        scrollback_limit_for_kind,
     };
-    use std::io::Cursor;
-    use std::sync::mpsc;
 
     #[test]
-    fn codex_last_resume_uses_resume_subcommand_and_preserves_scrollback() {
+    fn codex_last_resume_uses_resume_subcommand() {
         let (program, args) = resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last);
 
         assert_eq!(program, "codex");
-        assert_eq!(args, vec!["--no-alt-screen", "resume", "--last"]);
+        assert_eq!(args, vec!["resume", "--last"]);
     }
 
     #[test]
@@ -406,20 +288,5 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
-    }
-
-    #[test]
-    fn output_reader_thread_forwards_bytes_and_disconnects() {
-        let (tx, rx) = mpsc::channel();
-        spawn_reader_thread(Box::new(Cursor::new(b"hello".to_vec())), tx);
-
-        let output = rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("reader output");
-        assert_eq!(output, b"hello");
-        assert!(matches!(
-            rx.recv_timeout(std::time::Duration::from_millis(50)),
-            Err(mpsc::RecvTimeoutError::Disconnected)
-        ));
     }
 }

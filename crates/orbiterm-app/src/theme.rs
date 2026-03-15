@@ -1,3 +1,5 @@
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor, Rgb};
 use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Style, Vec2, Visuals};
 
 pub const BG: Color32 = Color32::from_rgb(7, 10, 16);
@@ -74,30 +76,11 @@ pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
     }
 }
 
-pub fn vt100_color_to_egui(color: vt100::Color, is_fg: bool) -> Color32 {
+pub fn terminal_color_to_egui(color: TerminalColor, colors: &Colors) -> Color32 {
     match color {
-        vt100::Color::Default => {
-            if is_fg {
-                FG
-            } else {
-                PANEL_BG
-            }
-        }
-        vt100::Color::Idx(idx) => {
-            if idx < 16 {
-                PALETTE[idx as usize]
-            } else if idx < 232 {
-                let idx = idx - 16;
-                let r = (idx / 36) * 51;
-                let g = ((idx % 36) / 6) * 51;
-                let b = (idx % 6) * 51;
-                Color32::from_rgb(r, g, b)
-            } else {
-                let v = 8 + (idx - 232) * 10;
-                Color32::from_rgb(v, v, v)
-            }
-        }
-        vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+        TerminalColor::Named(name) => colors[name].map_or_else(|| named_color_to_egui(name), rgb_to_egui),
+        TerminalColor::Spec(rgb) => rgb_to_egui(rgb),
+        TerminalColor::Indexed(index) => palette_color(index, colors),
     }
 }
 
@@ -163,4 +146,58 @@ fn blend_channel(base: u8, tint: u8, keep: f32, amount: f32) -> u8 {
     {
         mixed as u8
     }
+}
+
+fn named_color_to_egui(color: NamedColor) -> Color32 {
+    match color {
+        NamedColor::Black => PALETTE[0],
+        NamedColor::Red => PALETTE[1],
+        NamedColor::Green => PALETTE[2],
+        NamedColor::Yellow => PALETTE[3],
+        NamedColor::Blue => PALETTE[4],
+        NamedColor::Magenta => PALETTE[5],
+        NamedColor::Cyan => PALETTE[6],
+        NamedColor::White => PALETTE[7],
+        NamedColor::BrightBlack => PALETTE[8],
+        NamedColor::BrightRed => PALETTE[9],
+        NamedColor::BrightGreen => PALETTE[10],
+        NamedColor::BrightYellow => PALETTE[11],
+        NamedColor::BrightBlue => PALETTE[12],
+        NamedColor::BrightMagenta => PALETTE[13],
+        NamedColor::BrightCyan => PALETTE[14],
+        NamedColor::BrightWhite => PALETTE[15],
+        NamedColor::Foreground | NamedColor::BrightForeground => FG,
+        NamedColor::Background => PANEL_BG,
+        NamedColor::Cursor => CURSOR,
+        NamedColor::DimForeground => alpha(FG_SOFT, 196),
+        NamedColor::DimBlack => alpha(PALETTE[0], 196),
+        NamedColor::DimRed => alpha(PALETTE[1], 196),
+        NamedColor::DimGreen => alpha(PALETTE[2], 196),
+        NamedColor::DimYellow => alpha(PALETTE[3], 196),
+        NamedColor::DimBlue => alpha(PALETTE[4], 196),
+        NamedColor::DimMagenta => alpha(PALETTE[5], 196),
+        NamedColor::DimCyan => alpha(PALETTE[6], 196),
+        NamedColor::DimWhite => alpha(PALETTE[7], 196),
+    }
+}
+
+fn palette_color(index: u8, colors: &Colors) -> Color32 {
+    let index = usize::from(index);
+    if index < PALETTE.len() {
+        colors[index].map_or(PALETTE[index], rgb_to_egui)
+    } else if let Some(rgb) = colors[index] {
+        rgb_to_egui(rgb)
+    } else if index < 232 {
+        let idx = index - 16;
+        let steps = [0_u8, 95, 135, 175, 215, 255];
+        Color32::from_rgb(steps[idx / 36], steps[(idx % 36) / 6], steps[idx % 6])
+    } else {
+        let value = 8 + ((index - 232) * 10);
+        let value = u8::try_from(value).unwrap_or(u8::MAX);
+        Color32::from_rgb(value, value, value)
+    }
+}
+
+fn rgb_to_egui(rgb: Rgb) -> Color32 {
+    Color32::from_rgb(rgb.r, rgb.g, rgb.b)
 }
