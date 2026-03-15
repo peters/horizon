@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind,
-    UiBuilder, Vec2,
+    Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke,
+    StrokeKind, UiBuilder, Vec2,
 };
 use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
 
@@ -20,7 +20,26 @@ const PANEL_COLUMN_SPACING: f32 = 540.0;
 const PANEL_ROW_SPACING: f32 = 360.0;
 const RESIZE_HANDLE_SIZE: f32 = 18.0;
 const WS_BG_PAD: f32 = 16.0;
-const WS_TITLE_HEIGHT: f32 = 32.0;
+const WS_TITLE_HEIGHT: f32 = 54.0;
+const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
+const WS_LABEL_HEIGHT: f32 = 42.0;
+const WS_LABEL_MIN_WIDTH: f32 = 168.0;
+const WS_LABEL_MAX_WIDTH: f32 = 320.0;
+
+struct WorkspaceVisual {
+    id: WorkspaceId,
+    name: String,
+    color: Color32,
+    screen_rect: Rect,
+    label_rect: Rect,
+    is_active: bool,
+    is_empty: bool,
+}
+
+struct WorkspaceInteraction {
+    activate_workspace: bool,
+    drag_delta: Vec2,
+}
 
 pub struct OrbitermApp {
     board: Board,
@@ -464,79 +483,77 @@ impl OrbitermApp {
         close_panel
     }
 
-    fn render_workspace_backgrounds(&self, ctx: &Context) {
+    fn render_workspace_backgrounds(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_rect(ctx);
+        let visuals = self.workspace_visuals(canvas_rect);
 
-        for workspace in &self.board.workspaces {
-            let (r, g, b) = workspace.accent();
-            let ws_color = Color32::from_rgb(r, g, b);
+        let mut pending_workspace_moves = Vec::new();
+        let mut focus_workspace = None;
 
-            let Some((min, max)) = self.board.workspace_bounds(workspace.id) else {
-                // Empty workspace: draw a small placeholder badge.
-                let badge_pos = Pos2::new(workspace.position[0], workspace.position[1]);
-                let screen_pos = self.canvas_to_screen(canvas_rect, badge_pos);
-                let badge_rect = Rect::from_min_size(screen_pos, Vec2::new(160.0, 36.0));
+        for workspace in visuals {
+            let interaction = render_workspace_visual(ctx, &workspace);
 
-                egui::Area::new(Id::new(("ws_empty", workspace.id.0)))
-                    .fixed_pos(badge_rect.min)
-                    .constrain(false)
-                    .interactable(false)
-                    .order(Order::Background)
-                    .show(ctx, |ui| {
-                        let (rect, _) = ui.allocate_exact_size(badge_rect.size(), Sense::hover());
-                        let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, CornerRadius::same(12), theme::alpha(ws_color, 12));
-                        painter.rect_stroke(
-                            rect,
-                            CornerRadius::same(12),
-                            Stroke::new(1.0, theme::alpha(ws_color, 40)),
-                            StrokeKind::Outside,
-                        );
-                        painter.text(
-                            Pos2::new(rect.min.x + 14.0, rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            &workspace.name,
-                            egui::FontId::proportional(12.0),
-                            theme::alpha(ws_color, 140),
-                        );
-                    });
-                continue;
-            };
+            if interaction.activate_workspace {
+                focus_workspace = Some(workspace.id);
+            }
 
-            let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-            let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
-
-            let screen_min = self.canvas_to_screen(canvas_rect, top_left);
-            let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
-            // Clamp to canvas so workspace backgrounds never overlap the toolbar.
-            let screen_rect =
-                Rect::from_min_max(Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)), screen_max);
-
-            egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
-                .fixed_pos(screen_rect.min)
-                .constrain(false)
-                .interactable(false)
-                .order(Order::Background)
-                .show(ctx, |ui| {
-                    let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
-                    let painter = ui.painter_at(rect);
-
-                    painter.rect_filled(rect, CornerRadius::same(20), theme::alpha(ws_color, 15));
-                    painter.rect_stroke(
-                        rect,
-                        CornerRadius::same(20),
-                        Stroke::new(1.0, theme::alpha(ws_color, 50)),
-                        StrokeKind::Outside,
-                    );
-                    painter.text(
-                        Pos2::new(rect.min.x + 16.0, rect.min.y + WS_TITLE_HEIGHT * 0.5),
-                        egui::Align2::LEFT_CENTER,
-                        &workspace.name,
-                        egui::FontId::proportional(13.0),
-                        theme::alpha(ws_color, 160),
-                    );
-                });
+            if interaction.drag_delta != Vec2::ZERO {
+                pending_workspace_moves.push((workspace.id, interaction.drag_delta));
+            }
         }
+
+        if let Some(workspace_id) = focus_workspace {
+            self.board.focus_workspace(workspace_id);
+        }
+
+        for (workspace_id, delta) in pending_workspace_moves {
+            let _ = self.board.translate_workspace(workspace_id, [delta.x, delta.y]);
+        }
+    }
+
+    fn workspace_visuals(&self, canvas_rect: Rect) -> Vec<WorkspaceVisual> {
+        self.board
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                let (r, g, b) = workspace.accent();
+                let color = Color32::from_rgb(r, g, b);
+                let is_active = self.board.active_workspace == Some(workspace.id);
+                let (screen_rect, is_empty) = if let Some((min, max)) = self.board.workspace_bounds(workspace.id) {
+                    let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                    let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
+                    let screen_min = self.canvas_to_screen(canvas_rect, top_left);
+                    let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
+                    (
+                        Rect::from_min_max(Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)), screen_max),
+                        false,
+                    )
+                } else {
+                    let screen_min =
+                        self.canvas_to_screen(canvas_rect, Pos2::new(workspace.position[0], workspace.position[1]));
+                    (
+                        Rect::from_min_size(
+                            Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)),
+                            Vec2::new(WS_EMPTY_SIZE[0], WS_EMPTY_SIZE[1]),
+                        ),
+                        true,
+                    )
+                };
+
+                WorkspaceVisual {
+                    id: workspace.id,
+                    name: workspace.name.clone(),
+                    color,
+                    screen_rect,
+                    label_rect: Rect::from_min_size(
+                        screen_rect.min + Vec2::new(14.0, 12.0),
+                        Vec2::new(workspace_label_width(&workspace.name), WS_LABEL_HEIGHT),
+                    ),
+                    is_active,
+                    is_empty,
+                }
+            })
+            .collect()
     }
 }
 
@@ -697,6 +714,213 @@ fn paint_empty_state(ui: &mut egui::Ui) {
     );
 }
 
+fn render_workspace_visual(ctx: &Context, workspace: &WorkspaceVisual) -> WorkspaceInteraction {
+    egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
+        .fixed_pos(workspace.screen_rect.min)
+        .constrain(false)
+        .order(Order::Background)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(workspace.screen_rect.size(), Sense::hover());
+            paint_workspace_frame(ui, rect, workspace.color, workspace.is_active, workspace.is_empty);
+
+            if workspace.is_empty {
+                paint_empty_workspace_hint(ui, rect, workspace.label_rect, workspace.color);
+            }
+        });
+
+    egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
+        .fixed_pos(workspace.label_rect.min)
+        .constrain(false)
+        .order(Order::Tooltip)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(workspace.label_rect.size(), Sense::hover());
+            let label_response = ui.interact(
+                rect,
+                ui.make_persistent_id(("workspace_drag", workspace.id.0)),
+                Sense::click_and_drag(),
+            );
+
+            if label_response.hovered() || label_response.dragged() {
+                ui.ctx().set_cursor_icon(if label_response.dragged() {
+                    CursorIcon::Grabbing
+                } else {
+                    CursorIcon::Grab
+                });
+            }
+
+            paint_workspace_label(
+                ui,
+                rect,
+                &workspace.name,
+                workspace.color,
+                workspace.is_active,
+                label_response.hovered(),
+                label_response.dragged(),
+            );
+
+            WorkspaceInteraction {
+                activate_workspace: label_response.clicked() || label_response.drag_started(),
+                drag_delta: if label_response.dragged() {
+                    ctx.input(|input| input.pointer.delta())
+                } else {
+                    Vec2::ZERO
+                },
+            }
+        })
+        .inner
+}
+
+fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool, is_empty: bool) {
+    let painter = ui.painter_at(rect);
+    let corner_radius = CornerRadius::same(24);
+    let border_alpha = if is_active { 150 } else { 84 };
+    let fill_alpha = if is_active { 34 } else { 22 };
+    let inner_alpha = if is_empty { 32 } else { 48 };
+    let frame_fill = theme::alpha(theme::blend(theme::PANEL_BG, color, 0.18), fill_alpha);
+
+    painter.rect_filled(rect, corner_radius, frame_fill);
+    painter.rect_stroke(
+        rect,
+        corner_radius,
+        Stroke::new(if is_active { 1.5 } else { 1.0 }, theme::alpha(color, border_alpha)),
+        StrokeKind::Outside,
+    );
+
+    let inner_rect = rect.shrink2(Vec2::new(10.0, 10.0));
+    painter.rect_stroke(
+        inner_rect,
+        CornerRadius::same(18),
+        Stroke::new(
+            1.0,
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE, color, 0.28), inner_alpha),
+        ),
+        StrokeKind::Outside,
+    );
+
+    painter.rect_filled(
+        Rect::from_min_max(
+            rect.min + Vec2::new(12.0, 12.0),
+            Pos2::new(rect.max.x - 12.0, rect.min.y + 72.0),
+        ),
+        CornerRadius::same(18),
+        theme::alpha(theme::blend(theme::PANEL_BG_ALT, color, 0.24), 54),
+    );
+}
+
+fn paint_workspace_label(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    name: &str,
+    color: Color32,
+    is_active: bool,
+    hovered: bool,
+    dragging: bool,
+) {
+    let painter = ui.painter();
+    let shadow_rect = rect.translate(Vec2::new(0.0, 5.0));
+    let accent_fill = theme::blend(
+        theme::PANEL_BG_ALT,
+        color,
+        if dragging {
+            0.88
+        } else if hovered || is_active {
+            0.82
+        } else {
+            0.74
+        },
+    );
+    let sheen_color = theme::alpha(theme::blend(color, theme::FG, 0.24), 92);
+    let title_plate = Rect::from_min_max(rect.min + Vec2::new(48.0, 6.0), rect.max - Vec2::new(30.0, 6.0));
+    let grip_center = Pos2::new(rect.max.x - 18.0, rect.center().y);
+    let kicker_rect = Rect::from_min_size(rect.min + Vec2::new(8.0, 6.0), Vec2::new(34.0, rect.height() - 12.0));
+
+    painter.rect_filled(shadow_rect, CornerRadius::same(14), Color32::from_black_alpha(68));
+    painter.rect_filled(rect, CornerRadius::same(14), accent_fill);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(14),
+        Stroke::new(1.1, theme::alpha(theme::blend(color, theme::FG, 0.18), 220)),
+        StrokeKind::Outside,
+    );
+    painter.rect_filled(
+        Rect::from_min_max(
+            rect.min + Vec2::new(1.0, 1.0),
+            Pos2::new(rect.max.x - 1.0, rect.min.y + 17.0),
+        ),
+        CornerRadius::same(13),
+        sheen_color,
+    );
+    painter.rect_filled(
+        title_plate,
+        CornerRadius::same(11),
+        theme::alpha(theme::blend(theme::PANEL_BG, color, 0.14), 210),
+    );
+    painter.rect_filled(
+        kicker_rect,
+        CornerRadius::same(10),
+        theme::alpha(theme::blend(theme::PANEL_BG, color, 0.28), 200),
+    );
+    painter.rect_filled(
+        Rect::from_min_size(
+            Pos2::new(rect.min.x + 16.0, rect.max.y - 3.0),
+            Vec2::new((rect.width() * 0.34).min(86.0), 9.0),
+        ),
+        CornerRadius::same(4),
+        theme::alpha(color, 166),
+    );
+    painter.text(
+        kicker_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "WS",
+        egui::FontId::proportional(10.0),
+        theme::alpha(theme::FG, 230),
+    );
+    painter.text(
+        Pos2::new(title_plate.min.x + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::FontId::proportional(13.5),
+        theme::FG,
+    );
+    paint_workspace_grip(painter, grip_center, dragging || hovered);
+}
+
+fn paint_workspace_grip(painter: &egui::Painter, center: Pos2, highlighted: bool) {
+    let color = if highlighted {
+        theme::alpha(theme::FG, 214)
+    } else {
+        theme::alpha(theme::FG_SOFT, 182)
+    };
+    let x_offsets = [-4.0, 0.0, 4.0];
+    let y_offsets = [-6.0, 0.0, 6.0];
+
+    for x_offset in x_offsets {
+        for y_offset in y_offsets {
+            painter.circle_filled(Pos2::new(center.x + x_offset, center.y + y_offset), 1.45, color);
+        }
+    }
+}
+
+fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_rect: Rect, color: Color32) {
+    let painter = ui.painter();
+    let copy_pos = Pos2::new(rect.min.x + 18.0, label_rect.max.y + 22.0);
+
+    painter.text(
+        copy_pos,
+        egui::Align2::LEFT_TOP,
+        "Drag this workspace anywhere on the board.",
+        egui::FontId::proportional(12.0),
+        theme::alpha(theme::FG_SOFT, 210),
+    );
+    painter.text(
+        copy_pos + Vec2::new(0.0, 20.0),
+        egui::Align2::LEFT_TOP,
+        "New terminals will land inside this frame.",
+        egui::FontId::proportional(10.5),
+        theme::alpha(theme::blend(theme::FG_DIM, color, 0.18), 196),
+    );
+}
+
 fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2) {
     let rect = ui.max_rect();
     let painter = ui.painter();
@@ -741,6 +965,23 @@ fn default_panel_canvas_pos(index: usize) -> Pos2 {
 
 fn clamp_panel_size(size: Vec2) -> Vec2 {
     Vec2::new(size.x.max(PANEL_MIN_SIZE[0]), size.y.max(PANEL_MIN_SIZE[1]))
+}
+
+fn workspace_label_width(name: &str) -> f32 {
+    let estimated_text_width: f32 = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_uppercase() {
+                8.6
+            } else if ch.is_ascii_whitespace() {
+                4.5
+            } else {
+                7.6
+            }
+        })
+        .sum();
+
+    (estimated_text_width + 104.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH)
 }
 
 fn format_grid_position(position: Pos2) -> String {

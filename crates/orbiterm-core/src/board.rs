@@ -289,6 +289,29 @@ impl Board {
         false
     }
 
+    pub fn translate_workspace(&mut self, id: WorkspaceId, delta: [f32; 2]) -> bool {
+        if delta == [0.0, 0.0] {
+            return false;
+        }
+
+        let Some(panel_ids) = self.workspace(id).map(|workspace| workspace.panels.clone()) else {
+            return false;
+        };
+
+        if let Some(workspace) = self.workspace_mut(id) {
+            workspace.position[0] += delta[0];
+            workspace.position[1] += delta[1];
+        }
+
+        for panel_id in panel_ids {
+            if let Some(panel) = self.panel_mut(panel_id) {
+                panel.move_to([panel.layout.position[0] + delta[0], panel.layout.position[1] + delta[1]]);
+            }
+        }
+
+        true
+    }
+
     pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
         if let Some(panel) = self.panel_mut(id) {
             panel.move_to(position);
@@ -544,5 +567,26 @@ mod tests {
         assert_eq!(panel.workspace_id, ws2);
         // Panel should be within the target workspace's region.
         assert!(panel.layout.position[0] >= ws2_pos[0]);
+    }
+
+    #[test]
+    fn translating_workspace_moves_workspace_origin_and_panels() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+
+        let original_workspace_pos = board.workspace(workspace_id).expect("workspace").position;
+        let original_panel_pos = board.panel(panel_id).expect("panel").layout.position;
+
+        assert!(board.translate_workspace(workspace_id, [48.0, 24.0]));
+
+        let workspace = board.workspace(workspace_id).expect("workspace");
+        let panel = board.panel(panel_id).expect("panel");
+        assert!((workspace.position[0] - (original_workspace_pos[0] + 48.0)).abs() <= f32::EPSILON);
+        assert!((workspace.position[1] - (original_workspace_pos[1] + 24.0)).abs() <= f32::EPSILON);
+        assert!((panel.layout.position[0] - (original_panel_pos[0] + 48.0)).abs() <= f32::EPSILON);
+        assert!((panel.layout.position[1] - (original_panel_pos[1] + 24.0)).abs() <= f32::EPSILON);
     }
 }
