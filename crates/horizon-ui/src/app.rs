@@ -422,6 +422,7 @@ impl HorizonApp {
         let mut pan_to_panel: Option<PanelId> = None;
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
+        let mut close_all_in_ws: Option<WorkspaceId> = None;
         let mut create_from_preset: Option<(WorkspaceId, PanelOptions)> = None;
 
         let viewport = viewport_local_rect(ctx);
@@ -554,6 +555,25 @@ impl HorizonApp {
                             if ws_sense.clicked() {
                                 pan_to_workspace = Some(ws_id);
                             }
+
+                            // Workspace right-click context menu
+                            ws_response.response.context_menu(|ui| {
+                                ui.set_min_width(160.0);
+                                if ui
+                                    .add(
+                                        Button::new(
+                                            egui::RichText::new("Close All Terminals")
+                                                .size(12.0)
+                                                .color(theme::PALETTE_RED),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    close_all_in_ws = Some(ws_id);
+                                    ui.close();
+                                }
+                            });
 
                             // Workspace hover background
                             let ws_bg = Rect::from_min_max(
@@ -725,6 +745,17 @@ impl HorizonApp {
         if let Some(panel_id) = close_panel {
             self.board.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
+        }
+        if let Some(ws_id) = close_all_in_ws {
+            let panel_ids: Vec<_> = self
+                .board
+                .workspace(ws_id)
+                .map(|ws| ws.panels.clone())
+                .unwrap_or_default();
+            for pid in panel_ids {
+                self.board.close_panel(pid);
+                self.panel_screen_rects.remove(&pid);
+            }
         }
         if let Some((ws_id, opts)) = create_from_preset
             && let Err(error) = self.board.create_panel(opts, ws_id)
