@@ -261,7 +261,13 @@ impl OrbitermApp {
             if drag_panning {
                 input.pointer.delta()
             } else if scroll_panning {
-                input.smooth_scroll_delta + input.raw_scroll_delta
+                let scroll = input.smooth_scroll_delta + input.raw_scroll_delta;
+                // Shift+scroll maps vertical scroll to horizontal pan
+                if input.modifiers.shift && scroll.x == 0.0 {
+                    Vec2::new(scroll.y, 0.0)
+                } else {
+                    scroll
+                }
             } else {
                 Vec2::ZERO
             }
@@ -918,16 +924,16 @@ impl OrbitermApp {
             .panels
             .iter()
             .enumerate()
-            .map(|(index, panel)| (panel.id, panel.title.clone(), index))
+            .map(|(index, panel)| (panel.id, index))
             .collect();
         let focused = self.board.focused;
-        panel_order.sort_by_key(|(panel_id, _, _)| Some(*panel_id) == focused);
+        panel_order.sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let mut panels_to_close = Vec::new();
 
-        for (panel_id, title, fallback_index) in panel_order {
-            if self.render_panel(ctx, canvas_rect, panel_id, &title, fallback_index, &workspaces) {
+        for (panel_id, fallback_index) in panel_order {
+            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -941,17 +947,21 @@ impl OrbitermApp {
         ctx: &Context,
         canvas_rect: Rect,
         panel_id: PanelId,
-        title: &str,
         _fallback_index: usize,
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> bool {
-        let Some((canvas_position, canvas_size, current_ws_id)) = self.board.panel(panel_id).map(|panel| {
-            (
-                Pos2::new(panel.layout.position[0], panel.layout.position[1]),
-                Vec2::new(panel.layout.size[0], panel.layout.size[1]),
-                panel.workspace_id,
-            )
-        }) else {
+        let Some((canvas_position, canvas_size, current_ws_id, title, history_size, scrollback_limit)) =
+            self.board.panel(panel_id).map(|panel| {
+                (
+                    Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+                    Vec2::new(panel.layout.size[0], panel.layout.size[1]),
+                    panel.workspace_id,
+                    panel.title.clone(),
+                    panel.terminal.history_size(),
+                    panel.terminal.scrollback_limit(),
+                )
+            })
+        else {
             return false;
         };
 
@@ -1059,11 +1069,14 @@ impl OrbitermApp {
 
                 paint_panel_chrome(
                     ui,
+                    panel_id,
                     panel_rect,
                     titlebar_rect,
                     close_rect,
                     resize_rect,
-                    title,
+                    &title,
+                    history_size,
+                    scrollback_limit,
                     is_focused,
                     close_response.hovered(),
                     ws_accent,
@@ -1287,11 +1300,14 @@ fn viewport_local_rect(ctx: &Context) -> Rect {
 #[allow(clippy::too_many_arguments)]
 fn paint_panel_chrome(
     ui: &mut egui::Ui,
+    panel_id: PanelId,
     panel_rect: Rect,
     titlebar_rect: Rect,
     close_rect: Rect,
     resize_rect: Rect,
     title: &str,
+    history_size: usize,
+    scrollback_limit: usize,
     focused: bool,
     close_hovered: bool,
     ws_accent: Option<Color32>,
@@ -1329,6 +1345,18 @@ fn paint_panel_chrome(
         theme::FG,
     );
 
+    paint_history_meter(
+        ui,
+        &painter,
+        panel_id,
+        titlebar_rect,
+        close_rect,
+        accent,
+        history_size,
+        scrollback_limit,
+        focused,
+    );
+
     painter.circle_filled(
         close_rect.center(),
         5.0,
@@ -1353,6 +1381,84 @@ fn paint_panel_chrome(
             resize_rect.left_top() + Vec2::new(12.0, 12.0),
         ],
         handle_stroke,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_history_meter(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    panel_id: PanelId,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    accent: Color32,
+    history_size: usize,
+    scrollback_limit: usize,
+    focused: bool,
+) {
+    let badge_size = Vec2::new(96.0, 20.0);
+    let badge_rect = Rect::from_center_size(
+        Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
+        badge_size,
+    );
+    let track_rect = Rect::from_min_max(
+        Pos2::new(badge_rect.min.x + 8.0, badge_rect.max.y - 5.0),
+        Pos2::new(badge_rect.max.x - 8.0, badge_rect.max.y - 3.0),
+    );
+    let ratio = if scrollback_limit == 0 {
+        0.0
+    } else {
+        (usize_to_f32(history_size) / usize_to_f32(scrollback_limit)).clamp(0.0, 1.0)
+    };
+    let animated_ratio = ui
+        .ctx()
+        .animate_value_with_time(Id::new(("panel_history_ratio", panel_id.0)), ratio, 0.16);
+    let fill_width = track_rect.width() * animated_ratio.clamp(0.0, 1.0);
+    let fill_rect = Rect::from_min_max(
+        track_rect.min,
+        Pos2::new(track_rect.min.x + fill_width, track_rect.max.y),
+    );
+    let history_text = format!(
+        "{}/{}",
+        format_compact_count(history_size),
+        format_compact_count(scrollback_limit)
+    );
+
+    painter.rect_filled(
+        badge_rect,
+        CornerRadius::same(7),
+        theme::alpha(
+            theme::blend(theme::BG_ELEVATED, accent, 0.10),
+            if focused { 214 } else { 184 },
+        ),
+    );
+    painter.rect_stroke(
+        badge_rect,
+        CornerRadius::same(7),
+        Stroke::new(1.0, theme::alpha(theme::blend(theme::BORDER_SUBTLE, accent, 0.34), 180)),
+        StrokeKind::Outside,
+    );
+    painter.rect_filled(track_rect, CornerRadius::same(2), theme::alpha(theme::FG_DIM, 52));
+    if fill_width > 0.0 {
+        painter.rect_filled(
+            fill_rect,
+            CornerRadius::same(2),
+            theme::alpha(
+                theme::blend(theme::ACCENT, accent, 0.35),
+                if focused { 224 } else { 188 },
+            ),
+        );
+    }
+    painter.text(
+        Pos2::new(badge_rect.center().x, badge_rect.center().y - 2.0),
+        egui::Align2::CENTER_CENTER,
+        history_text,
+        egui::FontId::monospace(10.5),
+        if history_size > 0 {
+            theme::FG_SOFT
+        } else {
+            theme::FG_DIM
+        },
     );
 }
 
@@ -1392,7 +1498,7 @@ fn paint_empty_state(ui: &mut egui::Ui) {
     painter.text(
         Pos2::new(card_rect.center().x, card_rect.min.y + 102.0),
         egui::Align2::CENTER_CENTER,
-        "Middle-drag or scroll to pan the board.",
+        "Scroll to pan vertically, Shift+scroll horizontally.",
         egui::FontId::proportional(10.5),
         theme::FG_DIM,
     );
@@ -1671,6 +1777,23 @@ fn workspace_label_width(name: &str) -> f32 {
     (estimated_text_width + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH)
 }
 
+fn format_compact_count(value: usize) -> String {
+    if value >= 10_000 {
+        return format!("{}k", value / 1_000);
+    }
+
+    if value >= 1_000 {
+        let whole = value / 1_000;
+        let tenth = (value % 1_000) / 100;
+        if tenth == 0 {
+            return format!("{whole}k");
+        }
+        return format!("{whole}.{tenth}k");
+    }
+
+    value.to_string()
+}
+
 fn format_grid_position(position: Pos2) -> String {
     format!("{}, {}", rounded_i32(position.x), rounded_i32(position.y))
 }
@@ -1702,7 +1825,6 @@ fn chrome_button(text: &str) -> Button<'_> {
         .corner_radius(10)
 }
 
-#[cfg(test)]
 fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
