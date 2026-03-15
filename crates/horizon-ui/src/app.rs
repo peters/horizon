@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use egui::{
@@ -7,7 +8,7 @@ use egui::{
     StrokeKind, UiBuilder, Vec2,
 };
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PanelKind, PanelOptions, PanelState,
+    AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
     PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
 };
 
@@ -61,6 +62,11 @@ struct SettingsEditor {
     status: SettingsStatus,
 }
 
+struct StartupBootstrap {
+    runtime_state: RuntimeState,
+    session_catalog: AgentSessionCatalog,
+}
+
 pub struct HorizonApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
@@ -81,6 +87,8 @@ pub struct HorizonApp {
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
     session_catalog: AgentSessionCatalog,
+    startup_receiver: Option<Receiver<StartupBootstrap>>,
+    session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     last_session_catalog_refresh: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
@@ -94,7 +102,7 @@ impl HorizonApp {
         config: &Config,
         config_path: PathBuf,
         runtime_state_path: PathBuf,
-        mut runtime_state: RuntimeState,
+        runtime_state: RuntimeState,
     ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
 
@@ -119,16 +127,16 @@ impl HorizonApp {
             .insert(0, "jetbrains-mono".to_owned());
 
         cc.egui_ctx.set_fonts(fonts);
-
-        let session_catalog = AgentSessionCatalog::load().unwrap_or_else(|error| {
-            tracing::warn!("failed to load agent session catalog: {error}");
-            AgentSessionCatalog::default()
-        });
-        runtime_state.bootstrap_missing_agent_bindings(&session_catalog);
-        let board = Board::from_runtime_state(&runtime_state).unwrap_or_else(|error| {
-            tracing::error!("failed to load config: {error}");
+        let startup_receiver = Self::runtime_state_needs_session_bootstrap(&runtime_state)
+            .then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
+        let board = if startup_receiver.is_some() {
             Board::new()
-        });
+        } else {
+            Board::from_runtime_state(&runtime_state).unwrap_or_else(|error| {
+                tracing::error!("failed to restore runtime state: {error}");
+                Board::new()
+            })
+        };
 
         Self {
             board,
@@ -148,7 +156,9 @@ impl HorizonApp {
             template_config: config.clone(),
             presets: config.presets.clone(),
             window_config: runtime_state.window_or(&config.window).clone(),
-            session_catalog,
+            session_catalog: AgentSessionCatalog::default(),
+            startup_receiver,
+            session_catalog_refresh: None,
             last_session_catalog_refresh: None,
             pending_session_rebinds: Vec::new(),
             settings: None,
@@ -162,6 +172,44 @@ impl HorizonApp {
                     .unwrap_or_else(Instant::now),
             ),
         }
+    }
+
+    fn runtime_state_needs_session_bootstrap(runtime_state: &RuntimeState) -> bool {
+        runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(|panel| {
+                panel.kind.is_agent() && panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)
+            })
+    }
+
+    fn panel_options_need_session_bootstrap(opts: &PanelOptions) -> bool {
+        opts.kind.is_agent() && opts.session_binding.is_none() && matches!(opts.resume, PanelResume::Last)
+    }
+
+    fn spawn_startup_bootstrap(mut runtime_state: RuntimeState) -> Receiver<StartupBootstrap> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let session_catalog = AgentSessionCatalog::load().unwrap_or_else(|error| {
+                tracing::warn!("failed to load agent session catalog: {error}");
+                AgentSessionCatalog::default()
+            });
+            runtime_state.bootstrap_missing_agent_bindings(&session_catalog);
+            let _ = tx.send(StartupBootstrap {
+                runtime_state,
+                session_catalog,
+            });
+        });
+        rx
+    }
+
+    fn spawn_session_catalog_refresh() -> Receiver<horizon_core::Result<AgentSessionCatalog>> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(AgentSessionCatalog::load());
+        });
+        rx
     }
 
     fn reset_view(&mut self) {
@@ -206,8 +254,37 @@ impl HorizonApp {
 
     fn create_panel(&mut self) {
         let ws_id = self.board.ensure_workspace();
-        if let Err(error) = self.board.create_panel(PanelOptions::default(), ws_id) {
+        if let Err(error) = self.create_panel_with_options(PanelOptions::default(), ws_id) {
             tracing::error!("failed to create panel: {error}");
+        }
+    }
+
+    fn create_panel_with_options(
+        &mut self,
+        mut opts: PanelOptions,
+        workspace_id: WorkspaceId,
+    ) -> horizon_core::Result<PanelId> {
+        self.resolve_panel_launch_binding(&mut opts);
+        self.board.create_panel(opts, workspace_id)
+    }
+
+    fn resolve_panel_launch_binding(&mut self, opts: &mut PanelOptions) {
+        if !Self::panel_options_need_session_bootstrap(opts) {
+            return;
+        }
+
+        match AgentSessionCatalog::load() {
+            Ok(catalog) => {
+                let cwd = opts.cwd.as_ref().map(|path| path.display().to_string());
+                opts.session_binding = catalog
+                    .recent_for(opts.kind, cwd.as_deref())
+                    .into_iter()
+                    .next()
+                    .map(|session| session.into_binding());
+                self.session_catalog = catalog;
+                self.last_session_catalog_refresh = Some(Instant::now());
+            }
+            Err(error) => tracing::warn!("failed to load agent session catalog: {error}"),
         }
     }
 
@@ -305,6 +382,7 @@ impl HorizonApp {
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
 
         let mut created = false;
+        let mut create_request: Option<(WorkspaceId, PanelOptions)> = None;
 
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
@@ -344,14 +422,19 @@ impl HorizonApp {
                                     self.board.create_workspace_at(&name, canvas_pos)
                                 };
 
-                                if let Err(error) = self.board.create_panel(opts, ws_id) {
-                                    tracing::error!("failed to create panel: {error}");
-                                }
-                                created = true;
+                                create_request = Some((ws_id, opts));
                             }
                         }
                     });
             });
+
+        if let Some((ws_id, opts)) = create_request {
+            if let Err(error) = self.create_panel_with_options(opts, ws_id) {
+                tracing::error!("failed to create panel: {error}");
+            } else {
+                created = true;
+            }
+        }
 
         // Close popup on selection or click outside the popup area.
         // Skip the first 2 frames to avoid the opening double-click
@@ -811,7 +894,7 @@ impl HorizonApp {
             }
         }
         if let Some((ws_id, opts)) = create_from_preset
-            && let Err(error) = self.board.create_panel(opts, ws_id)
+            && let Err(error) = self.create_panel_with_options(opts, ws_id)
         {
             tracing::error!("failed to create panel from preset: {error}");
         }
@@ -954,28 +1037,92 @@ impl HorizonApp {
         }
     }
 
+    fn poll_startup_bootstrap(&mut self) -> bool {
+        let Some(receiver) = self.startup_receiver.take() else {
+            return true;
+        };
+
+        match receiver.try_recv() {
+            Ok(bootstrap) => {
+                self.session_catalog = bootstrap.session_catalog;
+                self.last_session_catalog_refresh = Some(Instant::now());
+                self.board = Board::from_runtime_state(&bootstrap.runtime_state).unwrap_or_else(|error| {
+                    tracing::error!("failed to restore runtime state: {error}");
+                    Board::new()
+                });
+                true
+            }
+            Err(TryRecvError::Empty) => {
+                self.startup_receiver = Some(receiver);
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                tracing::warn!("startup bootstrap worker disconnected before sending runtime state");
+                true
+            }
+        }
+    }
+
+    fn render_loading_view(&self, ctx: &Context) {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(theme::BG))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() * 0.32);
+                    ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Resolving saved sessions...")
+                            .size(13.0)
+                            .color(theme::FG_SOFT),
+                    );
+                });
+            });
+    }
+
     fn maybe_refresh_session_catalog(&mut self) {
         const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+        if let Some(receiver) = self.session_catalog_refresh.take() {
+            match receiver.try_recv() {
+                Ok(Ok(catalog)) => {
+                    self.session_catalog = catalog;
+                    self.last_session_catalog_refresh = Some(Instant::now());
+                    self.capture_new_codex_bindings();
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!("failed to refresh agent session catalog: {error}");
+                    self.last_session_catalog_refresh = Some(Instant::now());
+                }
+                Err(TryRecvError::Empty) => {
+                    self.session_catalog_refresh = Some(receiver);
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    tracing::warn!("session catalog refresh worker disconnected");
+                }
+            }
+        }
+
         let has_unbound_codex = self
             .board
             .panels
             .iter()
             .any(|panel| panel.kind == PanelKind::Codex && panel.session_binding.is_none());
+        if !has_unbound_codex {
+            return;
+        }
+
         let should_refresh = self
             .last_session_catalog_refresh
             .is_none_or(|last_refresh| last_refresh.elapsed() >= REFRESH_INTERVAL);
 
-        if !has_unbound_codex && !should_refresh {
+        if !should_refresh {
             return;
         }
 
-        match AgentSessionCatalog::load() {
-            Ok(catalog) => {
-                self.session_catalog = catalog;
-                self.last_session_catalog_refresh = Some(Instant::now());
-                self.capture_new_codex_bindings();
-            }
-            Err(error) => tracing::warn!("failed to refresh agent session catalog: {error}"),
+        if self.session_catalog_refresh.is_none() {
+            self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());
         }
     }
 
@@ -1706,6 +1853,12 @@ impl eframe::App for HorizonApp {
             self.theme_applied = true;
         }
 
+        if !self.poll_startup_bootstrap() {
+            self.render_loading_view(ctx);
+            ctx.request_repaint_after(Duration::from_millis(16));
+            return;
+        }
+
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.board.process_output();
@@ -1786,6 +1939,11 @@ impl eframe::App for HorizonApp {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         theme::BG.to_normalized_gamma_f32()
+    }
+
+    fn on_exit(&mut self) {
+        self.auto_save_runtime_state();
+        self.board.shutdown_agent_panels();
     }
 }
 

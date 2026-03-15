@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
@@ -8,6 +10,7 @@ use crate::workspace::{Workspace, WorkspaceId};
 const TILE_GAP: f32 = 20.0;
 const WS_INNER_PAD: f32 = 20.0;
 const WORKSPACE_GAP: f32 = 80.0;
+const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct Board {
     pub panels: Vec<Panel>,
@@ -155,8 +158,12 @@ impl Board {
     }
 
     pub fn close_panel(&mut self, id: PanelId) {
-        let ws_id = self.panel_workspace_id(id);
-        self.panels.retain(|p| p.id != id);
+        let removed_panel = self
+            .panels
+            .iter()
+            .position(|panel| panel.id == id)
+            .map(|index| self.panels.remove(index));
+        let ws_id = removed_panel.as_ref().map(|panel| panel.workspace_id);
         for ws in &mut self.workspaces {
             ws.remove_panel(id);
         }
@@ -177,6 +184,40 @@ impl Board {
                 if self.active_workspace == Some(ws_id) {
                     self.active_workspace = self.workspaces.first().map(|ws| ws.id);
                 }
+            }
+        }
+
+        if let Some(mut panel) = removed_panel
+            && panel.kind.is_agent()
+            && !panel.shutdown_with_timeout(AGENT_PANEL_SHUTDOWN_TIMEOUT)
+        {
+            tracing::warn!(
+                panel_id = panel.id.0,
+                kind = ?panel.kind,
+                timeout_ms = AGENT_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
+                "timed out waiting for agent panel shutdown"
+            );
+        }
+    }
+
+    pub fn shutdown_agent_panels(&mut self) {
+        for panel in &mut self.panels {
+            if panel.kind.is_agent() {
+                panel.request_shutdown();
+            }
+        }
+
+        for panel in &mut self.panels {
+            if !panel.kind.is_agent() {
+                continue;
+            }
+            if !panel.wait_for_shutdown(AGENT_PANEL_SHUTDOWN_TIMEOUT) {
+                tracing::warn!(
+                    panel_id = panel.id.0,
+                    kind = ?panel.kind,
+                    timeout_ms = AGENT_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
+                    "timed out waiting for agent panel shutdown"
+                );
             }
         }
     }

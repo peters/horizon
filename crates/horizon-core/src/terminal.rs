@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
@@ -176,6 +177,45 @@ impl Terminal {
             .event_sender
             .send(Msg::Input(Cow::Owned(bytes.to_vec())))
             .map_err(|error| tracing::debug!("failed to forward terminal input: {error}"));
+    }
+
+    pub fn request_shutdown(&mut self) {
+        if self.event_loop_handle.is_none() {
+            return;
+        }
+
+        let _ = self
+            .event_sender
+            .send(Msg::Shutdown)
+            .map_err(|error| tracing::debug!("failed to stop terminal event loop: {error}"));
+    }
+
+    #[must_use]
+    pub fn wait_for_shutdown(&mut self, timeout: Duration) -> bool {
+        let Some(event_loop_handle) = self.event_loop_handle.take() else {
+            return true;
+        };
+
+        let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = shutdown_tx.send(event_loop_handle.join());
+        });
+
+        match shutdown_rx.recv_timeout(timeout) {
+            Ok(Ok(_)) => true,
+            Ok(Err(_)) => {
+                tracing::warn!("terminal event loop panicked during shutdown");
+                true
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+        }
+    }
+
+    #[must_use]
+    pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
+        self.request_shutdown();
+        self.wait_for_shutdown(timeout)
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
@@ -420,10 +460,7 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self
-            .event_sender
-            .send(Msg::Shutdown)
-            .map_err(|error| tracing::debug!("failed to stop terminal event loop: {error}"));
+        self.request_shutdown();
 
         // Detach the event loop thread instead of joining it — joining can
         // block the main thread indefinitely if the child process is still
@@ -498,7 +535,9 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalDimensions, default_terminal_rgb};
+    use std::time::Duration;
+
+    use super::{Terminal, TerminalDimensions, TerminalSpawnOptions, default_terminal_rgb};
     use alacritty_terminal::grid::Dimensions;
 
     #[test]
@@ -515,5 +554,23 @@ mod tests {
         let color = default_terminal_rgb(21);
 
         assert_eq!((color.r, color.g, color.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn shutdown_with_timeout_waits_for_pty_exit() {
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
+            args: Vec::new(),
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 41,
+        })
+        .expect("terminal should spawn");
+
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 }

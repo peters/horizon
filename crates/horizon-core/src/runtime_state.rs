@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -18,6 +18,10 @@ const DEFAULT_COLS: u16 = 80;
 const TILE_GAP: f32 = 20.0;
 const WS_INNER_PAD: f32 = 20.0;
 const WORKSPACE_GAP: f32 = 80.0;
+const MAX_CLAUDE_SESSION_FILES: usize = 64;
+const CLAUDE_SESSION_HEAD_LINE_LIMIT: usize = 48;
+const CLAUDE_SESSION_TAIL_LINE_LIMIT: usize = 24;
+const CLAUDE_SESSION_TAIL_BYTES: u64 = 32 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
@@ -426,10 +430,12 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
 
     let mut session_paths = Vec::new();
     collect_claude_project_files(&projects_dir, &mut session_paths)?;
+    session_paths.sort_by(|left, right| right.1.cmp(&left.1));
+    session_paths.truncate(MAX_CLAUDE_SESSION_FILES);
 
     let mut sessions_by_id: HashMap<String, AgentSessionRecord> = HashMap::new();
-    for path in session_paths {
-        match load_claude_project_session(&path) {
+    for (path, updated_at) in session_paths {
+        match load_claude_project_session_summary(&path, updated_at) {
             Ok(Some(session)) => match sessions_by_id.get_mut(&session.session_id) {
                 Some(existing) if session.updated_at > existing.updated_at => *existing = session,
                 Some(_) => {}
@@ -449,7 +455,7 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
     Ok(sessions)
 }
 
-fn collect_claude_project_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -457,84 +463,145 @@ fn collect_claude_project_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<
         if file_type.is_dir() {
             collect_claude_project_files(&path, files)?;
         } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl") {
-            files.push(path);
+            let updated_at = file_updated_at_millis(&path)?;
+            files.push((path, updated_at));
         }
     }
     Ok(())
 }
 
-fn load_claude_project_session(path: &Path) -> Result<Option<AgentSessionRecord>> {
+fn load_claude_project_session_summary(path: &Path, updated_at: i64) -> Result<Option<AgentSessionRecord>> {
     let session_id = path
         .file_stem()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_owned)
         .ok_or_else(|| Error::State(format!("invalid Claude session path {}", path.display())))?;
-    let updated_at = file_updated_at_millis(path)?;
-    let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
-    Ok(parse_claude_project_session(reader, &session_id, updated_at))
+    let mut file = std::fs::File::open(path)?;
+    let mut summary = ClaudeSessionSummary::default();
+    scan_claude_session_reader(
+        BufReader::new(file.try_clone()?),
+        Some(CLAUDE_SESSION_HEAD_LINE_LIMIT),
+        &mut summary,
+    );
+    if summary.last_prompt.is_none() {
+        scan_claude_session_tail(&mut file, &mut summary)?;
+    }
+    Ok(summary.into_record(&session_id, updated_at))
 }
 
+#[cfg(test)]
 fn parse_claude_project_session<R: BufRead>(
     reader: R,
     fallback_session_id: &str,
     fallback_updated_at: i64,
 ) -> Option<AgentSessionRecord> {
-    let mut session_id = fallback_session_id.to_string();
-    let mut cwd = None;
-    let mut slug = None;
-    let mut last_prompt = None;
+    let mut summary = ClaudeSessionSummary::default();
+    scan_claude_session_reader(reader, None, &mut summary);
+    summary.into_record(fallback_session_id, fallback_updated_at)
+}
 
-    for line_result in reader.lines() {
-        let Ok(line) = line_result else {
-            continue;
-        };
+#[derive(Default)]
+struct ClaudeSessionSummary {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    slug: Option<String>,
+    last_prompt: Option<String>,
+}
+
+impl ClaudeSessionSummary {
+    fn apply_line(&mut self, line: &str) {
         if line.trim().is_empty() {
-            continue;
+            return;
         }
 
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return;
         };
 
         if let Some(found_session_id) = value.get("sessionId").and_then(Value::as_str)
             && !found_session_id.is_empty()
         {
-            session_id = found_session_id.to_string();
+            self.session_id = Some(found_session_id.to_string());
         }
 
-        if cwd.is_none()
+        if self.cwd.is_none()
             && let Some(found_cwd) = value.get("cwd").and_then(Value::as_str)
         {
-            cwd = normalize_cwd(Some(found_cwd));
+            self.cwd = normalize_cwd(Some(found_cwd));
         }
 
-        if slug.is_none()
+        if self.slug.is_none()
             && let Some(found_slug) = value.get("slug").and_then(Value::as_str)
             && !found_slug.is_empty()
         {
-            slug = Some(found_slug.to_string());
+            self.slug = Some(found_slug.to_string());
         }
 
         if let Some("last-prompt") = value.get("type").and_then(Value::as_str)
             && let Some(found_prompt) = value.get("lastPrompt").and_then(Value::as_str)
             && !found_prompt.is_empty()
         {
-            last_prompt = Some(truncate_session_label(found_prompt));
+            self.last_prompt = Some(truncate_session_label(found_prompt));
         }
     }
 
-    if session_id.is_empty() {
-        return None;
-    }
+    fn into_record(self, fallback_session_id: &str, fallback_updated_at: i64) -> Option<AgentSessionRecord> {
+        let session_id = self
+            .session_id
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback_session_id.to_string());
 
-    Some(AgentSessionRecord {
-        kind: PanelKind::Claude,
-        session_id,
-        cwd,
-        label: last_prompt.or(slug).or(Some("Claude session".to_string())),
-        updated_at: fallback_updated_at,
-    })
+        if session_id.is_empty() {
+            return None;
+        }
+
+        Some(AgentSessionRecord {
+            kind: PanelKind::Claude,
+            session_id,
+            cwd: self.cwd,
+            label: self.last_prompt.or(self.slug).or(Some("Claude session".to_string())),
+            updated_at: fallback_updated_at,
+        })
+    }
+}
+
+fn scan_claude_session_reader<R: BufRead>(mut reader: R, limit: Option<usize>, summary: &mut ClaudeSessionSummary) {
+    let mut buffer = Vec::new();
+    let mut index = 0usize;
+    loop {
+        if limit.is_some_and(|line_limit| index >= line_limit) {
+            break;
+        }
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buffer);
+                summary.apply_line(line.trim_end_matches(['\r', '\n']));
+                index += 1;
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+fn scan_claude_session_tail(file: &mut std::fs::File, summary: &mut ClaudeSessionSummary) -> Result<()> {
+    let file_len = file.metadata()?.len();
+    let start = file_len.saturating_sub(CLAUDE_SESSION_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))?;
+
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    let text = String::from_utf8_lossy(&buffer);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let tail_start = lines.len().saturating_sub(CLAUDE_SESSION_TAIL_LINE_LIMIT);
+    for line in &lines[tail_start..] {
+        summary.apply_line(line);
+    }
+    Ok(())
 }
 
 fn truncate_session_label(value: &str) -> String {
@@ -758,5 +825,31 @@ mod tests {
         assert_eq!(session.cwd, None);
         assert_eq!(session.label.as_deref(), Some("Claude session"));
         assert_eq!(session.updated_at, 7);
+    }
+
+    #[test]
+    fn load_claude_project_session_summary_reads_head_and_tail_metadata() {
+        let path = std::env::temp_dir().join(format!("horizon-claude-session-{}.jsonl", Uuid::new_v4()));
+        let mut content = String::from(
+            "{\"type\":\"user\",\"cwd\":\"/repo\",\"sessionId\":\"session-123\",\"slug\":\"quiet-river\"}\n",
+        );
+        for _ in 0..80 {
+            content.push_str("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\"}}\n");
+        }
+        content.push_str(
+            "{\"type\":\"last-prompt\",\"lastPrompt\":\"reply with ok only\",\"sessionId\":\"session-123\"}\n",
+        );
+        std::fs::write(&path, content).expect("write temp session file");
+
+        let session = load_claude_project_session_summary(&path, 9)
+            .expect("load")
+            .expect("session");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(session.kind, PanelKind::Claude);
+        assert_eq!(session.session_id, "session-123");
+        assert_eq!(session.cwd.as_deref(), Some("/repo"));
+        assert_eq!(session.label.as_deref(), Some("reply with ok only"));
+        assert_eq!(session.updated_at, 9);
     }
 }

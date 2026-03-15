@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -147,17 +148,29 @@ impl Panel {
         let saved_args = args.clone();
         let saved_cwd = cwd.clone();
         let saved_cwd_string = saved_cwd.as_ref().map(|path| path.display().to_string());
-        let should_resume_binding = session_binding.is_some() || matches!(resume, PanelResume::Session { .. });
-
+        let had_existing_session_binding = session_binding.is_some();
         if session_binding.is_none() {
             session_binding = match (&resume, kind) {
                 (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude) => Some(
                     AgentSessionBinding::new(kind, session_id.clone(), saved_cwd_string.clone(), name.clone(), None),
                 ),
-                (_, PanelKind::Claude) => new_session_binding(kind, saved_cwd_string.clone(), name.clone()),
+                (PanelResume::Fresh, PanelKind::Claude) => {
+                    new_session_binding(kind, saved_cwd_string.clone(), name.clone())
+                }
                 _ => None,
             };
         }
+
+        let should_resume_binding = match kind {
+            PanelKind::Claude => {
+                session_binding.is_some()
+                    && (had_existing_session_binding
+                        || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
+            }
+            PanelKind::Codex | PanelKind::Shell | PanelKind::Command => {
+                session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
+            }
+        };
 
         let (program, launch_args) = resolve_launch_command(
             command,
@@ -218,6 +231,20 @@ impl Panel {
 
     pub fn write_input(&mut self, bytes: &[u8]) {
         self.terminal.write_input(bytes);
+    }
+
+    pub fn request_shutdown(&mut self) {
+        self.terminal.request_shutdown();
+    }
+
+    #[must_use]
+    pub fn wait_for_shutdown(&mut self, timeout: Duration) -> bool {
+        self.terminal.wait_for_shutdown(timeout)
+    }
+
+    #[must_use]
+    pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
+        self.terminal.shutdown_with_timeout(timeout)
     }
 
     pub fn move_to(&mut self, position: [f32; 2]) {
@@ -408,6 +435,44 @@ mod tests {
         assert_eq!(args[0], "-ic");
         assert!(args[1].contains("claude"));
         assert!(args[1].contains("--resume session-42"));
+    }
+
+    #[test]
+    fn claude_fresh_binding_uses_session_id_flag() {
+        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-42".to_string(), None, None, None);
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--dangerously-skip-permissions".to_string()],
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            Some(&binding),
+            false,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("claude"));
+        assert!(args[1].contains("--session-id session-42"));
+        assert!(!args[1].contains("--resume session-42"));
+    }
+
+    #[test]
+    fn restored_claude_fresh_binding_uses_resume_flag() {
+        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-42".to_string(), None, None, None);
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--dangerously-skip-permissions".to_string()],
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            Some(&binding),
+            true,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("claude"));
+        assert!(args[1].contains("--resume session-42"));
+        assert!(!args[1].contains("--session-id session-42"));
     }
 
     #[test]
