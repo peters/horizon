@@ -88,6 +88,7 @@ pub struct HorizonApp {
     workspace_creates: Vec<PanelId>,
     theme_applied: bool,
     pan_offset: Vec2,
+    pan_target: Option<Vec2>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
@@ -194,6 +195,7 @@ impl HorizonApp {
             pan_offset: runtime_state
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
+            pan_target: None,
             runtime_dirty_since: Some(
                 Instant::now()
                     .checked_sub(Duration::from_secs(1))
@@ -242,17 +244,47 @@ impl HorizonApp {
 
     fn reset_view(&mut self) {
         self.pan_offset = Vec2::ZERO;
+        self.pan_target = None;
         self.mark_runtime_dirty();
     }
 
+    fn animate_pan(&mut self, ctx: &Context) {
+        if let Some(target) = self.pan_target {
+            let dt = ctx.input(|i| i.predicted_dt);
+            let t = (8.0 * dt).min(1.0);
+            self.pan_offset = self.pan_offset + (target - self.pan_offset) * t;
+            if (self.pan_offset - target).length_sq() < 0.5 {
+                self.pan_offset = target;
+                self.pan_target = None;
+            }
+            self.mark_runtime_dirty();
+        }
+    }
+
     fn pan_to_canvas_pos(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2) {
+        self.pan_to_canvas_pos_aligned(ctx, canvas_pos, canvas_size, false);
+    }
+
+    fn pan_to_canvas_pos_aligned(
+        &mut self,
+        ctx: &Context,
+        canvas_pos: Pos2,
+        canvas_size: Vec2,
+        left_align: bool,
+    ) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let center = Pos2::new(canvas_pos.x + canvas_size.x * 0.5, canvas_pos.y + canvas_size.y * 0.5);
-        self.pan_offset = Vec2::new(
-            canvas_rect.width() * 0.5 - center.x,
-            canvas_rect.height() * 0.5 - center.y,
-        );
-        self.mark_runtime_dirty();
+        let vw = canvas_rect.width();
+        let vh = canvas_rect.height();
+
+        const PAN_MARGIN: f32 = 40.0;
+        let x = if left_align {
+            PAN_MARGIN - canvas_pos.x
+        } else {
+            vw * 0.5 - (canvas_pos.x + canvas_size.x * 0.5)
+        };
+        let y = vh * 0.5 - (canvas_pos.y + canvas_size.y * 0.5);
+
+        self.pan_target = Some(Vec2::new(x, y));
     }
 
     fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
@@ -332,10 +364,7 @@ impl HorizonApp {
             }
             self.mark_runtime_dirty();
         } else {
-            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
-                workspace_id,
-                preset,
-            }));
+            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel { workspace_id, preset }));
         }
     }
 
@@ -606,6 +635,7 @@ impl HorizonApp {
         });
 
         if pan_delta != Vec2::ZERO {
+            self.pan_target = None;
             self.pan_offset += pan_delta;
             self.mark_runtime_dirty();
         }
@@ -988,15 +1018,21 @@ impl HorizonApp {
         if let Some(panel_id) = pan_to_panel {
             if let Some(panel) = self.board.panel(panel_id) {
                 let pos = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
-                let size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
+                let size = Vec2::new(
+                    panel.layout.size[0] + 2.0 * PANEL_PADDING,
+                    panel.layout.size[1] + PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING,
+                );
                 self.pan_to_canvas_pos(ctx, pos, size);
             }
         } else if let Some(ws_id) = pan_to_workspace {
             self.board.focus_workspace(ws_id);
             if let Some((min, max)) = self.board.workspace_bounds(ws_id) {
-                let pos = Pos2::new(min[0], min[1]);
-                let size = Vec2::new(max[0] - min[0], max[1] - min[1]);
-                self.pan_to_canvas_pos(ctx, pos, size);
+                let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                let size = Vec2::new(
+                    max[0] - min[0] + 2.0 * WS_BG_PAD,
+                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                );
+                self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
             }
         }
         if let Some(panel_id) = close_panel {
@@ -2212,6 +2248,8 @@ impl eframe::App for HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.board.process_output();
+
+        self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
 
         let ws_count_before = self.board.workspaces.len();
