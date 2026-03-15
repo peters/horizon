@@ -416,6 +416,15 @@ fn printable_text(key: Key, modifiers: Modifiers) -> Option<String> {
         return Some(letter.to_string());
     }
 
+    // For non-letter keys, shift produces a layout-dependent character
+    // (e.g. Shift+2 = @ on US, " on UK). We can't predict it here, so
+    // return None and let egui's Text event deliver the correct character.
+    // Without this, the suppress mechanism fails: we'd suppress "2" but
+    // egui emits Text("@"), causing both to reach the terminal.
+    if modifiers.shift {
+        return None;
+    }
+
     let symbol = match key {
         Key::Space => Some(" "),
         Key::Colon => Some(":"),
