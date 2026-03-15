@@ -1,4 +1,4 @@
-use egui::{FontId, Key, Pos2, Rect, Rounding, Vec2};
+use egui::{CornerRadius, FontId, Key, Pos2, Rect, StrokeKind, Vec2};
 use orbiterm_core::Panel;
 
 use crate::input;
@@ -22,7 +22,7 @@ impl<'a> TerminalView<'a> {
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
     pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
         let font_id = FontId::monospace(FONT_SIZE);
-        let char_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
+        let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'M'));
         let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
         let layout = terminal_layout(ui.available_size(), char_width, line_height);
         let new_cols = quantize_dimension(layout.body.width() / char_width);
@@ -193,7 +193,7 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
 fn render_grid(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, Rounding::same(6.0), theme::PANEL_BG);
+    painter.rect_filled(rect, CornerRadius::same(6), theme::PANEL_BG);
 
     let (rows, cols) = screen.size();
 
@@ -207,7 +207,7 @@ fn render_grid(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &Grid
                 if bg != theme::PANEL_BG {
                     let cell_rect =
                         Rect::from_min_size(Pos2::new(x, y), Vec2::new(metrics.char_width, metrics.line_height));
-                    painter.rect_filled(cell_rect, 0.0, bg);
+                    painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
                 }
 
                 let contents = cell.contents();
@@ -216,7 +216,7 @@ fn render_grid(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &Grid
                     painter.text(
                         Pos2::new(x, y),
                         egui::Align2::LEFT_TOP,
-                        &contents,
+                        contents,
                         metrics.font_id.clone(),
                         fg,
                     );
@@ -236,13 +236,14 @@ fn render_cursor(ui: &egui::Ui, rect: Rect, screen: &vt100::Screen, metrics: &Gr
 
     if has_focus {
         // Solid block cursor when focused
-        painter.rect_filled(cursor_rect, Rounding::same(1.0), theme::CURSOR.gamma_multiply(0.8));
+        painter.rect_filled(cursor_rect, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.8));
     } else {
         // Hollow rectangle when not focused
         painter.rect_stroke(
             cursor_rect,
-            Rounding::same(1.0),
+            CornerRadius::same(1),
             egui::Stroke::new(1.0, theme::CURSOR.gamma_multiply(0.4)),
+            StrokeKind::Outside,
         );
     }
 }
@@ -261,18 +262,19 @@ fn render_scrollbar(
     } else {
         theme::alpha(theme::PANEL_BG_ALT, 170)
     };
-    painter.rect_filled(rect, Rounding::same(999.0), track_fill);
+    painter.rect_filled(rect, CornerRadius::same(u8::MAX), track_fill);
     painter.rect_stroke(
         rect,
-        Rounding::same(999.0),
+        CornerRadius::same(u8::MAX),
         egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 180)),
+        StrokeKind::Outside,
     );
 
     let thumb_height = scrollbar_thumb_height(rect.height(), quantize_visible_rows(visible_rows), scrollback_limit);
     let thumb_rect = scrollbar_thumb_rect(rect, thumb_height, scrollback, scrollback_limit);
     painter.rect_filled(
         thumb_rect,
-        Rounding::same(999.0),
+        CornerRadius::same(u8::MAX),
         if scrollback > 0 || highlighted {
             theme::alpha(theme::ACCENT, 210)
         } else {

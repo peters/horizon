@@ -15,6 +15,8 @@ workspace = true
 orbiterm-core = { path = "../orbiterm-core" }
 eframe.workspace = true
 egui.workspace = true
+# Ensure native renderer backends are enabled for eframe's wgpu stack.
+wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_yaml.workspace = true

@@ -1,4 +1,4 @@
-use egui::{Color32, Rounding, Shadow, Stroke, Style, Vec2, Visuals, epaint};
+use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Style, Vec2, Visuals};
 
 pub const BG: Color32 = Color32::from_rgb(7, 10, 16);
 pub const BG_ELEVATED: Color32 = Color32::from_rgb(12, 16, 24);
@@ -42,7 +42,7 @@ pub fn apply(ctx: &egui::Context) {
     let mut style = Style::default();
 
     style.spacing.item_spacing = Vec2::new(8.0, 8.0);
-    style.spacing.window_margin = epaint::Margin::same(0.0);
+    style.spacing.window_margin = Margin::same(0);
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
     style.visuals = visuals();
 
@@ -102,11 +102,11 @@ pub fn vt100_color_to_egui(color: vt100::Color, is_fg: bool) -> Color32 {
 fn visuals() -> Visuals {
     let mut visuals = Visuals::dark();
 
-    visuals.window_rounding = Rounding::same(14.0);
+    visuals.window_corner_radius = CornerRadius::same(14);
     visuals.window_shadow = Shadow {
-        offset: [0.0, 10.0].into(),
-        blur: 28.0,
-        spread: 2.0,
+        offset: [0, 10],
+        blur: 28,
+        spread: 2,
         color: Color32::from_black_alpha(128),
     };
     visuals.window_stroke = Stroke::new(1.0, BORDER_SUBTLE);
@@ -123,29 +123,29 @@ fn visuals() -> Visuals {
     visuals.widgets.noninteractive.bg_fill = BG_ELEVATED;
     visuals.widgets.noninteractive.weak_bg_fill = PANEL_BG_ALT;
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, FG_DIM);
-    visuals.widgets.noninteractive.rounding = Rounding::same(10.0);
+    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(10);
 
     visuals.widgets.inactive.bg_fill = PANEL_BG_ALT;
     visuals.widgets.inactive.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, FG_SOFT);
-    visuals.widgets.inactive.rounding = Rounding::same(10.0);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(10);
 
     visuals.widgets.hovered.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.16);
     visuals.widgets.hovered.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.hovered.rounding = Rounding::same(10.0);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(10);
 
     visuals.widgets.active.bg_fill = blend(PANEL_BG_ALT, ACCENT, 0.22);
     visuals.widgets.active.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, FG);
-    visuals.widgets.active.rounding = Rounding::same(10.0);
+    visuals.widgets.active.corner_radius = CornerRadius::same(10);
 
     visuals.selection.bg_fill = alpha(ACCENT, 54);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     visuals.popup_shadow = Shadow {
-        offset: [0.0, 6.0].into(),
-        blur: 22.0,
-        spread: 0.0,
+        offset: [0, 6],
+        blur: 22,
+        spread: 0,
         color: Color32::from_black_alpha(118),
     };
 

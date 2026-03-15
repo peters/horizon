@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use egui::{
-    Align, Button, Color32, Context, Id, Layout, Margin, Order, Pos2, Rect, Rounding, Sense, Stroke, UiBuilder, Vec2,
+    Align, Button, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind,
+    UiBuilder, Vec2,
 };
 use orbiterm_core::{Board, Config, PanelId, PanelOptions, WorkspaceId};
 
@@ -120,7 +121,7 @@ impl OrbitermApp {
             .frame(
                 egui::Frame::default()
                     .fill(theme::TITLEBAR_BG)
-                    .inner_margin(Margin::symmetric(14.0, 8.0))
+                    .inner_margin(Margin::symmetric(14, 8))
                     .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170))),
             )
             .show(ctx, |ui| {
@@ -182,7 +183,7 @@ impl OrbitermApp {
                             1.0,
                             theme::alpha(ws_color, if is_active { 200 } else { 120 }),
                         ))
-                        .rounding(Rounding::same(10.0));
+                        .corner_radius(10);
 
                         if ui.add(chip).clicked() {
                             self.board.focus_workspace(ws_id);
@@ -222,9 +223,9 @@ impl OrbitermApp {
             .show(ctx, |ui| {
                 egui::Frame::default()
                     .fill(theme::alpha(theme::PANEL_BG, 236))
-                    .inner_margin(Margin::symmetric(12.0, 10.0))
+                    .inner_margin(Margin::symmetric(12, 10))
                     .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG, 210)))
-                    .rounding(Rounding::same(12.0))
+                    .corner_radius(12)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("Canvas HUD").color(theme::FG).size(11.5).strong());
                         ui.label(
@@ -402,14 +403,14 @@ impl OrbitermApp {
                             .size(12.0);
                         if ui.add(egui::Button::new(text).frame(false)).clicked() {
                             ws_assign = Some(*ws_id);
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
 
                     ui.separator();
                     if ui.button("New Workspace").clicked() {
                         ws_create = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -484,8 +485,13 @@ impl OrbitermApp {
                     .show(ctx, |ui| {
                         let (rect, _) = ui.allocate_exact_size(badge_rect.size(), Sense::hover());
                         let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, Rounding::same(12.0), theme::alpha(ws_color, 12));
-                        painter.rect_stroke(rect, Rounding::same(12.0), Stroke::new(1.0, theme::alpha(ws_color, 40)));
+                        painter.rect_filled(rect, CornerRadius::same(12), theme::alpha(ws_color, 12));
+                        painter.rect_stroke(
+                            rect,
+                            CornerRadius::same(12),
+                            Stroke::new(1.0, theme::alpha(ws_color, 40)),
+                            StrokeKind::Outside,
+                        );
                         painter.text(
                             Pos2::new(rect.min.x + 14.0, rect.center().y),
                             egui::Align2::LEFT_CENTER,
@@ -515,8 +521,13 @@ impl OrbitermApp {
                     let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::hover());
                     let painter = ui.painter_at(rect);
 
-                    painter.rect_filled(rect, Rounding::same(20.0), theme::alpha(ws_color, 15));
-                    painter.rect_stroke(rect, Rounding::same(20.0), Stroke::new(1.0, theme::alpha(ws_color, 50)));
+                    painter.rect_filled(rect, CornerRadius::same(20), theme::alpha(ws_color, 15));
+                    painter.rect_stroke(
+                        rect,
+                        CornerRadius::same(20),
+                        Stroke::new(1.0, theme::alpha(ws_color, 50)),
+                        StrokeKind::Outside,
+                    );
                     painter.text(
                         Pos2::new(rect.min.x + 16.0, rect.min.y + WS_TITLE_HEIGHT * 0.5),
                         egui::Align2::LEFT_CENTER,
@@ -572,7 +583,7 @@ fn viewport_local_rect(ctx: &Context) -> Rect {
     ctx.input(|input| input.viewport().inner_rect.or(input.viewport().outer_rect))
         .map_or_else(
             || {
-                let rect = ctx.screen_rect();
+                let rect = ctx.content_rect();
                 Rect::from_min_size(Pos2::ZERO, rect.size())
             },
             |rect| Rect::from_min_size(Pos2::ZERO, rect.size()),
@@ -594,15 +605,16 @@ fn paint_panel_chrome(
     let painter = ui.painter_at(panel_rect);
     let accent = ws_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG });
 
-    painter.rect_filled(panel_rect, Rounding::same(14.0), theme::PANEL_BG);
+    painter.rect_filled(panel_rect, CornerRadius::same(14), theme::PANEL_BG);
     painter.rect_stroke(
         panel_rect,
-        Rounding::same(14.0),
+        CornerRadius::same(14),
         Stroke::new(1.2, theme::panel_border(accent, focused)),
+        StrokeKind::Outside,
     );
     painter.rect_filled(
         titlebar_rect,
-        Rounding::same(14.0),
+        CornerRadius::same(14),
         theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
     );
     let title_x = if let Some(ws_color) = ws_accent {
@@ -655,11 +667,12 @@ fn paint_empty_state(ui: &mut egui::Ui) {
     let card_rect = Rect::from_center_size(rect.center(), Vec2::new(320.0, 110.0));
     let painter = ui.painter();
 
-    painter.rect_filled(card_rect, Rounding::same(18.0), theme::alpha(theme::PANEL_BG, 236));
+    painter.rect_filled(card_rect, CornerRadius::same(18), theme::alpha(theme::PANEL_BG, 236));
     painter.rect_stroke(
         card_rect,
-        Rounding::same(18.0),
+        CornerRadius::same(18),
         Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)),
+        StrokeKind::Outside,
     );
     painter.text(
         Pos2::new(card_rect.center().x, card_rect.min.y + 34.0),
@@ -751,14 +764,14 @@ fn primary_button(text: &str) -> Button<'_> {
             1.0,
             theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.72),
         ))
-        .rounding(Rounding::same(10.0))
+        .corner_radius(10)
 }
 
 fn chrome_button(text: &str) -> Button<'_> {
     Button::new(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT))
         .fill(theme::PANEL_BG_ALT)
         .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)))
-        .rounding(Rounding::same(10.0))
+        .corner_radius(10)
 }
 
 #[cfg(test)]

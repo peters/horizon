@@ -1,7 +1,18 @@
+#[derive(Default)]
+struct TerminalCallbacks {
+    title: String,
+}
+
+impl vt100::Callbacks for TerminalCallbacks {
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        self.title = String::from_utf8_lossy(title).into_owned();
+    }
+}
+
 const DEFAULT_SCROLLBACK_LIMIT: usize = 8_000;
 
 pub struct Terminal {
-    parser: vt100::Parser,
+    parser: vt100::Parser<TerminalCallbacks>,
     cols: u16,
     rows: u16,
     scrollback_limit: usize,
@@ -17,7 +28,7 @@ impl Terminal {
     pub fn with_scrollback(rows: u16, cols: u16, scrollback_limit: usize) -> Self {
         let scrollback_limit = scrollback_limit.max(1);
         Self {
-            parser: vt100::Parser::new(rows, cols, scrollback_limit),
+            parser: vt100::Parser::new_with_callbacks(rows, cols, scrollback_limit, TerminalCallbacks::default()),
             cols,
             rows,
             scrollback_limit,
@@ -37,7 +48,7 @@ impl Terminal {
         if rows != self.rows || cols != self.cols {
             self.rows = rows;
             self.cols = cols;
-            self.parser.set_size(rows, cols);
+            self.parser.screen_mut().set_size(rows, cols);
         }
     }
 
@@ -47,12 +58,12 @@ impl Terminal {
     }
 
     pub fn set_scrollback(&mut self, scrollback: usize) {
-        self.parser.set_scrollback(scrollback);
+        self.parser.screen_mut().set_scrollback(scrollback);
     }
 
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
-        self.parser
-            .set_scrollback(next_scrollback_offset(self.scrollback(), delta));
+        let next = next_scrollback_offset(self.scrollback(), delta);
+        self.parser.screen_mut().set_scrollback(next);
     }
 
     #[must_use]
@@ -72,7 +83,7 @@ impl Terminal {
 
     #[must_use]
     pub fn title(&self) -> &str {
-        self.parser.screen().title()
+        &self.parser.callbacks().title
     }
 }
 
@@ -100,5 +111,14 @@ mod tests {
         let terminal = Terminal::with_scrollback(24, 80, 12_345);
 
         assert_eq!(terminal.scrollback_limit(), 12_345);
+    }
+
+    #[test]
+    fn terminal_tracks_title_via_callbacks() {
+        let mut terminal = Terminal::new(24, 80);
+
+        terminal.process(b"\x1b]2;Build Output\x07");
+
+        assert_eq!(terminal.title(), "Build Output");
     }
 }
