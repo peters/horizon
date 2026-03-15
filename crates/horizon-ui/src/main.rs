@@ -2,6 +2,7 @@
 
 mod app;
 mod branding;
+mod dir_picker;
 mod input;
 mod terminal_widget;
 mod theme;

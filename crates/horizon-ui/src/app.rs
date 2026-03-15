@@ -12,6 +12,7 @@ use horizon_core::{
     PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
 };
 
+use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::terminal_widget::TerminalView;
 use crate::theme;
 
@@ -108,10 +109,12 @@ pub struct HorizonApp {
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
+    dir_picker: Option<DirPicker>,
     runtime_dirty_since: Option<Instant>,
 }
 
 impl HorizonApp {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         config: &Config,
@@ -181,6 +184,7 @@ impl HorizonApp {
             pending_session_rebinds: Vec::new(),
             settings: None,
             pending_preset_pick: None,
+            dir_picker: None,
             pan_offset: runtime_state
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
@@ -267,7 +271,7 @@ impl HorizonApp {
     }
 
     fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
-        self.board.focused.is_some() && !ctx.wants_keyboard_input()
+        self.board.focused.is_some() && !ctx.wants_keyboard_input() && self.dir_picker.is_none()
     }
 
     fn create_panel(&mut self) {
@@ -308,12 +312,57 @@ impl HorizonApp {
                     .recent_for(opts.kind, cwd.as_deref())
                     .into_iter()
                     .next()
-                    .map(|session| session.into_binding());
+                    .map(horizon_core::AgentSessionRecord::into_binding);
                 self.session_catalog = catalog;
                 self.last_session_catalog_refresh = Some(Instant::now());
             }
             Err(error) => tracing::warn!("failed to load agent session catalog: {error}"),
         }
+    }
+
+    fn render_dir_picker(&mut self, ctx: &Context) {
+        let Some(picker) = self.dir_picker.as_mut() else {
+            return;
+        };
+
+        match picker.show(ctx) {
+            DirPickerAction::None => {}
+            DirPickerAction::Cancelled => {
+                self.dir_picker = None;
+            }
+            DirPickerAction::Selected(path, purpose) => {
+                self.dir_picker = None;
+                self.execute_dir_picker_result(path, purpose);
+            }
+        }
+    }
+
+    fn execute_dir_picker_result(&mut self, path: Option<PathBuf>, purpose: DirPickerPurpose) {
+        match purpose {
+            DirPickerPurpose::NewWorkspace { canvas_pos, preset } => {
+                let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+                let ws_id = self.board.create_workspace_at(&name, canvas_pos);
+                if let Some(ref cwd) = path
+                    && let Some(ws) = self.board.workspace_mut(ws_id)
+                {
+                    ws.cwd = Some(cwd.clone());
+                }
+                let mut opts = preset.to_panel_options();
+                opts.cwd = path;
+                opts.position = Some(canvas_pos);
+                if let Err(error) = self.create_panel_with_options(opts, ws_id) {
+                    tracing::error!("failed to create panel: {error}");
+                }
+            }
+            DirPickerPurpose::AddPanel { workspace_id, preset } => {
+                let mut opts = preset.to_panel_options();
+                opts.cwd = path;
+                if let Err(error) = self.create_panel_with_options(opts, workspace_id) {
+                    tracing::error!("failed to create panel: {error}");
+                }
+            }
+        }
+        self.mark_runtime_dirty();
     }
 
     fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
@@ -363,7 +412,16 @@ impl HorizonApp {
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
-            self.create_panel();
+            let ws_id = self.board.ensure_workspace();
+            if let Some(preset) = self.presets.first().cloned() {
+                self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
+                    workspace_id: ws_id,
+                    preset,
+                }));
+            } else {
+                // No presets configured — create a plain shell panel
+                self.create_panel();
+            }
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
@@ -412,8 +470,7 @@ impl HorizonApp {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
 
-        let mut created = false;
-        let mut create_request: Option<(WorkspaceId, PanelOptions)> = None;
+        let mut open_dir_picker: Option<DirPickerPurpose> = None;
 
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
@@ -443,35 +500,25 @@ impl HorizonApp {
                             };
                             let text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
                             if ui.add(Button::new(text).frame(false)).clicked() {
-                                let mut opts = preset.to_panel_options();
-
-                                let ws_id = if let Some(ws_id) = target_ws {
-                                    opts.position = Some(canvas_pos);
-                                    ws_id
+                                if let Some(ws_id) = target_ws {
+                                    open_dir_picker = Some(DirPickerPurpose::AddPanel {
+                                        workspace_id: ws_id,
+                                        preset: preset.clone(),
+                                    });
                                 } else {
-                                    let name = format!("Workspace {}", self.board.workspaces.len() + 1,);
-                                    self.board.create_workspace_at(&name, canvas_pos)
-                                };
-
-                                create_request = Some((ws_id, opts));
+                                    open_dir_picker = Some(DirPickerPurpose::NewWorkspace {
+                                        canvas_pos,
+                                        preset: preset.clone(),
+                                    });
+                                }
                             }
                         }
                     });
             });
 
-        if let Some((ws_id, opts)) = create_request {
-            if let Err(error) = self.create_panel_with_options(opts, ws_id) {
-                tracing::error!("failed to create panel: {error}");
-            } else {
-                created = true;
-            }
-        }
-
-        // Close popup on selection or click outside the popup area.
-        // Skip the first 2 frames to avoid the opening double-click
-        // from immediately closing the popup.
-        if created {
+        if let Some(purpose) = open_dir_picker {
             self.pending_preset_pick = None;
+            self.dir_picker = Some(DirPicker::new(purpose));
         } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
             let popup_rect = area_response.response.rect;
             let clicked_outside = ctx.input(|input| {
@@ -590,7 +637,7 @@ impl HorizonApp {
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
         let mut close_all_in_ws: Option<WorkspaceId> = None;
-        let mut create_from_preset: Option<(WorkspaceId, PanelOptions)> = None;
+        let mut create_from_preset: Option<(WorkspaceId, PresetConfig)> = None;
 
         let viewport = viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
@@ -707,7 +754,7 @@ impl HorizonApp {
                                                 let label =
                                                     egui::RichText::new(&preset.name).size(12.0).color(theme::FG_SOFT);
                                                 if ui.add(Button::new(label).frame(false)).clicked() {
-                                                    create_from_preset = Some((ws_id, preset.to_panel_options()));
+                                                    create_from_preset = Some((ws_id, preset.clone()));
                                                 }
                                             }
                                         },
@@ -924,10 +971,11 @@ impl HorizonApp {
                 self.panel_screen_rects.remove(&pid);
             }
         }
-        if let Some((ws_id, opts)) = create_from_preset
-            && let Err(error) = self.create_panel_with_options(opts, ws_id)
-        {
-            tracing::error!("failed to create panel from preset: {error}");
+        if let Some((ws_id, preset)) = create_from_preset {
+            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
+                workspace_id: ws_id,
+                preset,
+            }));
         }
     }
 
@@ -1094,6 +1142,7 @@ impl HorizonApp {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn render_loading_view(&self, ctx: &Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::BG))
@@ -2172,6 +2221,9 @@ impl eframe::App for HorizonApp {
             self.render_minimap(ctx);
             self.render_canvas_hud(ctx);
         }
+
+        // Dir picker renders on top of everything
+        self.render_dir_picker(ctx);
 
         // Track window size/position for persistence.
         ctx.input(|input| {

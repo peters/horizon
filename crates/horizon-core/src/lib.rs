@@ -3,6 +3,7 @@
 mod attention;
 mod board;
 mod config;
+pub mod dir_search;
 mod error;
 mod panel;
 mod runtime_state;
