@@ -1602,14 +1602,16 @@ impl HorizonApp {
             return;
         }
 
-        // Include the current viewport in the content bounds so the minimap
-        // always shows the viewport rectangle even when panned beyond content.
+        // Add a margin around the content so the viewport indicator
+        // stays visible when panned near the edges.
         let view_min = self.screen_to_canvas(canvas_rect, canvas_rect.min);
         let view_max = self.screen_to_canvas(canvas_rect, canvas_rect.max);
-        content_min[0] = content_min[0].min(view_min.x);
-        content_min[1] = content_min[1].min(view_min.y);
-        content_max[0] = content_max[0].max(view_max.x);
-        content_max[1] = content_max[1].max(view_max.y);
+        let view_w = view_max.x - view_min.x;
+        let view_h = view_max.y - view_min.y;
+        content_min[0] -= view_w * 0.5;
+        content_min[1] -= view_h * 0.5;
+        content_max[0] += view_w * 0.5;
+        content_max[1] += view_h * 0.5;
 
         let content_w = content_max[0] - content_min[0];
         let content_h = content_max[1] - content_min[1];
@@ -1733,6 +1735,7 @@ impl HorizonApp {
             let canvas_y = content_min[1] + (local.y - MINIMAP_PAD) / scale;
 
             // Center the viewport on the clicked canvas position.
+            self.pan_target = None;
             self.pan_offset = Vec2::new(
                 canvas_rect.width() * 0.5 - canvas_x,
                 canvas_rect.height() * 0.5 - canvas_y,
