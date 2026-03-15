@@ -1398,10 +1398,17 @@ impl HorizonApp {
                     let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
                     let screen_min = self.canvas_to_screen(canvas_rect, top_left);
                     let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
-                    (
-                        Rect::from_min_max(Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)), screen_max),
-                        false,
-                    )
+                    {
+                        let clamped_min_y = screen_min.y.max(canvas_rect.min.y);
+                        let clamped_max_y = screen_max.y.max(clamped_min_y);
+                        (
+                            Rect::from_min_max(
+                                Pos2::new(screen_min.x, clamped_min_y),
+                                Pos2::new(screen_max.x, clamped_max_y),
+                            ),
+                            false,
+                        )
+                    }
                 } else {
                     let screen_min =
                         self.canvas_to_screen(canvas_rect, Pos2::new(workspace.position[0], workspace.position[1]));
