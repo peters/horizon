@@ -279,6 +279,11 @@ impl Board {
         false
     }
 
+    #[must_use]
+    pub fn rename_panel(&mut self, id: PanelId, name: &str) -> bool {
+        self.panel_mut(id).is_some_and(|panel| panel.rename(name))
+    }
+
     pub fn process_output(&mut self) {
         for panel in &mut self.panels {
             panel.process_output();
@@ -598,6 +603,34 @@ mod tests {
 
         assert!(!board.rename_workspace(workspace_id, "   "));
         assert_eq!(board.workspaces[0].name, "frontend");
+    }
+
+    #[test]
+    fn rename_panel_updates_matching_panel() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+
+        assert!(board.rename_panel(panel_id, "backend shell"));
+        assert_eq!(
+            board.panel(panel_id).expect("panel should exist").title,
+            "backend shell"
+        );
+    }
+
+    #[test]
+    fn rename_panel_rejects_blank_names() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("frontend");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+        let original_title = board.panel(panel_id).expect("panel should exist").title.clone();
+
+        assert!(!board.rename_panel(panel_id, "   "));
+        assert_eq!(board.panel(panel_id).expect("panel should exist").title, original_title);
     }
 
     #[test]

@@ -50,7 +50,15 @@ struct WorkspaceInteraction {
     activate_workspace: bool,
     drag_delta: Vec2,
     start_rename: bool,
-    finish_rename: bool,
+    rename_action: RenameEditAction,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RenameEditAction {
+    #[default]
+    None,
+    Commit,
+    Cancel,
 }
 
 enum SettingsStatus {
@@ -86,6 +94,8 @@ pub struct HorizonApp {
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
+    renaming_panel: Option<PanelId>,
+    panel_rename_buffer: String,
     config_path: PathBuf,
     runtime_state_path: PathBuf,
     template_config: Config,
@@ -157,6 +167,8 @@ impl HorizonApp {
             hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),
+            renaming_panel: None,
+            panel_rename_buffer: String::new(),
             config_path,
             runtime_state_path,
             template_config: config.clone(),
@@ -272,6 +284,16 @@ impl HorizonApp {
     ) -> horizon_core::Result<PanelId> {
         self.resolve_panel_launch_binding(&mut opts);
         self.board.create_panel(opts, workspace_id)
+    }
+
+    fn clear_workspace_rename(&mut self) {
+        self.renaming_workspace = None;
+        self.rename_buffer.clear();
+    }
+
+    fn clear_panel_rename(&mut self) {
+        self.renaming_panel = None;
+        self.panel_rename_buffer.clear();
     }
 
     fn resolve_panel_launch_binding(&mut self, opts: &mut PanelOptions) {
@@ -1747,6 +1769,7 @@ impl HorizonApp {
         let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
         let is_focused = self.board.focused == Some(panel_id);
         let rebind_options = self.session_rebind_options(panel_id);
+        let is_renaming = self.renaming_panel == Some(panel_id);
         let mut clicked_terminal = false;
         let mut focus_panel = false;
         let mut close_panel = false;
@@ -1754,6 +1777,8 @@ impl HorizonApp {
         let mut resize_delta = Vec2::ZERO;
         let mut ws_assign: Option<WorkspaceId> = None;
         let mut ws_create = false;
+        let mut start_rename = false;
+        let mut rename_action = RenameEditAction::None;
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(screen_rect.min)
@@ -1784,7 +1809,11 @@ impl HorizonApp {
                 let drag_response = ui.interact(
                     titlebar_rect,
                     ui.make_persistent_id(("panel_drag", panel_id.0)),
-                    Sense::click_and_drag(),
+                    if is_renaming {
+                        Sense::hover()
+                    } else {
+                        Sense::click_and_drag()
+                    },
                 );
                 let close_response = ui.interact(
                     close_rect.expand2(Vec2::splat(4.0)),
@@ -1797,14 +1826,13 @@ impl HorizonApp {
                     Sense::click_and_drag(),
                 );
 
-                if drag_response.clicked()
-                    || drag_response.drag_started()
-                    || resize_response.drag_started()
-                    || resize_response.clicked()
-                {
+                if resize_response.drag_started() || resize_response.clicked() {
                     focus_panel = true;
                 }
-                if drag_response.dragged() {
+                if !is_renaming && (drag_response.clicked() || drag_response.drag_started()) {
+                    focus_panel = true;
+                }
+                if !is_renaming && drag_response.dragged() {
                     drag_delta = ctx.input(|input| input.pointer.delta());
                 }
                 if resize_response.dragged() {
@@ -1813,49 +1841,55 @@ impl HorizonApp {
                 if close_response.clicked() {
                     close_panel = true;
                 }
+                if !is_renaming && drag_response.double_clicked() {
+                    start_rename = true;
+                    focus_panel = true;
+                }
 
-                drag_response.context_menu(|ui| {
-                    ui.set_min_width(180.0);
-                    ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
-                    ui.separator();
+                if !is_renaming {
+                    drag_response.context_menu(|ui| {
+                        ui.set_min_width(180.0);
+                        ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
+                        ui.separator();
 
-                    for (ws_id, ws_name, ws_color) in workspaces {
-                        let is_current = current_ws_id == *ws_id;
-                        let label = if is_current {
-                            format!("● {ws_name}")
-                        } else {
-                            format!("  {ws_name}")
-                        };
-                        let text = egui::RichText::new(label)
-                            .color(if is_current { *ws_color } else { theme::FG_SOFT })
-                            .size(12.0);
-                        if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                            ws_assign = Some(*ws_id);
+                        for (ws_id, ws_name, ws_color) in workspaces {
+                            let is_current = current_ws_id == *ws_id;
+                            let label = if is_current {
+                                format!("● {ws_name}")
+                            } else {
+                                format!("  {ws_name}")
+                            };
+                            let text = egui::RichText::new(label)
+                                .color(if is_current { *ws_color } else { theme::FG_SOFT })
+                                .size(12.0);
+                            if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                                ws_assign = Some(*ws_id);
+                                ui.close();
+                            }
+                        }
+
+                        ui.separator();
+                        if !rebind_options.is_empty() {
+                            ui.menu_button("Rebind Session", |ui| {
+                                ui.set_min_width(220.0);
+                                for (label, binding) in &rebind_options {
+                                    let button =
+                                        egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT))
+                                            .frame(false);
+                                    if ui.add(button).clicked() {
+                                        self.pending_session_rebinds.push((panel_id, binding.clone()));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.separator();
+                        }
+                        if ui.button("New Workspace").clicked() {
+                            ws_create = true;
                             ui.close();
                         }
-                    }
-
-                    ui.separator();
-                    if !rebind_options.is_empty() {
-                        ui.menu_button("Rebind Session", |ui| {
-                            ui.set_min_width(220.0);
-                            for (label, binding) in &rebind_options {
-                                let button =
-                                    egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT))
-                                        .frame(false);
-                                if ui.add(button).clicked() {
-                                    self.pending_session_rebinds.push((panel_id, binding.clone()));
-                                    ui.close();
-                                }
-                            }
-                        });
-                        ui.separator();
-                    }
-                    if ui.button("New Workspace").clicked() {
-                        ws_create = true;
-                        ui.close();
-                    }
-                });
+                    });
+                }
 
                 paint_panel_chrome(
                     ui,
@@ -1864,13 +1898,22 @@ impl HorizonApp {
                     titlebar_rect,
                     close_rect,
                     resize_rect,
-                    &title,
+                    if is_renaming { None } else { Some(title.as_str()) },
                     history_size,
                     scrollback_limit,
                     is_focused,
                     close_response.hovered(),
                     ws_accent,
                 );
+
+                if is_renaming {
+                    rename_action = show_inline_rename_editor(
+                        ui,
+                        panel_title_content_rect(titlebar_rect, close_rect, ws_accent.is_some()),
+                        &mut self.panel_rename_buffer,
+                        egui::FontId::proportional(13.0),
+                    );
+                }
 
                 ui.scope_builder(
                     UiBuilder::new()
@@ -1885,6 +1928,30 @@ impl HorizonApp {
             });
 
         self.panel_screen_rects.insert(panel_id, screen_rect);
+
+        if start_rename {
+            self.clear_workspace_rename();
+            self.renaming_panel = Some(panel_id);
+            self.panel_rename_buffer = title.clone();
+        }
+
+        match rename_action {
+            RenameEditAction::Commit => {
+                if self.renaming_panel == Some(panel_id) {
+                    let name = self.panel_rename_buffer.trim().to_string();
+                    if !name.is_empty() && self.board.rename_panel(panel_id, &name) {
+                        self.mark_runtime_dirty();
+                    }
+                    self.clear_panel_rename();
+                }
+            }
+            RenameEditAction::Cancel => {
+                if self.renaming_panel == Some(panel_id) {
+                    self.clear_panel_rename();
+                }
+            }
+            RenameEditAction::None => {}
+        }
 
         if drag_delta != Vec2::ZERO {
             let new_position = canvas_position + drag_delta;
@@ -1920,7 +1987,7 @@ impl HorizonApp {
         let mut pending_workspace_moves = Vec::new();
         let mut focus_workspace = None;
         let mut start_rename_ws = None;
-        let mut finish_rename = false;
+        let mut rename_action = RenameEditAction::None;
 
         for workspace in &visuals {
             self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
@@ -1944,23 +2011,29 @@ impl HorizonApp {
                 start_rename_ws = Some((workspace.id, workspace.name.clone()));
             }
 
-            if interaction.finish_rename {
-                finish_rename = true;
+            if interaction.rename_action != RenameEditAction::None {
+                rename_action = interaction.rename_action;
             }
         }
 
         if let Some((ws_id, current_name)) = start_rename_ws {
+            self.clear_panel_rename();
             self.renaming_workspace = Some(ws_id);
             self.rename_buffer = current_name;
         }
 
-        if finish_rename && let Some(ws_id) = self.renaming_workspace.take() {
-            let name = self.rename_buffer.trim().to_string();
-            if !name.is_empty() {
-                let _ = self.board.rename_workspace(ws_id, &name);
-                self.mark_runtime_dirty();
+        match rename_action {
+            RenameEditAction::Commit => {
+                if let Some(ws_id) = self.renaming_workspace {
+                    let name = self.rename_buffer.trim().to_string();
+                    if !name.is_empty() && self.board.rename_workspace(ws_id, &name) {
+                        self.mark_runtime_dirty();
+                    }
+                    self.clear_workspace_rename();
+                }
             }
-            self.rename_buffer.clear();
+            RenameEditAction::Cancel => self.clear_workspace_rename(),
+            RenameEditAction::None => {}
         }
 
         if let Some(workspace_id) = focus_workspace {
@@ -2047,12 +2120,28 @@ impl eframe::App for HorizonApp {
         let ws_count_before = self.board.workspaces.len();
         let panel_count_before = self.board.panels.len();
 
-        for panel_id in self.panels_to_close.drain(..) {
+        let panels_to_close = std::mem::take(&mut self.panels_to_close);
+        for panel_id in panels_to_close {
             self.board.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
+            if self.renaming_panel == Some(panel_id) {
+                self.clear_panel_rename();
+            }
         }
         if self.board.workspaces.is_empty() {
             self.reset_view();
+        }
+        if self
+            .renaming_workspace
+            .is_some_and(|workspace_id| self.board.workspace(workspace_id).is_none())
+        {
+            self.clear_workspace_rename();
+        }
+        if self
+            .renaming_panel
+            .is_some_and(|panel_id| self.board.panel(panel_id).is_none())
+        {
+            self.clear_panel_rename();
         }
 
         for panel_id in self.workspace_creates.drain(..) {
@@ -2175,7 +2264,7 @@ fn paint_panel_chrome(
     titlebar_rect: Rect,
     close_rect: Rect,
     resize_rect: Rect,
-    title: &str,
+    title: Option<&str>,
     history_size: usize,
     scrollback_limit: usize,
     focused: bool,
@@ -2197,23 +2286,24 @@ fn paint_panel_chrome(
         CornerRadius::same(16),
         theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
     );
-    let title_x = if let Some(ws_color) = ws_accent {
+    if let Some(ws_color) = ws_accent {
         painter.circle_filled(
             Pos2::new(titlebar_rect.min.x + 14.0, titlebar_rect.center().y),
             4.5,
             ws_color,
         );
-        titlebar_rect.min.x + 26.0
-    } else {
-        titlebar_rect.min.x + 12.0
-    };
-    painter.text(
-        Pos2::new(title_x, titlebar_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        title,
-        egui::FontId::proportional(13.0),
-        theme::FG,
-    );
+    }
+    if let Some(title) = title {
+        let title_rect = panel_title_content_rect(titlebar_rect, close_rect, ws_accent.is_some());
+        let title_painter = painter.with_clip_rect(title_rect);
+        title_painter.text(
+            Pos2::new(title_rect.min.x, titlebar_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::proportional(13.0),
+            theme::FG,
+        );
+    }
 
     paint_history_meter(
         ui,
@@ -2266,11 +2356,7 @@ fn paint_history_meter(
     scrollback_limit: usize,
     focused: bool,
 ) {
-    let badge_size = Vec2::new(96.0, 20.0);
-    let badge_rect = Rect::from_center_size(
-        Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
-        badge_size,
-    );
+    let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
     let track_rect = Rect::from_min_max(
         Pos2::new(badge_rect.min.x + 8.0, badge_rect.max.y - 5.0),
         Pos2::new(badge_rect.max.x - 8.0, badge_rect.max.y - 3.0),
@@ -2330,6 +2416,64 @@ fn paint_history_meter(
             theme::FG_DIM
         },
     );
+}
+
+fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
+    let badge_size = Vec2::new(96.0, 20.0);
+    Rect::from_center_size(
+        Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
+        badge_size,
+    )
+}
+
+fn panel_title_content_rect(titlebar_rect: Rect, close_rect: Rect, has_workspace_accent: bool) -> Rect {
+    let left = if has_workspace_accent {
+        titlebar_rect.min.x + 26.0
+    } else {
+        titlebar_rect.min.x + 12.0
+    };
+    let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
+    let right = (badge_rect.min.x - 12.0).max(left + 1.0);
+
+    Rect::from_min_max(
+        Pos2::new(left, titlebar_rect.min.y + 2.0),
+        Pos2::new(right, titlebar_rect.max.y - 2.0),
+    )
+}
+
+fn show_inline_rename_editor(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    buffer: &mut String,
+    font: egui::FontId,
+) -> RenameEditAction {
+    let mut ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let edit = egui::TextEdit::singleline(buffer)
+        .font(font)
+        .text_color(theme::FG)
+        .frame(false)
+        .desired_width(rect.width())
+        .margin(Margin::ZERO);
+    let response = ui.add(edit);
+    if !response.has_focus() {
+        response.request_focus();
+    }
+
+    let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    let lost_focus = response.lost_focus();
+
+    if escape {
+        RenameEditAction::Cancel
+    } else if enter || lost_focus {
+        RenameEditAction::Commit
+    } else {
+        RenameEditAction::None
+    }
 }
 
 fn paint_empty_state(ui: &mut egui::Ui) {
@@ -2407,35 +2551,19 @@ fn render_workspace_visual(
             if let Some(buffer) = rename_buffer {
                 paint_workspace_label_bg(ui, rect, workspace.color, true, false, false);
 
-                let text_rect = Rect::from_min_max(
-                    Pos2::new(rect.min.x + 12.0, rect.min.y + 2.0),
-                    Pos2::new(rect.max.x - 8.0, rect.max.y - 2.0),
-                );
-                let mut ui = ui.new_child(
-                    UiBuilder::new()
-                        .max_rect(text_rect)
-                        .layout(Layout::left_to_right(Align::Center)),
-                );
-                let edit = egui::TextEdit::singleline(buffer)
-                    .font(egui::FontId::proportional(12.5))
-                    .text_color(theme::FG)
-                    .frame(false)
-                    .desired_width(text_rect.width())
-                    .margin(Margin::ZERO);
-                let response = ui.add(edit);
-                if !response.has_focus() {
-                    response.request_focus();
-                }
-
-                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-                let lost_focus = response.lost_focus();
-
                 WorkspaceInteraction {
                     activate_workspace: false,
                     drag_delta: Vec2::ZERO,
                     start_rename: false,
-                    finish_rename: enter || escape || lost_focus,
+                    rename_action: show_inline_rename_editor(
+                        ui,
+                        Rect::from_min_max(
+                            Pos2::new(rect.min.x + 12.0, rect.min.y + 2.0),
+                            Pos2::new(rect.max.x - 8.0, rect.max.y - 2.0),
+                        ),
+                        buffer,
+                        egui::FontId::proportional(12.5),
+                    ),
                 }
             } else {
                 if label_response.hovered() || label_response.dragged() {
@@ -2464,7 +2592,7 @@ fn render_workspace_visual(
                         Vec2::ZERO
                     },
                     start_rename: label_response.double_clicked(),
-                    finish_rename: false,
+                    rename_action: RenameEditAction::None,
                 }
             }
         })

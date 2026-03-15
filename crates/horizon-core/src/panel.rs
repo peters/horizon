@@ -229,6 +229,18 @@ impl Panel {
         }
     }
 
+    #[must_use]
+    pub fn rename(&mut self, name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        trimmed.clone_into(&mut self.title);
+        self.has_custom_name = true;
+        true
+    }
+
     pub fn write_input(&mut self, bytes: &[u8]) {
         self.terminal.write_input(bytes);
     }
