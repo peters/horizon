@@ -64,7 +64,7 @@ impl<'a> TerminalView<'a> {
         self.panel.set_focused(has_terminal_focus);
 
         if ui.is_rect_visible(interaction.layout.outer) {
-            let scrollbar_limit = self.panel.terminal.scrollback_limit();
+            let history_size = self.panel.terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
             self.panel.terminal.with_renderable_content(|content| {
                 let cursor = content.cursor;
@@ -83,7 +83,7 @@ impl<'a> TerminalView<'a> {
                     interaction.layout.scrollbar,
                     display_offset,
                     usize::from(new_rows),
-                    scrollbar_limit,
+                    history_size,
                     scrollbar_highlighted,
                 );
             });
@@ -249,9 +249,9 @@ fn handle_terminal_pointer_input(
             scrollbar_thumb_height(
                 interaction.scrollbar.rect.height() - 4.0,
                 visible_rows,
-                panel.terminal.scrollback_limit(),
+                panel.terminal.history_size(),
             ),
-            panel.terminal.scrollback_limit(),
+            panel.terminal.history_size(),
         );
         panel.set_scrollback(target_scrollback);
     }

@@ -237,6 +237,13 @@ impl Terminal {
     }
 
     #[must_use]
+    pub fn history_size(&self) -> usize {
+        let term = self.term.lock();
+        let grid = term.grid();
+        grid.total_lines().saturating_sub(grid.screen_lines())
+    }
+
+    #[must_use]
     pub fn cols(&self) -> u16 {
         self.cols
     }
