@@ -11,6 +11,7 @@ use crate::terminal_widget::TerminalView;
 use crate::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
+const SIDEBAR_WIDTH: f32 = 210.0;
 const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_MIN_SIZE: [f32; 2] = [320.0, 220.0];
@@ -53,6 +54,7 @@ pub struct OrbitermApp {
     panel_screen_rects: HashMap<PanelId, Rect>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
+    sidebar_visible: bool,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
 }
@@ -74,6 +76,7 @@ impl OrbitermApp {
             panel_screen_rects: HashMap::new(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
+            sidebar_visible: true,
             renaming_workspace: None,
             rename_buffer: String::new(),
         }
@@ -81,6 +84,18 @@ impl OrbitermApp {
 
     fn reset_view(&mut self) {
         self.pan_offset = Vec2::ZERO;
+    }
+
+    fn pan_to_canvas_pos(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2) {
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let center = Pos2::new(
+            canvas_pos.x + canvas_size.x * 0.5,
+            canvas_pos.y + canvas_size.y * 0.5,
+        );
+        self.pan_offset = Vec2::new(
+            canvas_rect.width() * 0.5 - center.x,
+            canvas_rect.height() * 0.5 - center.y,
+        );
     }
 
     fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
@@ -94,9 +109,14 @@ impl OrbitermApp {
         )
     }
 
-    fn canvas_rect(ctx: &Context) -> Rect {
+    fn canvas_rect(ctx: &Context, sidebar_visible: bool) -> Rect {
         let rect = viewport_local_rect(ctx);
-        Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + TOOLBAR_HEIGHT), rect.max)
+        let left = if sidebar_visible {
+            rect.min.x + SIDEBAR_WIDTH
+        } else {
+            rect.min.x
+        };
+        Rect::from_min_max(Pos2::new(left, rect.min.y + TOOLBAR_HEIGHT), rect.max)
     }
 
     fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
@@ -147,13 +167,17 @@ impl OrbitermApp {
             self.create_panel();
         }
 
+        if ctx.input(|input| input.key_pressed(egui::Key::B) && input.modifiers.ctrl) {
+            self.sidebar_visible = !self.sidebar_visible;
+        }
+
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
             self.reset_view();
         }
     }
 
     fn handle_canvas_double_click(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_rect(ctx);
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let ctrl_double_click = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl || input.modifiers.command;
             let double = input
@@ -200,7 +224,7 @@ impl OrbitermApp {
     }
 
     fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_rect(ctx);
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let panel_rects: Vec<Rect> = self.panel_screen_rects.values().copied().collect();
         let pan_delta = ctx.input(|input| {
             let pointer_position = input.pointer.hover_pos();
@@ -252,61 +276,265 @@ impl OrbitermApp {
                     if ui.add(primary_button("New Terminal")).clicked() {
                         self.create_panel();
                     }
-                    if ui.add(chrome_button("Reset View")).clicked() {
-                        self.reset_view();
-                    }
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(format!("{} panels", self.board.panels.len()))
-                            .color(theme::FG_DIM)
-                            .size(10.5),
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new("Middle-drag or scroll empty space to pan")
-                            .color(theme::FG_DIM)
-                            .size(10.5),
-                    );
-
-                    ui.separator();
-
-                    let ws_info: Vec<_> = self
-                        .board
-                        .workspaces
-                        .iter()
-                        .map(|ws| (ws.id, ws.name.clone(), ws.accent()))
-                        .collect();
-
-                    for (ws_id, ws_name, (r, g, b)) in ws_info {
-                        let ws_color = Color32::from_rgb(r, g, b);
-                        let is_active = self.board.active_workspace == Some(ws_id);
-                        let chip = Button::new(egui::RichText::new(&ws_name).size(10.5).color(if is_active {
-                            theme::FG
-                        } else {
-                            theme::FG_SOFT
-                        }))
-                        .fill(theme::blend(
-                            theme::PANEL_BG_ALT,
-                            ws_color,
-                            if is_active { 0.28 } else { 0.14 },
-                        ))
-                        .stroke(Stroke::new(
-                            1.0,
-                            theme::alpha(ws_color, if is_active { 200 } else { 120 }),
-                        ))
-                        .corner_radius(10);
-
-                        if ui.add(chip).clicked() {
-                            self.board.focus_workspace(ws_id);
-                        }
-                    }
-
-                    if ui.add(chrome_button("+ Workspace")).clicked() {
+                    if ui.add(chrome_button("New Workspace")).clicked() {
                         let name = format!("Workspace {}", self.board.workspaces.len() + 1);
                         let _ = self.board.create_workspace(&name);
                     }
+                    if ui.add(chrome_button("Reset View")).clicked() {
+                        self.reset_view();
+                    }
                 });
             });
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn render_sidebar(&mut self, ctx: &Context) {
+        if !self.sidebar_visible {
+            return;
+        }
+
+        let mut focus_panel: Option<PanelId> = None;
+        let mut pan_to_panel: Option<PanelId> = None;
+        let mut pan_to_workspace: Option<WorkspaceId> = None;
+        let mut close_panel: Option<PanelId> = None;
+
+        egui::SidePanel::left("sidebar")
+            .exact_width(SIDEBAR_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(theme::BG_ELEVATED)
+                    .inner_margin(Margin::ZERO)
+                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE)),
+            )
+            .show(ctx, |ui| {
+                // ── Header ──
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    ui.label(
+                        egui::RichText::new("WORKSPACES")
+                            .color(theme::FG_DIM)
+                            .size(10.5)
+                            .strong(),
+                    );
+                });
+                ui.add_space(10.0);
+
+                // ── Scrollable workspace list ──
+                let available = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .max_height(available)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+
+                        let ws_data: Vec<_> = self
+                            .board
+                            .workspaces
+                            .iter()
+                            .map(|ws| {
+                                let (r, g, b) = ws.accent();
+                                let color = Color32::from_rgb(r, g, b);
+                                let is_active = self.board.active_workspace == Some(ws.id);
+                                let panel_ids = ws.panels.clone();
+                                (ws.id, ws.name.clone(), color, is_active, panel_ids)
+                            })
+                            .collect();
+
+                        for (ws_id, ws_name, ws_color, is_active, panel_ids) in ws_data {
+                            // ── Workspace header ──
+                            ui.add_space(4.0);
+
+                            let ws_response = ui.horizontal(|ui| {
+                                ui.set_min_height(32.0);
+                                ui.add_space(14.0);
+
+                                // Accent bar
+                                let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
+                                ui.painter().rect_filled(
+                                    bar_rect,
+                                    CornerRadius::same(2),
+                                    theme::alpha(ws_color, if is_active { 240 } else { 110 }),
+                                );
+
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(&ws_name)
+                                        .color(if is_active { theme::FG } else { theme::FG_SOFT })
+                                        .size(13.0)
+                                        .strong(),
+                                );
+
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.add_space(14.0);
+                                    ui.label(
+                                        egui::RichText::new(format!("{}", panel_ids.len()))
+                                            .color(theme::alpha(theme::FG_DIM, 100))
+                                            .size(10.5),
+                                    );
+                                });
+                            });
+
+                            // Workspace click → pan to workspace
+                            let ws_rect = ws_response.response.rect;
+                            let ws_interact_id = ui.make_persistent_id(("sidebar_ws", ws_id.0));
+                            let ws_sense = ui.interact(ws_rect, ws_interact_id, Sense::click());
+                            if ws_sense.clicked() {
+                                pan_to_workspace = Some(ws_id);
+                            }
+
+                            // Workspace hover background
+                            let ws_bg = Rect::from_min_max(
+                                Pos2::new(ws_rect.min.x + 6.0, ws_rect.min.y),
+                                Pos2::new(ws_rect.max.x - 6.0, ws_rect.max.y),
+                            );
+                            if is_active {
+                                ui.painter_at(ws_bg).rect_filled(
+                                    ws_bg,
+                                    CornerRadius::same(8),
+                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT, ws_color, 0.12), 140),
+                                );
+                            } else if ws_sense.hovered() {
+                                ui.painter_at(ws_bg).rect_filled(
+                                    ws_bg,
+                                    CornerRadius::same(8),
+                                    theme::alpha(theme::PANEL_BG_ALT, 160),
+                                );
+                            }
+
+                            ui.add_space(2.0);
+
+                            // ── Terminal entries ──
+                            for panel_id in panel_ids {
+                                let Some(panel) = self.board.panel(panel_id) else {
+                                    continue;
+                                };
+                                let title = panel.title.clone();
+                                let is_focused = self.board.focused == Some(panel_id);
+
+                                let item_response = ui.horizontal(|ui| {
+                                    ui.set_min_height(30.0);
+                                    ui.add_space(30.0);
+
+                                    // Terminal prompt icon
+                                    ui.label(
+                                        egui::RichText::new(">_")
+                                            .color(theme::alpha(
+                                                ws_color,
+                                                if is_focused { 200 } else { 80 },
+                                            ))
+                                            .size(10.0)
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.add_space(4.0);
+
+                                    ui.label(
+                                        egui::RichText::new(&title)
+                                            .color(if is_focused {
+                                                theme::FG
+                                            } else {
+                                                theme::FG_SOFT
+                                            })
+                                            .size(12.5),
+                                    );
+
+                                    // Close button
+                                    ui.with_layout(
+                                        Layout::right_to_left(Align::Center),
+                                        |ui| {
+                                            ui.add_space(14.0);
+                                            let close = ui.add(
+                                                Button::new(
+                                                    egui::RichText::new("×")
+                                                        .size(16.0)
+                                                        .color(theme::FG_DIM),
+                                                )
+                                                .frame(false),
+                                            );
+                                            if close.clicked() {
+                                                close_panel = Some(panel_id);
+                                            }
+                                        },
+                                    );
+                                });
+
+                                // Row click (only if close wasn't clicked)
+                                let row_clicked =
+                                    item_response.response.interact(Sense::click()).clicked()
+                                        && close_panel != Some(panel_id);
+                                if row_clicked {
+                                    focus_panel = Some(panel_id);
+                                    pan_to_panel = Some(panel_id);
+                                }
+
+                                // Paint hover/focus background
+                                let item_rect = item_response.response.rect;
+                                let bg_rect = Rect::from_min_max(
+                                    Pos2::new(item_rect.min.x + 6.0, item_rect.min.y),
+                                    Pos2::new(item_rect.max.x - 6.0, item_rect.max.y),
+                                );
+                                if is_focused {
+                                    ui.painter_at(bg_rect).rect_filled(
+                                        bg_rect,
+                                        CornerRadius::same(8),
+                                        theme::alpha(
+                                            theme::blend(theme::PANEL_BG_ALT, ws_color, 0.22),
+                                            200,
+                                        ),
+                                    );
+                                    // Left accent edge
+                                    let edge = Rect::from_min_size(
+                                        Pos2::new(bg_rect.min.x, bg_rect.min.y + 4.0),
+                                        Vec2::new(2.0, bg_rect.height() - 8.0),
+                                    );
+                                    ui.painter().rect_filled(
+                                        edge,
+                                        CornerRadius::same(1),
+                                        ws_color,
+                                    );
+                                } else if item_response.response.hovered() {
+                                    ui.painter_at(bg_rect).rect_filled(
+                                        bg_rect,
+                                        CornerRadius::same(8),
+                                        theme::alpha(theme::PANEL_BG_ALT, 180),
+                                    );
+                                }
+
+                                ui.add_space(1.0);
+                            }
+
+                            ui.add_space(8.0);
+                        }
+                    });
+
+                ui.add_space(8.0);
+            });
+
+        // Apply deferred actions
+        if let Some(panel_id) = focus_panel {
+            self.board.focus(panel_id);
+        }
+        if let Some(panel_id) = pan_to_panel {
+            if let Some(panel) = self.board.panel(panel_id) {
+                let pos = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+                let size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
+                self.pan_to_canvas_pos(ctx, pos, size);
+            }
+        } else if let Some(ws_id) = pan_to_workspace {
+            self.board.focus_workspace(ws_id);
+            if let Some((min, max)) = self.board.workspace_bounds(ws_id) {
+                let pos = Pos2::new(min[0], min[1]);
+                let size = Vec2::new(max[0] - min[0], max[1] - min[1]);
+                self.pan_to_canvas_pos(ctx, pos, size);
+            }
+        }
+        if let Some(panel_id) = close_panel {
+            self.board.close_panel(panel_id);
+            self.panel_screen_rects.remove(&panel_id);
+        }
     }
 
     fn render_canvas_hud(&self, ctx: &Context) {
@@ -327,8 +555,13 @@ impl OrbitermApp {
                 },
             );
 
+        let hud_left = if self.sidebar_visible {
+            SIDEBAR_WIDTH + 16.0
+        } else {
+            16.0
+        };
         egui::Area::new(Id::new("canvas_hud"))
-            .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(16.0, -16.0))
+            .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(hud_left, -16.0))
             .interactable(false)
             .order(Order::Foreground)
             .show(ctx, |ui| {
@@ -418,7 +651,7 @@ impl OrbitermApp {
         let focused = self.board.focused;
         panel_order.sort_by_key(|(panel_id, _, _)| Some(*panel_id) == focused);
 
-        let canvas_rect = Self::canvas_rect(ctx);
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let mut panels_to_close = Vec::new();
 
         for (panel_id, title, fallback_index) in panel_order {
@@ -603,7 +836,7 @@ impl OrbitermApp {
     }
 
     fn render_workspace_backgrounds(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_rect(ctx);
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let visuals = self.workspace_visuals(canvas_rect);
 
         self.workspace_screen_rects.clear();
@@ -725,6 +958,9 @@ impl eframe::App for OrbitermApp {
             self.board.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
         }
+        if self.board.workspaces.is_empty() {
+            self.reset_view();
+        }
 
         for panel_id in self.workspace_creates.drain(..) {
             let name = format!("Workspace {}", self.board.workspaces.len() + 1);
@@ -740,6 +976,7 @@ impl eframe::App for OrbitermApp {
         } else {
             self.handle_canvas_pan(ctx);
             self.render_toolbar(ctx);
+            self.render_sidebar(ctx);
             self.render_canvas(ctx);
             self.render_workspace_backgrounds(ctx);
             self.handle_canvas_double_click(ctx);
