@@ -31,6 +31,10 @@ const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
 const WS_LABEL_HEIGHT: f32 = 30.0;
 const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;
+const MINIMAP_MAX_W: f32 = 200.0;
+const MINIMAP_MAX_H: f32 = 140.0;
+const MINIMAP_MARGIN: f32 = 16.0;
+const MINIMAP_PAD: f32 = 6.0;
 
 struct WorkspaceVisual {
     id: WorkspaceId,
@@ -78,6 +82,7 @@ pub struct HorizonApp {
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
+    minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
@@ -148,6 +153,7 @@ impl HorizonApp {
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
+            minimap_visible: true,
             hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),
@@ -329,6 +335,9 @@ impl HorizonApp {
         }
         if ctx.input(|input| input.key_pressed(egui::Key::H) && input.modifiers.ctrl) {
             self.hud_visible = !self.hud_visible;
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::M) && input.modifiers.ctrl) {
+            self.minimap_visible = !self.minimap_visible;
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
@@ -1406,6 +1415,177 @@ impl HorizonApp {
             });
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn render_minimap(&mut self, ctx: &Context) {
+        if !self.minimap_visible || self.board.workspaces.is_empty() {
+            return;
+        }
+
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+
+        // Gather all content bounds in canvas coordinates.
+        let mut content_min = [f32::MAX, f32::MAX];
+        let mut content_max = [f32::MIN, f32::MIN];
+        let mut has_content = false;
+        for workspace in &self.board.workspaces {
+            if let Some((ws_min, ws_max)) = self.board.workspace_bounds(workspace.id) {
+                content_min[0] = content_min[0].min(ws_min[0] - WS_BG_PAD);
+                content_min[1] = content_min[1].min(ws_min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                content_max[0] = content_max[0].max(ws_max[0] + WS_BG_PAD);
+                content_max[1] = content_max[1].max(ws_max[1] + WS_BG_PAD);
+                has_content = true;
+            } else {
+                let pos = workspace.position;
+                content_min[0] = content_min[0].min(pos[0]);
+                content_min[1] = content_min[1].min(pos[1]);
+                content_max[0] = content_max[0].max(pos[0] + WS_EMPTY_SIZE[0]);
+                content_max[1] = content_max[1].max(pos[1] + WS_EMPTY_SIZE[1]);
+                has_content = true;
+            }
+        }
+        if !has_content {
+            return;
+        }
+
+        // Include the current viewport in the content bounds so the minimap
+        // always shows the viewport rectangle even when panned beyond content.
+        let view_min = self.screen_to_canvas(canvas_rect, canvas_rect.min);
+        let view_max = self.screen_to_canvas(canvas_rect, canvas_rect.max);
+        content_min[0] = content_min[0].min(view_min.x);
+        content_min[1] = content_min[1].min(view_min.y);
+        content_max[0] = content_max[0].max(view_max.x);
+        content_max[1] = content_max[1].max(view_max.y);
+
+        let content_w = content_max[0] - content_min[0];
+        let content_h = content_max[1] - content_min[1];
+        if content_w < 1.0 || content_h < 1.0 {
+            return;
+        }
+
+        // Fit content aspect ratio into the minimap box.
+        let aspect = content_w / content_h;
+        let (map_w, map_h) = if aspect > MINIMAP_MAX_W / MINIMAP_MAX_H {
+            (MINIMAP_MAX_W, MINIMAP_MAX_W / aspect)
+        } else {
+            (MINIMAP_MAX_H * aspect, MINIMAP_MAX_H)
+        };
+        let outer_w = map_w + MINIMAP_PAD * 2.0;
+        let outer_h = map_h + MINIMAP_PAD * 2.0;
+
+        let scale = map_w / content_w;
+
+        // Map a canvas point to minimap-local coordinates.
+        let to_minimap = |cx: f32, cy: f32| -> Pos2 {
+            Pos2::new(
+                MINIMAP_PAD + (cx - content_min[0]) * scale,
+                MINIMAP_PAD + (cy - content_min[1]) * scale,
+            )
+        };
+
+        let area_id = Id::new("minimap_overlay");
+        let anchor_offset = Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN);
+
+        let response = egui::Area::new(area_id)
+            .anchor(egui::Align2::RIGHT_BOTTOM, anchor_offset)
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                let (response, painter) = ui.allocate_painter(Vec2::new(outer_w, outer_h), Sense::click_and_drag());
+                let origin = response.rect.min;
+
+                // Background.
+                painter.rect_filled(
+                    response.rect,
+                    CornerRadius::same(8),
+                    theme::alpha(theme::BG_ELEVATED, 220),
+                );
+                painter.rect_stroke(
+                    response.rect,
+                    CornerRadius::same(8),
+                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 180)),
+                    StrokeKind::Outside,
+                );
+
+                // Draw workspace frames.
+                for workspace in &self.board.workspaces {
+                    let (r, g, b) = workspace.accent();
+                    let ws_color = Color32::from_rgb(r, g, b);
+                    let is_active = self.board.active_workspace == Some(workspace.id);
+
+                    let (ws_min, ws_max) = if let Some((ws_min, ws_max)) = self.board.workspace_bounds(workspace.id) {
+                        (
+                            [ws_min[0] - WS_BG_PAD, ws_min[1] - WS_BG_PAD - WS_TITLE_HEIGHT],
+                            [ws_max[0] + WS_BG_PAD, ws_max[1] + WS_BG_PAD],
+                        )
+                    } else {
+                        let pos = workspace.position;
+                        (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
+                    };
+
+                    let tl = origin + to_minimap(ws_min[0], ws_min[1]).to_vec2();
+                    let br = origin + to_minimap(ws_max[0], ws_max[1]).to_vec2();
+                    let ws_rect = Rect::from_min_max(tl, br);
+
+                    let fill_alpha = if is_active { 40 } else { 22 };
+                    painter.rect_filled(ws_rect, CornerRadius::same(2), theme::alpha(ws_color, fill_alpha));
+                    painter.rect_stroke(
+                        ws_rect,
+                        CornerRadius::same(2),
+                        Stroke::new(0.8, theme::alpha(ws_color, if is_active { 140 } else { 80 })),
+                        StrokeKind::Outside,
+                    );
+                }
+
+                // Draw panel rectangles.
+                for panel in &self.board.panels {
+                    let pos = panel.layout.position;
+                    let size = panel.layout.size;
+                    let tl = origin + to_minimap(pos[0], pos[1]).to_vec2();
+                    let br = origin + to_minimap(pos[0] + size[0], pos[1] + size[1]).to_vec2();
+                    let panel_rect = Rect::from_min_max(tl, br);
+
+                    let ws_color = self.board.workspace(panel.workspace_id).map_or(theme::ACCENT, |ws| {
+                        let (r, g, b) = ws.accent();
+                        Color32::from_rgb(r, g, b)
+                    });
+
+                    let is_focused = self.board.focused == Some(panel.id);
+                    let fill_alpha = if is_focused { 120 } else { 70 };
+                    painter.rect_filled(panel_rect, CornerRadius::same(1), theme::alpha(ws_color, fill_alpha));
+                }
+
+                // Draw viewport rectangle.
+                let vp_tl = origin + to_minimap(view_min.x, view_min.y).to_vec2();
+                let vp_br = origin + to_minimap(view_max.x, view_max.y).to_vec2();
+                let vp_rect = Rect::from_min_max(vp_tl, vp_br);
+                painter.rect_filled(vp_rect, CornerRadius::same(1), theme::alpha(theme::FG, 14));
+                painter.rect_stroke(
+                    vp_rect,
+                    CornerRadius::same(1),
+                    Stroke::new(1.0, theme::alpha(theme::FG, 90)),
+                    StrokeKind::Inside,
+                );
+
+                response
+            });
+
+        // Handle click/drag to navigate.
+        let inner = response.inner;
+        if (inner.clicked() || inner.dragged())
+            && let Some(pointer) = ctx.input(|input| input.pointer.interact_pos())
+        {
+            let local = pointer - inner.rect.min;
+            let canvas_x = content_min[0] + (local.x - MINIMAP_PAD) / scale;
+            let canvas_y = content_min[1] + (local.y - MINIMAP_PAD) / scale;
+
+            // Center the viewport on the clicked canvas position.
+            self.pan_offset = Vec2::new(
+                canvas_rect.width() * 0.5 - canvas_x,
+                canvas_rect.height() * 0.5 - canvas_y,
+            );
+            self.mark_runtime_dirty();
+        }
+    }
+
     fn render_canvas_hud(&self, ctx: &Context) {
         if !self.hud_visible {
             return;
@@ -1900,6 +2080,7 @@ impl eframe::App for HorizonApp {
             self.handle_canvas_double_click(ctx);
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
+            self.render_minimap(ctx);
             self.render_canvas_hud(ctx);
         }
 
