@@ -50,6 +50,7 @@ pub struct OrbitermApp {
     pan_offset: Vec2,
     panel_screen_rects: HashMap<PanelId, Rect>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
+    fullscreen_panel: Option<PanelId>,
 }
 
 impl OrbitermApp {
@@ -68,6 +69,7 @@ impl OrbitermApp {
             pan_offset: Vec2::ZERO,
             panel_screen_rects: HashMap::new(),
             workspace_screen_rects: Vec::new(),
+            fullscreen_panel: None,
         }
     }
 
@@ -99,6 +101,34 @@ impl OrbitermApp {
         let ws_id = self.board.ensure_workspace();
         if let Err(error) = self.board.create_panel(PanelOptions::default(), ws_id) {
             tracing::error!("failed to create panel: {error}");
+        }
+    }
+
+    fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
+        let (f11, ctrl_f11, escape) = ctx.input(|input| {
+            let f11 = input.key_pressed(egui::Key::F11);
+            let ctrl = input.modifiers.ctrl || input.modifiers.command;
+            (f11 && !ctrl, f11 && ctrl, input.key_pressed(egui::Key::Escape))
+        });
+
+        if ctrl_f11 {
+            let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+        } else if f11 {
+            if self.fullscreen_panel.is_some() {
+                self.fullscreen_panel = None;
+            } else {
+                self.fullscreen_panel = self.board.focused;
+            }
+        } else if escape && self.fullscreen_panel.is_some() {
+            self.fullscreen_panel = None;
+        }
+
+        // Clear fullscreen if the panel no longer exists.
+        if let Some(panel_id) = self.fullscreen_panel
+            && self.board.panel(panel_id).is_none()
+        {
+            self.fullscreen_panel = None;
         }
     }
 
@@ -316,6 +346,33 @@ impl OrbitermApp {
                                 .size(11.0),
                         );
                     });
+            });
+    }
+
+    fn render_fullscreen_panel(&mut self, ctx: &Context) {
+        let Some(panel_id) = self.fullscreen_panel else {
+            return;
+        };
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(theme::PANEL_BG))
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                let body_rect = Rect::from_min_max(
+                    Pos2::new(rect.min.x + PANEL_PADDING, rect.min.y + PANEL_PADDING),
+                    Pos2::new(rect.max.x - PANEL_PADDING, rect.max.y - PANEL_PADDING),
+                );
+
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(body_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                        if let Some(panel) = self.board.panel_mut(panel_id) {
+                            TerminalView::new(panel).show(ui, true);
+                        }
+                    },
+                );
             });
     }
 
@@ -623,7 +680,7 @@ impl eframe::App for OrbitermApp {
             self.theme_applied = true;
         }
 
-        self.handle_canvas_pan(ctx);
+        self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.board.process_output();
 
@@ -641,12 +698,17 @@ impl eframe::App for OrbitermApp {
             self.board.assign_panel_to_workspace(panel_id, ws_id);
         }
 
-        self.render_toolbar(ctx);
-        self.render_canvas(ctx);
-        self.render_workspace_backgrounds(ctx);
-        self.handle_canvas_double_click(ctx);
-        self.render_panels(ctx);
-        self.render_canvas_hud(ctx);
+        if self.fullscreen_panel.is_some() {
+            self.render_fullscreen_panel(ctx);
+        } else {
+            self.handle_canvas_pan(ctx);
+            self.render_toolbar(ctx);
+            self.render_canvas(ctx);
+            self.render_workspace_backgrounds(ctx);
+            self.handle_canvas_double_click(ctx);
+            self.render_panels(ctx);
+            self.render_canvas_hud(ctx);
+        }
 
         ctx.request_repaint();
     }
