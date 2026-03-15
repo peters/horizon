@@ -735,6 +735,13 @@ impl OrbitermApp {
                     .filter_map(|pid| self.board.panel(*pid))
                     .map(|panel| TerminalConfig {
                         name: panel.title.clone(),
+                        command: panel.launch_command.clone(),
+                        args: panel.launch_args.clone(),
+                        cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
+                        kind: panel.kind,
+                        resume: panel.resume.clone(),
+                        position: Some(panel.layout.position),
+                        size: Some(panel.layout.size),
                         ..TerminalConfig::default()
                     })
                     .collect();
@@ -742,7 +749,7 @@ impl OrbitermApp {
                     name: ws.name.clone(),
                     color: None,
                     cwd: ws.cwd.as_ref().map(|p| p.display().to_string()),
-                    position: None,
+                    position: Some(ws.position),
                     terminals,
                 }
             })

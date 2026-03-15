@@ -91,6 +91,12 @@ pub struct Panel {
     pub workspace_id: WorkspaceId,
     pub terminal: Terminal,
     has_custom_name: bool,
+    /// Original launch command (for persistence).
+    pub launch_command: Option<String>,
+    /// Original launch args (for persistence).
+    pub launch_args: Vec<String>,
+    /// Working directory (for persistence).
+    pub launch_cwd: Option<PathBuf>,
 }
 
 impl Panel {
@@ -112,6 +118,13 @@ impl Panel {
             position,
             size,
         } = opts;
+
+        // Save original launch params for persistence before they're
+        // transformed by resolve_launch_command.
+        let saved_command = command.clone();
+        let saved_args = args.clone();
+        let saved_cwd = cwd.clone();
+
         let (program, launch_args) = resolve_launch_command(command, args, kind, &resume);
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
@@ -141,6 +154,9 @@ impl Panel {
             workspace_id,
             terminal,
             has_custom_name,
+            launch_command: saved_command,
+            launch_args: saved_args,
+            launch_cwd: saved_cwd,
         })
     }
 
