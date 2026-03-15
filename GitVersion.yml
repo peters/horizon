@@ -1,0 +1,13 @@
+next-version: 0.1.0
+mode: ContinuousDeployment
+branches:
+  main:
+    regex: ^main$
+    increment: Minor
+    label: ''
+    prevent-increment:
+      when-current-commit-tagged: true
+  develop:
+    regex: ^develop$
+    increment: Minor
+    label: preview

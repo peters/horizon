@@ -6,68 +6,197 @@ on:
   pull_request:
     branches: [main, develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
+  RUSTFLAGS: -D warnings
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.gitversion.outputs.semVer }}
+      major: ${{ steps.gitversion.outputs.major }}
+      minor: ${{ steps.gitversion.outputs.minor }}
+      patch: ${{ steps.gitversion.outputs.patch }}
+      prerelease: ${{ steps.gitversion.outputs.preReleaseLabel }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify GitVersion and Cargo baseline versions are aligned
+        run: ./scripts/check-version-sync.sh
+      - uses: gittools/actions/gitversion/setup@v4.3.3
+        with:
+          versionSpec: '6.x'
+      - id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.3.3
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - uses: actions/checkout@v6
+      - run: rustup component add rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add clippy
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
   clippy-strict:
     name: Clippy (strict)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: cargo clippy --workspace --lib --bins -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add clippy
+      - run: cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
   clippy-pedantic:
     name: Clippy (pedantic — advisory)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add clippy
+      - name: Run pedantic audit (non-blocking)
+        run: |
+          cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic || {
+            echo "::warning::Pedantic lint debt detected (non-blocking advisory job)."
+          }
 
-  test:
-    name: Test (${{ matrix.os }})
+  rust-test:
+    name: Tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            name: Linux x64
+            cache_key: linux-test
+          - os: macos-latest
+            name: macOS
+            cache_key: macos-test
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cache_key }}
       - run: cargo test --workspace
 
-  build:
-    name: Build (release)
-    runs-on: ubuntu-latest
+  rust-artifacts:
+    name: Artifacts (${{ matrix.name }})
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux x64
+            cache_key: linux-artifacts
+            artifact_name: linux-x64
+            artifact_path: target/release/horizon
+          - os: macos-latest
+            name: macOS
+            cache_key: macos-artifacts
+            artifact_name: osx-x64
+            artifact_path: target/release/horizon
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cache_key }}
       - run: cargo build --release
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+
+  # ── Publishing (not yet enabled) ────────────────────────────────────
+  #
+  # cargo-crates-io-publish:
+  #   name: Publish Cargo (crates.io)
+  #   runs-on: ubuntu-latest
+  #   needs: [version, clippy, clippy-strict, rust-test, rust-artifacts]
+  #   if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+  #   env:
+  #     CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: Validate crates.io API token
+  #       run: |
+  #         if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+  #           echo "CARGO_REGISTRY_TOKEN secret is required for crates.io publish."
+  #           exit 1
+  #         fi
+  #     - name: Set version
+  #       run: |
+  #         sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.semver }}"/' Cargo.toml
+  #         cargo generate-lockfile
+  #     - name: Publish horizon-core to crates.io
+  #       run: cargo publish -p horizon-core --allow-dirty
+  #     - name: Publish horizon-ui to crates.io
+  #       run: |
+  #         for attempt in $(seq 1 10); do
+  #           if cargo publish -p horizon-ui --allow-dirty; then
+  #             exit 0
+  #           fi
+  #           if [ "${attempt}" -eq 10 ]; then
+  #             echo "Failed to publish horizon-ui after waiting for horizon-core to sync on crates.io."
+  #             exit 1
+  #           fi
+  #           sleep $((attempt * 5))
+  #         done
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs:
+      - version
+      - clippy
+      - clippy-strict
+      - rust-test
+      - rust-artifacts
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Package release assets
+        run: |
+          cd artifacts
+          tar czf ../horizon-linux-x64.tar.gz -C linux-x64 .
+          tar czf ../horizon-osx-x64.tar.gz -C osx-x64 .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.semver }}
+          name: v${{ needs.version.outputs.semver }}
+          draft: ${{ github.ref == 'refs/heads/main' }}
+          prerelease: ${{ github.ref == 'refs/heads/develop' }}
+          generate_release_notes: true
+          files: |
+            horizon-linux-x64.tar.gz
+            horizon-osx-x64.tar.gz
