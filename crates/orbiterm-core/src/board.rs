@@ -384,7 +384,7 @@ impl Board {
         for ws in &self.workspaces {
             right_edge = right_edge.max(ws.position[0] + workspace_slot_width());
         }
-        [right_edge, 0.0]
+        [right_edge, 40.0]
     }
 
     fn default_panel_position(&self, workspace: WorkspaceId) -> [f32; 2] {

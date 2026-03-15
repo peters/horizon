@@ -20,11 +20,11 @@ const PANEL_COLUMN_SPACING: f32 = 540.0;
 const PANEL_ROW_SPACING: f32 = 360.0;
 const RESIZE_HANDLE_SIZE: f32 = 18.0;
 const WS_BG_PAD: f32 = 16.0;
-const WS_TITLE_HEIGHT: f32 = 54.0;
+const WS_TITLE_HEIGHT: f32 = 38.0;
 const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
-const WS_LABEL_HEIGHT: f32 = 42.0;
-const WS_LABEL_MIN_WIDTH: f32 = 168.0;
-const WS_LABEL_MAX_WIDTH: f32 = 320.0;
+const WS_LABEL_HEIGHT: f32 = 30.0;
+const WS_LABEL_MIN_WIDTH: f32 = 110.0;
+const WS_LABEL_MAX_WIDTH: f32 = 260.0;
 
 struct WorkspaceVisual {
     id: WorkspaceId,
@@ -770,40 +770,19 @@ fn render_workspace_visual(ctx: &Context, workspace: &WorkspaceVisual) -> Worksp
         .inner
 }
 
-fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool, is_empty: bool) {
+fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool, _is_empty: bool) {
     let painter = ui.painter_at(rect);
-    let corner_radius = CornerRadius::same(24);
-    let border_alpha = if is_active { 150 } else { 84 };
-    let fill_alpha = if is_active { 34 } else { 22 };
-    let inner_alpha = if is_empty { 32 } else { 48 };
-    let frame_fill = theme::alpha(theme::blend(theme::PANEL_BG, color, 0.18), fill_alpha);
+    let corner_radius = CornerRadius::same(16);
+    let border_alpha = if is_active { 110 } else { 55 };
+    let fill_alpha = if is_active { 24 } else { 14 };
+    let frame_fill = theme::alpha(theme::blend(theme::PANEL_BG, color, 0.12), fill_alpha);
 
     painter.rect_filled(rect, corner_radius, frame_fill);
     painter.rect_stroke(
         rect,
         corner_radius,
-        Stroke::new(if is_active { 1.5 } else { 1.0 }, theme::alpha(color, border_alpha)),
+        Stroke::new(1.0, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
-    );
-
-    let inner_rect = rect.shrink2(Vec2::new(10.0, 10.0));
-    painter.rect_stroke(
-        inner_rect,
-        CornerRadius::same(18),
-        Stroke::new(
-            1.0,
-            theme::alpha(theme::blend(theme::BORDER_SUBTLE, color, 0.28), inner_alpha),
-        ),
-        StrokeKind::Outside,
-    );
-
-    painter.rect_filled(
-        Rect::from_min_max(
-            rect.min + Vec2::new(12.0, 12.0),
-            Pos2::new(rect.max.x - 12.0, rect.min.y + 72.0),
-        ),
-        CornerRadius::same(18),
-        theme::alpha(theme::blend(theme::PANEL_BG_ALT, color, 0.24), 54),
     );
 }
 
@@ -817,86 +796,56 @@ fn paint_workspace_label(
     dragging: bool,
 ) {
     let painter = ui.painter();
-    let shadow_rect = rect.translate(Vec2::new(0.0, 5.0));
-    let accent_fill = theme::blend(
-        theme::PANEL_BG_ALT,
-        color,
-        if dragging {
-            0.88
-        } else if hovered || is_active {
-            0.82
-        } else {
-            0.74
-        },
-    );
-    let sheen_color = theme::alpha(theme::blend(color, theme::FG, 0.24), 92);
-    let title_plate = Rect::from_min_max(rect.min + Vec2::new(48.0, 6.0), rect.max - Vec2::new(30.0, 6.0));
-    let grip_center = Pos2::new(rect.max.x - 18.0, rect.center().y);
-    let kicker_rect = Rect::from_min_size(rect.min + Vec2::new(8.0, 6.0), Vec2::new(34.0, rect.height() - 12.0));
+    let tint = if dragging {
+        0.22
+    } else if hovered {
+        0.18
+    } else if is_active {
+        0.14
+    } else {
+        0.08
+    };
+    let fill = theme::blend(theme::PANEL_BG_ALT, color, tint);
+    let border_alpha = if is_active || hovered { 160 } else { 90 };
+    let grip_center = Pos2::new(rect.max.x - 14.0, rect.center().y);
 
-    painter.rect_filled(shadow_rect, CornerRadius::same(14), Color32::from_black_alpha(68));
-    painter.rect_filled(rect, CornerRadius::same(14), accent_fill);
+    painter.rect_filled(rect, CornerRadius::same(8), fill);
     painter.rect_stroke(
         rect,
-        CornerRadius::same(14),
-        Stroke::new(1.1, theme::alpha(theme::blend(color, theme::FG, 0.18), 220)),
+        CornerRadius::same(8),
+        Stroke::new(1.0, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
     );
-    painter.rect_filled(
-        Rect::from_min_max(
-            rect.min + Vec2::new(1.0, 1.0),
-            Pos2::new(rect.max.x - 1.0, rect.min.y + 17.0),
-        ),
-        CornerRadius::same(13),
-        sheen_color,
+
+    painter.circle_filled(
+        Pos2::new(rect.min.x + 14.0, rect.center().y),
+        4.0,
+        theme::alpha(color, if is_active { 220 } else { 150 }),
     );
-    painter.rect_filled(
-        title_plate,
-        CornerRadius::same(11),
-        theme::alpha(theme::blend(theme::PANEL_BG, color, 0.14), 210),
-    );
-    painter.rect_filled(
-        kicker_rect,
-        CornerRadius::same(10),
-        theme::alpha(theme::blend(theme::PANEL_BG, color, 0.28), 200),
-    );
-    painter.rect_filled(
-        Rect::from_min_size(
-            Pos2::new(rect.min.x + 16.0, rect.max.y - 3.0),
-            Vec2::new((rect.width() * 0.34).min(86.0), 9.0),
-        ),
-        CornerRadius::same(4),
-        theme::alpha(color, 166),
-    );
+
     painter.text(
-        kicker_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        "WS",
-        egui::FontId::proportional(10.0),
-        theme::alpha(theme::FG, 230),
-    );
-    painter.text(
-        Pos2::new(title_plate.min.x + 10.0, rect.center().y),
+        Pos2::new(rect.min.x + 26.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         name,
-        egui::FontId::proportional(13.5),
-        theme::FG,
+        egui::FontId::proportional(12.5),
+        if is_active { theme::FG } else { theme::FG_SOFT },
     );
+
     paint_workspace_grip(painter, grip_center, dragging || hovered);
 }
 
 fn paint_workspace_grip(painter: &egui::Painter, center: Pos2, highlighted: bool) {
     let color = if highlighted {
-        theme::alpha(theme::FG, 214)
+        theme::alpha(theme::FG_SOFT, 180)
     } else {
-        theme::alpha(theme::FG_SOFT, 182)
+        theme::alpha(theme::FG_DIM, 140)
     };
-    let x_offsets = [-4.0, 0.0, 4.0];
-    let y_offsets = [-6.0, 0.0, 6.0];
+    let x_offsets = [-3.0, 3.0];
+    let y_offsets = [-4.0, 0.0, 4.0];
 
     for x_offset in x_offsets {
         for y_offset in y_offsets {
-            painter.circle_filled(Pos2::new(center.x + x_offset, center.y + y_offset), 1.45, color);
+            painter.circle_filled(Pos2::new(center.x + x_offset, center.y + y_offset), 1.2, color);
         }
     }
 }
@@ -981,7 +930,7 @@ fn workspace_label_width(name: &str) -> f32 {
         })
         .sum();
 
-    (estimated_text_width + 104.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH)
+    (estimated_text_width + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH)
 }
 
 fn format_grid_position(position: Pos2) -> String {
