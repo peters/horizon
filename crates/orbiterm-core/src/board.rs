@@ -76,11 +76,6 @@ impl Board {
             }
         }
 
-        // Ensure at least one workspace always exists.
-        if board.workspaces.is_empty() {
-            let _ = board.create_workspace("Workspace 1");
-        }
-
         board.focused = board.panels.first().map(|panel| panel.id);
 
         Ok(board)
