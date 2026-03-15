@@ -45,6 +45,7 @@ impl PresetConfig {
     #[must_use]
     pub fn to_panel_options(&self) -> crate::panel::PanelOptions {
         crate::panel::PanelOptions {
+            name: Some(self.name.clone()),
             command: self.command.clone(),
             args: self.args.clone(),
             kind: self.kind,
