@@ -9,7 +9,8 @@ use egui::{
 };
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
-    PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
+    PanelTranscript, PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
+    transcript_root_path_for_config,
 };
 
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
@@ -99,6 +100,7 @@ pub struct HorizonApp {
     panel_rename_buffer: String,
     config_path: PathBuf,
     runtime_state_path: PathBuf,
+    transcript_root: Option<PathBuf>,
     template_config: Config,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
@@ -145,15 +147,18 @@ impl HorizonApp {
             .insert(0, "jetbrains-mono".to_owned());
 
         cc.egui_ctx.set_fonts(fonts);
+        let transcript_root = transcript_root_path_for_config(&config_path);
         let startup_receiver = Self::runtime_state_needs_session_bootstrap(&runtime_state)
             .then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
         let board = if startup_receiver.is_some() {
             Board::new()
         } else {
-            Board::from_runtime_state(&runtime_state).unwrap_or_else(|error| {
-                tracing::error!("failed to restore runtime state: {error}");
-                Board::new()
-            })
+            Board::from_runtime_state_with_transcripts(&runtime_state, transcript_root.as_deref()).unwrap_or_else(
+                |error| {
+                    tracing::error!("failed to restore runtime state: {error}");
+                    Board::new()
+                },
+            )
         };
 
         Self {
@@ -174,6 +179,7 @@ impl HorizonApp {
             panel_rename_buffer: String::new(),
             config_path,
             runtime_state_path,
+            transcript_root,
             template_config: config.clone(),
             presets: config.presets.clone(),
             window_config: runtime_state.window_or(&config.window).clone(),
@@ -287,7 +293,21 @@ impl HorizonApp {
         workspace_id: WorkspaceId,
     ) -> horizon_core::Result<PanelId> {
         self.resolve_panel_launch_binding(&mut opts);
+        opts.transcript_root.clone_from(&self.transcript_root);
         self.board.create_panel(opts, workspace_id)
+    }
+
+    fn close_panel(&mut self, panel_id: PanelId) {
+        let transcript = self
+            .board
+            .panel(panel_id)
+            .and_then(|panel| PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id));
+        self.board.close_panel(panel_id);
+        if let Some(transcript) = transcript
+            && let Err(error) = transcript.delete_all()
+        {
+            tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+        }
     }
 
     fn clear_workspace_rename(&mut self) {
@@ -298,6 +318,25 @@ impl HorizonApp {
     fn clear_panel_rename(&mut self) {
         self.renaming_panel = None;
         self.panel_rename_buffer.clear();
+    }
+
+    /// Open a directory picker for adding a panel, or skip it if the
+    /// workspace already has a working directory set.
+    fn add_panel_to_workspace(&mut self, workspace_id: WorkspaceId, preset: PresetConfig) {
+        let ws_cwd = self.board.workspace(workspace_id).and_then(|ws| ws.cwd.clone());
+        if let Some(cwd) = ws_cwd {
+            let mut opts = preset.to_panel_options();
+            opts.cwd = Some(cwd);
+            if let Err(error) = self.create_panel_with_options(opts, workspace_id) {
+                tracing::error!("failed to create panel: {error}");
+            }
+            self.mark_runtime_dirty();
+        } else {
+            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
+                workspace_id,
+                preset,
+            }));
+        }
     }
 
     fn resolve_panel_launch_binding(&mut self, opts: &mut PanelOptions) {
@@ -957,7 +996,7 @@ impl HorizonApp {
             }
         }
         if let Some(panel_id) = close_panel {
-            self.board.close_panel(panel_id);
+            self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
         }
         if let Some(ws_id) = close_all_in_ws {
@@ -967,7 +1006,7 @@ impl HorizonApp {
                 .map(|ws| ws.panels.clone())
                 .unwrap_or_default();
             for pid in panel_ids {
-                self.board.close_panel(pid);
+                self.close_panel(pid);
                 self.panel_screen_rects.remove(&pid);
             }
         }
@@ -1125,7 +1164,11 @@ impl HorizonApp {
             Ok(bootstrap) => {
                 self.session_catalog = bootstrap.session_catalog;
                 self.last_session_catalog_refresh = Some(Instant::now());
-                self.board = Board::from_runtime_state(&bootstrap.runtime_state).unwrap_or_else(|error| {
+                self.board = Board::from_runtime_state_with_transcripts(
+                    &bootstrap.runtime_state,
+                    self.transcript_root.as_deref(),
+                )
+                .unwrap_or_else(|error| {
                     tracing::error!("failed to restore runtime state: {error}");
                     Board::new()
                 });
@@ -1981,7 +2024,7 @@ impl HorizonApp {
         if start_rename {
             self.clear_workspace_rename();
             self.renaming_panel = Some(panel_id);
-            self.panel_rename_buffer = title.clone();
+            self.panel_rename_buffer.clone_from(&title);
         }
 
         match rename_action {
@@ -2171,7 +2214,7 @@ impl eframe::App for HorizonApp {
 
         let panels_to_close = std::mem::take(&mut self.panels_to_close);
         for panel_id in panels_to_close {
-            self.board.close_panel(panel_id);
+            self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();

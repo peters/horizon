@@ -7,13 +7,14 @@ use serde::Deserialize;
 use crate::error::Result;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id, new_session_binding};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
+use crate::transcript::PanelTranscript;
 use crate::workspace::WorkspaceId;
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
 
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
-const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = 8_000;
+const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 const AGENT_PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -76,6 +77,7 @@ pub struct PanelOptions {
     pub local_id: Option<String>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    pub transcript_root: Option<PathBuf>,
 }
 
 impl Default for PanelOptions {
@@ -94,6 +96,7 @@ impl Default for PanelOptions {
             local_id: None,
             session_binding: None,
             template: None,
+            transcript_root: None,
         }
     }
 }
@@ -138,9 +141,13 @@ impl Panel {
             position,
             size,
             local_id,
-            mut session_binding,
+            session_binding,
             template,
+            transcript_root,
         } = opts;
+
+        let local_id = local_id.unwrap_or_else(new_local_id);
+        let (transcript, replay_bytes) = prepare_transcript_restore(id, kind, transcript_root, &local_id);
 
         // Save original launch params for persistence before they're
         // transformed by resolve_launch_command.
@@ -148,29 +155,13 @@ impl Panel {
         let saved_args = args.clone();
         let saved_cwd = cwd.clone();
         let saved_cwd_string = saved_cwd.as_ref().map(|path| path.display().to_string());
-        let had_existing_session_binding = session_binding.is_some();
-        if session_binding.is_none() {
-            session_binding = match (&resume, kind) {
-                (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude) => Some(
-                    AgentSessionBinding::new(kind, session_id.clone(), saved_cwd_string.clone(), name.clone(), None),
-                ),
-                (PanelResume::Fresh, PanelKind::Claude) => {
-                    new_session_binding(kind, saved_cwd_string.clone(), name.clone())
-                }
-                _ => None,
-            };
-        }
-
-        let should_resume_binding = match kind {
-            PanelKind::Claude => {
-                session_binding.is_some()
-                    && (had_existing_session_binding
-                        || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
-            }
-            PanelKind::Codex | PanelKind::Shell | PanelKind::Command => {
-                session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
-            }
-        };
+        let (session_binding, should_resume_binding) = resolve_session_binding(
+            kind,
+            &resume,
+            session_binding,
+            saved_cwd_string.as_deref(),
+            name.as_deref(),
+        );
 
         let (program, launch_args) = resolve_launch_command(
             command,
@@ -180,6 +171,11 @@ impl Panel {
             session_binding.as_ref(),
             should_resume_binding,
         );
+        let (program, launch_args) = if let Some(transcript) = transcript.as_ref() {
+            transcript.wrap_launch_command(program, launch_args)
+        } else {
+            (program, launch_args)
+        };
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
         let terminal = Terminal::spawn(TerminalSpawnOptions {
@@ -192,13 +188,14 @@ impl Panel {
             cell_height: DEFAULT_CELL_HEIGHT,
             scrollback_limit: scrollback_limit_for_kind(kind),
             window_id: id.0,
+            replay_bytes,
         })?;
 
         tracing::info!("created panel '{}' (id={})", title, id.0);
 
         Ok(Self {
             id,
-            local_id: local_id.unwrap_or_else(new_local_id),
+            local_id,
             title,
             kind,
             resume,
@@ -376,6 +373,72 @@ fn current_unix_millis() -> i64 {
         .unwrap_or_default()
         .as_millis();
     i64::try_from(now).unwrap_or(i64::MAX)
+}
+
+fn prepare_transcript_restore(
+    id: PanelId,
+    kind: PanelKind,
+    transcript_root: Option<PathBuf>,
+    local_id: &str,
+) -> (Option<PanelTranscript>, Vec<u8>) {
+    let mut transcript = PanelTranscript::for_panel(kind, transcript_root, local_id);
+    let replay_bytes = if let Some(active_transcript) = transcript.as_ref() {
+        match active_transcript.prepare_replay_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    panel_id = id.0,
+                    kind = ?kind,
+                    "failed to prepare persisted transcript, starting fresh shell: {error}"
+                );
+                transcript = None;
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    (transcript, replay_bytes)
+}
+
+fn resolve_session_binding(
+    kind: PanelKind,
+    resume: &PanelResume,
+    mut session_binding: Option<AgentSessionBinding>,
+    cwd: Option<&str>,
+    label: Option<&str>,
+) -> (Option<AgentSessionBinding>, bool) {
+    let had_existing_session_binding = session_binding.is_some();
+    if session_binding.is_none() {
+        session_binding = match (resume, kind) {
+            (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude) => {
+                Some(AgentSessionBinding::new(
+                    kind,
+                    session_id.clone(),
+                    cwd.map(str::to_string),
+                    label.map(str::to_string),
+                    None,
+                ))
+            }
+            (PanelResume::Fresh, PanelKind::Claude) => {
+                new_session_binding(kind, cwd.map(str::to_string), label.map(str::to_string))
+            }
+            _ => None,
+        };
+    }
+
+    let should_resume_binding = match kind {
+        PanelKind::Claude => {
+            session_binding.is_some()
+                && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
+        }
+        PanelKind::Codex | PanelKind::Shell | PanelKind::Command => {
+            session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
+        }
+    };
+
+    (session_binding, should_resume_binding)
 }
 
 /// Wrap a command in an interactive shell (`-ic`) so that the user's

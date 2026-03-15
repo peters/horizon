@@ -298,6 +298,7 @@ impl PanelState {
             local_id: Some(self.local_id.clone()),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
+            transcript_root: None,
         }
     }
 }
@@ -673,6 +674,16 @@ pub fn runtime_state_path_for_config(config_path: &Path) -> Option<PathBuf> {
 }
 
 #[must_use]
+pub fn transcript_root_path_for_config(config_path: &Path) -> Option<PathBuf> {
+    let base_dir = xdg_state_home()
+        .or_else(default_home_state_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stable_config_path = std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+    let key = stable_state_key(&stable_config_path.to_string_lossy());
+    Some(base_dir.join("horizon/transcripts").join(key))
+}
+
+#[must_use]
 pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
 }
@@ -796,6 +807,15 @@ mod tests {
         let second = runtime_state_path_for_config(&path).expect("state path");
         assert_eq!(first, second);
         assert!(first.to_string_lossy().ends_with(".yaml"));
+    }
+
+    #[test]
+    fn transcript_root_path_is_stable_for_config_path() {
+        let path = PathBuf::from("/tmp/horizon/config.yaml");
+        let first = transcript_root_path_for_config(&path).expect("transcript root");
+        let second = transcript_root_path_for_config(&path).expect("transcript root");
+        assert_eq!(first, second);
+        assert!(!first.to_string_lossy().ends_with(".yaml"));
     }
 
     #[test]

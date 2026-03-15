@@ -13,7 +13,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode, viewport_to_point};
 use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
-use alacritty_terminal::vte::ansi::Rgb;
+use alacritty_terminal::vte::ansi::{self, Rgb};
 
 use crate::error::{Error, Result};
 
@@ -35,6 +35,7 @@ pub struct TerminalSpawnOptions {
     pub cell_height: u16,
     pub scrollback_limit: usize,
     pub window_id: u64,
+    pub replay_bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -118,6 +119,7 @@ impl Terminal {
             kitty_keyboard: true,
             ..term::Config::default()
         };
+        let replay_bytes = options.replay_bytes;
         let (event_tx, event_rx) = mpsc::channel();
         let term_proxy = TerminalEventProxy {
             event_tx: event_tx.clone(),
@@ -136,6 +138,9 @@ impl Terminal {
         };
 
         let term = Arc::new(FairMutex::new(Term::new(terminal_config, &dimensions, term_proxy)));
+        if !replay_bytes.is_empty() {
+            replay_terminal_bytes(&term, &replay_bytes);
+        }
         let pty =
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
         let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
@@ -548,6 +553,11 @@ fn default_terminal_rgb(index: usize) -> Rgb {
     }
 }
 
+fn replay_terminal_bytes(term: &Arc<FairMutex<Term<TerminalEventProxy>>>, bytes: &[u8]) {
+    let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+    parser.advance(&mut *term.lock(), bytes);
+}
+
 const TERMINAL_BASE_COLORS: [Rgb; 16] = [
     rgb(0x1d, 0x1f, 0x21),
     rgb(0xcc, 0x66, 0x66),
@@ -606,6 +616,7 @@ mod tests {
             cell_height: 16,
             scrollback_limit: 256,
             window_id: 41,
+            replay_bytes: Vec::new(),
         })
         .expect("terminal should spawn");
 

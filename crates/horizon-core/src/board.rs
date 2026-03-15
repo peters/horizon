@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
@@ -53,12 +54,23 @@ impl Board {
     ///
     /// Returns an error if any configured panel fails to spawn.
     pub fn from_runtime_state(state: &RuntimeState) -> Result<Self> {
+        Self::from_runtime_state_with_transcripts(state, None)
+    }
+
+    /// Build a board from a persisted runtime state snapshot and optional transcript root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured panel fails to spawn.
+    pub fn from_runtime_state_with_transcripts(state: &RuntimeState, transcript_root: Option<&Path>) -> Result<Self> {
         let mut board = Self::new();
 
         for workspace_state in &state.workspaces {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
-                board.create_panel(panel_state.to_panel_options(), ws_id)?;
+                let mut options = panel_state.to_panel_options();
+                options.transcript_root = transcript_root.map(Path::to_path_buf);
+                board.create_panel(options, ws_id)?;
             }
         }
 
