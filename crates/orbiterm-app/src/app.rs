@@ -5,7 +5,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2,
 };
-use orbiterm_core::{Board, Config, PanelId, PanelOptions, TerminalConfig, WorkspaceConfig, WorkspaceId};
+use orbiterm_core::{Board, Config, PanelId, PanelOptions, PresetConfig, TerminalConfig, WorkspaceConfig, WorkspaceId};
 
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -72,7 +72,9 @@ pub struct OrbitermApp {
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
     config_path: PathBuf,
+    presets: Vec<PresetConfig>,
     settings: Option<SettingsEditor>,
+    pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
 }
 
 impl OrbitermApp {
@@ -99,7 +101,9 @@ impl OrbitermApp {
             renaming_workspace: None,
             rename_buffer: String::new(),
             config_path: resolved_path,
+            presets: config.presets.clone(),
             settings: None,
+            pending_preset_pick: None,
         }
     }
 
@@ -217,6 +221,8 @@ impl OrbitermApp {
             return;
         };
 
+        let canvas_pos = self.screen_to_canvas(canvas_rect, screen_pos);
+
         // Check if click is inside any workspace
         let hit_workspace = self
             .workspace_screen_rects
@@ -224,23 +230,97 @@ impl OrbitermApp {
             .find(|(_, rect)| rect.contains(screen_pos))
             .map(|(id, _)| *id);
 
-        if let Some(ws_id) = hit_workspace {
-            // Inside a workspace: create a new panel there
-            let canvas_pos = self.screen_to_canvas(canvas_rect, screen_pos);
-            let opts = PanelOptions {
-                position: Some([canvas_pos.x, canvas_pos.y]),
-                ..PanelOptions::default()
-            };
-            if let Err(error) = self.board.create_panel(opts, ws_id) {
-                tracing::error!("failed to create panel: {error}");
-            }
-        } else {
-            // Outside all workspaces: create a new workspace at click position
-            let canvas_pos = self.screen_to_canvas(canvas_rect, screen_pos);
-            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-            let ws_id = self.board.create_workspace_at(&name, [canvas_pos.x, canvas_pos.y]);
-            if let Err(error) = self.board.create_panel(PanelOptions::default(), ws_id) {
-                tracing::error!("failed to create panel: {error}");
+        // Store pending pick — the preset picker popup will handle creation
+        self.pending_preset_pick = Some((hit_workspace, [canvas_pos.x, canvas_pos.y], std::time::Instant::now()));
+    }
+
+    fn render_preset_picker(&mut self, ctx: &Context) {
+        let Some((target_ws, canvas_pos, opened_at)) = self.pending_preset_pick else {
+            return;
+        };
+
+        let popup_id = Id::new("canvas_preset_picker");
+
+        // Position the popup at the click location
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
+
+        let mut created = false;
+
+        let area_response = egui::Area::new(popup_id)
+            .fixed_pos(screen_pos)
+            .constrain(true)
+            .order(Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(theme::PANEL_BG)
+                    .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
+                    .corner_radius(8)
+                    .inner_margin(Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(160.0);
+                        let heading = if target_ws.is_some() {
+                            "New Terminal"
+                        } else {
+                            "New Workspace"
+                        };
+                        ui.label(
+                            egui::RichText::new(heading)
+                                .size(11.0)
+                                .color(theme::FG_DIM)
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+
+                        for preset in &self.presets {
+                            let label = if let Some(alias) = &preset.alias {
+                                format!("{} ({})", preset.name, alias)
+                            } else {
+                                preset.name.clone()
+                            };
+                            let text = egui::RichText::new(label)
+                                .size(12.5)
+                                .color(theme::FG_SOFT);
+                            if ui.add(Button::new(text).frame(false)).clicked() {
+                                let mut opts = preset.to_panel_options();
+
+                                let ws_id = if let Some(ws_id) = target_ws {
+                                    opts.position = Some(canvas_pos);
+                                    ws_id
+                                } else {
+                                    let name = format!(
+                                        "Workspace {}",
+                                        self.board.workspaces.len() + 1,
+                                    );
+                                    self.board
+                                        .create_workspace_at(&name, canvas_pos)
+                                };
+
+                                if let Err(error) = self.board.create_panel(opts, ws_id) {
+                                    tracing::error!("failed to create panel: {error}");
+                                }
+                                created = true;
+                            }
+                        }
+                    });
+            });
+
+        // Close popup on selection or click outside the popup area.
+        // Skip the first 2 frames to avoid the opening double-click
+        // from immediately closing the popup.
+        if created {
+            self.pending_preset_pick = None;
+        } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
+            let popup_rect = area_response.response.rect;
+            let clicked_outside = ctx.input(|input| {
+                input.pointer.any_click()
+                    && input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|pos| !popup_rect.contains(pos))
+            });
+            if clicked_outside {
+                self.pending_preset_pick = None;
             }
         }
     }
@@ -346,6 +426,7 @@ impl OrbitermApp {
         let mut pan_to_panel: Option<PanelId> = None;
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
+        let mut create_from_preset: Option<(WorkspaceId, PanelOptions)> = None;
 
         let viewport = viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
@@ -430,11 +511,38 @@ impl OrbitermApp {
                                 );
 
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.add_space(14.0);
-                                    ui.label(
-                                        egui::RichText::new(format!("{}", panel_ids.len()))
-                                            .color(theme::alpha(theme::FG_DIM, 100))
-                                            .size(10.5),
+                                    ui.add_space(10.0);
+                                    let plus_btn = ui.add(
+                                        Button::new(
+                                            egui::RichText::new("+")
+                                                .size(15.0)
+                                                .color(theme::FG_DIM),
+                                        )
+                                        .frame(false),
+                                    );
+                                    let popup_id = plus_btn.id.with("preset_menu");
+                                    if plus_btn.clicked() {
+                                        #[allow(deprecated)]
+                                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                                    }
+                                    #[allow(deprecated)]
+                                    egui::popup_below_widget(
+                                        ui,
+                                        popup_id,
+                                        &plus_btn,
+                                        egui::PopupCloseBehavior::CloseOnClick,
+                                        |ui| {
+                                            ui.set_min_width(160.0);
+                                            for preset in &self.presets {
+                                                let label = egui::RichText::new(&preset.name)
+                                                    .size(12.0)
+                                                    .color(theme::FG_SOFT);
+                                                if ui.add(Button::new(label).frame(false)).clicked() {
+                                                    create_from_preset =
+                                                        Some((ws_id, preset.to_panel_options()));
+                                                }
+                                            }
+                                        },
                                     );
                                 });
                             });
@@ -575,12 +683,17 @@ impl OrbitermApp {
             self.board.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
         }
+        if let Some((ws_id, opts)) = create_from_preset
+            && let Err(error) = self.board.create_panel(opts, ws_id)
+        {
+            tracing::error!("failed to create panel from preset: {error}");
+        }
     }
 
     fn toggle_settings(&mut self) {
         if let Some(editor) = self.settings.take() {
             if let Ok(config) = serde_yaml::from_str::<Config>(&editor.original) {
-                Self::sync_workspace_names(&mut self.board, &config);
+                Self::sync_workspace_metadata(&mut self.board, &config);
             }
         } else {
             let content = self.load_or_generate_config_yaml();
@@ -628,6 +741,7 @@ impl OrbitermApp {
                 WorkspaceConfig {
                     name: ws.name.clone(),
                     color: None,
+                    cwd: ws.cwd.as_ref().map(|p| p.display().to_string()),
                     position: None,
                     terminals,
                 }
@@ -635,18 +749,20 @@ impl OrbitermApp {
             .collect();
 
         let config = Config {
+            presets: self.presets.clone(),
             workspaces,
             ..Config::default()
         };
         config.to_yaml().unwrap_or_else(|_| "workspaces: []\n".to_string())
     }
 
-    fn sync_workspace_names(board: &mut Board, config: &Config) {
+    fn sync_workspace_metadata(board: &mut Board, config: &Config) {
         for (index, ws_cfg) in config.workspaces.iter().enumerate() {
-            if let Some(ws) = board.workspaces.get_mut(index)
-                && ws.name != ws_cfg.name
-            {
-                ws_cfg.name.clone_into(&mut ws.name);
+            if let Some(ws) = board.workspaces.get_mut(index) {
+                if ws.name != ws_cfg.name {
+                    ws_cfg.name.clone_into(&mut ws.name);
+                }
+                ws.cwd = ws_cfg.cwd.as_ref().map(|s| Config::expand_tilde(s));
             }
         }
     }
@@ -661,7 +777,7 @@ impl OrbitermApp {
         let parsed = serde_yaml::from_str::<Config>(&editor.buffer);
         let is_valid = parsed.is_ok();
         if let Ok(config) = &parsed {
-            Self::sync_workspace_names(&mut self.board, config);
+            Self::sync_workspace_metadata(&mut self.board, config);
             if !matches!(editor.status, SettingsStatus::Saved) {
                 editor.status = SettingsStatus::LivePreview;
             }
@@ -723,13 +839,13 @@ impl OrbitermApp {
                             if let Some(editor) = self.settings.take()
                                 && let Ok(config) = serde_yaml::from_str::<Config>(&editor.original)
                             {
-                                Self::sync_workspace_names(&mut self.board, &config);
+                                Self::sync_workspace_metadata(&mut self.board, &config);
                             }
                         } else if revert {
                             if let Some(editor) = self.settings.as_mut() {
                                 let original = editor.original.clone();
                                 if let Ok(config) = serde_yaml::from_str::<Config>(&original) {
-                                    Self::sync_workspace_names(&mut self.board, &config);
+                                    Self::sync_workspace_metadata(&mut self.board, &config);
                                 }
                                 editor.buffer = original;
                                 editor.status = SettingsStatus::None;
@@ -1270,6 +1386,7 @@ impl eframe::App for OrbitermApp {
             self.render_workspace_backgrounds(ctx);
             self.handle_canvas_double_click(ctx);
             self.render_panels(ctx);
+            self.render_preset_picker(ctx);
             self.render_canvas_hud(ctx);
         }
 
