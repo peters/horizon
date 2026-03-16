@@ -2425,7 +2425,7 @@ impl eframe::App for HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_file_drop(ctx);
-        self.board.process_output();
+        let had_terminal_output = self.board.process_output();
 
         // Auto-close panels whose child process has exited.
         for panel_id in self.board.exited_panels() {
@@ -2534,7 +2534,16 @@ impl eframe::App for HorizonApp {
         }
         self.flush_runtime_if_dirty();
 
-        ctx.request_repaint();
+        // Only repaint continuously when there is terminal activity or an
+        // animation in flight.  Otherwise schedule a low-frequency poll so
+        // we still pick up new PTY output without burning CPU while idle.
+        let has_live_terminals = !self.board.panels.is_empty();
+        let animating = self.pan_target.is_some();
+        if had_terminal_output || animating {
+            ctx.request_repaint();
+        } else if has_live_terminals {
+            ctx.request_repaint_after(Duration::from_millis(32));
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

@@ -178,11 +178,15 @@ impl Terminal {
         Ok(terminal)
     }
 
-    pub fn process_events(&mut self) {
+    /// Drain pending PTY events. Returns `true` if any events were processed.
+    pub fn process_events(&mut self) -> bool {
+        let mut had_events = false;
         while let Ok(event) = self.event_rx.try_recv() {
             self.handle_event(event);
+            had_events = true;
         }
         self.flush_pending_pty_resize();
+        had_events
     }
 
     pub fn write_input(&self, bytes: &[u8]) {

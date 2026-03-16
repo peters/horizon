@@ -324,11 +324,14 @@ impl Board {
         self.panel_mut(id).is_some_and(|panel| panel.rename(name))
     }
 
-    pub fn process_output(&mut self) {
+    /// Drain pending output from all panels. Returns `true` if any panel had activity.
+    pub fn process_output(&mut self) -> bool {
+        let mut had_output = false;
         for panel in &mut self.panels {
-            panel.process_output();
+            had_output |= panel.process_output();
         }
         self.update_attention();
+        had_output
     }
 
     /// Remove workspaces that have no panels.

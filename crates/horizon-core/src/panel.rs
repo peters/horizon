@@ -317,18 +317,20 @@ impl Panel {
         })
     }
 
-    pub fn process_output(&mut self) {
+    /// Drain pending terminal events. Returns `true` if any output was processed.
+    pub fn process_output(&mut self) -> bool {
         let Some(terminal) = self.content.terminal_mut() else {
-            return;
+            return false;
         };
-        terminal.process_events();
+        let had_output = terminal.process_events();
 
-        if !self.has_custom_name {
+        if had_output && !self.has_custom_name {
             let title = terminal.title();
             if !title.is_empty() {
                 self.title = title.to_string();
             }
         }
+        had_output
     }
 
     #[must_use]
