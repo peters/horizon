@@ -175,17 +175,24 @@ impl HorizonApp {
         canvas_rect: Rect,
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> Option<PanelSnapshot> {
-        self.board.panel(panel_id).map(|panel| {
+        self.board.panel(panel_id).and_then(|panel| {
             let terminal = panel.terminal();
             let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
             let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
+            let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
+
+            // Cull off-screen panels — skip chrome, snapshot, and rendering.
+            if !canvas_rect.intersects(screen_rect) {
+                return None;
+            }
+
             let workspace_accent = workspaces
                 .iter()
                 .find(|(workspace_id, _, _)| *workspace_id == panel.workspace_id)
                 .map(|(_, _, color)| *color);
 
-            PanelSnapshot {
-                screen_rect: Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size),
+            Some(PanelSnapshot {
+                screen_rect,
                 canvas_position,
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
@@ -197,7 +204,7 @@ impl HorizonApp {
                 is_focused: self.board.focused == Some(panel_id),
                 is_renaming: self.renaming_panel == Some(panel_id),
                 rebind_options: self.session_rebind_options(panel_id),
-            }
+            })
         })
     }
 
