@@ -111,6 +111,8 @@ pub struct HorizonApp {
     initial_pan_done: bool,
     file_hover_pos: Option<Pos2>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
+    config_last_mtime: Option<std::time::SystemTime>,
+    config_last_check: Option<Instant>,
 }
 
 impl HorizonApp {
@@ -159,6 +161,10 @@ impl HorizonApp {
             )
         };
 
+        let config_last_mtime = std::fs::metadata(&config_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
         Self {
             board,
             panels_to_close: Vec::new(),
@@ -204,6 +210,8 @@ impl HorizonApp {
             pan_target: None,
             is_panning: false,
             git_watchers: HashMap::new(),
+            config_last_mtime,
+            config_last_check: None,
         }
     }
 }
@@ -282,6 +290,7 @@ impl HorizonApp {
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
         self.poll_git_watchers();
+        self.poll_config_reload();
 
         had_terminal_output
     }
@@ -330,6 +339,39 @@ impl HorizonApp {
         // Remove watchers for workspaces that no longer have GitChanges panels.
         self.git_watchers
             .retain(|ws_id, _| workspaces_needing_watchers.contains_key(ws_id));
+    }
+
+    fn poll_config_reload(&mut self) {
+        // Skip while settings editor is open (it manages its own save/reload).
+        if self.settings.is_some() {
+            return;
+        }
+
+        // Check at most every 2 seconds.
+        let now = Instant::now();
+        if self
+            .config_last_check
+            .is_some_and(|t| now.duration_since(t) < Duration::from_secs(2))
+        {
+            return;
+        }
+        self.config_last_check = Some(now);
+
+        let current_mtime = std::fs::metadata(&self.config_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
+        if current_mtime == self.config_last_mtime {
+            return;
+        }
+        self.config_last_mtime = current_mtime;
+
+        if let Ok(config) = Config::load(Some(&self.config_path)) {
+            tracing::info!("config file changed, reloading presets");
+            self.template_config = config.clone();
+            self.presets.clone_from(&config.presets);
+            self.board.sync_workspace_metadata(&config);
+        }
     }
 
     fn apply_panel_transitions(&mut self) {
