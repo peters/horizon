@@ -1,17 +1,28 @@
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
 use alacritty_terminal::vte::ansi::CursorShape;
-use egui::{CornerRadius, Pos2, Rect, StrokeKind, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, StrokeKind, Vec2};
 
 use crate::theme;
 
 use super::layout::{GridMetrics, usize_to_f32};
+
+struct TextRun {
+    line: usize,
+    next_column: usize,
+    x: f32,
+    y: f32,
+    fg: Color32,
+    text: String,
+}
 
 #[profiling::function]
 pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, CornerRadius::same(8), theme::PANEL_BG);
+
+    let mut text_run: Option<TextRun> = None;
 
     for indexed in content.display_iter {
         let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
@@ -29,6 +40,39 @@ pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<
             .selection
             .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
         let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
+        let batchable_char = batchable_cell_char(indexed.cell, selected)
+            .filter(|_| bg == theme::PANEL_BG && !has_cell_decoration(indexed.cell));
+
+        if let Some(ch) = batchable_char {
+            let can_continue = text_run
+                .as_ref()
+                .is_some_and(|run| run.line == point.line && run.next_column == point.column.0 && run.fg == fg);
+
+            if can_continue {
+                if let Some(run) = &mut text_run {
+                    run.text.push(ch);
+                    run.next_column += 1;
+                }
+                continue;
+            }
+
+            flush_text_run(&painter, metrics, &mut text_run);
+            if ch != ' ' {
+                let mut text = String::new();
+                text.push(ch);
+                text_run = Some(TextRun {
+                    line: point.line,
+                    next_column: point.column.0 + 1,
+                    x,
+                    y,
+                    fg,
+                    text,
+                });
+            }
+            continue;
+        }
+
+        flush_text_run(&painter, metrics, &mut text_run);
 
         if bg != theme::PANEL_BG || selected {
             painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
@@ -48,6 +92,8 @@ pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<
 
         paint_cell_decoration(&painter, cell_rect, indexed.cell, content.colors, fg);
     }
+
+    flush_text_run(&painter, metrics, &mut text_run);
 }
 
 #[profiling::function]
@@ -149,6 +195,47 @@ fn cell_text(cell: &Cell) -> Option<String> {
     }
 
     Some(text)
+}
+
+fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
+    if selected
+        || cell
+            .flags
+            .intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
+        || cell.zerowidth().is_some()
+    {
+        return None;
+    }
+
+    Some(cell.c)
+}
+
+fn flush_text_run(painter: &egui::Painter, metrics: &GridMetrics, run: &mut Option<TextRun>) {
+    let Some(run) = run.take() else {
+        return;
+    };
+    if run.text.is_empty() {
+        return;
+    }
+
+    painter.text(
+        Pos2::new(run.x, run.y),
+        egui::Align2::LEFT_TOP,
+        run.text,
+        metrics.font_id.clone(),
+        run.fg,
+    );
+}
+
+fn has_cell_decoration(cell: &Cell) -> bool {
+    cell.flags.intersects(
+        Flags::UNDERLINE
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::UNDERCURL
+            | Flags::DOTTED_UNDERLINE
+            | Flags::DASHED_UNDERLINE
+            | Flags::STRIKEOUT,
+    )
 }
 
 fn paint_cell_decoration(
