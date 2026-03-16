@@ -792,20 +792,54 @@ impl Board {
         else {
             return;
         };
-        self.set_workspace_layout(id, Some(layout));
         let count = panel_ids.len();
         if count == 0 {
+            self.set_workspace_layout(id, Some(layout));
             return;
         }
 
+        // For Grid layout, compute the current workspace content size so panels
+        // expand to fill the existing area rather than shrinking it.
+        let content_size = if layout == WorkspaceLayout::Grid {
+            self.workspace_content_size(id)
+        } else {
+            None
+        };
+
+        self.set_workspace_layout(id, Some(layout));
+
         for (index, panel_id) in panel_ids.iter().enumerate() {
-            let (position, size) = arranged_panel_layout(origin, layout, index, count);
+            let (position, size) =
+                arranged_panel_layout(origin, layout, index, count, content_size);
 
             if let Some(panel) = self.panel_mut(*panel_id) {
                 panel.move_to(position);
                 panel.resize_layout(size);
             }
         }
+    }
+
+    /// Compute the content area of a workspace from its current panel layout
+    /// bounds (excluding chrome decoration).  Returns `[width, height]` of the
+    /// region from the inner-padding edge to the farthest panel edge.
+    fn workspace_content_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
+        let workspace = self.workspace(id)?;
+        let origin = workspace.position;
+        let mut max = [f32::MIN, f32::MIN];
+        let mut any = false;
+        for panel_id in &workspace.panels {
+            if let Some(panel) = self.panel(*panel_id) {
+                any = true;
+                max[0] = max[0].max(panel.layout.position[0] + panel.layout.size[0]);
+                max[1] = max[1].max(panel.layout.position[1] + panel.layout.size[1]);
+            }
+        }
+        if !any {
+            return None;
+        }
+        let min_x = origin[0] + WS_INNER_PAD;
+        let min_y = origin[1] + WS_INNER_PAD;
+        Some([(max[0] - min_x).max(0.0), (max[1] - min_y).max(0.0)])
     }
 
     fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
@@ -852,6 +886,7 @@ fn arranged_panel_layout(
     layout: WorkspaceLayout,
     index: usize,
     count: usize,
+    content_size: Option<[f32; 2]>,
 ) -> ([f32; 2], [f32; 2]) {
     let panel_size = DEFAULT_PANEL_SIZE;
 
@@ -868,11 +903,14 @@ fn arranged_panel_layout(
         }
         WorkspaceLayout::Grid => {
             let cols = ceil_sqrt_usize(count);
+            let rows = (count + cols - 1) / cols;
             let col = index % cols;
             let row = index / cols;
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_size[0] + TILE_GAP);
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_size[1] + TILE_GAP);
-            ([x, y], panel_size)
+
+            let grid_size = grid_panel_size(content_size, cols, rows);
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (grid_size[0] + TILE_GAP);
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (grid_size[1] + TILE_GAP);
+            ([x, y], grid_size)
         }
         WorkspaceLayout::Stack => {
             let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_X;
@@ -885,6 +923,21 @@ fn arranged_panel_layout(
             ([x, y], panel_size)
         }
     }
+}
+
+/// Compute per-panel size for Grid layout so panels fill the workspace content area.
+/// Falls back to `DEFAULT_PANEL_SIZE` when no prior content area is available.
+fn grid_panel_size(content_size: Option<[f32; 2]>, cols: usize, rows: usize) -> [f32; 2] {
+    let Some(content) = content_size else {
+        return DEFAULT_PANEL_SIZE;
+    };
+
+    let cols_f = usize_to_f32(cols);
+    let rows_f = usize_to_f32(rows);
+
+    let w = ((content[0] - (cols_f - 1.0) * TILE_GAP) / cols_f).max(DEFAULT_PANEL_SIZE[0]);
+    let h = ((content[1] - (rows_f - 1.0) * TILE_GAP) / rows_f).max(DEFAULT_PANEL_SIZE[1]);
+    [w, h]
 }
 
 fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
