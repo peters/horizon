@@ -254,12 +254,8 @@ impl HorizonApp {
         response.context_menu(|ui| {
             ui.set_min_width(160.0);
             ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
-            for (label, layout) in [
-                ("Rows", WorkspaceLayout::Rows),
-                ("Columns", WorkspaceLayout::Columns),
-                ("Grid", WorkspaceLayout::Grid),
-            ] {
-                let text = egui::RichText::new(label).size(12.0).color(theme::FG_SOFT);
+            for layout in WorkspaceLayout::ALL {
+                let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT);
                 if ui.add(Button::new(text).frame(false)).clicked() {
                     actions.arrange_layout = Some((workspace.id, layout));
                     ui.close();

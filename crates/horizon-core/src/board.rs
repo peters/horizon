@@ -5,8 +5,8 @@ use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
 use crate::layout::{
-    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD,
-    ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
+    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
+    tiled_panel_position, usize_to_f32, workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::{RuntimeState, WorkspaceState};
@@ -15,6 +15,10 @@ use crate::workspace::{Workspace, WorkspaceId};
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const STACK_OFFSET_X: f32 = 16.0;
+const STACK_OFFSET_Y: f32 = 20.0;
+const CASCADE_OFFSET_X: f32 = 40.0;
+const CASCADE_OFFSET_Y: f32 = 30.0;
 
 /// Predefined layout arrangements for panels inside a workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +29,25 @@ pub enum WorkspaceLayout {
     Columns,
     /// Square-ish grid (auto columns).
     Grid,
+    /// Layered pile with slight offsets to keep nearby panels accessible.
+    Stack,
+    /// Diagonal overlap that fans panels across the workspace.
+    Cascade,
+}
+
+impl WorkspaceLayout {
+    pub const ALL: [Self; 5] = [Self::Rows, Self::Columns, Self::Grid, Self::Stack, Self::Cascade];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Rows => "Rows",
+            Self::Columns => "Columns",
+            Self::Grid => "Grid",
+            Self::Stack => "Stack",
+            Self::Cascade => "Cascade",
+        }
+    }
 }
 
 pub struct Board {
@@ -644,28 +667,12 @@ impl Board {
             return;
         }
 
-        let (cols, _rows) = match layout {
-            WorkspaceLayout::Rows => (1, count),
-            WorkspaceLayout::Columns => (count, 1),
-            WorkspaceLayout::Grid => {
-                let cols = ceil_sqrt_usize(count);
-                let rows = count.div_ceil(cols);
-                (cols, rows)
-            }
-        };
-
-        let panel_width = DEFAULT_PANEL_SIZE[0];
-        let panel_height = DEFAULT_PANEL_SIZE[1];
-
         for (index, panel_id) in panel_ids.iter().enumerate() {
-            let col = index % cols;
-            let row = index / cols;
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_width + TILE_GAP);
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_height + TILE_GAP);
+            let (position, size) = arranged_panel_layout(origin, layout, index, count);
 
             if let Some(panel) = self.panel_mut(*panel_id) {
-                panel.move_to([x, y]);
-                panel.resize_layout([panel_width, panel_height]);
+                panel.move_to(position);
+                panel.resize_layout(size);
             }
         }
     }
@@ -769,6 +776,46 @@ impl Board {
 impl Default for Board {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn arranged_panel_layout(
+    origin: [f32; 2],
+    layout: WorkspaceLayout,
+    index: usize,
+    count: usize,
+) -> ([f32; 2], [f32; 2]) {
+    let panel_size = DEFAULT_PANEL_SIZE;
+
+    match layout {
+        WorkspaceLayout::Rows => {
+            let x = origin[0] + WS_INNER_PAD;
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * (panel_size[1] + TILE_GAP);
+            ([x, y], panel_size)
+        }
+        WorkspaceLayout::Columns => {
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * (panel_size[0] + TILE_GAP);
+            let y = origin[1] + WS_INNER_PAD;
+            ([x, y], panel_size)
+        }
+        WorkspaceLayout::Grid => {
+            let cols = ceil_sqrt_usize(count);
+            let col = index % cols;
+            let row = index / cols;
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_size[0] + TILE_GAP);
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_size[1] + TILE_GAP);
+            ([x, y], panel_size)
+        }
+        WorkspaceLayout::Stack => {
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_X;
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_Y;
+            ([x, y], panel_size)
+        }
+        WorkspaceLayout::Cascade => {
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_X;
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_Y;
+            ([x, y], panel_size)
+        }
     }
 }
 
@@ -1079,6 +1126,62 @@ mod tests {
             "panel should be placed at the explicit click position ({:?}), not at the default tile position ({:?})",
             click_pos,
             panel.layout.position,
+        );
+    }
+
+    #[test]
+    fn arrange_workspace_stack_offsets_panels_in_layers() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("stacked");
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Stack);
+
+        let first_position = board.panel(first).expect("first panel").layout.position;
+        let second_position = board.panel(second).expect("second panel").layout.position;
+
+        assert_eq!(first_position, [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
+        assert_eq!(
+            second_position,
+            [
+                origin[0] + WS_INNER_PAD + STACK_OFFSET_X,
+                origin[1] + WS_INNER_PAD + STACK_OFFSET_Y,
+            ]
+        );
+    }
+
+    #[test]
+    fn arrange_workspace_cascade_offsets_panels_diagonally() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("cascade");
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Cascade);
+
+        let first_position = board.panel(first).expect("first panel").layout.position;
+        let second_position = board.panel(second).expect("second panel").layout.position;
+
+        assert_eq!(first_position, [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
+        assert_eq!(
+            second_position,
+            [
+                origin[0] + WS_INNER_PAD + CASCADE_OFFSET_X,
+                origin[1] + WS_INNER_PAD + CASCADE_OFFSET_Y,
+            ]
         );
     }
 }

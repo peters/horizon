@@ -1,5 +1,7 @@
-use egui::{Color32, Context, CornerRadius, CursorIcon, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
-use horizon_core::WorkspaceId;
+use egui::{
+    Button, Color32, Context, CornerRadius, CursorIcon, Id, Margin, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
+use horizon_core::{WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
@@ -14,6 +16,7 @@ struct WorkspaceVisual {
     label_rect: Rect,
     is_active: bool,
     is_empty: bool,
+    panel_count: usize,
 }
 
 struct WorkspaceInteraction {
@@ -21,7 +24,10 @@ struct WorkspaceInteraction {
     drag_delta: Vec2,
     start_rename: bool,
     rename_action: RenameEditAction,
+    arrange_layout: Option<WorkspaceLayout>,
 }
+
+const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
 
 impl HorizonApp {
     pub(super) fn render_workspace_backgrounds(&mut self, ctx: &Context) {
@@ -33,6 +39,7 @@ impl HorizonApp {
         let mut focus_workspace = None;
         let mut start_rename_workspace = None;
         let mut rename_action = RenameEditAction::None;
+        let mut arrange_workspace = None;
 
         for workspace in &visuals {
             self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
@@ -55,6 +62,9 @@ impl HorizonApp {
             }
             if interaction.rename_action != RenameEditAction::None {
                 rename_action = interaction.rename_action;
+            }
+            if interaction.arrange_layout.is_some() {
+                arrange_workspace = interaction.arrange_layout.map(|layout| (workspace.id, layout));
             }
         }
 
@@ -81,10 +91,16 @@ impl HorizonApp {
         if let Some(workspace_id) = focus_workspace {
             self.board.focus_workspace(workspace_id);
         }
+        if let Some((workspace_id, layout)) = arrange_workspace {
+            self.board.arrange_workspace(workspace_id, layout);
+            self.mark_runtime_dirty();
+        }
 
         if !self.is_panning {
             for (workspace_id, delta) in pending_workspace_moves {
-                let _ = self.board.translate_workspace_with_push(workspace_id, [delta.x, delta.y]);
+                let _ = self
+                    .board
+                    .translate_workspace_with_push(workspace_id, [delta.x, delta.y]);
                 self.mark_runtime_dirty();
             }
         }
@@ -135,6 +151,7 @@ impl HorizonApp {
                     ),
                     is_active,
                     is_empty,
+                    panel_count: workspace.panels.len(),
                 }
             })
             .collect()
@@ -146,6 +163,8 @@ fn render_workspace_visual(
     workspace: &WorkspaceVisual,
     rename_buffer: Option<&mut String>,
 ) -> WorkspaceInteraction {
+    let is_renaming = rename_buffer.is_some();
+
     egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
         .fixed_pos(workspace.screen_rect.min)
         .constrain(false)
@@ -159,7 +178,7 @@ fn render_workspace_visual(
             }
         });
 
-    egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
+    let mut interaction = egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
         .fixed_pos(workspace.label_rect.min)
         .constrain(false)
         .order(egui::Order::Tooltip)
@@ -186,6 +205,7 @@ fn render_workspace_visual(
                         buffer,
                         egui::FontId::proportional(12.5),
                     ),
+                    arrange_layout: None,
                 }
             } else {
                 if label_response.hovered() || label_response.dragged() {
@@ -215,10 +235,17 @@ fn render_workspace_visual(
                     },
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
+                    arrange_layout: None,
                 }
             }
         })
-        .inner
+        .inner;
+
+    if !is_renaming && workspace.is_active && workspace.panel_count > 1 {
+        interaction.arrange_layout = render_workspace_layout_toolbar(ctx, workspace);
+    }
+
+    interaction
 }
 
 fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool) {
@@ -311,6 +338,78 @@ fn paint_workspace_grip(painter: &egui::Painter, center: Pos2, highlighted: bool
         for y_offset in y_offsets {
             painter.circle_filled(Pos2::new(center.x + x_offset, center.y + y_offset), 1.2, color);
         }
+    }
+}
+
+fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -> Option<WorkspaceLayout> {
+    let origin = Pos2::new(workspace.label_rect.max.x + 10.0, workspace.label_rect.min.y);
+    let mut clicked_layout = None;
+
+    egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
+        .fixed_pos(origin)
+        .constrain(false)
+        .order(egui::Order::Tooltip)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(theme::alpha(
+                    theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.08),
+                    228,
+                ))
+                .stroke(Stroke::new(1.0, theme::alpha(workspace.color, 112)))
+                .corner_radius(10.0)
+                .inner_margin(Margin::symmetric(6, 5))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for layout in WorkspaceLayout::ALL {
+                            let response = ui
+                                .add(
+                                    Button::new(
+                                        egui::RichText::new(workspace_layout_label(layout))
+                                            .size(10.5)
+                                            .color(theme::FG_SOFT),
+                                    )
+                                    .min_size(Vec2::new(
+                                        workspace_layout_button_width(layout),
+                                        WORKSPACE_LAYOUT_BUTTON_HEIGHT,
+                                    ))
+                                    .fill(theme::alpha(
+                                        theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05),
+                                        220,
+                                    ))
+                                    .stroke(Stroke::new(
+                                        1.0,
+                                        theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216),
+                                    ))
+                                    .corner_radius(8),
+                                )
+                                .on_hover_text(layout.label());
+                            if response.clicked() {
+                                clicked_layout = Some(layout);
+                            }
+                        }
+                    });
+                });
+        });
+
+    clicked_layout
+}
+
+fn workspace_layout_label(layout: WorkspaceLayout) -> &'static str {
+    match layout {
+        WorkspaceLayout::Rows => "Rows",
+        WorkspaceLayout::Columns => "Cols",
+        WorkspaceLayout::Grid => "Grid",
+        WorkspaceLayout::Stack => "Stack",
+        WorkspaceLayout::Cascade => "Cascade",
+    }
+}
+
+fn workspace_layout_button_width(layout: WorkspaceLayout) -> f32 {
+    match layout {
+        WorkspaceLayout::Rows | WorkspaceLayout::Columns | WorkspaceLayout::Grid => 44.0,
+        WorkspaceLayout::Stack => 52.0,
+        WorkspaceLayout::Cascade => 68.0,
     }
 }
 
