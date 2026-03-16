@@ -21,7 +21,7 @@ mod workspace;
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
-pub use board::{Board, WorkspaceLayout};
+pub use board::{Board, ShutdownProgress, WorkspaceLayout};
 pub use config::{
     Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig,
     WorkspaceConfig,

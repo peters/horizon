@@ -1,7 +1,12 @@
 mod attention;
+mod shutdown;
+
+pub use shutdown::ShutdownProgress;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -303,6 +308,32 @@ impl Board {
                 );
             }
         }
+    }
+
+    /// Begins shutting down all terminal panels asynchronously.
+    ///
+    /// Sends shutdown signals to every terminal and spawns background threads
+    /// to join their event loops. Returns a [`ShutdownProgress`] handle that
+    /// can be polled each frame to track completion without blocking the UI.
+    pub fn begin_async_shutdown(&mut self) -> ShutdownProgress {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut terminal_count = 0;
+
+        for panel in &mut self.panels {
+            if let Some(terminal) = panel.terminal_mut() {
+                terminal.request_shutdown();
+            }
+        }
+
+        for panel in &mut self.panels {
+            if let Some(terminal) = panel.terminal_mut()
+                && terminal.begin_async_join(&completed)
+            {
+                terminal_count += 1;
+            }
+        }
+
+        ShutdownProgress::new(terminal_count, completed)
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {

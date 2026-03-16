@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PanelKind, PresetConfig,
-    RuntimeState, WindowConfig, WorkspaceId, transcript_root_path_for_config,
+    RuntimeState, ShutdownProgress, WindowConfig, WorkspaceId, transcript_root_path_for_config,
 };
 
 use crate::dir_picker::DirPicker;
@@ -111,6 +111,7 @@ pub struct HorizonApp {
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
+    shutdown_progress: Option<ShutdownProgress>,
     exit_cleanup_complete: bool,
 }
 
@@ -210,6 +211,7 @@ impl HorizonApp {
             git_watchers: HashMap::new(),
             config_last_mtime,
             config_last_check: None,
+            shutdown_progress: None,
             exit_cleanup_complete: false,
         }
     }
@@ -218,6 +220,12 @@ impl HorizonApp {
 impl eframe::App for HorizonApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.exit_on_close_request(ctx);
+
+        if self.shutdown_progress.is_some() {
+            self.render_shutdown_overlay(ctx);
+            self.poll_shutdown_progress();
+            return;
+        }
 
         if !self.prepare_frame(ctx) {
             return;
@@ -237,7 +245,10 @@ impl eframe::App for HorizonApp {
     }
 
     fn on_exit(&mut self) {
-        self.exit_after_cleanup();
+        self.run_exit_cleanup();
+        // macOS can leave Horizon running as a windowless app after eframe
+        // has already torn down the viewport, so terminate explicitly.
+        std::process::exit(0);
     }
 }
 
@@ -249,16 +260,68 @@ impl HorizonApp {
 
         // Keep the viewport alive while we flush state and stop PTY-backed panels.
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        self.exit_after_cleanup();
+        self.begin_shutdown();
     }
 
-    fn exit_after_cleanup(&mut self) -> ! {
-        self.run_exit_cleanup();
-        // macOS can leave Horizon running as a windowless app after eframe has
-        // already called `on_exit`, so terminate explicitly once cleanup is done.
-        std::process::exit(0);
+    /// Starts asynchronous terminal shutdown. State is saved immediately,
+    /// and background threads join each terminal event loop. The UI shows a
+    /// progress overlay until all terminals are done or the budget expires.
+    fn begin_shutdown(&mut self) {
+        if self.shutdown_progress.is_some() {
+            return;
+        }
+
+        self.auto_save_runtime_state();
+        self.git_watchers.clear();
+        self.shutdown_progress = Some(self.board.begin_async_shutdown());
     }
 
+    fn poll_shutdown_progress(&mut self) {
+        const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
+        let Some(progress) = &self.shutdown_progress else {
+            return;
+        };
+
+        if progress.is_complete() || progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT {
+            self.exit_cleanup_complete = true;
+            std::process::exit(0);
+        }
+    }
+
+    fn render_shutdown_overlay(&self, ctx: &Context) {
+        let Some(progress) = &self.shutdown_progress else {
+            return;
+        };
+        let completed = progress.terminals_completed();
+        let total = progress.terminal_count();
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let height = ui.available_height();
+            ui.add_space(height * 0.5 - 36.0);
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Spinner::new().size(24.0));
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("Closing Horizon…")
+                        .size(18.0)
+                        .color(egui::Color32::from_gray(200)),
+                );
+                if total > 0 {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!("{completed} / {total} terminals shut down"))
+                            .size(14.0)
+                            .color(egui::Color32::from_gray(140)),
+                    );
+                }
+            });
+        });
+
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// Synchronous fallback for the `on_exit` eframe callback.
     fn run_exit_cleanup(&mut self) {
         if self.exit_cleanup_complete {
             return;

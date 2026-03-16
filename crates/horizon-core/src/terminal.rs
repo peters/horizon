@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -257,6 +258,22 @@ impl Terminal {
     pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
         self.request_shutdown();
         self.wait_for_shutdown(timeout)
+    }
+
+    /// Spawns a background thread to join the event-loop handle, incrementing
+    /// `completed` when done.  Returns `true` if a join thread was spawned.
+    pub(crate) fn begin_async_join(&mut self, completed: &Arc<AtomicUsize>) -> bool {
+        let Some(handle) = self.event_loop_handle.take() else {
+            return false;
+        };
+        let done = Arc::clone(completed);
+        std::thread::spawn(move || {
+            // Join and drop on this helper thread so PTY teardown
+            // cannot block the UI thread.
+            let _ = handle.join();
+            done.fetch_add(1, Ordering::Relaxed);
+        });
+        true
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
