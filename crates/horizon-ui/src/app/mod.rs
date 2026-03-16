@@ -435,9 +435,12 @@ impl HorizonApp {
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
             let minimap_height = self.render_minimap(ctx);
-            if let Some(panel_id) =
-                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays)
-            {
+            let feed_result =
+                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
+            for attention_id in feed_result.dismissed_ids {
+                let _ = self.board.dismiss_attention(attention_id);
+            }
+            if let Some(panel_id) = feed_result.focus_panel {
                 self.board.focus(panel_id);
                 if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(ws_id)
