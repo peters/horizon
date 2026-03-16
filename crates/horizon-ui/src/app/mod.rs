@@ -367,10 +367,19 @@ impl HorizonApp {
 
         let has_live_terminals = !self.board.panels.is_empty();
         let animating = self.pan_target.is_some();
-        if had_terminal_output || animating {
+        if animating {
             ctx.request_repaint();
         } else if has_live_terminals {
-            ctx.request_repaint_after(Duration::from_millis(32));
+            // Poll for new PTY output. When a terminal just produced output
+            // we check again soon (16ms) to keep up with streaming content.
+            // When idle we back off to 100ms to save CPU — egui still
+            // repaints instantly on any user interaction (mouse, keyboard).
+            let poll = if had_terminal_output {
+                Duration::from_millis(16)
+            } else {
+                Duration::from_millis(100)
+            };
+            ctx.request_repaint_after(poll);
         }
     }
 }
