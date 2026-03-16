@@ -38,6 +38,17 @@ impl PanelKind {
     pub fn is_agent(self) -> bool {
         matches!(self, Self::Codex | Self::Claude)
     }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Shell => "Shell",
+            Self::Codex => "Codex",
+            Self::Claude => "Claude",
+            Self::Command => "Command",
+            Self::Editor => "Editor",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
@@ -573,10 +584,7 @@ fn resolve_launch_command(
                 // same CWD don't share the most-recent conversation.
                 // This UUID is only used for launch isolation — the real
                 // session binding is discovered from the catalog later.
-                launch_args.extend([
-                    "--session-id".to_string(),
-                    Uuid::new_v4().to_string(),
-                ]);
+                launch_args.extend(["--session-id".to_string(), Uuid::new_v4().to_string()]);
             }
             launch_args.extend(args);
             wrap_in_login_shell(program, launch_args)
@@ -749,7 +757,10 @@ mod tests {
         assert_eq!(args[0], "-ic");
         assert!(args[1].contains("claude"));
         assert!(args[1].contains("--dangerously-skip-permissions"));
-        assert!(args[1].contains("--session-id"), "fresh Claude panels must get an ephemeral --session-id");
+        assert!(
+            args[1].contains("--session-id"),
+            "fresh Claude panels must get an ephemeral --session-id"
+        );
         assert!(!args[1].contains("--resume"));
     }
 

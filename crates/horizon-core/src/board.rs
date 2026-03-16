@@ -4,13 +4,13 @@ use std::time::Duration;
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
+use crate::layout::{
+    TILE_GAP, WS_INNER_PAD, ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
+};
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::{RuntimeState, WorkspaceState};
 use crate::workspace::{Workspace, WorkspaceId};
 
-const TILE_GAP: f32 = 20.0;
-const WS_INNER_PAD: f32 = 20.0;
-const WORKSPACE_GAP: f32 = 80.0;
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -324,6 +324,19 @@ impl Board {
         self.panel_mut(id).is_some_and(|panel| panel.rename(name))
     }
 
+    pub fn sync_workspace_metadata(&mut self, config: &Config) {
+        for workspace in &mut self.workspaces {
+            if let Some(template) = &workspace.template
+                && let Some(workspace_config) = config.workspaces.get(template.workspace_index)
+            {
+                if workspace.name != workspace_config.name {
+                    workspace_config.name.clone_into(&mut workspace.name);
+                }
+                workspace.cwd = workspace_config.cwd.as_deref().map(Config::expand_tilde);
+            }
+        }
+    }
+
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     pub fn process_output(&mut self) -> bool {
         let mut had_output = false;
@@ -556,7 +569,7 @@ impl Board {
             WorkspaceLayout::Rows => (1, count),
             WorkspaceLayout::Columns => (count, 1),
             WorkspaceLayout::Grid => {
-                let cols = (count as f64).sqrt().ceil() as usize;
+                let cols = ceil_sqrt_usize(count);
                 let rows = count.div_ceil(cols);
                 (cols, rows)
             }
@@ -680,36 +693,18 @@ impl Default for Board {
     }
 }
 
-/// Fixed horizontal space reserved per workspace (3 panel columns + padding + gap).
-fn workspace_slot_width() -> f32 {
-    let columns = 3.0;
-    let content = columns * DEFAULT_PANEL_SIZE[0] + (columns - 1.0) * TILE_GAP;
-    content + 2.0 * WS_INNER_PAD + WORKSPACE_GAP
-}
-
-fn tiled_panel_position(origin: [f32; 2], index: usize) -> [f32; 2] {
-    let column = usize_to_f32(index % 3);
-    let row = usize_to_f32(index / 3);
-    [
-        origin[0] + WS_INNER_PAD + column * (DEFAULT_PANEL_SIZE[0] + TILE_GAP),
-        origin[1] + WS_INNER_PAD + row * (DEFAULT_PANEL_SIZE[1] + TILE_GAP),
-    ]
-}
-
 fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
     positions
         .iter()
         .any(|pos| (pos[0] - candidate[0]).abs() < 1.0 && (pos[1] - candidate[1]).abs() < 1.0)
 }
 
-fn usize_to_f32(value: usize) -> f32 {
-    let clamped = u16::try_from(value).unwrap_or(u16::MAX);
-    f32::from(clamped)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WorkspaceConfig;
+    use crate::runtime_state::WorkspaceTemplateRef;
+    use std::path::PathBuf;
 
     #[test]
     fn rename_workspace_updates_matching_workspace() {
@@ -875,5 +870,46 @@ mod tests {
         assert!((workspace.position[1] - (original_workspace_pos[1] + 24.0)).abs() <= f32::EPSILON);
         assert!((panel.layout.position[0] - (original_panel_pos[0] + 48.0)).abs() <= f32::EPSILON);
         assert!((panel.layout.position[1] - (original_panel_pos[1] + 24.0)).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn sync_workspace_metadata_updates_only_templated_workspaces() {
+        let mut board = Board::new();
+        let templated_workspace = board.create_workspace("stale");
+        let manual_workspace = board.create_workspace("manual");
+
+        {
+            let workspace = board.workspace_mut(templated_workspace).expect("templated workspace");
+            workspace.template = Some(WorkspaceTemplateRef {
+                workspace_index: 0,
+                workspace_name: "template".to_string(),
+            });
+            workspace.cwd = Some(PathBuf::from("/tmp/old"));
+        }
+        {
+            let workspace = board.workspace_mut(manual_workspace).expect("manual workspace");
+            workspace.cwd = Some(PathBuf::from("/tmp/manual"));
+        }
+
+        let config = Config {
+            workspaces: vec![WorkspaceConfig {
+                name: "synced".to_string(),
+                color: None,
+                cwd: Some("~/repo".to_string()),
+                position: None,
+                terminals: Vec::new(),
+            }],
+            ..Config::default()
+        };
+
+        board.sync_workspace_metadata(&config);
+
+        let templated = board.workspace(templated_workspace).expect("templated workspace");
+        assert_eq!(templated.name, "synced");
+        assert_eq!(templated.cwd, Some(Config::expand_tilde("~/repo")));
+
+        let manual = board.workspace(manual_workspace).expect("manual workspace");
+        assert_eq!(manual.name, "manual");
+        assert_eq!(manual.cwd, Some(PathBuf::from("/tmp/manual")));
     }
 }

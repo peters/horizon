@@ -8,16 +8,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::board::Board;
 use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
-use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
+use crate::layout::workspace_slot_width;
+use crate::panel::{PanelKind, PanelOptions, PanelResume};
 
 const RUNTIME_STATE_VERSION: u32 = 1;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
-const TILE_GAP: f32 = 20.0;
-const WS_INNER_PAD: f32 = 20.0;
-const WORKSPACE_GAP: f32 = 80.0;
 const MAX_CLAUDE_SESSION_FILES: usize = 64;
 const CLAUDE_SESSION_HEAD_LINE_LIMIT: usize = 48;
 const CLAUDE_SESSION_TAIL_LINE_LIMIT: usize = 24;
@@ -157,6 +156,75 @@ impl RuntimeState {
     #[must_use]
     pub fn panel_count(&self) -> usize {
         self.workspaces.iter().map(|workspace| workspace.panels.len()).sum()
+    }
+
+    #[must_use]
+    pub fn from_board(board: &Board, window: WindowConfig, pan_offset: [f32; 2]) -> Self {
+        let workspaces = board
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                let panels = workspace
+                    .panels
+                    .iter()
+                    .filter_map(|panel_id| board.panel(*panel_id))
+                    .map(|panel| {
+                        let terminal = panel.terminal();
+                        let editor = panel.editor();
+
+                        PanelState {
+                            local_id: panel.local_id.clone(),
+                            name: panel.title.clone(),
+                            kind: panel.kind,
+                            command: panel.launch_command.clone(),
+                            args: panel.launch_args.clone(),
+                            cwd: if panel.kind.is_agent() {
+                                panel.launch_cwd.clone()
+                            } else {
+                                terminal
+                                    .and_then(crate::terminal::Terminal::current_cwd)
+                                    .or_else(|| panel.launch_cwd.clone())
+                            }
+                            .map(|path| path.display().to_string()),
+                            rows: terminal.map_or(DEFAULT_ROWS, crate::terminal::Terminal::rows),
+                            cols: terminal.map_or(DEFAULT_COLS, crate::terminal::Terminal::cols),
+                            resume: panel.resume.clone(),
+                            position: Some(panel.layout.position),
+                            size: Some(panel.layout.size),
+                            session_binding: panel.session_binding.clone(),
+                            template: panel.template.clone(),
+                            editor_content: editor
+                                .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
+                                .map(|editor| editor.text.clone()),
+                        }
+                    })
+                    .collect();
+
+                WorkspaceState {
+                    local_id: workspace.local_id.clone(),
+                    name: workspace.name.clone(),
+                    cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
+                    position: Some(workspace.position),
+                    template: workspace.template.clone(),
+                    panels,
+                }
+            })
+            .collect();
+
+        Self {
+            version: RUNTIME_STATE_VERSION,
+            window: Some(window),
+            pan_offset: Some(pan_offset),
+            active_workspace_local_id: board
+                .active_workspace
+                .and_then(|workspace_id| board.workspace(workspace_id))
+                .map(|workspace| workspace.local_id.clone()),
+            focused_panel_local_id: board
+                .focused
+                .and_then(|panel_id| board.panel(panel_id))
+                .map(|panel| panel.local_id.clone()),
+            workspaces,
+        }
     }
 }
 
@@ -708,7 +776,6 @@ pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-
 fn xdg_state_home() -> Option<PathBuf> {
     std::env::var_os("XDG_STATE_HOME").map(PathBuf::from)
 }
@@ -736,15 +803,11 @@ fn empty_to_none(value: &str) -> Option<&str> {
     if value.is_empty() { None } else { Some(value) }
 }
 
-fn workspace_slot_width() -> f32 {
-    let columns = 3.0;
-    let content = columns * DEFAULT_PANEL_SIZE[0] + (columns - 1.0) * TILE_GAP;
-    content + 2.0 * WS_INNER_PAD + WORKSPACE_GAP
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Board;
+    use crate::config::WindowConfig;
     use std::io::Cursor;
 
     #[test]
@@ -877,5 +940,73 @@ mod tests {
         assert_eq!(session.cwd.as_deref(), Some("/repo"));
         assert_eq!(session.label.as_deref(), Some("reply with ok only"));
         assert_eq!(session.updated_at, 9);
+    }
+
+    #[test]
+    fn from_board_preserves_window_pan_focus_and_bindings() {
+        let mut board = Board::new();
+        let alpha = board.create_workspace_at("alpha", [120.0, 64.0]);
+        let beta = board.create_workspace_at("beta", [860.0, 64.0]);
+        let panel_id = board
+            .create_panel(
+                PanelOptions {
+                    name: Some("agent shell".to_string()),
+                    position: Some([180.0, 120.0]),
+                    size: Some([640.0, 420.0]),
+                    session_binding: Some(AgentSessionBinding::new(
+                        PanelKind::Shell,
+                        "session-42".to_string(),
+                        Some("/repo".to_string()),
+                        Some("Agent shell".to_string()),
+                        Some(17),
+                    )),
+                    ..PanelOptions::default()
+                },
+                beta,
+            )
+            .expect("panel should spawn");
+        board.focus_workspace(alpha);
+        board.focus(panel_id);
+
+        let window = WindowConfig {
+            width: 1920.0,
+            height: 1080.0,
+            x: Some(32.0),
+            y: Some(48.0),
+        };
+        let state = RuntimeState::from_board(&board, window.clone(), [24.0, -18.0]);
+
+        let saved_window = state.window.expect("window config");
+        assert!((saved_window.width - window.width).abs() <= f32::EPSILON);
+        assert!((saved_window.height - window.height).abs() <= f32::EPSILON);
+        assert_eq!(saved_window.x, window.x);
+        assert_eq!(saved_window.y, window.y);
+        assert_eq!(state.pan_offset, Some([24.0, -18.0]));
+        assert_eq!(
+            state.active_workspace_local_id.as_deref(),
+            Some(board.workspace(beta).expect("workspace").local_id.as_str())
+        );
+        assert_eq!(
+            state.focused_panel_local_id.as_deref(),
+            Some(board.panel(panel_id).expect("panel").local_id.as_str())
+        );
+        assert_eq!(state.workspaces.len(), 2);
+
+        let saved_workspace = state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.local_id == board.workspace(beta).expect("workspace").local_id)
+            .expect("workspace state");
+        let saved_panel = saved_workspace.panels.first().expect("panel state");
+        assert_eq!(saved_workspace.position, Some([860.0, 64.0]));
+        assert_eq!(saved_panel.position, Some([180.0, 120.0]));
+        assert_eq!(saved_panel.size, Some([640.0, 420.0]));
+        assert_eq!(
+            saved_panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-42")
+        );
     }
 }

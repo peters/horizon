@@ -23,6 +23,10 @@ pub struct MarkdownEditor {
 
 impl MarkdownEditor {
     /// Open a markdown file from disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read from disk.
     pub fn open(path: PathBuf) -> Result<Self> {
         let text = std::fs::read_to_string(&path).map_err(|e| Error::Editor(e.to_string()))?;
         Ok(Self {
@@ -45,6 +49,10 @@ impl MarkdownEditor {
     }
 
     /// Save the buffer to its file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the editor has no file path or the file write fails.
     pub fn save(&mut self) -> Result<()> {
         if let Some(path) = &self.file_path {
             std::fs::write(path, &self.text)?;
