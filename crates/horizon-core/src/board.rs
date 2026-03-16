@@ -318,6 +318,23 @@ impl Board {
         self.update_attention();
     }
 
+    /// Remove workspaces that have no panels.
+    pub fn remove_empty_workspaces(&mut self) {
+        let empty_ids: Vec<_> = self
+            .workspaces
+            .iter()
+            .filter(|ws| ws.panels.is_empty())
+            .map(|ws| ws.id)
+            .collect();
+        for ws_id in empty_ids {
+            self.workspaces.retain(|ws| ws.id != ws_id);
+            self.attention.retain(|item| item.workspace_id != ws_id);
+            if self.active_workspace == Some(ws_id) {
+                self.active_workspace = self.workspaces.first().map(|ws| ws.id);
+            }
+        }
+    }
+
     /// Returns IDs of panels whose child process has exited.
     #[must_use]
     pub fn exited_panels(&self) -> Vec<PanelId> {

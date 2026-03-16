@@ -14,6 +14,7 @@ use horizon_core::{
 };
 
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
+use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::terminal_widget::TerminalView;
 use crate::theme;
 
@@ -114,6 +115,7 @@ pub struct HorizonApp {
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
+    quick_nav: Option<QuickNav>,
     runtime_dirty_since: Option<Instant>,
 }
 
@@ -194,6 +196,7 @@ impl HorizonApp {
             settings: None,
             pending_preset_pick: None,
             dir_picker: None,
+            quick_nav: None,
             pan_offset: runtime_state
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
@@ -384,6 +387,47 @@ impl HorizonApp {
         }
     }
 
+    fn render_quick_nav(&mut self, ctx: &Context) {
+        let Some(nav) = self.quick_nav.as_mut() else {
+            return;
+        };
+
+        let entries: Vec<WorkspaceEntry> = self
+            .board
+            .workspaces
+            .iter()
+            .map(|ws| {
+                let (r, g, b) = ws.accent();
+                WorkspaceEntry {
+                    id: ws.id,
+                    name: ws.name.clone(),
+                    color: Color32::from_rgb(r, g, b),
+                    panel_count: ws.panels.len(),
+                    is_active: self.board.active_workspace == Some(ws.id),
+                }
+            })
+            .collect();
+
+        match nav.show(ctx, &entries) {
+            QuickNavAction::None => {}
+            QuickNavAction::Cancelled => {
+                self.quick_nav = None;
+            }
+            QuickNavAction::Selected(ws_id) => {
+                self.quick_nav = None;
+                self.board.focus_workspace(ws_id);
+                if let Some((min, max)) = self.board.workspace_bounds(ws_id) {
+                    let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                    let size = Vec2::new(
+                        max[0] - min[0] + 2.0 * WS_BG_PAD,
+                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                    );
+                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+                }
+            }
+        }
+    }
+
     fn render_dir_picker(&mut self, ctx: &Context) {
         let Some(picker) = self.dir_picker.as_mut() else {
             return;
@@ -458,6 +502,15 @@ impl HorizonApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
+        // Ctrl+K toggles quick-nav even when a terminal has focus.
+        if ctx.input(|input| input.key_pressed(egui::Key::K) && input.modifiers.ctrl) {
+            if self.quick_nav.is_some() {
+                self.quick_nav = None;
+            } else {
+                self.quick_nav = Some(QuickNav::new());
+            }
+        }
+
         if self.terminal_accepts_keyboard_input(ctx) {
             return;
         }
@@ -2297,6 +2350,7 @@ impl eframe::App for HorizonApp {
             }
         }
 
+        self.board.remove_empty_workspaces();
         if self.board.workspaces.is_empty() {
             self.reset_view();
         }
@@ -2344,6 +2398,7 @@ impl eframe::App for HorizonApp {
 
         // Dir picker renders on top of everything
         self.render_dir_picker(ctx);
+        self.render_quick_nav(ctx);
 
         // Track window size/position for persistence.
         ctx.input(|input| {
