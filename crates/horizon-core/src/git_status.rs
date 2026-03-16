@@ -74,10 +74,7 @@ impl GitStatus {
 /// Returns an error if the repository cannot be opened or the diff computation fails.
 pub fn compute_git_status(repo_path: &Path) -> Result<GitStatus> {
     let repo = Repository::discover(repo_path).map_err(|e| Error::Git(e.message().to_string()))?;
-    let repo_root = repo
-        .workdir()
-        .unwrap_or_else(|| repo.path())
-        .to_path_buf();
+    let repo_root = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
 
     let branch = resolve_branch(&repo);
     let (changes, diffs, total_insertions, total_deletions) = compute_changes(&repo)?;
@@ -94,9 +91,7 @@ pub fn compute_git_status(repo_path: &Path) -> Result<GitStatus> {
 }
 
 fn resolve_branch(repo: &Repository) -> Option<String> {
-    repo.head()
-        .ok()
-        .and_then(|head| head.shorthand().map(String::from))
+    repo.head().ok().and_then(|head| head.shorthand().map(String::from))
 }
 
 type ChangesResult = (Vec<FileChange>, HashMap<String, FileDiff>, usize, usize);
@@ -115,10 +110,7 @@ fn compute_changes(repo: &Repository) -> Result<ChangesResult> {
     }
 
     // Second pass: compute unified diff (HEAD to workdir including index).
-    let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|head| head.peel_to_tree().ok());
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
 
     let mut diff_opts = DiffOptions::new();
     diff_opts.include_untracked(true);
@@ -128,9 +120,7 @@ fn compute_changes(repo: &Repository) -> Result<ChangesResult> {
         .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_opts))
         .map_err(|e| Error::Git(e.message().to_string()))?;
 
-    let stats = diff
-        .stats()
-        .map_err(|e| Error::Git(e.message().to_string()))?;
+    let stats = diff.stats().map_err(|e| Error::Git(e.message().to_string()))?;
     let total_insertions = stats.insertions();
     let total_deletions = stats.deletions();
 

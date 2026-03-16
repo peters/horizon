@@ -61,11 +61,7 @@ impl Drop for GitWatcher {
     }
 }
 
-fn watcher_loop(
-    repo_path: &Path,
-    sender: &mpsc::Sender<Arc<GitStatus>>,
-    shutdown: &AtomicBool,
-) {
+fn watcher_loop(repo_path: &Path, sender: &mpsc::Sender<Arc<GitStatus>>, shutdown: &AtomicBool) {
     let index_path = resolve_git_index_path(repo_path);
     let mut last_mtime: Option<SystemTime> = None;
 

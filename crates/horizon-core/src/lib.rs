@@ -22,7 +22,9 @@ pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, WorkspaceLayout};
-pub use config::{Config, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig};
+pub use config::{
+    Config, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig,
+};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use git_changes::GitChangesViewer;
