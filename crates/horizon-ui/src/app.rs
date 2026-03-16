@@ -266,10 +266,6 @@ impl HorizonApp {
         }
     }
 
-    fn pan_to_canvas_pos(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2) {
-        self.pan_to_canvas_pos_aligned(ctx, canvas_pos, canvas_size, false);
-    }
-
     fn pan_to_canvas_pos_aligned(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2, left_align: bool) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let vw = canvas_rect.width();
@@ -1069,12 +1065,21 @@ impl HorizonApp {
         }
         if let Some(panel_id) = pan_to_panel {
             if let Some(panel) = self.board.panel(panel_id) {
-                let pos = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
-                let size = Vec2::new(
+                let ws_id = panel.workspace_id;
+                let panel_pos = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+                let panel_size = Vec2::new(
                     panel.layout.size[0] + 2.0 * PANEL_PADDING,
                     panel.layout.size[1] + PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING,
                 );
-                self.pan_to_canvas_pos(ctx, pos, size);
+                // Use the workspace left edge for X so the panel is shown
+                // in context, and center vertically on the panel itself.
+                let ws_left = self
+                    .board
+                    .workspace_bounds(ws_id)
+                    .map_or(panel_pos.x, |(min, _)| min[0] - WS_BG_PAD);
+                let pan_pos = Pos2::new(ws_left, panel_pos.y);
+                let pan_size = Vec2::new(panel_pos.x - ws_left + panel_size.x, panel_size.y);
+                self.pan_to_canvas_pos_aligned(ctx, pan_pos, pan_size, true);
             }
         } else if let Some(ws_id) = pan_to_workspace {
             self.board.focus_workspace(ws_id);
