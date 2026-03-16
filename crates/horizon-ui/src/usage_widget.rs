@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::time::Duration;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
@@ -213,13 +214,9 @@ fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
         let total = day.claude_sessions.saturating_add(day.codex_sessions);
 
         if total > 0 {
-            let total_width = bar_area_width * (total as f32 / max_sessions as f32);
-            let claude_width = if total > 0 {
-                total_width * (day.claude_sessions as f32 / total as f32)
-            } else {
-                0.0
-            };
-            let codex_width = total_width - claude_width;
+            let total_width = scaled_bar_width(bar_area_width, total, max_sessions);
+            let claude_width = scaled_bar_width(total_width, day.claude_sessions, total);
+            let codex_width = (total_width - claude_width).max(0.0);
 
             if claude_width > 0.0 {
                 painter.rect_filled(
@@ -265,6 +262,23 @@ fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
             },
         );
     }
+}
+
+fn scaled_bar_width(bar_area_width: f32, numerator: u32, denominator: u32) -> f32 {
+    if denominator == 0 {
+        return 0.0;
+    }
+
+    // Session counts stay small in practice; clamp pathological values so the
+    // egui width math can use exact `u16 -> f32` conversions.
+    let numerator = bounded_session_count(numerator);
+    let denominator = bounded_session_count(denominator);
+
+    (bar_area_width * (f32::from(numerator) / f32::from(denominator))).clamp(0.0, bar_area_width)
+}
+
+fn bounded_session_count(value: u32) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 fn render_footer(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {

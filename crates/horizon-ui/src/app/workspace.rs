@@ -26,14 +26,13 @@ struct WorkspaceInteraction {
     start_rename: bool,
     rename_action: RenameEditAction,
     show_layout_toolbar: bool,
-    clear_layout: bool,
-    arrange_layout: Option<WorkspaceLayout>,
+    layout_action: Option<WorkspaceLayoutAction>,
 }
 
-#[derive(Default)]
-struct WorkspaceLayoutToolbarAction {
-    clear_layout: bool,
-    arrange_layout: Option<WorkspaceLayout>,
+#[derive(Clone, Copy)]
+enum WorkspaceLayoutAction {
+    Clear,
+    Arrange(WorkspaceLayout),
 }
 
 const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
@@ -78,13 +77,16 @@ impl HorizonApp {
             if interaction.rename_action != RenameEditAction::None {
                 rename_action = interaction.rename_action;
             }
-            if interaction.clear_layout {
-                focus_workspace = Some(workspace.id);
-                clear_workspace_layout = Some(workspace.id);
-            }
-            if interaction.arrange_layout.is_some() {
-                focus_workspace = Some(workspace.id);
-                arrange_workspace = interaction.arrange_layout.map(|layout| (workspace.id, layout));
+            match interaction.layout_action {
+                Some(WorkspaceLayoutAction::Clear) => {
+                    focus_workspace = Some(workspace.id);
+                    clear_workspace_layout = Some(workspace.id);
+                }
+                Some(WorkspaceLayoutAction::Arrange(layout)) => {
+                    focus_workspace = Some(workspace.id);
+                    arrange_workspace = Some((workspace.id, layout));
+                }
+                None => {}
             }
         }
 
@@ -232,8 +234,7 @@ fn render_workspace_visual(
                         egui::FontId::proportional(12.5),
                     ),
                     show_layout_toolbar: false,
-                    clear_layout: false,
-                    arrange_layout: None,
+                    layout_action: None,
                 }
             } else {
                 if label_response.hovered() || label_response.dragged() {
@@ -264,17 +265,14 @@ fn render_workspace_visual(
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
                     show_layout_toolbar: label_response.hovered(),
-                    clear_layout: false,
-                    arrange_layout: None,
+                    layout_action: None,
                 }
             }
         })
         .inner;
 
     if !is_renaming && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar) {
-        let toolbar_action = render_workspace_layout_toolbar(ctx, workspace);
-        interaction.clear_layout = toolbar_action.clear_layout;
-        interaction.arrange_layout = toolbar_action.arrange_layout;
+        interaction.layout_action = render_workspace_layout_toolbar(ctx, workspace);
     }
 
     interaction
@@ -386,9 +384,9 @@ fn should_show_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisu
         .is_some_and(|pointer| workspace_layout_toolbar_rect(workspace).contains(pointer))
 }
 
-fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -> WorkspaceLayoutToolbarAction {
+fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -> Option<WorkspaceLayoutAction> {
     let toolbar_rect = workspace_layout_toolbar_rect(workspace);
-    let mut action = WorkspaceLayoutToolbarAction::default();
+    let mut action = None;
 
     egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
         .fixed_pos(toolbar_rect.min)
@@ -438,7 +436,7 @@ fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -
                             )
                             .on_hover_text("Manual placement");
                         if response.clicked() {
-                            action.clear_layout = true;
+                            action = Some(WorkspaceLayoutAction::Clear);
                         }
 
                         for layout in WorkspaceLayout::ALL {
@@ -471,7 +469,7 @@ fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -
                                 )
                                 .on_hover_text(layout.label());
                             if response.clicked() {
-                                action.arrange_layout = Some(layout);
+                                action = Some(WorkspaceLayoutAction::Arrange(layout));
                             }
                         }
                     });

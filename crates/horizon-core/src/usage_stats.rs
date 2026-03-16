@@ -60,26 +60,29 @@ pub fn format_tokens(n: u64) -> String {
         return n.to_string();
     }
     if n < 1_000_000 {
-        let k = n as f64 / 1_000.0;
-        return if k < 10.0 {
-            format!("{k:.1}K")
-        } else {
-            format!("{k:.0}K")
-        };
+        return format_scaled_tokens(n, 1_000, 'K');
     }
     if n < 1_000_000_000 {
-        let m = n as f64 / 1_000_000.0;
-        return if m < 10.0 {
-            format!("{m:.1}M")
-        } else {
-            format!("{m:.0}M")
-        };
+        return format_scaled_tokens(n, 1_000_000, 'M');
     }
-    let b = n as f64 / 1_000_000_000.0;
-    if b < 10.0 {
-        format!("{b:.1}B")
+    format_scaled_tokens(n, 1_000_000_000, 'B')
+}
+
+fn format_scaled_tokens(n: u64, divisor: u64, suffix: char) -> String {
+    let whole = n / divisor;
+    let remainder = n % divisor;
+
+    if whole < 10 {
+        let mut rounded_whole = whole;
+        let mut tenths = (remainder.saturating_mul(10) + divisor / 2) / divisor;
+        if tenths == 10 {
+            rounded_whole = rounded_whole.saturating_add(1);
+            tenths = 0;
+        }
+        format!("{rounded_whole}.{tenths}{suffix}")
     } else {
-        format!("{b:.0}B")
+        let rounded_whole = whole.saturating_add(u64::from(remainder >= divisor / 2));
+        format!("{rounded_whole}{suffix}")
     }
 }
 
@@ -316,7 +319,7 @@ fn load_codex_stats_from_path(path: &std::path::Path) -> Option<Vec<CodexDayRow>
             Ok(CodexDayRow {
                 day: row.get(0)?,
                 sessions: row.get(1)?,
-                total_tokens: row.get::<_, i64>(2).map(|v| v.max(0) as u64)?,
+                total_tokens: row.get::<_, i64>(2).map(|v| v.max(0).cast_unsigned())?,
             })
         })
         .ok()?;
@@ -363,10 +366,10 @@ fn last_n_days_dates(n: u32) -> Vec<String> {
 /// Convert a day count from Unix epoch to (year, month, day).
 ///
 /// Algorithm from <https://howardhinnant.github.io/date_algorithms.html>.
-fn civil_from_days(days: u64) -> (i32, u32, u32) {
+fn civil_from_days(days: u64) -> (i64, u64, u64) {
     let z = days.cast_signed() + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
+    let doe = (z - era * 146_097).cast_unsigned();
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = yoe.cast_signed() + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
@@ -374,7 +377,7 @@ fn civil_from_days(days: u64) -> (i32, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
-    (year as i32, m as u32, d as u32)
+    (year, m, d)
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -413,13 +416,13 @@ mod tests {
     #[test]
     fn civil_from_days_epoch() {
         let (y, m, d) = civil_from_days(0);
-        assert_eq!((y, m, d), (1970, 1, 1));
+        assert_eq!((y, m, d), (1970_i64, 1_u64, 1_u64));
     }
 
     #[test]
     fn civil_from_days_known_date() {
         // 2026-03-16 is day 20528 from epoch
         let (y, m, d) = civil_from_days(20_528);
-        assert_eq!((y, m, d), (2026, 3, 16));
+        assert_eq!((y, m, d), (2026_i64, 3_u64, 16_u64));
     }
 }

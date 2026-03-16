@@ -730,12 +730,12 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use super::{
-        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-        default_terminal_rgb, replay_terminal_bytes,
-    };
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
+    use super::{
+        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
+        replay_terminal_bytes,
+    };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
     use alacritty_terminal::term::{self, Term, TermMode};

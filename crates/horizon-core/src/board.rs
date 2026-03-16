@@ -612,12 +612,7 @@ impl Board {
     /// After a panel is resized, push every overlapping sibling panel
     /// within the same workspace along `resize_dir`, cascading until
     /// nothing overlaps.
-    fn resolve_panel_collisions(
-        &mut self,
-        source: PanelId,
-        workspace_id: WorkspaceId,
-        resize_dir: [f32; 2],
-    ) {
+    fn resolve_panel_collisions(&mut self, source: PanelId, workspace_id: WorkspaceId, resize_dir: [f32; 2]) {
         let Some(sibling_ids) = self.workspace(workspace_id).map(|ws| ws.panels.clone()) else {
             return;
         };
@@ -633,11 +628,7 @@ impl Board {
             let cs = check_panel.layout.size;
             let check_rect = [cp[0], cp[1], cp[0] + cs[0], cp[1] + cs[1]];
 
-            let candidates: Vec<PanelId> = sibling_ids
-                .iter()
-                .copied()
-                .filter(|id| !settled.contains(id))
-                .collect();
+            let candidates: Vec<PanelId> = sibling_ids.iter().copied().filter(|id| !settled.contains(id)).collect();
 
             for other_id in candidates {
                 let Some(other_panel) = self.panel(other_id) else {
