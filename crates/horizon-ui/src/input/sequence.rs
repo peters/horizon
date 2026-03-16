@@ -4,10 +4,11 @@ use std::fmt::Write;
 use alacritty_terminal::term::TermMode;
 use egui::{Key, Modifiers};
 
-use super::keyboard::{KeyExt, control_modifier, is_control_character};
+use super::keyboard::{KeyExt, base_key_text, control_modifier, is_control_character};
 
 pub(super) fn build_sequence(
     key: Key,
+    physical_key: Option<Key>,
     modifiers: Modifiers,
     mode: TermMode,
     pressed: bool,
@@ -40,7 +41,7 @@ pub(super) fn build_sequence(
         .try_build_named_kitty(key)
         .or_else(|| builder.try_build_named_normal(key, associated_text.is_some()))
         .or_else(|| builder.try_build_control_char_or_modifier(key))
-        .or_else(|| builder.try_build_textual(key, text, associated_text));
+        .or_else(|| builder.try_build_textual(key, physical_key, text, associated_text));
 
     let SequenceBase { payload, terminator } = sequence_base?;
     let mut payload = format!("\x1b[{payload}");
@@ -81,18 +82,29 @@ struct SequenceBuilder {
 }
 
 impl SequenceBuilder {
-    fn try_build_textual(&self, key: Key, text: Option<&str>, associated_text: Option<&str>) -> Option<SequenceBase> {
+    fn try_build_textual(
+        &self,
+        key: Key,
+        physical_key: Option<Key>,
+        text: Option<&str>,
+        associated_text: Option<&str>,
+    ) -> Option<SequenceBase> {
         let (true, Some(text)) = (self.kitty_sequence, text) else {
             return None;
         };
 
         if text.chars().count() == 1 {
             let ch = text.chars().next()?;
-            let unshifted = if self.modifiers.contains(SequenceModifiers::SHIFT) && key.alpha_key() {
-                ch.to_ascii_lowercase()
-            } else {
-                ch
-            };
+            let unshifted = base_key_text(key, physical_key)
+                .as_deref()
+                .and_then(single_char)
+                .unwrap_or_else(|| {
+                    if self.modifiers.contains(SequenceModifiers::SHIFT) && key.alpha_key() {
+                        ch.to_ascii_lowercase()
+                    } else {
+                        ch
+                    }
+                });
             let alternate = u32::from(ch);
             let unicode = u32::from(unshifted);
             let payload = if self.mode.contains(TermMode::REPORT_ALTERNATE_KEYS) && alternate != unicode {
@@ -300,4 +312,10 @@ impl From<Modifiers> for SequenceModifiers {
         result.set(Self::CONTROL, control_modifier(modifiers));
         result
     }
+}
+
+fn single_char(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    chars.next().is_none().then_some(ch)
 }

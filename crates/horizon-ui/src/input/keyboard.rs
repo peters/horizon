@@ -3,13 +3,26 @@ use egui::{Key, Modifiers};
 
 use super::sequence::build_sequence;
 
+#[derive(Clone)]
 pub struct KeyTranslation {
     pub bytes: Vec<u8>,
     pub suppress_text: Option<String>,
 }
 
+#[cfg(test)]
 pub fn translate_key_event(
     key: Key,
+    pressed: bool,
+    repeat: bool,
+    modifiers: Modifiers,
+    mode: TermMode,
+) -> Option<KeyTranslation> {
+    translate_key_event_with_physical(key, None, pressed, repeat, modifiers, mode)
+}
+
+pub fn translate_key_event_with_physical(
+    key: Key,
+    physical_key: Option<Key>,
     pressed: bool,
     repeat: bool,
     modifiers: Modifiers,
@@ -24,7 +37,7 @@ pub fn translate_key_event(
     let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
 
     if kitty {
-        let bytes = build_sequence(key, modifiers, mode, pressed, repeat, text.as_deref())?;
+        let bytes = build_sequence(key, physical_key, modifiers, mode, pressed, repeat, text.as_deref())?;
         let suppress_text = pressed
             .then_some(text.as_deref())
             .flatten()
@@ -73,6 +86,26 @@ pub fn translate_key_event(
     None
 }
 
+pub fn translate_text_event(
+    key: Key,
+    physical_key: Option<Key>,
+    text: &str,
+    pressed: bool,
+    repeat: bool,
+    modifiers: Modifiers,
+    mode: TermMode,
+) -> Option<KeyTranslation> {
+    if !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        return None;
+    }
+
+    let bytes = build_sequence(key, physical_key, modifiers, mode, pressed, repeat, Some(text))?;
+    Some(KeyTranslation {
+        bytes,
+        suppress_text: None,
+    })
+}
+
 pub fn paste_bytes(text: &str, mode: TermMode, bracketed: bool) -> Vec<u8> {
     if bracketed && mode.contains(TermMode::BRACKETED_PASTE) {
         let filtered = text.replace(['\x1b', '\x03'], "");
@@ -92,6 +125,21 @@ pub fn paste_bytes(text: &str, mode: TermMode, bracketed: bool) -> Vec<u8> {
 
 pub(super) fn should_suppress_text_for_key(key: Key, modifiers: Modifiers, mode: TermMode) -> bool {
     printable_text(key, modifiers).is_some() && (modifiers.alt || mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL))
+}
+
+pub fn should_defer_textual_key(
+    key: Key,
+    physical_key: Option<Key>,
+    pressed: bool,
+    modifiers: Modifiers,
+    mode: TermMode,
+) -> bool {
+    if !pressed || !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        return false;
+    }
+
+    let printable_base = base_key_text(key, physical_key).is_some();
+    printable_base && (modifiers.alt || (!control_modifier(modifiers) && printable_text(key, modifiers).is_none()))
 }
 
 pub(super) fn control_modifier(modifiers: Modifiers) -> bool {
@@ -175,11 +223,15 @@ fn named_key_sequence(key: Key, modifiers: Modifiers, mode: TermMode) -> Option<
         });
     }
 
-    build_sequence(key, modifiers, TermMode::NONE, true, false, None)
+    build_sequence(key, None, modifiers, TermMode::NONE, true, false, None)
 }
 
 fn any_modifiers(modifiers: Modifiers) -> bool {
     modifiers.alt || modifiers.shift || control_modifier(modifiers)
+}
+
+pub(super) fn base_key_text(key: Key, physical_key: Option<Key>) -> Option<String> {
+    printable_text(physical_key.unwrap_or(key), Modifiers::NONE)
 }
 
 pub(super) fn printable_text(key: Key, modifiers: Modifiers) -> Option<String> {

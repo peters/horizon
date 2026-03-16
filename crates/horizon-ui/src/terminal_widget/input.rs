@@ -242,31 +242,17 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
         return;
     };
     let mode = terminal.mode();
-    let mut suppressed_text = VecDeque::new();
-
-    // Alt-modified key translations are deferred until the next Text event
-    // so we can distinguish true Alt (e.g. Alt+b → ESC+"b") from AltGr
-    // (e.g. AltGr+2 → "@").  winit reports AltGr as Alt, so we compare
-    // the suppress_text against the actual Text event to decide.
-    let mut deferred_alt: Option<(Vec<u8>, String)> = None;
+    let mut forwarder = KeyboardInputForwarder::default();
 
     for event in &events {
         match event {
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                if let Some((alt_bytes, expected)) = deferred_alt.take() {
-                    if expected == *text {
-                        // True Alt key — send the alt-prefixed bytes, suppress text.
-                        terminal.write_input(&alt_bytes);
-                    } else {
-                        // AltGr — discard alt bytes, send the actual character.
-                        terminal.clear_selection();
-                        terminal.write_input(text.as_bytes());
-                    }
-                } else if suppressed_text.front().is_some_and(|expected| expected == text) {
-                    suppressed_text.pop_front();
-                } else {
+                let emission = forwarder.on_text(text, mode);
+                if emission.clears_selection {
                     terminal.clear_selection();
-                    terminal.write_input(text.as_bytes());
+                }
+                if !emission.bytes.is_empty() {
+                    terminal.write_input(&emission.bytes);
                 }
             }
             egui::Event::Paste(text) => {
@@ -291,39 +277,313 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
             }
             egui::Event::Key {
                 key,
+                physical_key,
                 pressed,
                 repeat,
                 modifiers,
                 ..
             } => {
-                // Flush any pending deferred alt (a Key event arrived before
-                // the expected Text event — treat as true Alt).
-                if let Some((alt_bytes, expected)) = deferred_alt.take() {
-                    terminal.write_input(&alt_bytes);
-                    suppressed_text.push_back(expected);
-                }
-
-                if let Some(translation) = input::translate_key_event(*key, *pressed, *repeat, *modifiers, mode) {
-                    if let Some(text) = translation.suppress_text {
-                        if modifiers.alt && !translation.bytes.is_empty() {
-                            // Defer: wait for the Text event to confirm true Alt vs AltGr.
-                            deferred_alt = Some((translation.bytes, text));
-                            continue;
-                        }
-                        suppressed_text.push_back(text);
-                    }
-                    if !translation.bytes.is_empty() {
-                        terminal.write_input(&translation.bytes);
-                    }
+                let emission = forwarder.on_key(*key, *physical_key, *pressed, *repeat, *modifiers, mode);
+                if !emission.bytes.is_empty() {
+                    terminal.write_input(&emission.bytes);
                 }
             }
             _ => {}
         }
     }
 
-    // Flush any remaining deferred alt (no Text event followed — true Alt
-    // of a non-printable key, or platform didn't generate text).
-    if let Some((alt_bytes, _)) = deferred_alt {
-        terminal.write_input(&alt_bytes);
+    let emission = forwarder.finish();
+    if !emission.bytes.is_empty() {
+        terminal.write_input(&emission.bytes);
+    }
+}
+
+#[derive(Default)]
+struct KeyboardInputForwarder {
+    suppressed_text: VecDeque<String>,
+    deferred_text_key: Option<DeferredTextKey>,
+}
+
+impl KeyboardInputForwarder {
+    fn on_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
+        if let Some(mut deferred) = self.deferred_text_key.take() {
+            if let Some(actual_text) = deferred.synthetic_text.as_deref() {
+                if actual_text != text {
+                    // Drop stale synthetic state if a later text event does not
+                    // belong to the deferred key.
+                    return InputEmission::raw_text(text);
+                }
+            } else {
+                let emission = deferred.resolve_text(text, mode);
+                if deferred.synthetic_text.is_some() {
+                    self.deferred_text_key = Some(deferred);
+                }
+                return emission;
+            }
+        }
+
+        if self.suppressed_text.front().is_some_and(|expected| expected == text) {
+            self.suppressed_text.pop_front();
+            return InputEmission::default();
+        }
+
+        InputEmission::raw_text(text)
+    }
+
+    fn on_key(
+        &mut self,
+        key: Key,
+        physical_key: Option<Key>,
+        pressed: bool,
+        repeat: bool,
+        modifiers: egui::Modifiers,
+        mode: TermMode,
+    ) -> InputEmission {
+        let mut emission = InputEmission::default();
+
+        if let Some(deferred) = self.deferred_text_key.as_mut() {
+            if let Some(actual_text) = deferred.synthetic_text.as_deref() {
+                if !pressed && deferred.matches(key, physical_key) {
+                    if let Some(translation) =
+                        input::translate_text_event(key, physical_key, actual_text, false, repeat, modifiers, mode)
+                    {
+                        emission.bytes.extend_from_slice(&translation.bytes);
+                    }
+                    self.deferred_text_key = None;
+                    return emission;
+                }
+
+                if !deferred.matches(key, physical_key) {
+                    self.deferred_text_key = None;
+                }
+            } else if !pressed && deferred.matches(key, physical_key) {
+                deferred.release_seen = true;
+                deferred.release_translation =
+                    input::translate_key_event_with_physical(key, physical_key, false, repeat, modifiers, mode);
+                return emission;
+            } else if !deferred.matches(key, physical_key) {
+                emission.bytes.extend_from_slice(&deferred.flush_fallback());
+                self.deferred_text_key = None;
+            }
+        }
+
+        if let Some(translation) =
+            input::translate_key_event_with_physical(key, physical_key, pressed, repeat, modifiers, mode)
+        {
+            if pressed
+                && translation.suppress_text.is_some()
+                && (modifiers.alt || input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode))
+            {
+                self.deferred_text_key = Some(DeferredTextKey::new(key, physical_key, modifiers, Some(translation)));
+                return emission;
+            }
+
+            if let Some(text) = translation.suppress_text {
+                self.suppressed_text.push_back(text);
+            }
+            emission.bytes.extend_from_slice(&translation.bytes);
+            return emission;
+        }
+
+        if input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode) {
+            self.deferred_text_key = Some(DeferredTextKey::new(key, physical_key, modifiers, None));
+        }
+
+        emission
+    }
+
+    fn finish(&mut self) -> InputEmission {
+        let Some(deferred) = self.deferred_text_key.take() else {
+            return InputEmission::default();
+        };
+
+        if deferred.synthetic_text.is_some() {
+            return InputEmission::default();
+        }
+
+        InputEmission::pty(deferred.flush_fallback())
+    }
+}
+
+struct DeferredTextKey {
+    key: Key,
+    physical_key: Option<Key>,
+    modifiers: egui::Modifiers,
+    press_translation: Option<input::KeyTranslation>,
+    release_translation: Option<input::KeyTranslation>,
+    release_seen: bool,
+    synthetic_text: Option<String>,
+}
+
+impl DeferredTextKey {
+    fn new(
+        key: Key,
+        physical_key: Option<Key>,
+        modifiers: egui::Modifiers,
+        press_translation: Option<input::KeyTranslation>,
+    ) -> Self {
+        Self {
+            key,
+            physical_key,
+            modifiers,
+            press_translation,
+            release_translation: None,
+            release_seen: false,
+            synthetic_text: None,
+        }
+    }
+
+    fn matches(&self, key: Key, physical_key: Option<Key>) -> bool {
+        self.key == key && self.physical_key == physical_key
+    }
+
+    fn resolve_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
+        if self
+            .press_translation
+            .as_ref()
+            .and_then(|translation| translation.suppress_text.as_deref())
+            .is_some_and(|expected| expected == text)
+        {
+            return InputEmission::pty(self.flush_fallback());
+        }
+
+        if let Some(translation) =
+            input::translate_text_event(self.key, self.physical_key, text, true, false, self.modifiers, mode)
+        {
+            let mut bytes = translation.bytes;
+            if self.release_seen {
+                if let Some(release) =
+                    input::translate_text_event(self.key, self.physical_key, text, false, false, self.modifiers, mode)
+                {
+                    bytes.extend_from_slice(&release.bytes);
+                }
+            } else {
+                self.synthetic_text = Some(text.to_owned());
+            }
+            return InputEmission::pty(bytes);
+        }
+
+        InputEmission::raw_text(text)
+    }
+
+    fn flush_fallback(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        if let Some(translation) = self.press_translation.as_ref() {
+            bytes.extend_from_slice(&translation.bytes);
+        }
+        if self.release_seen
+            && let Some(translation) = self.release_translation.as_ref()
+        {
+            bytes.extend_from_slice(&translation.bytes);
+        }
+        bytes
+    }
+}
+
+#[derive(Default)]
+struct InputEmission {
+    bytes: Vec<u8>,
+    clears_selection: bool,
+}
+
+impl InputEmission {
+    fn pty(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            clears_selection: false,
+        }
+    }
+
+    fn raw_text(text: &str) -> Self {
+        Self {
+            bytes: text.as_bytes().to_vec(),
+            clears_selection: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyboardInputForwarder;
+    use alacritty_terminal::term::TermMode;
+    use egui::{Event, Key, Modifiers};
+
+    #[test]
+    fn altgr_text_after_release_emits_only_kitty_sequences() {
+        let events = vec![
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::ALT,
+            },
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::ALT,
+            },
+            Event::Text("@".to_owned()),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b"\x1b[50:64;3u\x1b[50:64;3:3u");
+    }
+
+    #[test]
+    fn shifted_symbol_uses_text_reconciliation_for_release_order() {
+        let events = vec![
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::SHIFT,
+            },
+            Event::Text("@".to_owned()),
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::SHIFT,
+            },
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b"\x1b[50:64;2u\x1b[50:64;2:3u");
+    }
+
+    fn forward_bytes(events: &[Event], mode: TermMode) -> Vec<u8> {
+        let mut forwarder = KeyboardInputForwarder::default();
+        let mut bytes = Vec::new();
+
+        for event in events {
+            let emission = match event {
+                Event::Text(text) | Event::Ime(egui::ImeEvent::Commit(text)) => forwarder.on_text(text, mode),
+                Event::Key {
+                    key,
+                    physical_key,
+                    pressed,
+                    repeat,
+                    modifiers,
+                } => forwarder.on_key(*key, *physical_key, *pressed, *repeat, *modifiers, mode),
+                _ => continue,
+            };
+            bytes.extend_from_slice(&emission.bytes);
+        }
+
+        bytes.extend_from_slice(&forwarder.finish().bytes);
+        bytes
     }
 }
