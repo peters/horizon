@@ -42,6 +42,7 @@ impl QuickNav {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn show(&mut self, ctx: &Context, workspaces: &[WorkspaceEntry]) -> QuickNavAction {
         let filtered = self.filtered_workspaces(workspaces);
         let mut action = QuickNavAction::None;

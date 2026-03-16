@@ -4,6 +4,7 @@ mod attention;
 mod board;
 mod config;
 pub mod dir_search;
+mod editor;
 mod error;
 mod panel;
 mod runtime_state;
@@ -16,6 +17,7 @@ pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, WorkspaceLayout};
 pub use config::{Config, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig};
+pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{

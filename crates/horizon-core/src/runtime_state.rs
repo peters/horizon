@@ -234,6 +234,9 @@ pub struct PanelState {
     pub size: Option<[f32; 2]>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    /// Scratch editor buffer content (persisted for file-less editors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_content: Option<String>,
 }
 
 impl PanelState {
@@ -275,6 +278,7 @@ impl PanelState {
                 args,
                 cwd,
             }),
+            editor_content: None,
         }
     }
 
@@ -319,6 +323,7 @@ impl Default for PanelState {
             size: None,
             session_binding: None,
             template: None,
+            editor_content: None,
         }
     }
 }
@@ -713,7 +718,7 @@ pub fn new_session_binding(kind: PanelKind, cwd: Option<String>, label: Option<S
             label,
             None,
         )),
-        PanelKind::Codex | PanelKind::Shell | PanelKind::Command => None,
+        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor => None,
     }
 }
 

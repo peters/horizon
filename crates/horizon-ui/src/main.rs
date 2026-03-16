@@ -3,6 +3,7 @@
 mod app;
 mod branding;
 mod dir_picker;
+mod editor_widget;
 mod input;
 mod quick_nav;
 mod terminal_widget;

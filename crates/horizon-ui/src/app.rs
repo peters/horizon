@@ -14,6 +14,7 @@ use horizon_core::{
 };
 
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
+use crate::editor_widget::MarkdownEditorView;
 use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::terminal_widget::TerminalView;
 use crate::theme;
@@ -118,6 +119,8 @@ pub struct HorizonApp {
     quick_nav: Option<QuickNav>,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
+    /// Last pointer position while files are being hovered over the window.
+    file_hover_pos: Option<Pos2>,
 }
 
 impl HorizonApp {
@@ -199,6 +202,7 @@ impl HorizonApp {
             dir_picker: None,
             quick_nav: None,
             initial_pan_done: false,
+            file_hover_pos: None,
             pan_offset: runtime_state
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
@@ -272,7 +276,11 @@ impl HorizonApp {
         self.board
             .workspaces
             .iter()
-            .min_by(|a, b| a.position[0].partial_cmp(&b.position[0]).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| {
+                a.position[0]
+                    .partial_cmp(&b.position[0])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|ws| ws.id)
     }
 
@@ -281,9 +289,9 @@ impl HorizonApp {
         let vw = canvas_rect.width();
         let vh = canvas_rect.height();
 
-        const PAN_MARGIN: f32 = 40.0;
+        let pan_margin: f32 = 40.0;
         let x = if left_align {
-            PAN_MARGIN - canvas_pos.x
+            pan_margin - canvas_pos.x
         } else {
             vw * 0.5 - (canvas_pos.x + canvas_size.x * 0.5)
         };
@@ -546,6 +554,63 @@ impl HorizonApp {
 
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
             self.reset_view();
+        }
+    }
+
+    fn handle_file_drop(&mut self, ctx: &Context) {
+        let (hovered, dropped, pointer_pos) = ctx.input(|input| {
+            (
+                !input.raw.hovered_files.is_empty(),
+                input.raw.dropped_files.clone(),
+                input.pointer.hover_pos().or(input.pointer.latest_pos()),
+            )
+        });
+
+        // Track pointer position while files are hovering over the window.
+        if hovered && let Some(pos) = pointer_pos {
+            self.file_hover_pos = Some(pos);
+        }
+
+        if dropped.is_empty() {
+            return;
+        }
+
+        // Use the tracked hover position (most reliable), falling back to
+        // the current pointer position.
+        let screen_pos = self.file_hover_pos.or(pointer_pos);
+        self.file_hover_pos = None;
+
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_pos = screen_pos.map(|p| self.screen_to_canvas(canvas_rect, p));
+
+        for file in dropped {
+            let path = match &file.path {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !matches!(ext, "md" | "markdown" | "txt" | "mdx") {
+                continue;
+            }
+
+            let size = editor_panel_size_for_file(&path);
+
+            let ws_id = self
+                .board
+                .active_workspace
+                .unwrap_or_else(|| self.board.ensure_workspace());
+            let opts = PanelOptions {
+                name: path.file_name().map(|n| n.to_string_lossy().to_string()),
+                command: Some(path.display().to_string()),
+                kind: PanelKind::Editor,
+                position: canvas_pos.map(|p| [p.x, p.y]),
+                size: Some(size),
+                ..PanelOptions::default()
+            };
+            if let Err(error) = self.create_panel_with_options(opts, ws_id) {
+                tracing::error!("failed to create editor panel from dropped file: {error}");
+            }
+            self.mark_runtime_dirty();
         }
     }
 
@@ -874,9 +939,7 @@ impl HorizonApp {
                             // Workspace right-click context menu
                             ws_response.response.context_menu(|ui| {
                                 ui.set_min_width(160.0);
-                                ui.label(
-                                    egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM),
-                                );
+                                ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
                                 for (label, layout) in [
                                     ("Rows", WorkspaceLayout::Rows),
                                     ("Columns", WorkspaceLayout::Columns),
@@ -1194,31 +1257,37 @@ impl HorizonApp {
                     .panels
                     .iter()
                     .filter_map(|pid| self.board.panel(*pid))
-                    .map(|panel| PanelState {
-                        local_id: panel.local_id.clone(),
-                        name: panel.title.clone(),
-                        kind: panel.kind,
-                        command: panel.launch_command.clone(),
-                        args: panel.launch_args.clone(),
-                        cwd: if panel.kind.is_agent() {
-                            // Agent panels must keep the launch CWD so
-                            // that `--resume` looks in the correct Claude
-                            // project directory on restart.
-                            panel.launch_cwd.clone()
-                        } else {
-                            panel
-                                .terminal
-                                .current_cwd()
-                                .or_else(|| panel.launch_cwd.clone())
+                    .map(|panel| {
+                        let terminal = panel.terminal();
+                        let editor = panel.editor();
+                        PanelState {
+                            local_id: panel.local_id.clone(),
+                            name: panel.title.clone(),
+                            kind: panel.kind,
+                            command: panel.launch_command.clone(),
+                            args: panel.launch_args.clone(),
+                            cwd: if panel.kind.is_agent() {
+                                // Agent panels must keep the launch CWD so
+                                // that `--resume` looks in the correct Claude
+                                // project directory on restart.
+                                panel.launch_cwd.clone()
+                            } else {
+                                terminal
+                                    .and_then(horizon_core::Terminal::current_cwd)
+                                    .or_else(|| panel.launch_cwd.clone())
+                            }
+                            .map(|path| path.display().to_string()),
+                            rows: terminal.map_or(24, horizon_core::Terminal::rows),
+                            cols: terminal.map_or(80, horizon_core::Terminal::cols),
+                            resume: panel.resume.clone(),
+                            position: Some(panel.layout.position),
+                            size: Some(panel.layout.size),
+                            session_binding: panel.session_binding.clone(),
+                            template: panel.template.clone(),
+                            editor_content: editor
+                                .filter(|e| e.file_path.is_none() && !e.text.is_empty())
+                                .map(|e| e.text.clone()),
                         }
-                        .map(|path| path.display().to_string()),
-                        rows: panel.terminal.rows(),
-                        cols: panel.terminal.cols(),
-                        resume: panel.resume.clone(),
-                        position: Some(panel.layout.position),
-                        size: Some(panel.layout.size),
-                        session_binding: panel.session_binding.clone(),
-                        template: panel.template.clone(),
                     })
                     .collect();
                 WorkspaceState {
@@ -1885,7 +1954,11 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         if let Some(panel) = self.board.panel_mut(panel_id) {
-                            TerminalView::new(panel).show(ui, true);
+                            if panel.kind == PanelKind::Editor {
+                                MarkdownEditorView::new(panel).show(ui, true);
+                            } else {
+                                TerminalView::new(panel).show(ui, true);
+                            }
                         }
                     },
                 );
@@ -1951,14 +2024,15 @@ impl HorizonApp {
     ) -> bool {
         let Some((canvas_position, canvas_size, current_ws_id, title, kind, history_size, scrollback_limit)) =
             self.board.panel(panel_id).map(|panel| {
+                let terminal = panel.terminal();
                 (
                     Pos2::new(panel.layout.position[0], panel.layout.position[1]),
                     Vec2::new(panel.layout.size[0], panel.layout.size[1]),
                     panel.workspace_id,
                     panel.title.clone(),
                     panel.kind,
-                    panel.terminal.history_size(),
-                    panel.terminal.scrollback_limit(),
+                    terminal.map_or(0, horizon_core::Terminal::history_size),
+                    terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
                 )
             })
         else {
@@ -2132,7 +2206,11 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         if let Some(panel) = self.board.panel_mut(panel_id) {
-                            clicked_terminal = TerminalView::new(panel).show(ui, is_focused);
+                            clicked_terminal = if panel.kind == PanelKind::Editor {
+                                MarkdownEditorView::new(panel).show(ui, is_focused)
+                            } else {
+                                TerminalView::new(panel).show(ui, is_focused)
+                            };
                         }
                     },
                 );
@@ -2346,6 +2424,7 @@ impl eframe::App for HorizonApp {
 
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
+        self.handle_file_drop(ctx);
         self.board.process_output();
 
         // Auto-close panels whose child process has exited.
@@ -2487,12 +2566,37 @@ fn short_session_id(session_id: &str) -> &str {
     session_id.get(..8).unwrap_or(session_id)
 }
 
+/// Estimate a panel size based on the markdown file content.
+/// Uses line count and max line width, clamped to reasonable bounds.
+fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
+    const CHAR_W: f32 = 8.0;
+    const LINE_H: f32 = 20.0;
+    const PAD: f32 = 80.0; // mode bar + margins
+    const MIN_W: f32 = 400.0;
+    const MIN_H: f32 = 280.0;
+    const MAX_W: f32 = 900.0;
+    const MAX_H: f32 = 800.0;
+
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return [520.0, 400.0];
+    };
+
+    let line_count = content.lines().count().max(1);
+    let max_line_len = content.lines().map(str::len).max().unwrap_or(40);
+
+    let w = (max_line_len as f32 * CHAR_W + PAD).clamp(MIN_W, MAX_W);
+    let h = (line_count as f32 * LINE_H + PAD).clamp(MIN_H, MAX_H);
+
+    [w, h]
+}
+
 fn panel_kind_name(kind: PanelKind) -> &'static str {
     match kind {
         PanelKind::Shell => "Shell",
         PanelKind::Codex => "Codex",
         PanelKind::Claude => "Claude",
         PanelKind::Command => "Command",
+        PanelKind::Editor => "Markdown",
     }
 }
 
@@ -3070,6 +3174,10 @@ fn primary_button(text: &str) -> Button<'_> {
 fn panel_kind_icon(kind: PanelKind, ws_color: Color32, focused: bool) -> (&'static str, Color32) {
     match kind {
         PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(ws_color, if focused { 200 } else { 80 })),
+        PanelKind::Editor => (
+            "MD",
+            theme::alpha(Color32::from_rgb(166, 227, 161), if focused { 220 } else { 120 }),
+        ),
         PanelKind::Codex => (
             "CX",
             theme::alpha(Color32::from_rgb(116, 162, 247), if focused { 220 } else { 120 }),

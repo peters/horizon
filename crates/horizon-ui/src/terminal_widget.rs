@@ -79,9 +79,13 @@ impl<'a> TerminalView<'a> {
         }
 
         if ui.is_rect_visible(interaction.layout.outer) {
-            let history_size = self.panel.terminal.history_size();
+            let terminal = self
+                .panel
+                .terminal_mut()
+                .expect("TerminalView requires terminal content");
+            let history_size = terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
-            self.panel.terminal.with_renderable_content(|content| {
+            terminal.with_renderable_content(|content| {
                 let cursor = content.cursor;
                 let display_offset = content.display_offset;
                 render_grid(ui, interaction.layout.body, content, &metrics);
@@ -190,7 +194,10 @@ fn handle_terminal_pointer_input(
         interaction.body.request_focus();
     }
 
-    let terminal_mode = panel.terminal.mode();
+    let terminal_mode = panel
+        .terminal_mut()
+        .expect("TerminalView requires terminal content")
+        .mode();
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
     let pointer_buttons = ui.input(|input| input::PointerButtons {
         primary: input.pointer.primary_down(),
@@ -276,7 +283,7 @@ fn handle_pointer_events(
                     {
                         panel.write_input(&bytes);
                     }
-                } else if interaction.body.dragged() && panel.terminal.has_selection() {
+                } else if interaction.body.dragged() && panel.terminal_mut().is_some_and(|t| t.has_selection()) {
                     handle_pointer_selection_drag(
                         panel,
                         *pos,
@@ -342,7 +349,9 @@ fn handle_pointer_button(
         } else {
             SelectionType::Simple
         };
-        panel.terminal.start_selection(sel_type, point.line, point.column);
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.start_selection(sel_type, point.line, point.column);
+        }
     }
 }
 
@@ -350,15 +359,12 @@ fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &Ter
     if (interaction.scrollbar.dragged() || interaction.scrollbar.clicked())
         && let Some(pointer_position) = ui.input(|input| input.pointer.interact_pos())
     {
+        let history_size = panel.terminal().map_or(0, horizon_core::Terminal::history_size);
         let target_scrollback = scrollbar_pointer_to_scrollback(
             pointer_position,
             interaction.scrollbar.rect.shrink2(Vec2::new(2.0, 2.0)),
-            scrollbar_thumb_height(
-                interaction.scrollbar.rect.height() - 4.0,
-                visible_rows,
-                panel.terminal.history_size(),
-            ),
-            panel.terminal.history_size(),
+            scrollbar_thumb_height(interaction.scrollbar.rect.height() - 4.0, visible_rows, history_size),
+            history_size,
         );
         panel.set_scrollback(target_scrollback);
     }
@@ -379,7 +385,9 @@ fn handle_pointer_selection_drag(
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let lines = (lines as i32).min(5);
         panel.scroll_scrollback_by(lines);
-        panel.terminal.update_selection(0, 0, TerminalSide::Left);
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.update_selection(0, 0, TerminalSide::Left);
+        }
     } else if pos.y > body_rect.max.y {
         // Pointer is below the terminal — scroll down and pin selection to bottom-right.
         let overshoot = pos.y - body_rect.max.y;
@@ -389,12 +397,14 @@ fn handle_pointer_selection_drag(
         panel.scroll_scrollback_by(-lines);
         let last_row = visible_rows.saturating_sub(1);
         let last_col = visible_cols.saturating_sub(1);
-        panel
-            .terminal
-            .update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
+        }
     } else if let Some(point) = grid_point_from_position(body_rect, pos, metrics, visible_rows, visible_cols) {
         let side = cell_side(pos, body_rect, metrics, point);
-        panel.terminal.update_selection(point.line, point.column, side);
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.update_selection(point.line, point.column, side);
+        }
     }
 }
 
@@ -411,7 +421,10 @@ fn cell_side(pos: Pos2, body_rect: Rect, metrics: &GridMetrics, point: input::Gr
 
 fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
-    let mode = panel.terminal.mode();
+    let Some(terminal) = panel.terminal_mut() else {
+        return;
+    };
+    let mode = terminal.mode();
     let mut suppressed_text = VecDeque::new();
 
     for event in &events {
@@ -420,33 +433,33 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
                 if suppressed_text.front().is_some_and(|expected| expected == text) {
                     suppressed_text.pop_front();
                 } else {
-                    panel.terminal.clear_selection();
-                    panel.write_input(text.as_bytes());
+                    terminal.clear_selection();
+                    terminal.write_input(text.as_bytes());
                 }
             }
             egui::Event::Paste(text) => {
-                panel.terminal.clear_selection();
+                terminal.clear_selection();
                 let bytes = input::paste_bytes(text, mode, true);
-                panel.write_input(&bytes);
+                terminal.write_input(&bytes);
             }
             egui::Event::Copy => {
                 // If there is an active selection, copy it to the clipboard
                 // instead of sending Ctrl-C to the terminal.
-                if let Some(text) = panel.terminal.selection_to_string() {
+                if let Some(text) = terminal.selection_to_string() {
                     ui.ctx().copy_text(text);
-                    panel.terminal.clear_selection();
+                    terminal.clear_selection();
                 } else {
-                    panel.write_input(&[3]);
+                    terminal.write_input(&[3]);
                 }
             }
             egui::Event::Cut => {
                 // Copy selection to clipboard on Cut too, then send the
                 // key to the terminal.
-                if let Some(text) = panel.terminal.selection_to_string() {
+                if let Some(text) = terminal.selection_to_string() {
                     ui.ctx().copy_text(text);
-                    panel.terminal.clear_selection();
+                    terminal.clear_selection();
                 }
-                panel.write_input(&[24]);
+                terminal.write_input(&[24]);
             }
             egui::Event::Key {
                 key,
@@ -460,7 +473,7 @@ fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
                         suppressed_text.push_back(text);
                     }
                     if !translation.bytes.is_empty() {
-                        panel.write_input(&translation.bytes);
+                        terminal.write_input(&translation.bytes);
                     }
                 }
             }

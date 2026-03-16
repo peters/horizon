@@ -554,7 +554,7 @@ impl Board {
             WorkspaceLayout::Columns => (count, 1),
             WorkspaceLayout::Grid => {
                 let cols = (count as f64).sqrt().ceil() as usize;
-                let rows = (count + cols - 1) / cols;
+                let rows = count.div_ceil(cols);
                 (cols, rows)
             }
         };

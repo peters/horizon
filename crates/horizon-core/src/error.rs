@@ -11,6 +11,9 @@ pub enum Error {
     #[error("State error: {0}")]
     State(String),
 
+    #[error("Editor error: {0}")]
+    Editor(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

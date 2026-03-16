@@ -120,6 +120,14 @@ fn default_presets() -> Vec<PresetConfig> {
             args: vec!["--dangerously-skip-permissions".to_string()],
             resume: PanelResume::Fresh,
         },
+        PresetConfig {
+            name: "Markdown".to_string(),
+            alias: Some("md".to_string()),
+            kind: PanelKind::Editor,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+        },
     ]
 }
 

@@ -22,3 +22,4 @@ tracing-subscriber.workspace = true
 serde_yaml.workspace = true
 tempfile.workspace = true
 alacritty_terminal.workspace = true
+comrak = { version = "0.51", default-features = false }

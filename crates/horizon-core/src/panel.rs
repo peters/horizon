@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id, new_session_binding};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -28,6 +29,7 @@ pub enum PanelKind {
     Codex,
     Claude,
     Command,
+    Editor,
 }
 
 impl PanelKind {
@@ -109,7 +111,7 @@ pub struct Panel {
     pub resume: PanelResume,
     pub layout: PanelLayout,
     pub workspace_id: WorkspaceId,
-    pub terminal: Terminal,
+    pub content: PanelContent,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -123,7 +125,31 @@ pub struct Panel {
 }
 
 impl Panel {
-    /// Spawn a new PTY-backed terminal panel.
+    /// Convenience accessor for the terminal content (if this panel holds one).
+    #[must_use]
+    pub fn terminal(&self) -> Option<&Terminal> {
+        self.content.terminal()
+    }
+
+    /// Mutable accessor for the terminal content.
+    pub fn terminal_mut(&mut self) -> Option<&mut Terminal> {
+        self.content.terminal_mut()
+    }
+
+    /// Convenience accessor for the editor content (if this panel holds one).
+    #[must_use]
+    pub fn editor(&self) -> Option<&MarkdownEditor> {
+        self.content.editor()
+    }
+
+    /// Mutable accessor for the editor content.
+    pub fn editor_mut(&mut self) -> Option<&mut MarkdownEditor> {
+        self.content.editor_mut()
+    }
+}
+
+impl Panel {
+    /// Spawn a new panel — either a PTY-backed terminal or a markdown editor.
     ///
     /// # Errors
     ///
@@ -147,6 +173,11 @@ impl Panel {
         } = opts;
 
         let local_id = local_id.unwrap_or_else(new_local_id);
+
+        if kind == PanelKind::Editor {
+            return Self::spawn_editor(id, workspace_id, local_id, name, command, position, size, template);
+        }
+
         let (transcript, replay_bytes) = prepare_transcript_restore(id, kind, transcript_root, &local_id);
 
         // Save original launch params for persistence before they're
@@ -204,7 +235,7 @@ impl Panel {
                 size: size.unwrap_or(DEFAULT_PANEL_SIZE),
             },
             workspace_id,
-            terminal,
+            content: PanelContent::Terminal(terminal),
             session_binding,
             template,
             launched_at_millis: current_unix_millis(),
@@ -215,11 +246,70 @@ impl Panel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_editor(
+        id: PanelId,
+        workspace_id: WorkspaceId,
+        local_id: String,
+        name: Option<String>,
+        command: Option<String>,
+        position: Option<[f32; 2]>,
+        size: Option<[f32; 2]>,
+        template: Option<PanelTemplateRef>,
+    ) -> Result<Self> {
+        let editor = if let Some(ref path_str) = command {
+            let path = PathBuf::from(path_str);
+            if path.exists() {
+                MarkdownEditor::open(path)?
+            } else {
+                let mut ed = MarkdownEditor::scratch();
+                ed.file_path = Some(path);
+                ed
+            }
+        } else {
+            MarkdownEditor::scratch()
+        };
+
+        let has_custom_name = name.is_some();
+        let title = name.unwrap_or_else(|| {
+            command
+                .as_deref()
+                .and_then(|p| PathBuf::from(p).file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Markdown".to_string())
+        });
+
+        tracing::info!("created editor panel '{}' (id={})", title, id.0);
+
+        Ok(Self {
+            id,
+            local_id,
+            title,
+            kind: PanelKind::Editor,
+            resume: PanelResume::Fresh,
+            layout: PanelLayout {
+                position: position.unwrap_or_default(),
+                size: size.unwrap_or(DEFAULT_PANEL_SIZE),
+            },
+            workspace_id,
+            content: PanelContent::Editor(editor),
+            session_binding: None,
+            template,
+            launched_at_millis: current_unix_millis(),
+            has_custom_name,
+            launch_command: command,
+            launch_args: Vec::new(),
+            launch_cwd: None,
+        })
+    }
+
     pub fn process_output(&mut self) {
-        self.terminal.process_events();
+        let Some(terminal) = self.content.terminal_mut() else {
+            return;
+        };
+        terminal.process_events();
 
         if !self.has_custom_name {
-            let title = self.terminal.title();
+            let title = terminal.title();
             if !title.is_empty() {
                 self.title = title.to_string();
             }
@@ -228,12 +318,12 @@ impl Panel {
 
     #[must_use]
     pub fn child_exited(&self) -> bool {
-        self.terminal.child_exited()
+        self.content.terminal().is_some_and(Terminal::child_exited)
     }
 
     /// Returns `true` if the terminal bell has fired since the last call.
     pub fn take_bell(&mut self) -> bool {
-        self.terminal.take_bell()
+        self.content.terminal_mut().is_some_and(Terminal::take_bell)
     }
 
     #[must_use]
@@ -249,21 +339,38 @@ impl Panel {
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
-        self.terminal.write_input(bytes);
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.write_input(bytes);
+        }
     }
 
     pub fn request_shutdown(&mut self) {
-        self.terminal.request_shutdown();
+        match &mut self.content {
+            PanelContent::Terminal(terminal) => terminal.request_shutdown(),
+            PanelContent::Editor(editor) => editor.save_if_dirty(),
+        }
     }
 
     #[must_use]
     pub fn wait_for_shutdown(&mut self, timeout: Duration) -> bool {
-        self.terminal.wait_for_shutdown(timeout)
+        match &mut self.content {
+            PanelContent::Terminal(terminal) => terminal.wait_for_shutdown(timeout),
+            PanelContent::Editor(editor) => {
+                editor.save_if_dirty();
+                true
+            }
+        }
     }
 
     #[must_use]
     pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
-        self.terminal.shutdown_with_timeout(timeout)
+        match &mut self.content {
+            PanelContent::Terminal(terminal) => terminal.shutdown_with_timeout(timeout),
+            PanelContent::Editor(editor) => {
+                editor.save_if_dirty();
+                true
+            }
+        }
     }
 
     pub fn move_to(&mut self, position: [f32; 2]) {
@@ -282,11 +389,22 @@ impl Panel {
     ///
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart(&mut self) -> Result<()> {
-        let rows = self.terminal.rows();
-        let cols = self.terminal.cols();
+        let Some(terminal) = self.content.terminal_mut() else {
+            // Editor panels don't restart — just reload from disk if file-backed.
+            if let Some(editor) = self.content.editor_mut()
+                && let Some(path) = editor.file_path.clone()
+                && path.exists()
+            {
+                *editor = MarkdownEditor::open(path)?;
+            }
+            return Ok(());
+        };
+
+        let rows = terminal.rows();
+        let cols = terminal.cols();
 
         // Graceful shutdown of the old terminal.
-        let _ = self.terminal.shutdown_with_timeout(Duration::from_secs(2));
+        let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
 
         let should_resume = self.kind.is_agent() && self.session_binding.is_some();
         let (program, launch_args) = resolve_launch_command(
@@ -298,7 +416,7 @@ impl Panel {
             should_resume,
         );
 
-        self.terminal = Terminal::spawn(TerminalSpawnOptions {
+        self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
             cwd: self.launch_cwd.clone(),
@@ -309,7 +427,7 @@ impl Panel {
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
             replay_bytes: Vec::new(),
-        })?;
+        })?);
 
         self.launched_at_millis = current_unix_millis();
         tracing::info!("restarted panel '{}' (id={})", self.title, self.id.0);
@@ -321,19 +439,27 @@ impl Panel {
     }
 
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
-        self.terminal.scroll_scrollback_by(delta);
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.scroll_scrollback_by(delta);
+        }
     }
 
     pub fn set_scrollback(&mut self, scrollback: usize) {
-        self.terminal.set_scrollback(scrollback);
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.set_scrollback(scrollback);
+        }
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
-        self.terminal.resize(rows, cols, cell_width, cell_height);
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.resize(rows, cols, cell_width, cell_height);
+        }
     }
 
     pub fn set_focused(&mut self, focused: bool) {
-        self.terminal.set_focused(focused);
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.set_focused(focused);
+        }
     }
 
     /// Check if this panel's terminal output suggests it needs user attention.
@@ -342,7 +468,8 @@ impl Panel {
         if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude) {
             return None;
         }
-        let text = self.terminal.last_lines_text(3);
+        let terminal = self.content.terminal()?;
+        let text = terminal.last_lines_text(3);
         if text.is_empty() {
             return None;
         }
@@ -379,6 +506,7 @@ fn resolve_launch_command(
     should_resume_binding: bool,
 ) -> (String, Vec<String>) {
     match kind {
+        PanelKind::Editor => (String::new(), Vec::new()),
         PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
         PanelKind::Command => {
             if let Some(program) = command {
@@ -485,7 +613,7 @@ fn resolve_session_binding(
             session_binding.is_some()
                 && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
         }
-        PanelKind::Codex | PanelKind::Shell | PanelKind::Command => {
+        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor => {
             session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
         }
     };
@@ -519,6 +647,7 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     match kind {
         PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Shell | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
+        PanelKind::Editor => 0,
     }
 }
 
