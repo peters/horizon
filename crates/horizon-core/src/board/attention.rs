@@ -8,9 +8,13 @@ use super::Board;
 
 impl Board {
     pub(super) fn update_attention(&mut self) {
+        // Only inspect panels that received new terminal output this frame.
+        // `detect_attention()` locks the terminal and iterates the full
+        // display, so skipping idle panels avoids significant per-frame cost.
         let panel_states: Vec<_> = self
             .panels
             .iter_mut()
+            .filter(|panel| panel.had_recent_output)
             .map(|panel| {
                 let bell = panel.take_bell();
                 let notification = panel.take_notification();

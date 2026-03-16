@@ -134,6 +134,9 @@ pub struct Panel {
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
     has_custom_name: bool,
+    /// Set by `process_output` each frame; read by attention detection to skip
+    /// the expensive `last_lines_text` scan for panels without new content.
+    pub(crate) had_recent_output: bool,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
     /// Original launch args (for persistence).
@@ -183,6 +186,7 @@ impl Panel {
     /// # Errors
     ///
     /// Returns an error if the terminal runtime cannot be created.
+    #[allow(clippy::too_many_lines)]
     pub fn spawn(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Self> {
         let PanelOptions {
             name,
@@ -293,6 +297,7 @@ impl Panel {
             template,
             launched_at_millis: current_unix_millis(),
             has_custom_name,
+            had_recent_output: false,
             launch_command: saved_command,
             launch_args: saved_args,
             launch_cwd: saved_cwd,
@@ -349,6 +354,7 @@ impl Panel {
             template,
             launched_at_millis: current_unix_millis(),
             has_custom_name,
+            had_recent_output: false,
             launch_command: command,
             launch_args: Vec::new(),
             launch_cwd: None,
@@ -385,6 +391,7 @@ impl Panel {
             template,
             launched_at_millis: current_unix_millis(),
             has_custom_name,
+            had_recent_output: false,
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: cwd,
@@ -420,6 +427,7 @@ impl Panel {
             template,
             launched_at_millis: current_unix_millis(),
             has_custom_name,
+            had_recent_output: false,
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: None,
@@ -430,9 +438,11 @@ impl Panel {
     #[profiling::function]
     pub fn process_output(&mut self) -> bool {
         let Some(terminal) = self.content.terminal_mut() else {
+            self.had_recent_output = false;
             return false;
         };
         let had_output = terminal.process_events();
+        self.had_recent_output = had_output;
 
         if had_output && !self.has_custom_name {
             let title = terminal.title();

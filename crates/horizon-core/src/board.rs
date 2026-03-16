@@ -433,7 +433,11 @@ impl Board {
         for panel in &mut self.panels {
             had_output |= panel.process_output();
         }
-        if self.attention_enabled {
+        // Only run attention detection when terminals actually produced new
+        // output.  The expensive path — `detect_attention()` — locks the
+        // terminal mutex and iterates the full display, so skipping it on
+        // idle frames is a significant CPU win.
+        if self.attention_enabled && had_output {
             self.update_attention();
         }
         had_output
