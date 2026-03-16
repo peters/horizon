@@ -1,10 +1,12 @@
+mod attention;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
+use crate::attention::AttentionItem;
 use crate::config::Config;
 use crate::error::Result;
 use crate::layout::{
@@ -432,116 +434,6 @@ impl Board {
             .collect()
     }
 
-    fn update_attention(&mut self) {
-        use crate::attention::AttentionSeverity;
-
-        let panel_states: Vec<_> = self
-            .panels
-            .iter_mut()
-            .map(|panel| {
-                let bell = panel.take_bell();
-                let notification = panel.take_notification();
-                (
-                    panel.id,
-                    panel.workspace_id,
-                    panel.kind,
-                    panel.detect_attention(),
-                    bell,
-                    notification,
-                    panel.launched_at_millis,
-                )
-            })
-            .collect();
-
-        for (panel_id, workspace_id, kind, attention, bell, notification, launched_at) in panel_states {
-            if let Some(notif) = notification {
-                let severity = match notif.severity.as_str() {
-                    "attention" => AttentionSeverity::High,
-                    "done" => AttentionSeverity::Medium,
-                    _ => AttentionSeverity::Low,
-                };
-                self.create_attention(workspace_id, Some(panel_id), "agent-notify", notif.message, severity);
-            }
-
-            if let Some(summary) = attention {
-                self.reconcile_agent_attention_signal(panel_id, workspace_id, summary);
-            } else {
-                self.reconcile_agent_attention_signal(panel_id, workspace_id, "");
-            }
-
-            let has_open = self.unresolved_attention_for_panel(panel_id).is_some();
-
-            if attention.is_none() && bell && kind.is_agent() {
-                let age_ms = crate::panel::current_unix_millis().saturating_sub(launched_at);
-                if !has_open && age_ms >= 10_000 {
-                    self.create_attention(
-                        workspace_id,
-                        Some(panel_id),
-                        "agent",
-                        "Needs attention",
-                        AttentionSeverity::High,
-                    );
-                }
-            } else if attention.is_none() && has_open {
-                let ids_to_resolve: Vec<_> = self
-                    .attention
-                    .iter()
-                    .filter(|item| item.panel_id == Some(panel_id) && item.is_open())
-                    .map(|item| item.id)
-                    .collect();
-                for id in ids_to_resolve {
-                    let _ = self.resolve_attention(id);
-                }
-            }
-        }
-
-        self.dismiss_expired_ready_attention(READY_FOR_INPUT_AUTO_DISMISS_AFTER);
-    }
-
-    fn reconcile_agent_attention_signal(&mut self, panel_id: PanelId, workspace_id: WorkspaceId, summary: &str) {
-        let next_signal = (!summary.is_empty()).then_some(summary);
-        let previous_signal = self.panel_attention_signals.get(&panel_id).map(String::as_str);
-        if previous_signal == next_signal {
-            return;
-        }
-
-        self.resolve_open_attention_for_panel(panel_id);
-
-        match next_signal {
-            Some(summary) => {
-                self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
-                self.panel_attention_signals.insert(panel_id, summary.to_string());
-            }
-            None => {
-                self.panel_attention_signals.remove(&panel_id);
-            }
-        }
-    }
-
-    fn resolve_open_attention_for_panel(&mut self, panel_id: PanelId) {
-        let ids_to_resolve: Vec<_> = self
-            .attention
-            .iter()
-            .filter(|item| item.panel_id == Some(panel_id) && item.is_open())
-            .map(|item| item.id)
-            .collect();
-        for id in ids_to_resolve {
-            let _ = self.resolve_attention(id);
-        }
-    }
-
-    fn dismiss_expired_ready_attention(&mut self, max_age: Duration) {
-        let now = std::time::SystemTime::now();
-        for item in &mut self.attention {
-            let should_dismiss = item.is_open()
-                && item.is_agent_ready_for_input()
-                && now.duration_since(item.created_at).is_ok_and(|age| age >= max_age);
-            if should_dismiss {
-                item.dismiss();
-            }
-        }
-    }
-
     pub fn focus(&mut self, id: PanelId) {
         self.focused = Some(id);
         self.active_workspace = self.panel_workspace_id(id);
@@ -777,62 +669,6 @@ impl Board {
         true
     }
 
-    pub fn create_attention(
-        &mut self,
-        workspace_id: WorkspaceId,
-        panel_id: Option<PanelId>,
-        source: impl Into<String>,
-        summary: impl Into<String>,
-        severity: AttentionSeverity,
-    ) -> AttentionId {
-        let id = AttentionId(self.next_attention_id);
-        self.next_attention_id += 1;
-        self.attention.push(AttentionItem::new(
-            id,
-            workspace_id,
-            panel_id,
-            source,
-            summary,
-            severity,
-        ));
-        id
-    }
-
-    #[must_use]
-    pub fn resolve_attention(&mut self, id: AttentionId) -> bool {
-        if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {
-            item.resolve();
-            return true;
-        }
-
-        false
-    }
-
-    #[must_use]
-    pub fn dismiss_attention(&mut self, id: AttentionId) -> bool {
-        if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {
-            item.dismiss();
-            return true;
-        }
-
-        false
-    }
-
-    pub fn unresolved_attention(&self) -> impl Iterator<Item = &AttentionItem> + '_ {
-        self.attention.iter().filter(|item| item.is_open())
-    }
-
-    #[must_use]
-    pub fn unresolved_attention_for_panel(&self, panel_id: PanelId) -> Option<&AttentionItem> {
-        self.unresolved_attention()
-            .filter(|item| item.panel_id == Some(panel_id))
-            .max_by(|left, right| {
-                left.severity
-                    .cmp(&right.severity)
-                    .then_with(|| left.id.0.cmp(&right.id.0))
-            })
-    }
-
     /// Compute the canvas position for the next workspace so it doesn't
     /// overlap with existing ones.  Uses fixed-width slots so workspaces
     /// never collide even when fully populated (3 columns).
@@ -1032,6 +868,7 @@ fn collision_push(a: [f32; 4], b: [f32; 4], drag_dir: [f32; 2], gap: f32) -> [f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attention::AttentionSeverity;
     use crate::config::WorkspaceConfig;
     use crate::runtime_state::WorkspaceTemplateRef;
     use std::path::PathBuf;
@@ -1504,6 +1341,10 @@ mod tests {
         assert!(board.clear_workspace_layout(workspace_id));
 
         assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
-        assert_eq!(board.panel(panel_id).expect("panel").layout.position, arranged_position);
+        let current_position = board.panel(panel_id).expect("panel").layout.position;
+        assert!(
+            vec2_eq(current_position, arranged_position),
+            "expected {arranged_position:?}, got {current_position:?}"
+        );
     }
 }
