@@ -21,9 +21,9 @@ impl HorizonApp {
     pub(super) fn animate_pan(&mut self, ctx: &Context) {
         if let Some(target) = self.pan_target {
             let dt = ctx.input(|input| input.predicted_dt);
-            let t = (8.0 * dt).min(1.0);
+            let t = (20.0 * dt).min(1.0);
             self.pan_offset = self.pan_offset + (target - self.pan_offset) * t;
-            if (self.pan_offset - target).length_sq() < 0.5 {
+            if (self.pan_offset - target).length_sq() < 1.0 {
                 self.pan_offset = target;
                 self.pan_target = None;
             }
