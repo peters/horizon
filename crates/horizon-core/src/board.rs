@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,10 +18,15 @@ use crate::workspace::{Workspace, WorkspaceId};
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 const STACK_OFFSET_X: f32 = 16.0;
 const STACK_OFFSET_Y: f32 = 20.0;
 const CASCADE_OFFSET_X: f32 = 40.0;
 const CASCADE_OFFSET_Y: f32 = 30.0;
+
+fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
+    (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
+}
 
 /// Predefined layout arrangements for panels inside a workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -56,6 +62,7 @@ pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
+    panel_attention_signals: HashMap<PanelId, String>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
@@ -70,6 +77,7 @@ impl Board {
             panels: Vec::new(),
             workspaces: Vec::new(),
             attention: Vec::new(),
+            panel_attention_signals: HashMap::new(),
             focused: None,
             active_workspace: None,
             next_panel_id: 1,
@@ -223,6 +231,7 @@ impl Board {
             ws.remove_panel(id);
         }
         self.attention.retain(|item| item.panel_id != Some(id));
+        self.panel_attention_signals.remove(&id);
         if self.focused == Some(id) {
             self.focused = self.panels.last().map(|p| p.id);
             if let Some(focused) = self.focused {
@@ -450,13 +459,15 @@ impl Board {
                 self.create_attention(workspace_id, Some(panel_id), "agent-notify", notif.message, severity);
             }
 
+            if let Some(summary) = attention {
+                self.reconcile_agent_attention_signal(panel_id, workspace_id, summary);
+            } else {
+                self.reconcile_agent_attention_signal(panel_id, workspace_id, "");
+            }
+
             let has_open = self.unresolved_attention_for_panel(panel_id).is_some();
 
-            if let Some(summary) = attention {
-                if !has_open {
-                    self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
-                }
-            } else if bell && kind.is_agent() {
+            if attention.is_none() && bell && kind.is_agent() {
                 let age_ms = crate::panel::current_unix_millis().saturating_sub(launched_at);
                 if !has_open && age_ms >= 10_000 {
                     self.create_attention(
@@ -467,7 +478,7 @@ impl Board {
                         AttentionSeverity::High,
                     );
                 }
-            } else if has_open {
+            } else if attention.is_none() && has_open {
                 let ids_to_resolve: Vec<_> = self
                     .attention
                     .iter()
@@ -477,6 +488,52 @@ impl Board {
                 for id in ids_to_resolve {
                     let _ = self.resolve_attention(id);
                 }
+            }
+        }
+
+        self.dismiss_expired_ready_attention(READY_FOR_INPUT_AUTO_DISMISS_AFTER);
+    }
+
+    fn reconcile_agent_attention_signal(&mut self, panel_id: PanelId, workspace_id: WorkspaceId, summary: &str) {
+        let next_signal = (!summary.is_empty()).then_some(summary);
+        let previous_signal = self.panel_attention_signals.get(&panel_id).map(String::as_str);
+        if previous_signal == next_signal {
+            return;
+        }
+
+        self.resolve_open_attention_for_panel(panel_id);
+
+        match next_signal {
+            Some(summary) => {
+                self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
+                self.panel_attention_signals.insert(panel_id, summary.to_string());
+            }
+            None => {
+                self.panel_attention_signals.remove(&panel_id);
+            }
+        }
+    }
+
+    fn resolve_open_attention_for_panel(&mut self, panel_id: PanelId) {
+        let ids_to_resolve: Vec<_> = self
+            .attention
+            .iter()
+            .filter(|item| item.panel_id == Some(panel_id) && item.is_open())
+            .map(|item| item.id)
+            .collect();
+        for id in ids_to_resolve {
+            let _ = self.resolve_attention(id);
+        }
+    }
+
+    fn dismiss_expired_ready_attention(&mut self, max_age: Duration) {
+        let now = std::time::SystemTime::now();
+        for item in &mut self.attention {
+            let should_dismiss = item.is_open()
+                && item.is_agent_ready_for_input()
+                && now.duration_since(item.created_at).is_ok_and(|age| age >= max_age);
+            if should_dismiss {
+                item.dismiss();
             }
         }
     }
@@ -658,7 +715,10 @@ impl Board {
     }
 
     pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
-        if self.panel(id).is_some_and(|panel| panel.layout.position == position) {
+        if self
+            .panel(id)
+            .is_some_and(|panel| vec2_eq(panel.layout.position, position))
+        {
             return false;
         }
         if let Some(workspace_id) = self.panel_workspace_id(id) {
@@ -673,18 +733,29 @@ impl Board {
     }
 
     pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
-        if self.panel(id).is_some_and(|panel| panel.layout.size == size) {
+        if self.panel(id).is_some_and(|panel| vec2_eq(panel.layout.size, size)) {
             return false;
         }
-        if let Some(workspace_id) = self.panel_workspace_id(id) {
+        let ws_id = self.panel_workspace_id(id);
+        let old_size = self.panel(id).map(|panel| panel.layout.size);
+        if let Some(workspace_id) = ws_id {
             self.set_workspace_layout(workspace_id, None);
         }
         if let Some(panel) = self.panel_mut(id) {
             panel.resize_layout(size);
-            return true;
+        } else {
+            return false;
         }
-
-        false
+        if let Some(ws_id) = ws_id {
+            let delta = match old_size {
+                Some(old) => [size[0] - old[0], size[1] - old[1]],
+                None => size,
+            };
+            if delta[0] != 0.0 || delta[1] != 0.0 {
+                self.resolve_workspace_collisions(ws_id, delta);
+            }
+        }
+        true
     }
 
     /// Arrange all panels in a workspace according to a predefined layout.
@@ -727,6 +798,16 @@ impl Board {
     pub fn resolve_attention(&mut self, id: AttentionId) -> bool {
         if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {
             item.resolve();
+            return true;
+        }
+
+        false
+    }
+
+    #[must_use]
+    pub fn dismiss_attention(&mut self, id: AttentionId) -> bool {
+        if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {
+            item.dismiss();
             return true;
         }
 
@@ -1033,6 +1114,53 @@ mod tests {
     }
 
     #[test]
+    fn dismissing_attention_keeps_same_signal_suppressed_until_it_clears() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("agents");
+        let panel_id = PanelId(99);
+
+        board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
+        let attention_id = board.unresolved_attention().next().expect("open attention").id;
+        assert!(board.dismiss_attention(attention_id));
+
+        board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
+        assert!(board.unresolved_attention().next().is_none());
+
+        board.reconcile_agent_attention_signal(panel_id, workspace_id, "");
+        board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
+        assert!(board.unresolved_attention().next().is_some());
+    }
+
+    #[test]
+    fn stale_ready_for_input_attention_auto_dismisses() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("agents");
+        let attention_id = board.create_attention(
+            workspace_id,
+            Some(PanelId(7)),
+            "agent",
+            "Ready for input",
+            AttentionSeverity::High,
+        );
+
+        let item = board
+            .attention
+            .iter_mut()
+            .find(|item| item.id == attention_id)
+            .expect("attention item");
+        item.created_at = std::time::SystemTime::now() - READY_FOR_INPUT_AUTO_DISMISS_AFTER - Duration::from_secs(1);
+
+        board.dismiss_expired_ready_attention(READY_FOR_INPUT_AUTO_DISMISS_AFTER);
+
+        let item = board
+            .attention
+            .iter()
+            .find(|item| item.id == attention_id)
+            .expect("attention item");
+        assert_eq!(item.state, crate::attention::AttentionState::Dismissed);
+    }
+
+    #[test]
     fn focusing_panel_tracks_active_workspace() {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
@@ -1212,14 +1340,10 @@ mod tests {
         let first_position = board.panel(first).expect("first panel").layout.position;
         let second_position = board.panel(second).expect("second panel").layout.position;
 
-        assert_eq!(first_position, [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
-        assert_eq!(
-            second_position,
-            [
-                origin[0] + WS_INNER_PAD + STACK_OFFSET_X,
-                origin[1] + WS_INNER_PAD + STACK_OFFSET_Y,
-            ]
-        );
+        assert!((first_position[0] - (origin[0] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+        assert!((first_position[1] - (origin[1] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+        assert!((second_position[0] - (origin[0] + WS_INNER_PAD + STACK_OFFSET_X)).abs() <= f32::EPSILON);
+        assert!((second_position[1] - (origin[1] + WS_INNER_PAD + STACK_OFFSET_Y)).abs() <= f32::EPSILON);
     }
 
     #[test]
@@ -1240,14 +1364,10 @@ mod tests {
         let first_position = board.panel(first).expect("first panel").layout.position;
         let second_position = board.panel(second).expect("second panel").layout.position;
 
-        assert_eq!(first_position, [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
-        assert_eq!(
-            second_position,
-            [
-                origin[0] + WS_INNER_PAD + CASCADE_OFFSET_X,
-                origin[1] + WS_INNER_PAD + CASCADE_OFFSET_Y,
-            ]
-        );
+        assert!((first_position[0] - (origin[0] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+        assert!((first_position[1] - (origin[1] + WS_INNER_PAD)).abs() <= f32::EPSILON);
+        assert!((second_position[0] - (origin[0] + WS_INNER_PAD + CASCADE_OFFSET_X)).abs() <= f32::EPSILON);
+        assert!((second_position[1] - (origin[1] + WS_INNER_PAD + CASCADE_OFFSET_Y)).abs() <= f32::EPSILON);
     }
 
     #[test]
@@ -1280,17 +1400,17 @@ mod tests {
             .create_panel(PanelOptions::default(), workspace_id)
             .expect("second panel should spawn");
 
-        assert_eq!(
+        assert!(vec2_eq(
             board.panel(first).expect("first panel").layout.position,
             [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
-        );
-        assert_eq!(
+        ));
+        assert!(vec2_eq(
             board.panel(second).expect("second panel").layout.position,
             [
                 origin[0] + WS_INNER_PAD,
                 origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
             ]
-        );
+        ));
     }
 
     #[test]
@@ -1309,10 +1429,10 @@ mod tests {
 
         board.close_panel(first);
 
-        assert_eq!(
+        assert!(vec2_eq(
             board.panel(second).expect("remaining panel").layout.position,
             [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
-        );
+        ));
         assert_eq!(
             board.workspace(workspace_id).expect("workspace").layout,
             Some(WorkspaceLayout::Rows)

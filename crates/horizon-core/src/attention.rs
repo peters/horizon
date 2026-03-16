@@ -16,6 +16,7 @@ pub enum AttentionSeverity {
 pub enum AttentionState {
     Open,
     Resolved,
+    Dismissed,
 }
 
 #[derive(Clone, Debug)]
@@ -59,9 +60,26 @@ impl AttentionItem {
         self.state == AttentionState::Open
     }
 
+    #[must_use]
+    pub fn is_resolved(&self) -> bool {
+        self.state == AttentionState::Resolved
+    }
+
+    #[must_use]
+    pub fn is_agent_ready_for_input(&self) -> bool {
+        self.source == "agent" && self.summary == "Ready for input"
+    }
+
     pub fn resolve(&mut self) {
         if self.is_open() {
             self.state = AttentionState::Resolved;
+            self.resolved_at = Some(SystemTime::now());
+        }
+    }
+
+    pub fn dismiss(&mut self) {
+        if self.is_open() {
+            self.state = AttentionState::Dismissed;
             self.resolved_at = Some(SystemTime::now());
         }
     }
