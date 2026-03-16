@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
@@ -21,7 +23,7 @@ const CASCADE_OFFSET_X: f32 = 40.0;
 const CASCADE_OFFSET_Y: f32 = 30.0;
 
 /// Predefined layout arrangements for panels inside a workspace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum WorkspaceLayout {
     /// Single column, panels stacked top-to-bottom.
     Rows,
@@ -182,6 +184,7 @@ impl Board {
     pub fn create_panel(&mut self, mut opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
+        let workspace_layout = self.workspace_layout_value(workspace);
 
         // Inherit workspace cwd if the panel doesn't specify one.
         if opts.cwd.is_none()
@@ -202,6 +205,9 @@ impl Board {
         }
 
         self.focus(id);
+        if let Some(layout) = workspace_layout {
+            self.apply_workspace_layout(workspace, layout);
+        }
 
         Ok(id)
     }
@@ -233,6 +239,8 @@ impl Board {
                 if self.active_workspace == Some(ws_id) {
                     self.active_workspace = self.workspaces.first().map(|ws| ws.id);
                 }
+            } else {
+                self.reflow_workspace_layout(ws_id);
             }
         }
 
@@ -310,20 +318,35 @@ impl Board {
     /// Move a panel to a different workspace, physically relocating it to
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        let Some(source_workspace_id) = self.panel_workspace_id(panel_id) else {
+            return;
+        };
+        if source_workspace_id == workspace_id || self.workspace(workspace_id).is_none() {
+            return;
+        }
+
         for ws in &mut self.workspaces {
             ws.remove_panel(panel_id);
         }
-
-        // Compute new position before adding, so it finds a truly free tile.
-        let new_position = self.default_panel_position(workspace_id);
+        let target_layout = self.workspace_layout_value(workspace_id);
 
         if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
             ws.add_panel(panel_id);
         }
         if let Some(panel) = self.panel_mut(panel_id) {
             panel.workspace_id = workspace_id;
-            panel.move_to(new_position);
         }
+
+        if let Some(layout) = target_layout {
+            self.apply_workspace_layout(workspace_id, layout);
+        } else {
+            let new_position = self.default_panel_position(workspace_id);
+            if let Some(panel) = self.panel_mut(panel_id) {
+                panel.move_to(new_position);
+            }
+        }
+
+        self.reflow_workspace_layout(source_workspace_id);
     }
 
     #[must_use]
@@ -635,6 +658,12 @@ impl Board {
     }
 
     pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
+        if self.panel(id).is_some_and(|panel| panel.layout.position == position) {
+            return false;
+        }
+        if let Some(workspace_id) = self.panel_workspace_id(id) {
+            self.set_workspace_layout(workspace_id, None);
+        }
         if let Some(panel) = self.panel_mut(id) {
             panel.move_to(position);
             return true;
@@ -644,6 +673,12 @@ impl Board {
     }
 
     pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
+        if self.panel(id).is_some_and(|panel| panel.layout.size == size) {
+            return false;
+        }
+        if let Some(workspace_id) = self.panel_workspace_id(id) {
+            self.set_workspace_layout(workspace_id, None);
+        }
         if let Some(panel) = self.panel_mut(id) {
             panel.resize_layout(size);
             return true;
@@ -655,24 +690,7 @@ impl Board {
     /// Arrange all panels in a workspace according to a predefined layout.
     /// Panels are equally sized and positioned with gaps.
     pub fn arrange_workspace(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
-        let Some(workspace) = self.workspace(id) else {
-            return;
-        };
-        let panel_ids: Vec<PanelId> = workspace.panels.clone();
-        let origin = workspace.position;
-        let count = panel_ids.len();
-        if count == 0 {
-            return;
-        }
-
-        for (index, panel_id) in panel_ids.iter().enumerate() {
-            let (position, size) = arranged_panel_layout(origin, layout, index, count);
-
-            if let Some(panel) = self.panel_mut(*panel_id) {
-                panel.move_to(position);
-                panel.resize_layout(size);
-            }
-        }
+        self.apply_workspace_layout(id, layout);
     }
 
     pub fn create_attention(
@@ -739,6 +757,45 @@ impl Board {
         tiled_panel_position([0.0, 0.0], 0)
     }
 
+    fn workspace_layout_value(&self, id: WorkspaceId) -> Option<WorkspaceLayout> {
+        self.workspace(id).and_then(|workspace| workspace.layout)
+    }
+
+    fn set_workspace_layout(&mut self, id: WorkspaceId, layout: Option<WorkspaceLayout>) {
+        if let Some(workspace) = self.workspace_mut(id) {
+            workspace.layout = layout;
+        }
+    }
+
+    fn reflow_workspace_layout(&mut self, id: WorkspaceId) {
+        if let Some(layout) = self.workspace_layout_value(id) {
+            self.apply_workspace_layout(id, layout);
+        }
+    }
+
+    fn apply_workspace_layout(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
+        let Some((panel_ids, origin)) = self
+            .workspace(id)
+            .map(|workspace| (workspace.panels.clone(), workspace.position))
+        else {
+            return;
+        };
+        self.set_workspace_layout(id, Some(layout));
+        let count = panel_ids.len();
+        if count == 0 {
+            return;
+        }
+
+        for (index, panel_id) in panel_ids.iter().enumerate() {
+            let (position, size) = arranged_panel_layout(origin, layout, index, count);
+
+            if let Some(panel) = self.panel_mut(*panel_id) {
+                panel.move_to(position);
+                panel.resize_layout(size);
+            }
+        }
+    }
+
     fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
         let occupied: Vec<[f32; 2]> = workspace
             .panels
@@ -766,6 +823,7 @@ impl Board {
             workspace.position = workspace_state.position.unwrap_or(workspace.position);
             workspace.cwd = workspace_state.cwd.as_deref().map(Config::expand_tilde);
             workspace.template.clone_from(&workspace_state.template);
+            workspace.layout = workspace_state.layout;
         }
         id
     }
@@ -1181,5 +1239,88 @@ mod tests {
                 origin[1] + WS_INNER_PAD + CASCADE_OFFSET_Y,
             ]
         );
+    }
+
+    #[test]
+    fn arranging_workspace_records_selected_layout() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        assert_eq!(
+            board.workspace(workspace_id).expect("workspace").layout,
+            Some(WorkspaceLayout::Rows)
+        );
+    }
+
+    #[test]
+    fn adding_panel_reflows_arranged_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+
+        assert_eq!(
+            board.panel(first).expect("first panel").layout.position,
+            [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+        );
+        assert_eq!(
+            board.panel(second).expect("second panel").layout.position,
+            [
+                origin[0] + WS_INNER_PAD,
+                origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_panel_reflows_arranged_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        board.close_panel(first);
+
+        assert_eq!(
+            board.panel(second).expect("remaining panel").layout.position,
+            [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+        );
+        assert_eq!(
+            board.workspace(workspace_id).expect("workspace").layout,
+            Some(WorkspaceLayout::Rows)
+        );
+    }
+
+    #[test]
+    fn manual_panel_move_returns_workspace_to_freeform() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        assert!(board.move_panel(panel_id, [420.0, 360.0]));
+
+        assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
     }
 }

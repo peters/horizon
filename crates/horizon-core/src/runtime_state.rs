@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::board::Board;
+use crate::board::{Board, WorkspaceLayout};
 use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
@@ -206,6 +206,7 @@ impl RuntimeState {
                     cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
                     position: Some(workspace.position),
                     template: workspace.template.clone(),
+                    layout: workspace.layout,
                     panels,
                 }
             })
@@ -249,6 +250,8 @@ pub struct WorkspaceState {
     pub cwd: Option<String>,
     pub position: Option<[f32; 2]>,
     pub template: Option<WorkspaceTemplateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<WorkspaceLayout>,
     pub panels: Vec<PanelState>,
 }
 
@@ -281,6 +284,7 @@ impl WorkspaceState {
                 workspace_index,
                 workspace_name: workspace.name.clone(),
             }),
+            layout: None,
             panels,
         }
     }
@@ -819,6 +823,7 @@ mod tests {
                 cwd: Some("/repo".to_string()),
                 position: None,
                 template: None,
+                layout: None,
                 panels: vec![
                     PanelState {
                         local_id: "a".to_string(),
@@ -999,6 +1004,7 @@ mod tests {
             .expect("workspace state");
         let saved_panel = saved_workspace.panels.first().expect("panel state");
         assert_eq!(saved_workspace.position, Some([860.0, 64.0]));
+        assert_eq!(saved_workspace.layout, None);
         assert_eq!(saved_panel.position, Some([180.0, 120.0]));
         assert_eq!(saved_panel.size, Some([640.0, 420.0]));
         assert_eq!(
@@ -1008,5 +1014,27 @@ mod tests {
                 .map(|binding| binding.session_id.as_str()),
             Some("session-42")
         );
+    }
+
+    #[test]
+    fn from_board_persists_workspace_layout_selection() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace_at("grid", [860.0, 64.0]);
+        board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
+
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), [0.0, 0.0]);
+        let saved_workspace = state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.local_id == board.workspace(workspace_id).expect("workspace").local_id)
+            .expect("workspace state");
+
+        assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
     }
 }
