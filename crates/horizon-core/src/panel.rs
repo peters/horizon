@@ -202,6 +202,20 @@ impl Panel {
             session_binding.as_ref(),
             should_resume_binding,
         );
+
+        if kind.is_agent() {
+            tracing::info!(
+                panel_id = id.0,
+                kind = ?kind,
+                resume = ?resume,
+                session_id = session_binding.as_ref().map(|b| b.session_id.as_str()),
+                should_resume = should_resume_binding,
+                cwd = saved_cwd_string.as_deref(),
+                cmd = %format!("{program} {}", launch_args.join(" ")),
+                "launching agent panel"
+            );
+        }
+
         let (program, launch_args) = if let Some(transcript) = transcript.as_ref() {
             transcript.wrap_launch_command(program, launch_args)
         } else {
@@ -415,6 +429,19 @@ impl Panel {
             self.session_binding.as_ref(),
             should_resume,
         );
+
+        if self.kind.is_agent() {
+            tracing::info!(
+                panel_id = self.id.0,
+                kind = ?self.kind,
+                resume = ?self.resume,
+                session_id = self.session_binding.as_ref().map(|b| b.session_id.as_str()),
+                should_resume,
+                cwd = self.launch_cwd.as_ref().map(|p| p.display().to_string()).as_deref(),
+                cmd = %format!("{program} {}", launch_args.join(" ")),
+                "restarting agent panel"
+            );
+        }
 
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
