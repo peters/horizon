@@ -5,9 +5,13 @@ user-invocable: false
 ---
 
 You are running inside Horizon, a GPU-accelerated terminal workspace.
-When HORIZON=1 is set, notify the user by running:
+When HORIZON=1 is set, notify the user by emitting an OSC escape sequence
+**directly to the PTY device** (stdout is captured by tool runners and will
+not reach the terminal emulator).
 
-  printf '\033]0;HORIZON_NOTIFY:%s:%s\007' "<severity>" "<message>"
+Use this command (works on Linux and macOS):
+
+  printf '\033]0;HORIZON_NOTIFY:%s:%s\007' "<severity>" "<message>" > "/dev/$(ps -o tty= -p $PPID | tr -d ' ')"
 
 Severities: info, done, attention
 Keep messages under 80 chars.

@@ -620,9 +620,16 @@ impl Panel {
     }
 
     /// Check if this panel's terminal output suggests it needs user attention.
+    ///
+    /// Suppressed for the first 10 seconds after launch to avoid false positives
+    /// from initial prompt rendering on startup/restore.
     #[must_use]
     pub fn detect_attention(&self) -> Option<&'static str> {
         if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude) {
+            return None;
+        }
+        let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
+        if age_ms < 10_000 {
             return None;
         }
         let terminal = self.content.terminal()?;
@@ -711,7 +718,7 @@ fn resolve_launch_command(
     }
 }
 
-fn current_unix_millis() -> i64 {
+pub fn current_unix_millis() -> i64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

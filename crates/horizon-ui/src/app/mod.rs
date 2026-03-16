@@ -444,7 +444,19 @@ impl HorizonApp {
             } else {
                 0.0
             };
-            attention_feed::render_attention_feed(ctx, &self.board, minimap_height);
+            if let Some(panel_id) = attention_feed::render_attention_feed(ctx, &self.board, minimap_height) {
+                self.board.focus(panel_id);
+                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
+                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+                {
+                    let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                    let size = Vec2::new(
+                        max[0] - min[0] + 2.0 * WS_BG_PAD,
+                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                    );
+                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+                }
+            }
             self.render_canvas_hud(ctx);
         }
     }

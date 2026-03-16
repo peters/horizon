@@ -1,15 +1,17 @@
-use egui::{Color32, Id, Order, RichText, ScrollArea, Vec2};
-use horizon_core::{AttentionItem, AttentionSeverity, Board};
+use egui::{Color32, CornerRadius, Id, Order, RichText, ScrollArea, Sense, Vec2};
+use horizon_core::{AttentionItem, AttentionSeverity, Board, PanelId};
 use std::time::SystemTime;
 
 use crate::theme;
 
 const FEED_WIDTH: f32 = 320.0;
-const FEED_MAX_HEIGHT: f32 = 240.0;
+const FEED_MAX_HEIGHT: f32 = 360.0;
 const FEED_MARGIN: f32 = 16.0;
 const FEED_ITEM_SPACING: f32 = 4.0;
 
-pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height: f32) {
+/// Renders the attention feed overlay. Returns a panel ID if the user clicked
+/// an item to navigate to it.
+pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height: f32) -> Option<PanelId> {
     let now = SystemTime::now();
     let mut items: Vec<&AttentionItem> = board
         .attention
@@ -28,18 +30,19 @@ pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height:
         .collect();
 
     if items.is_empty() {
-        return;
+        return None;
     }
 
     items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     items.truncate(10);
 
     let offset_y = FEED_MARGIN + minimap_height + if minimap_height > 0.0 { 8.0 } else { 0.0 };
+    let mut clicked_panel: Option<PanelId> = None;
 
     egui::Area::new(Id::new("attention_feed"))
         .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-FEED_MARGIN, -offset_y))
         .order(Order::Foreground)
-        .interactable(false)
+        .interactable(true)
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
                 .fill(theme::BG_ELEVATED)
@@ -56,9 +59,11 @@ pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height:
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
-                render_feed_list(ui, &items);
+                clicked_panel = render_feed_list(ui, &items);
             });
         });
+
+    clicked_panel
 }
 
 fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
@@ -77,19 +82,23 @@ fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
     });
 }
 
-fn render_feed_list(ui: &mut egui::Ui, items: &[&AttentionItem]) {
+fn render_feed_list(ui: &mut egui::Ui, items: &[&AttentionItem]) -> Option<PanelId> {
+    let mut clicked = None;
     ScrollArea::vertical()
         .max_height(FEED_MAX_HEIGHT - 40.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             for item in items {
-                render_feed_item(ui, item);
+                if let Some(panel_id) = render_feed_item(ui, item) {
+                    clicked = Some(panel_id);
+                }
                 ui.add_space(FEED_ITEM_SPACING);
             }
         });
+    clicked
 }
 
-fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) {
+fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) -> Option<PanelId> {
     let is_resolved = !item.is_open();
     let color = severity_color(item.severity);
     let bg_color = Color32::from_rgba_premultiplied(
@@ -104,23 +113,57 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) {
         .corner_radius(6.0)
         .inner_margin(egui::Margin::symmetric(8, 5));
 
-    frame.show(ui, |ui| {
-        ui.set_width(FEED_WIDTH - 16.0);
-        render_feed_item_header(ui, item, is_resolved, color);
-        let msg_color = if is_resolved {
-            theme::alpha(theme::FG_SOFT, 100)
-        } else {
-            theme::FG_SOFT
-        };
-        ui.label(RichText::new(&item.summary).size(11.0).color(msg_color));
-    });
+    let resp = frame
+        .show(ui, |ui| {
+            ui.set_width(FEED_WIDTH - 16.0);
+            render_feed_item_header(ui, item, is_resolved, color);
+            let msg_color = if is_resolved {
+                theme::alpha(theme::FG_SOFT, 100)
+            } else {
+                theme::FG_SOFT
+            };
+            ui.label(RichText::new(&item.summary).size(11.0).color(msg_color));
+
+            if item.is_open() && item.panel_id.is_some() {
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Button::new(
+                                RichText::new("Go to panel \u{2192}")
+                                    .size(9.5)
+                                    .color(theme::ACCENT),
+                            )
+                            .fill(theme::alpha(theme::ACCENT, 20))
+                            .corner_radius(CornerRadius::same(4))
+                            .stroke(egui::Stroke::NONE),
+                        );
+                    });
+                });
+            }
+        })
+        .response;
+
+    // Make the whole item clickable to navigate
+    if item.panel_id.is_some() {
+        let interact = ui.interact(resp.rect, Id::new(("attn_item", item.id.0)), Sense::click());
+        if interact.clicked() {
+            return item.panel_id;
+        }
+        if interact.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    }
+
+    None
 }
 
 fn render_feed_item_header(ui: &mut egui::Ui, item: &AttentionItem, is_resolved: bool, color: Color32) {
     ui.horizontal(|ui| {
-        let dot_rect = ui.allocate_space(Vec2::new(6.0, 6.0));
+        // Solid filled indicator
+        let indicator_rect = ui.allocate_space(Vec2::new(8.0, 8.0));
         let dot_color = if is_resolved { theme::alpha(color, 100) } else { color };
-        ui.painter().circle_filled(dot_rect.1.center(), 3.0, dot_color);
+        ui.painter()
+            .rect_filled(indicator_rect.1, CornerRadius::same(2), dot_color);
 
         let label = severity_label(item.severity);
         ui.label(
