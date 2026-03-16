@@ -198,6 +198,7 @@ impl HorizonApp {
 
         let workspace_response = ui.horizontal(|ui| {
             ui.set_min_height(32.0);
+            ui.set_min_width(ui.available_width());
             ui.add_space(14.0);
 
             let bar_color = if workspace.attention_count > 0 {
@@ -315,6 +316,7 @@ impl HorizonApp {
 
         let item_response = ui.vertical(|ui| {
             ui.set_min_height(if attention.is_some() { 46.0 } else { 30.0 });
+            ui.set_min_width(ui.available_width());
 
             ui.horizontal(|ui| {
                 ui.set_min_height(30.0);
