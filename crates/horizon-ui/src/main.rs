@@ -4,6 +4,7 @@ mod app;
 mod branding;
 mod dir_picker;
 mod input;
+mod quick_nav;
 mod terminal_widget;
 mod theme;
 
