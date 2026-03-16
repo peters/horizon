@@ -17,6 +17,7 @@ struct WorkspaceVisual {
     is_active: bool,
     is_empty: bool,
     panel_count: usize,
+    layout: Option<WorkspaceLayout>,
 }
 
 struct WorkspaceInteraction {
@@ -152,6 +153,7 @@ impl HorizonApp {
                     is_active,
                     is_empty,
                     panel_count: workspace.panels.len(),
+                    layout: workspace.layout,
                 }
             })
             .collect()
@@ -241,7 +243,7 @@ fn render_workspace_visual(
         })
         .inner;
 
-    if !is_renaming && workspace.is_active && workspace.panel_count > 1 {
+    if !is_renaming && workspace.is_active && workspace.panel_count > 0 {
         interaction.arrange_layout = render_workspace_layout_toolbar(ctx, workspace);
     }
 
@@ -362,24 +364,30 @@ fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for layout in WorkspaceLayout::ALL {
+                            let is_selected = workspace.layout == Some(layout);
                             let response = ui
                                 .add(
                                     Button::new(
                                         egui::RichText::new(workspace_layout_label(layout))
                                             .size(10.5)
-                                            .color(theme::FG_SOFT),
+                                            .color(if is_selected { theme::FG } else { theme::FG_SOFT }),
                                     )
                                     .min_size(Vec2::new(
                                         workspace_layout_button_width(layout),
                                         WORKSPACE_LAYOUT_BUTTON_HEIGHT,
                                     ))
-                                    .fill(theme::alpha(
-                                        theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05),
-                                        220,
-                                    ))
+                                    .fill(if is_selected {
+                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.22), 236)
+                                    } else {
+                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05), 220)
+                                    })
                                     .stroke(Stroke::new(
                                         1.0,
-                                        theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216),
+                                        if is_selected {
+                                            theme::alpha(workspace.color, 224)
+                                        } else {
+                                            theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216)
+                                        },
                                     ))
                                     .corner_radius(8),
                                 )

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::board::WorkspaceLayout;
 use crate::panel::PanelId;
 use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
 
@@ -20,6 +21,7 @@ pub struct Workspace {
     /// Default working directory for new terminals in this workspace.
     pub cwd: Option<PathBuf>,
     pub template: Option<WorkspaceTemplateRef>,
+    pub layout: Option<WorkspaceLayout>,
 }
 
 /// Predefined accent colors for workspace clusters.
@@ -47,6 +49,7 @@ impl Workspace {
             position: [0.0, 0.0],
             cwd: None,
             template: None,
+            layout: None,
         }
     }
 
