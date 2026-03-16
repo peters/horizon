@@ -14,6 +14,9 @@ pub enum Error {
     #[error("Editor error: {0}")]
     Editor(String),
 
+    #[error("Git error: {0}")]
+    Git(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

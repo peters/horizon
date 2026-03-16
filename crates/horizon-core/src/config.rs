@@ -121,6 +121,14 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
         },
         PresetConfig {
+            name: "Git Changes".to_string(),
+            alias: Some("gc".to_string()),
+            kind: PanelKind::GitChanges,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+        },
+        PresetConfig {
             name: "Markdown".to_string(),
             alias: Some("md".to_string()),
             kind: PanelKind::Editor,

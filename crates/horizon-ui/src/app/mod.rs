@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PresetConfig, RuntimeState, WindowConfig,
-    WorkspaceId, transcript_root_path_for_config,
+    AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PanelKind, PresetConfig, RuntimeState,
+    WindowConfig, WorkspaceId, transcript_root_path_for_config,
 };
 
 use crate::dir_picker::DirPicker;
@@ -109,6 +109,7 @@ pub struct HorizonApp {
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_pos: Option<Pos2>,
+    git_watchers: HashMap<WorkspaceId, GitWatcher>,
 }
 
 impl HorizonApp {
@@ -201,6 +202,7 @@ impl HorizonApp {
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
             pan_target: None,
             is_panning: false,
+            git_watchers: HashMap::new(),
         }
     }
 }
@@ -278,8 +280,57 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
+        self.poll_git_watchers();
 
         had_terminal_output
+    }
+
+    fn poll_git_watchers(&mut self) {
+        // Collect which workspaces need watchers (have GitChanges panels).
+        let mut workspaces_needing_watchers: HashMap<WorkspaceId, Option<std::path::PathBuf>> = HashMap::new();
+        for panel in &self.board.panels {
+            if panel.kind == PanelKind::GitChanges {
+                let cwd = panel
+                    .launch_cwd
+                    .clone()
+                    .or_else(|| self.board.workspace(panel.workspace_id).and_then(|ws| ws.cwd.clone()));
+                workspaces_needing_watchers
+                    .entry(panel.workspace_id)
+                    .or_insert(cwd);
+            }
+        }
+
+        // Start watchers for workspaces that need them.
+        for (workspace_id, cwd) in &workspaces_needing_watchers {
+            if !self.git_watchers.contains_key(workspace_id)
+                && let Some(path) = cwd
+            {
+                tracing::info!(workspace = workspace_id.0, path = %path.display(), "starting git watcher");
+                self.git_watchers
+                    .insert(*workspace_id, GitWatcher::start(path.clone()));
+            }
+        }
+
+        // Poll existing watchers and push updates to panels.
+        let updates: Vec<(WorkspaceId, std::sync::Arc<horizon_core::GitStatus>)> = self
+            .git_watchers
+            .iter()
+            .filter_map(|(ws_id, watcher)| watcher.try_recv().map(|status| (*ws_id, status)))
+            .collect();
+
+        for (workspace_id, status) in updates {
+            for panel in &mut self.board.panels {
+                if panel.workspace_id == workspace_id && panel.kind == PanelKind::GitChanges
+                    && let Some(viewer) = panel.content.git_changes_mut()
+                {
+                    viewer.update(std::sync::Arc::clone(&status));
+                }
+            }
+        }
+
+        // Remove watchers for workspaces that no longer have GitChanges panels.
+        self.git_watchers
+            .retain(|ws_id, _| workspaces_needing_watchers.contains_key(ws_id));
     }
 
     fn apply_panel_transitions(&mut self) {

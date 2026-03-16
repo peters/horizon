@@ -6,6 +6,9 @@ mod config;
 pub mod dir_search;
 mod editor;
 mod error;
+pub mod git_changes;
+pub mod git_status;
+pub mod git_watcher;
 mod layout;
 mod panel;
 mod runtime_state;
@@ -19,6 +22,9 @@ pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionStat
 pub use board::{Board, WorkspaceLayout};
 pub use config::{Config, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
+pub use git_changes::GitChangesViewer;
+pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
+pub use git_watcher::GitWatcher;
 pub use error::{Error, Result};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{

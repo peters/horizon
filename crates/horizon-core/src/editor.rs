@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::git_changes::GitChangesViewer;
 use crate::terminal::Terminal;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -78,6 +79,7 @@ impl MarkdownEditor {
 pub enum PanelContent {
     Terminal(Terminal),
     Editor(MarkdownEditor),
+    GitChanges(GitChangesViewer),
 }
 
 impl PanelContent {
@@ -85,29 +87,44 @@ impl PanelContent {
     pub fn terminal(&self) -> Option<&Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) => None,
         }
     }
 
     pub fn terminal_mut(&mut self) -> Option<&mut Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) => None,
         }
     }
 
     #[must_use]
     pub fn editor(&self) -> Option<&MarkdownEditor> {
         match self {
-            Self::Terminal(_) => None,
             Self::Editor(e) => Some(e),
+            Self::Terminal(_) | Self::GitChanges(_) => None,
         }
     }
 
     pub fn editor_mut(&mut self) -> Option<&mut MarkdownEditor> {
         match self {
-            Self::Terminal(_) => None,
             Self::Editor(e) => Some(e),
+            Self::Terminal(_) | Self::GitChanges(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn git_changes(&self) -> Option<&GitChangesViewer> {
+        match self {
+            Self::GitChanges(v) => Some(v),
+            Self::Terminal(_) | Self::Editor(_) => None,
+        }
+    }
+
+    pub fn git_changes_mut(&mut self) -> Option<&mut GitChangesViewer> {
+        match self {
+            Self::GitChanges(v) => Some(v),
+            Self::Terminal(_) | Self::Editor(_) => None,
         }
     }
 }

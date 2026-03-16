@@ -5,6 +5,7 @@ use egui::{
 use horizon_core::{AgentSessionBinding, Panel, PanelId, PanelKind, WorkspaceId};
 
 use crate::editor_widget::MarkdownEditorView;
+use crate::git_changes_widget::GitChangesView;
 use crate::terminal_widget::TerminalView;
 use crate::theme;
 
@@ -84,10 +85,10 @@ impl PanelFrame {
 }
 
 fn show_panel_body_contents(ui: &mut egui::Ui, panel: &mut Panel, is_focused: bool) -> bool {
-    if panel.kind == PanelKind::Editor {
-        MarkdownEditorView::new(panel).show(ui, is_focused)
-    } else {
-        TerminalView::new(panel).show(ui, is_focused)
+    match panel.kind {
+        PanelKind::Editor => MarkdownEditorView::new(panel).show(ui, is_focused),
+        PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
+        _ => TerminalView::new(panel).show(ui, is_focused),
     }
 }
 
@@ -455,6 +456,10 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::Editor => (
             "MD",
             theme::alpha(Color32::from_rgb(166, 227, 161), if focused { 220 } else { 120 }),
+        ),
+        PanelKind::GitChanges => (
+            "GC",
+            theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
         ),
     }
 }
