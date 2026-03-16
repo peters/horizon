@@ -788,9 +788,12 @@ fn resolve_session_binding(
             session_binding.is_some()
                 && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
         }
-        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => {
-            session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
-        }
+        PanelKind::Codex
+        | PanelKind::Shell
+        | PanelKind::Command
+        | PanelKind::Editor
+        | PanelKind::GitChanges
+        | PanelKind::Usage => session_binding.is_some() || matches!(resume, PanelResume::Session { .. }),
     };
 
     (session_binding, should_resume_binding)
@@ -814,8 +817,16 @@ fn shell_escape(s: &str) -> String {
     }
 }
 
+const fn platform_default_shell() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "/bin/zsh"
+    } else {
+        "/bin/bash"
+    }
+}
+
 fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
 fn agent_env(kind: PanelKind) -> HashMap<String, String> {
@@ -853,8 +864,8 @@ mod tests {
     use crate::runtime_state::AgentSessionBinding;
 
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, resolve_launch_command,
-        scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, platform_default_shell,
+        resolve_launch_command, scrollback_limit_for_kind,
     };
 
     #[test]
@@ -984,5 +995,16 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+    }
+
+    #[test]
+    fn platform_default_shell_matches_target() {
+        let expected = if cfg!(target_os = "macos") {
+            "/bin/zsh"
+        } else {
+            "/bin/bash"
+        };
+
+        assert_eq!(platform_default_shell(), expected);
     }
 }
