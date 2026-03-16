@@ -1200,11 +1200,18 @@ impl HorizonApp {
                         kind: panel.kind,
                         command: panel.launch_command.clone(),
                         args: panel.launch_args.clone(),
-                        cwd: panel
-                            .terminal
-                            .current_cwd()
-                            .or_else(|| panel.launch_cwd.clone())
-                            .map(|path| path.display().to_string()),
+                        cwd: if panel.kind.is_agent() {
+                            // Agent panels must keep the launch CWD so
+                            // that `--resume` looks in the correct Claude
+                            // project directory on restart.
+                            panel.launch_cwd.clone()
+                        } else {
+                            panel
+                                .terminal
+                                .current_cwd()
+                                .or_else(|| panel.launch_cwd.clone())
+                        }
+                        .map(|path| path.display().to_string()),
                         rows: panel.terminal.rows(),
                         cols: panel.terminal.cols(),
                         resume: panel.resume.clone(),

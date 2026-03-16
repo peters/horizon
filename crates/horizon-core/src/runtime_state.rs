@@ -457,14 +457,29 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
 }
 
 fn collect_claude_project_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::debug!("skipping unreadable Claude project dir {}: {error}", dir.display());
+            return Ok(());
+        }
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
         let path = entry.path();
-        let file_type = entry.file_type()?;
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_dir() {
+            // Skip subagent session directories — they share the parent
+            // session ID and would only dilute the file limit.
+            if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("subagents") {
+                continue;
+            }
             collect_claude_project_files(&path, files)?;
-        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl") {
-            let updated_at = file_updated_at_millis(&path)?;
+        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
+            && let Ok(updated_at) = file_updated_at_millis(&path)
+        {
             files.push((path, updated_at));
         }
     }
