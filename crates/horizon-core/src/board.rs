@@ -236,16 +236,14 @@ impl Board {
             }
         }
 
+        // Send the shutdown request early so the event loop starts tearing
+        // down the PTY while the `Terminal::Drop` impl detaches the thread.
+        // This avoids blocking the UI thread — the child process is cleaned
+        // up asynchronously in the background.
         if let Some(mut panel) = removed_panel
             && panel.kind.is_agent()
-            && !panel.shutdown_with_timeout(AGENT_PANEL_SHUTDOWN_TIMEOUT)
         {
-            tracing::warn!(
-                panel_id = panel.id.0,
-                kind = ?panel.kind,
-                timeout_ms = AGENT_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
-                "timed out waiting for agent panel shutdown"
-            );
+            panel.request_shutdown();
         }
     }
 
