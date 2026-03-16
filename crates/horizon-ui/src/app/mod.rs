@@ -611,9 +611,11 @@ impl HorizonApp {
                 if idle_for < Duration::from_secs(1) {
                     Duration::from_millis(100)
                 } else if idle_for < Duration::from_secs(5) {
-                    Duration::from_millis(160)
-                } else {
                     Duration::from_millis(250)
+                } else if idle_for < Duration::from_secs(30) {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_secs(1)
                 }
             };
             ctx.request_repaint_after(poll);
