@@ -95,6 +95,7 @@ pub struct Terminal {
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,
     child_exited: bool,
+    bell_pending: bool,
 }
 
 impl Terminal {
@@ -171,6 +172,7 @@ impl Terminal {
             pending_pty_resize: None,
             pty_resized: false,
             child_exited: false,
+            bell_pending: false,
         };
         terminal.process_events();
         Ok(terminal)
@@ -389,6 +391,11 @@ impl Terminal {
         self.child_exited
     }
 
+    /// Returns `true` if a bell has fired since the last call, then clears.
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell_pending)
+    }
+
     #[must_use]
     pub fn title(&self) -> &str {
         &self.title
@@ -499,7 +506,10 @@ impl Terminal {
             Event::Exit | Event::ChildExit(_) => {
                 self.child_exited = true;
             }
-            Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup | Event::Bell => {}
+            Event::Bell => {
+                self.bell_pending = true;
+            }
+            Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup => {}
         }
     }
 

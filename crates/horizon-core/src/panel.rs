@@ -231,6 +231,11 @@ impl Panel {
         self.terminal.child_exited()
     }
 
+    /// Returns `true` if the terminal bell has fired since the last call.
+    pub fn take_bell(&mut self) -> bool {
+        self.terminal.take_bell()
+    }
+
     #[must_use]
     pub fn rename(&mut self, name: &str) -> bool {
         let trimmed = name.trim();

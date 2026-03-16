@@ -333,16 +333,29 @@ impl Board {
 
         let panel_states: Vec<_> = self
             .panels
-            .iter()
-            .map(|panel| (panel.id, panel.workspace_id, panel.detect_attention()))
+            .iter_mut()
+            .map(|panel| {
+                let bell = panel.take_bell();
+                (panel.id, panel.workspace_id, panel.kind, panel.detect_attention(), bell)
+            })
             .collect();
 
-        for (panel_id, workspace_id, attention) in panel_states {
+        for (panel_id, workspace_id, kind, attention, bell) in panel_states {
             let has_open = self.unresolved_attention_for_panel(panel_id).is_some();
 
             if let Some(summary) = attention {
                 if !has_open {
                     self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
+                }
+            } else if bell && kind.is_agent() {
+                if !has_open {
+                    self.create_attention(
+                        workspace_id,
+                        Some(panel_id),
+                        "agent",
+                        "Needs attention",
+                        AttentionSeverity::High,
+                    );
                 }
             } else if has_open {
                 let ids_to_resolve: Vec<_> = self
