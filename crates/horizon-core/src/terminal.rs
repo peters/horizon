@@ -223,14 +223,14 @@ impl Terminal {
 
     #[must_use]
     pub fn wait_for_shutdown(&mut self, timeout: Duration) -> bool {
-        let Some(event_loop_handle) = self.event_loop_handle.take() else {
-            return true;
-        };
-
         enum JoinStatus {
             Complete,
             Panicked,
         }
+
+        let Some(event_loop_handle) = self.event_loop_handle.take() else {
+            return true;
+        };
 
         let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
@@ -714,8 +714,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
-        replay_terminal_bytes,
+        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, current_cwd_for_pid,
+        default_terminal_rgb, replay_terminal_bytes,
     };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
