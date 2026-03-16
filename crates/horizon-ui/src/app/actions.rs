@@ -8,7 +8,7 @@ use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
-use super::util::{editor_panel_size_for_file, viewport_local_rect};
+use super::util::{editor_panel_size_for_file, primary_shortcut_modifier, viewport_local_rect};
 use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
@@ -274,7 +274,7 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| input.key_pressed(egui::Key::K) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::K) && primary_shortcut_modifier(input.modifiers)) {
             self.quick_nav = if self.quick_nav.is_some() {
                 None
             } else {
@@ -286,19 +286,19 @@ impl HorizonApp {
             return;
         }
 
-        if ctx.input(|input| input.key_pressed(egui::Key::Comma) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::Comma) && primary_shortcut_modifier(input.modifiers)) {
             self.toggle_settings();
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::B) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::B) && primary_shortcut_modifier(input.modifiers)) {
             self.sidebar_visible = !self.sidebar_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::H) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::H) && primary_shortcut_modifier(input.modifiers)) {
             self.hud_visible = !self.hud_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::M) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::M) && primary_shortcut_modifier(input.modifiers)) {
             self.minimap_visible = !self.minimap_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::N) && primary_shortcut_modifier(input.modifiers)) {
             let workspace_id = self.board.ensure_workspace();
             if let Some(preset) = self.presets.first().cloned() {
                 self.add_panel_to_workspace(workspace_id, preset, None);
@@ -306,7 +306,7 @@ impl HorizonApp {
                 self.create_panel();
             }
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && input.modifiers.ctrl) {
+        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && primary_shortcut_modifier(input.modifiers)) {
             self.reset_view();
         }
     }

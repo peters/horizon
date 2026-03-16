@@ -1,4 +1,4 @@
-use egui::{Button, Context, Pos2, Rect, Stroke, Vec2};
+use egui::{Button, Context, Modifiers, Pos2, Rect, Stroke, Vec2};
 
 use crate::theme;
 
@@ -15,6 +15,14 @@ pub(super) fn viewport_local_rect(ctx: &Context) -> Rect {
 
 pub(super) fn empty_string_as_none(value: &str) -> Option<&str> {
     if value.is_empty() { None } else { Some(value) }
+}
+
+pub(super) fn primary_shortcut_modifier(modifiers: Modifiers) -> bool {
+    modifiers.ctrl || modifiers.command
+}
+
+pub(super) fn primary_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
 }
 
 pub(super) fn short_session_id(session_id: &str) -> &str {
@@ -58,6 +66,7 @@ pub(super) fn paint_empty_state(ui: &mut egui::Ui) {
     let rect = ui.max_rect();
     let card_rect = Rect::from_center_size(rect.center(), Vec2::new(380.0, 120.0));
     let painter = ui.painter();
+    let shortcut = primary_shortcut_label();
 
     painter.rect_filled(
         card_rect,
@@ -80,14 +89,14 @@ pub(super) fn paint_empty_state(ui: &mut egui::Ui) {
     painter.text(
         Pos2::new(card_rect.center().x, card_rect.min.y + 60.0),
         egui::Align2::CENTER_CENTER,
-        "Ctrl+double-click to create a workspace.",
+        format!("{shortcut}+double-click to create a workspace."),
         egui::FontId::proportional(11.5),
         theme::FG_SOFT,
     );
     painter.text(
         Pos2::new(card_rect.center().x, card_rect.min.y + 80.0),
         egui::Align2::CENTER_CENTER,
-        "Ctrl+double-click inside a workspace to add a terminal.",
+        format!("{shortcut}+double-click inside a workspace to add a terminal."),
         egui::FontId::proportional(11.5),
         theme::FG_SOFT,
     );
@@ -236,8 +245,11 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_panel_size, default_panel_canvas_pos, format_grid_position};
-    use egui::{Pos2, Vec2};
+    use super::{
+        clamp_panel_size, default_panel_canvas_pos, format_grid_position, primary_shortcut_label,
+        primary_shortcut_modifier,
+    };
+    use egui::{Modifiers, Pos2, Vec2};
 
     #[test]
     fn default_panel_positions_tile_in_rows() {
@@ -258,5 +270,32 @@ mod tests {
     fn grid_positions_are_rounded_for_display() {
         assert_eq!(format_grid_position(Pos2::new(12.4, -7.6)), "12, -8");
         assert_eq!(format_grid_position(Pos2::new(-3.5, 2.5)), "-4, 3");
+    }
+
+    #[test]
+    fn primary_shortcut_modifier_accepts_ctrl() {
+        let modifiers = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+
+        assert!(primary_shortcut_modifier(modifiers));
+    }
+
+    #[test]
+    fn primary_shortcut_modifier_accepts_command() {
+        let modifiers = Modifiers {
+            command: true,
+            ..Modifiers::default()
+        };
+
+        assert!(primary_shortcut_modifier(modifiers));
+    }
+
+    #[test]
+    fn primary_shortcut_label_matches_platform_convention() {
+        let expected = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+
+        assert_eq!(primary_shortcut_label(), expected);
     }
 }
