@@ -139,7 +139,7 @@ impl HorizonApp {
         self.board
             .workspaces
             .iter()
-            .map(|workspace| {
+            .filter_map(|workspace| {
                 let (r, g, b) = workspace.accent();
                 let color = Color32::from_rgb(r, g, b);
                 let is_active = self.board.active_workspace == Some(workspace.id);
@@ -169,7 +169,13 @@ impl HorizonApp {
                     )
                 };
 
-                WorkspaceVisual {
+                // Cull off-screen workspaces to avoid painting backgrounds and
+                // labels for workspaces the user cannot see.
+                if !canvas_rect.intersects(screen_rect) {
+                    return None;
+                }
+
+                Some(WorkspaceVisual {
                     id: workspace.id,
                     name: workspace.name.clone(),
                     color,
@@ -182,7 +188,7 @@ impl HorizonApp {
                     is_empty,
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
-                }
+                })
             })
             .collect()
     }
