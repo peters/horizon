@@ -733,9 +733,6 @@ impl HorizonApp {
                                 .size(10.5),
                         );
                         ui.add_space(10.0);
-                        if ui.add(chrome_button("Reset View")).clicked() {
-                            self.reset_view();
-                        }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
