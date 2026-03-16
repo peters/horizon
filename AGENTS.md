@@ -27,9 +27,9 @@ crates/
 ### horizon-ui
 
 - `main.rs` — Entry point, tracing init, eframe launch
-- `app.rs` — `eframe::App` impl, toolbar, floating window management
-- `terminal_widget.rs` — Custom egui widget rendering the terminal grid
-- `input.rs` — Keyboard event to terminal byte sequence translation
+- `app/` — `eframe::App` orchestration split by canvas, panels, sidebar, settings, session, persistence
+- `terminal_widget/` — Terminal widget split by layout, input, render, scrollbar logic
+- `input/` — Keyboard translation, mouse reporting, escape-sequence building
 - `theme.rs` — Color palette (Catppuccin Mocha), styling constants
 
 ## Development Workflow
@@ -38,6 +38,7 @@ crates/
 
 ```bash
 cargo fmt --all -- --check
+./scripts/check-maintainability.sh
 RUSTFLAGS="-D warnings" cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
 cargo clippy --workspace --lib --bins -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
@@ -50,8 +51,20 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Typed error enums (thiserror) — no `Box<dyn Error>` or `.unwrap()` in library code
 - `#![forbid(unsafe_code)]` on all crates
 - Consolidate repeated helpers into shared modules in horizon-core
+- Keep new or edited modules single-purpose; avoid mixing rendering, persistence, session bootstrap, and filesystem logic in one file
+- If UI code needs shared layout math, state conversion, or template-sync logic, move it into `horizon-core` instead of duplicating it in `horizon-ui`
+- Treat roughly 600 lines as the point to split a Rust source file; the CI guardrail fails non-test files above 1000 lines under `crates/horizon-core/src` and `crates/horizon-ui/src`
+- Do not use `#[allow(clippy::too_many_lines)]` in core or UI source files; decompose the code instead
+- Keep inline `#[cfg(test)]` modules at the end of the file so maintainability checks can measure production code cleanly
 - Minimize allocations in the render hot path (per-frame code)
 - Every `unsafe` block (if ever needed) must have a `// SAFETY:` rationale
+
+### Maintainability Rules
+
+- Prefer small module trees over large flat files: `mod.rs` should orchestrate, leaf modules should do one job
+- UI modules render or collect UI actions; domain state mutation belongs in `horizon-core` unless it is purely presentational state
+- When editing a file that is already large, split it as part of the change instead of adding another responsibility
+- Keep architecture notes current in [`docs/architecture/maintainability.md`](docs/architecture/maintainability.md) when module boundaries or guardrails change
 
 ### CI Tiers (`.github/workflows/ci.yml`)
 
