@@ -644,12 +644,23 @@ impl Board {
     }
 
     pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
+        let ws_id = self.panel_workspace_id(id);
+        let old_size = self.panel(id).map(|p| p.layout.size);
         if let Some(panel) = self.panel_mut(id) {
             panel.resize_layout(size);
-            return true;
+        } else {
+            return false;
         }
-
-        false
+        if let Some(ws_id) = ws_id {
+            let delta = match old_size {
+                Some(old) => [size[0] - old[0], size[1] - old[1]],
+                None => size,
+            };
+            if delta[0] != 0.0 || delta[1] != 0.0 {
+                self.resolve_workspace_collisions(ws_id, delta);
+            }
+        }
+        true
     }
 
     /// Arrange all panels in a workspace according to a predefined layout.
