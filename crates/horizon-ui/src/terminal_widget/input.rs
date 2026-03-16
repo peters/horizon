@@ -25,6 +25,17 @@ pub(super) fn handle_terminal_pointer_input(
         interaction.body.request_focus();
     }
 
+    let should_handle_pointer = interaction.body.hovered()
+        || interaction.body.dragged()
+        || interaction.body.clicked()
+        || interaction.body.drag_started()
+        || interaction.scrollbar.hovered()
+        || interaction.scrollbar.dragged()
+        || interaction.scrollbar.clicked();
+    if !should_handle_pointer {
+        return;
+    }
+
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;
     };

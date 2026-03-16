@@ -1,6 +1,7 @@
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
 use alacritty_terminal::vte::ansi::CursorShape;
+use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor};
 use egui::{Color32, CornerRadius, Pos2, Rect, StrokeKind, Vec2};
 
 use crate::theme;
@@ -19,8 +20,6 @@ struct TextRun {
 #[profiling::function]
 pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
-
-    painter.rect_filled(rect, CornerRadius::same(8), theme::PANEL_BG);
 
     let mut text_run: Option<TextRun> = None;
 
@@ -150,6 +149,18 @@ fn cell_colors(
     selected: bool,
     colors: &alacritty_terminal::term::color::Colors,
 ) -> (egui::Color32, egui::Color32) {
+    let style_flags = Flags::INVERSE | Flags::DIM | Flags::HIDDEN;
+    if !selected
+        && !cell.flags.intersects(style_flags)
+        && matches!(
+            cell.fg,
+            TerminalColor::Named(NamedColor::Foreground | NamedColor::BrightForeground)
+        )
+        && matches!(cell.bg, TerminalColor::Named(NamedColor::Background))
+    {
+        return (theme::FG, theme::PANEL_BG);
+    }
+
     let mut fg = theme::terminal_color_to_egui(cell.fg, colors);
     let mut bg = theme::terminal_color_to_egui(cell.bg, colors);
 
