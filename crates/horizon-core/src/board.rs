@@ -11,6 +11,8 @@ use crate::workspace::{Workspace, WorkspaceId};
 const TILE_GAP: f32 = 20.0;
 const WS_INNER_PAD: f32 = 20.0;
 const WORKSPACE_GAP: f32 = 80.0;
+const PANEL_CHROME_PAD: f32 = 8.0;
+const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Predefined layout arrangements for panels inside a workspace.
@@ -473,10 +475,12 @@ impl Board {
         let mut min = [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD];
         let mut max = [f32::MIN, f32::MIN];
         for panel in panels {
+            let chrome_w = panel.layout.size[0] + 2.0 * PANEL_CHROME_PAD;
+            let chrome_h = panel.layout.size[1] + PANEL_CHROME_TITLEBAR + 2.0 * PANEL_CHROME_PAD;
             min[0] = min[0].min(panel.layout.position[0]);
             min[1] = min[1].min(panel.layout.position[1]);
-            max[0] = max[0].max(panel.layout.position[0] + panel.layout.size[0]);
-            max[1] = max[1].max(panel.layout.position[1] + panel.layout.size[1]);
+            max[0] = max[0].max(panel.layout.position[0] + chrome_w);
+            max[1] = max[1].max(panel.layout.position[1] + chrome_h);
         }
 
         Some((min, max))
