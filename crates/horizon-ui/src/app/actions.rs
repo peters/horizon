@@ -471,7 +471,8 @@ impl HorizonApp {
             }
         });
 
-        if pan_delta != Vec2::ZERO {
+        self.is_panning = pan_delta != Vec2::ZERO;
+        if self.is_panning {
             self.pan_target = None;
             self.pan_offset += pan_delta;
             self.mark_runtime_dirty();

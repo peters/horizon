@@ -80,6 +80,7 @@ pub struct HorizonApp {
     theme_applied: bool,
     pan_offset: Vec2,
     pan_target: Option<Vec2>,
+    is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
@@ -199,6 +200,7 @@ impl HorizonApp {
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
             pan_target: None,
+            is_panning: false,
         }
     }
 }

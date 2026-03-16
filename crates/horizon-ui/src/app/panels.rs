@@ -417,12 +417,12 @@ impl HorizonApp {
             RenameEditAction::None => {}
         }
 
-        if outcome.drag_delta != Vec2::ZERO {
+        if !self.is_panning && outcome.drag_delta != Vec2::ZERO {
             let new_position = snapshot.canvas_position + outcome.drag_delta;
             let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
             self.mark_runtime_dirty();
         }
-        if outcome.resize_delta != Vec2::ZERO {
+        if !self.is_panning && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
             let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
             self.mark_runtime_dirty();
