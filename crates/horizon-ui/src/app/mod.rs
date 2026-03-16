@@ -100,6 +100,7 @@ pub struct HorizonApp {
     startup_receiver: Option<Receiver<StartupBootstrap>>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     last_session_catalog_refresh: Option<Instant>,
+    last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
@@ -191,6 +192,7 @@ impl HorizonApp {
             startup_receiver,
             session_catalog_refresh: None,
             last_session_catalog_refresh: None,
+            last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),
             settings: None,
             pending_preset_pick: None,
@@ -595,14 +597,24 @@ impl HorizonApp {
         if animating {
             ctx.request_repaint();
         } else if has_live_terminals {
-            // Poll for new PTY output. When a terminal just produced output
-            // we check again soon (16ms) to keep up with streaming content.
-            // When idle we back off to 100ms to save CPU — egui still
-            // repaints instantly on any user interaction (mouse, keyboard).
+            // Keep streaming terminals responsive, but progressively back off
+            // once the board has been quiet for a while to reduce idle CPU.
+            let now = Instant::now();
             let poll = if had_terminal_output {
+                self.last_terminal_output_at = Some(now);
                 Duration::from_millis(16)
             } else {
-                Duration::from_millis(100)
+                let idle_for = self
+                    .last_terminal_output_at
+                    .map_or(Duration::MAX, |last_output| now.saturating_duration_since(last_output));
+
+                if idle_for < Duration::from_secs(1) {
+                    Duration::from_millis(100)
+                } else if idle_for < Duration::from_secs(5) {
+                    Duration::from_millis(160)
+                } else {
+                    Duration::from_millis(250)
+                }
             };
             ctx.request_repaint_after(poll);
         }
