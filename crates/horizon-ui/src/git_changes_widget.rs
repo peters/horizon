@@ -48,11 +48,7 @@ impl<'a> GitChangesView<'a> {
 fn render_scanning(ui: &mut egui::Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
-        ui.label(
-            RichText::new("Scanning repository...")
-                .size(12.0)
-                .color(theme::FG_DIM),
-        );
+        ui.label(RichText::new("Scanning repository...").size(12.0).color(theme::FG_DIM));
     });
 }
 
@@ -60,11 +56,7 @@ fn render_clean(ui: &mut egui::Ui, status: &GitStatus) {
     render_header(ui, status);
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
-        ui.label(
-            RichText::new("Working tree clean")
-                .size(13.0)
-                .color(theme::FG_DIM),
-        );
+        ui.label(RichText::new("Working tree clean").size(13.0).color(theme::FG_DIM));
     });
 }
 
@@ -116,10 +108,7 @@ fn render_header(ui: &mut egui::Ui, status: &GitStatus) {
     // Separator
     let sep_y = header_rect.max.y;
     ui.painter().line_segment(
-        [
-            Pos2::new(header_rect.min.x, sep_y),
-            Pos2::new(header_rect.max.x, sep_y),
-        ],
+        [Pos2::new(header_rect.min.x, sep_y), Pos2::new(header_rect.max.x, sep_y)],
         egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
     );
 }
@@ -182,18 +171,13 @@ fn render_file_list(ui: &mut egui::Ui, panel: &mut Panel, status: &GitStatus) {
                     render_section_label(ui, change.status, &status.changes);
                 }
 
-                let is_expanded = panel
-                    .content
-                    .git_changes()
-                    .is_some_and(|v| v.is_expanded(&change.path));
+                let is_expanded = panel.content.git_changes().is_some_and(|v| v.is_expanded(&change.path));
 
                 if render_file_row(ui, change, is_expanded) {
                     toggle_path = Some(change.path.clone());
                 }
 
-                if is_expanded
-                    && let Some(diff) = status.diffs.get(&change.path)
-                {
+                if is_expanded && let Some(diff) = status.diffs.get(&change.path) {
                     render_inline_diff(ui, diff, panel.id.0);
                 }
             }
@@ -365,11 +349,8 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
     // Hunk header
     let hunk_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 18.0));
     ui.allocate_rect(hunk_rect, egui::Sense::hover());
-    ui.painter().rect_filled(
-        hunk_rect,
-        CornerRadius::ZERO,
-        theme::alpha(theme::ACCENT, 12),
-    );
+    ui.painter()
+        .rect_filled(hunk_rect, CornerRadius::ZERO, theme::alpha(theme::ACCENT, 12));
     ui.painter().text(
         Pos2::new(hunk_rect.min.x + 10.0, hunk_rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -381,10 +362,7 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
     // Separator below hunk header
     let sep_y = hunk_rect.max.y;
     ui.painter().line_segment(
-        [
-            Pos2::new(hunk_rect.min.x, sep_y),
-            Pos2::new(hunk_rect.max.x, sep_y),
-        ],
+        [Pos2::new(hunk_rect.min.x, sep_y), Pos2::new(hunk_rect.max.x, sep_y)],
         egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
     );
 
@@ -411,10 +389,7 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
 
 fn render_diff_line(ui: &mut egui::Ui, line: &horizon_core::DiffLine) {
     let line_height = 16.0;
-    let line_rect = Rect::from_min_size(
-        ui.cursor().min,
-        Vec2::new(ui.available_width(), line_height),
-    );
+    let line_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), line_height));
     ui.allocate_rect(line_rect, egui::Sense::hover());
 
     // Background
@@ -424,8 +399,7 @@ fn render_diff_line(ui: &mut egui::Ui, line: &horizon_core::DiffLine) {
         DiffLineKind::Context => Color32::TRANSPARENT,
     };
     if bg != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_filled(line_rect, CornerRadius::ZERO, bg);
+        ui.painter().rect_filled(line_rect, CornerRadius::ZERO, bg);
     }
 
     // Line number
