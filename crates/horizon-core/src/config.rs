@@ -101,7 +101,7 @@ fn default_presets() -> Vec<PresetConfig> {
             alias: Some("cxy".to_string()),
             kind: PanelKind::Codex,
             command: None,
-            args: vec!["--full-auto".to_string(), "--no-alt-screen".to_string()],
+            args: vec!["--yolo".to_string(), "--no-alt-screen".to_string()],
             resume: PanelResume::Fresh,
         },
         PresetConfig {
