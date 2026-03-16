@@ -58,7 +58,7 @@ pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<
 
             flush_text_run(&painter, metrics, &mut text_run);
             if ch != ' ' {
-                let mut text = String::new();
+                let mut text = String::with_capacity(64);
                 text.push(ch);
                 text_run = Some(TextRun {
                     line: point.line,
