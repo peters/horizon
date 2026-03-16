@@ -501,6 +501,13 @@ impl HorizonApp {
             self.pan_target = None;
             self.pan_offset += pan_delta;
             self.mark_runtime_dirty();
+            // Clear any active terminal text selection so it doesn't
+            // continue extending while the canvas is being panned.
+            for panel in &self.board.panels {
+                if let Some(terminal) = panel.terminal() {
+                    terminal.clear_selection();
+                }
+            }
         }
     }
 }
