@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAX_LINES=1000
+ALLOW_PATTERN='#\[allow\(clippy::too_many_lines\)\]'
+SOURCE_DIRS=(
+  "$ROOT_DIR/crates/horizon-core/src"
+  "$ROOT_DIR/crates/horizon-ui/src"
+)
 status=0
 
 check_file_length() {
@@ -26,21 +31,21 @@ while IFS= read -r -d '' file; do
   check_file_length "$file"
 done < <(
   find \
-    "$ROOT_DIR/crates/horizon-core/src" \
-    "$ROOT_DIR/crates/horizon-ui/src" \
+    "${SOURCE_DIRS[@]}" \
     -type f \
     -name '*.rs' \
     -print0
 )
 
-if rg -n '#\[allow\(clippy::too_many_lines\)\]' \
-  "$ROOT_DIR/crates/horizon-core/src" \
-  "$ROOT_DIR/crates/horizon-ui/src" >/dev/null
-then
+if command -v rg >/dev/null 2>&1; then
+  if rg -n "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
+    echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from core/UI source files' >&2
+    rg -n "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >&2
+    status=1
+  fi
+elif grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
   echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from core/UI source files' >&2
-  rg -n '#\[allow\(clippy::too_many_lines\)\]' \
-    "$ROOT_DIR/crates/horizon-core/src" \
-    "$ROOT_DIR/crates/horizon-ui/src" >&2
+  grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >&2
   status=1
 fi
 
