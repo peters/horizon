@@ -244,10 +244,25 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
     let mode = terminal.mode();
     let mut suppressed_text = VecDeque::new();
 
+    // Alt-modified key translations are deferred until the next Text event
+    // so we can distinguish true Alt (e.g. Alt+b → ESC+"b") from AltGr
+    // (e.g. AltGr+2 → "@").  winit reports AltGr as Alt, so we compare
+    // the suppress_text against the actual Text event to decide.
+    let mut deferred_alt: Option<(Vec<u8>, String)> = None;
+
     for event in &events {
         match event {
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                if suppressed_text.front().is_some_and(|expected| expected == text) {
+                if let Some((alt_bytes, expected)) = deferred_alt.take() {
+                    if expected == *text {
+                        // True Alt key — send the alt-prefixed bytes, suppress text.
+                        terminal.write_input(&alt_bytes);
+                    } else {
+                        // AltGr — discard alt bytes, send the actual character.
+                        terminal.clear_selection();
+                        terminal.write_input(text.as_bytes());
+                    }
+                } else if suppressed_text.front().is_some_and(|expected| expected == text) {
                     suppressed_text.pop_front();
                 } else {
                     terminal.clear_selection();
@@ -281,8 +296,20 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
                 modifiers,
                 ..
             } => {
+                // Flush any pending deferred alt (a Key event arrived before
+                // the expected Text event — treat as true Alt).
+                if let Some((alt_bytes, expected)) = deferred_alt.take() {
+                    terminal.write_input(&alt_bytes);
+                    suppressed_text.push_back(expected);
+                }
+
                 if let Some(translation) = input::translate_key_event(*key, *pressed, *repeat, *modifiers, mode) {
                     if let Some(text) = translation.suppress_text {
+                        if modifiers.alt && !translation.bytes.is_empty() {
+                            // Defer: wait for the Text event to confirm true Alt vs AltGr.
+                            deferred_alt = Some((translation.bytes, text));
+                            continue;
+                        }
                         suppressed_text.push_back(text);
                     }
                     if !translation.bytes.is_empty() {
@@ -292,5 +319,11 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
             }
             _ => {}
         }
+    }
+
+    // Flush any remaining deferred alt (no Text event followed — true Alt
+    // of a non-printable key, or platform didn't generate text).
+    if let Some((alt_bytes, _)) = deferred_alt {
+        terminal.write_input(&alt_bytes);
     }
 }

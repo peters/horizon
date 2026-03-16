@@ -153,13 +153,23 @@ impl SequenceBuilder {
             "1"
         };
 
+        // In kitty disambiguate mode, Home (CSI H) and End (CSI F) clash
+        // with cursor-movement commands (CUP / CPL). Always include the
+        // explicit key number "1" so kitty-aware programs can distinguish
+        // them from cursor-movement sequences.
+        let one_based_or_kitty = if one_based.is_empty() && self.kitty_sequence {
+            "1"
+        } else {
+            one_based
+        };
+
         let (base, terminator) = match key {
             Key::PageUp => ("5", SequenceTerminator::Normal('~')),
             Key::PageDown => ("6", SequenceTerminator::Normal('~')),
             Key::Insert => ("2", SequenceTerminator::Normal('~')),
             Key::Delete => ("3", SequenceTerminator::Normal('~')),
-            Key::Home => (one_based, SequenceTerminator::Normal('H')),
-            Key::End => (one_based, SequenceTerminator::Normal('F')),
+            Key::Home => (one_based_or_kitty, SequenceTerminator::Normal('H')),
+            Key::End => (one_based_or_kitty, SequenceTerminator::Normal('F')),
             Key::ArrowLeft => (one_based, SequenceTerminator::Normal('D')),
             Key::ArrowRight => (one_based, SequenceTerminator::Normal('C')),
             Key::ArrowUp => (one_based, SequenceTerminator::Normal('A')),

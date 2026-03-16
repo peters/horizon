@@ -129,4 +129,88 @@ mod tests {
 
         assert_eq!(bytes, b"\x1b[M@!!");
     }
+
+    #[test]
+    fn home_end_produce_correct_sequences_in_normal_mode() {
+        let home =
+            translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::NONE).expect("Home should produce a sequence");
+        assert_eq!(home.bytes, b"\x1b[H", "Home in normal mode");
+
+        let end =
+            translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::NONE).expect("End should produce a sequence");
+        assert_eq!(end.bytes, b"\x1b[F", "End in normal mode");
+    }
+
+    #[test]
+    fn home_end_use_ss3_in_app_cursor_mode() {
+        let home =
+            translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::APP_CURSOR).expect("Home app-cursor");
+        assert_eq!(home.bytes, b"\x1bOH");
+
+        let end =
+            translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::APP_CURSOR).expect("End app-cursor");
+        assert_eq!(end.bytes, b"\x1bOF");
+    }
+
+    /// Regression: in kitty disambiguate mode, Home/End must include the
+    /// explicit key number "1" so programs can distinguish CSI 1 H (Home)
+    /// from CSI H (CUP cursor position).
+    #[test]
+    fn home_end_include_explicit_key_number_in_kitty_mode() {
+        let home = translate_key_event(
+            Key::Home,
+            true,
+            false,
+            Modifiers::NONE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        )
+        .expect("Home kitty");
+        assert_eq!(home.bytes, b"\x1b[1H", "Home must be CSI 1 H in kitty mode");
+
+        let end = translate_key_event(
+            Key::End,
+            true,
+            false,
+            Modifiers::NONE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        )
+        .expect("End kitty");
+        assert_eq!(end.bytes, b"\x1b[1F", "End must be CSI 1 F in kitty mode");
+    }
+
+    #[test]
+    fn navigation_keys_produce_correct_csi_sequences() {
+        let page_up =
+            translate_key_event(Key::PageUp, true, false, Modifiers::NONE, TermMode::NONE).expect("PageUp");
+        assert_eq!(page_up.bytes, b"\x1b[5~");
+
+        let page_down =
+            translate_key_event(Key::PageDown, true, false, Modifiers::NONE, TermMode::NONE).expect("PageDown");
+        assert_eq!(page_down.bytes, b"\x1b[6~");
+
+        let insert =
+            translate_key_event(Key::Insert, true, false, Modifiers::NONE, TermMode::NONE).expect("Insert");
+        assert_eq!(insert.bytes, b"\x1b[2~");
+
+        let delete =
+            translate_key_event(Key::Delete, true, false, Modifiers::NONE, TermMode::NONE).expect("Delete");
+        assert_eq!(delete.bytes, b"\x1b[3~");
+    }
+
+    /// Regression: AltGr is reported by winit as Alt. When typing @
+    /// via AltGr+2, translate_key_event must NOT produce an alt-prefixed
+    /// sequence for Num2, because the actual character (@) arrives as a
+    /// separate Text event. The deferred-alt logic in
+    /// handle_terminal_keyboard_input handles the mismatch, but
+    /// translate_key_event itself must return None for Shift+Num2 so
+    /// unshifted symbols don't leak through.
+    #[test]
+    fn altgr_character_keys_do_not_produce_alt_sequence_with_shift() {
+        // Shift+Num2 (how @ is typed on US layout) must not produce bytes.
+        let result = translate_key_event(Key::Num2, true, false, Modifiers::SHIFT, TermMode::NONE);
+        assert!(
+            result.is_none(),
+            "Shift+Num2 must not produce bytes (text event handles @)"
+        );
+    }
 }
