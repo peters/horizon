@@ -84,7 +84,7 @@ impl HorizonApp {
 
         if !self.is_panning {
             for (workspace_id, delta) in pending_workspace_moves {
-                let _ = self.board.translate_workspace(workspace_id, [delta.x, delta.y]);
+                let _ = self.board.translate_workspace_with_push(workspace_id, [delta.x, delta.y]);
                 self.mark_runtime_dirty();
             }
         }

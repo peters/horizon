@@ -5,7 +5,8 @@ use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
 use crate::layout::{
-    TILE_GAP, WS_INNER_PAD, ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
+    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD,
+    ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::{RuntimeState, WorkspaceState};
@@ -390,11 +391,12 @@ impl Board {
                     panel.detect_attention(),
                     bell,
                     notification,
+                    panel.launched_at_millis,
                 )
             })
             .collect();
 
-        for (panel_id, workspace_id, kind, attention, bell, notification) in panel_states {
+        for (panel_id, workspace_id, kind, attention, bell, notification, launched_at) in panel_states {
             if let Some(notif) = notification {
                 let severity = match notif.severity.as_str() {
                     "attention" => AttentionSeverity::High,
@@ -411,7 +413,8 @@ impl Board {
                     self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
                 }
             } else if bell && kind.is_agent() {
-                if !has_open {
+                let age_ms = crate::panel::current_unix_millis().saturating_sub(launched_at);
+                if !has_open && age_ms >= 10_000 {
                     self.create_attention(
                         workspace_id,
                         Some(panel_id),
@@ -549,6 +552,65 @@ impl Board {
         }
 
         true
+    }
+
+    /// Translate a workspace and push any colliding workspaces further along
+    /// the drag direction, cascading through the chain of collisions.
+    pub fn translate_workspace_with_push(&mut self, id: WorkspaceId, delta: [f32; 2]) -> bool {
+        if !self.translate_workspace(id, delta) {
+            return false;
+        }
+        self.resolve_workspace_collisions(id, delta);
+        true
+    }
+
+    /// Returns the visual frame rect `[min_x, min_y, max_x, max_y]` for a
+    /// workspace, including the title area and background padding.
+    fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
+        let workspace = self.workspace(id)?;
+        if let Some((min, max)) = self.workspace_bounds(id) {
+            Some([
+                min[0] - WS_FRAME_PAD,
+                min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
+                max[0] + WS_FRAME_PAD,
+                max[1] + WS_FRAME_PAD,
+            ])
+        } else {
+            let p = workspace.position;
+            Some([p[0], p[1], p[0] + WS_EMPTY_FRAME_SIZE[0], p[1] + WS_EMPTY_FRAME_SIZE[1]])
+        }
+    }
+
+    /// After the workspace `source` was moved, push every overlapping
+    /// workspace along `drag_dir`, cascading until nothing overlaps.
+    fn resolve_workspace_collisions(&mut self, source: WorkspaceId, drag_dir: [f32; 2]) {
+        let mut queue = vec![source];
+        let mut settled = vec![source];
+
+        while let Some(check_id) = queue.pop() {
+            let Some(check_rect) = self.workspace_frame_rect(check_id) else {
+                continue;
+            };
+
+            let candidates: Vec<WorkspaceId> = self
+                .workspaces
+                .iter()
+                .map(|ws| ws.id)
+                .filter(|id| !settled.contains(id))
+                .collect();
+
+            for other_id in candidates {
+                let Some(other_rect) = self.workspace_frame_rect(other_id) else {
+                    continue;
+                };
+                let push = collision_push(check_rect, other_rect, drag_dir, WS_COLLISION_GAP);
+                if push[0] != 0.0 || push[1] != 0.0 {
+                    self.translate_workspace(other_id, push);
+                    settled.push(other_id);
+                    queue.push(other_id);
+                }
+            }
+        }
     }
 
     pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {
@@ -714,6 +776,60 @@ fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
     positions
         .iter()
         .any(|pos| (pos[0] - candidate[0]).abs() < 1.0 && (pos[1] - candidate[1]).abs() < 1.0)
+}
+
+/// Compute the translation needed to push rect `b` away from rect `a` along
+/// `drag_dir` so they no longer overlap, maintaining `gap` pixels of space.
+/// Both rects are `[min_x, min_y, max_x, max_y]`.
+fn collision_push(a: [f32; 4], b: [f32; 4], drag_dir: [f32; 2], gap: f32) -> [f32; 2] {
+    // No overlap → no push.
+    if a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1] {
+        return [0.0, 0.0];
+    }
+
+    let len_sq = drag_dir[0] * drag_dir[0] + drag_dir[1] * drag_dir[1];
+    if len_sq < 1e-6 {
+        return [0.0, 0.0];
+    }
+    let len = len_sq.sqrt();
+    let dx = drag_dir[0] / len;
+    let dy = drag_dir[1] / len;
+
+    // For each axis where the drag has a non-zero component, compute the
+    // scalar `t` along the direction vector that would separate the rects
+    // on that axis.  The minimum such `t` is sufficient because clearing
+    // even one axis eliminates the AABB overlap.
+    let mut min_t = f32::MAX;
+
+    if dx > 1e-4 {
+        let t = (a[2] + gap - b[0]) / dx;
+        if t > 0.0 {
+            min_t = min_t.min(t);
+        }
+    } else if dx < -1e-4 {
+        let t = (a[0] - gap - b[2]) / dx;
+        if t > 0.0 {
+            min_t = min_t.min(t);
+        }
+    }
+
+    if dy > 1e-4 {
+        let t = (a[3] + gap - b[1]) / dy;
+        if t > 0.0 {
+            min_t = min_t.min(t);
+        }
+    } else if dy < -1e-4 {
+        let t = (a[1] - gap - b[3]) / dy;
+        if t > 0.0 {
+            min_t = min_t.min(t);
+        }
+    }
+
+    if min_t < f32::MAX {
+        [dx * min_t, dy * min_t]
+    } else {
+        [0.0, 0.0]
+    }
 }
 
 #[cfg(test)]

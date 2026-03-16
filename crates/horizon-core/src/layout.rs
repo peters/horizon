@@ -4,6 +4,15 @@ pub(crate) const TILE_GAP: f32 = 20.0;
 pub(crate) const WS_INNER_PAD: f32 = 20.0;
 pub(crate) const WORKSPACE_GAP: f32 = 80.0;
 
+/// Padding around workspace panel bounds for the visual frame (left, right, bottom).
+pub(crate) const WS_FRAME_PAD: f32 = 16.0;
+/// Extra top padding for the workspace title bar area.
+pub(crate) const WS_FRAME_TOP_EXTRA: f32 = 38.0;
+/// Size of an empty workspace placeholder.
+pub(crate) const WS_EMPTY_FRAME_SIZE: [f32; 2] = [304.0, 154.0];
+/// Minimum gap maintained between workspace frames during collision resolution.
+pub(crate) const WS_COLLISION_GAP: f32 = 10.0;
+
 pub(crate) fn workspace_slot_width() -> f32 {
     let columns = 3.0;
     let content = columns * DEFAULT_PANEL_SIZE[0] + (columns - 1.0) * TILE_GAP;
