@@ -294,43 +294,60 @@ impl HorizonApp {
         let title = panel.title.clone();
         let kind = panel.kind;
         let is_focused = self.board.focused == Some(panel_id);
-        let attention = self
-            .board
-            .unresolved_attention_for_panel(panel_id)
-            .map(|item| item.severity);
+        let attention = self.board.unresolved_attention_for_panel(panel_id).cloned();
 
-        let item_response = ui.horizontal(|ui| {
-            ui.set_min_height(30.0);
-            ui.add_space(30.0);
+        let item_response = ui.vertical(|ui| {
+            ui.set_min_height(if attention.is_some() { 46.0 } else { 30.0 });
 
-            let (icon, icon_color) = panel_kind_icon(kind, workspace.color, is_focused);
-            ui.label(
-                egui::RichText::new(icon)
-                    .color(icon_color)
-                    .size(10.0)
-                    .monospace()
-                    .strong(),
-            );
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(&title)
-                    .color(if is_focused { theme::FG } else { theme::FG_SOFT })
-                    .size(12.5),
-            );
+            ui.horizontal(|ui| {
+                ui.set_min_height(30.0);
+                ui.add_space(30.0);
 
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_space(14.0);
+                let (icon, icon_color) = panel_kind_icon(kind, workspace.color, is_focused);
+                ui.label(
+                    egui::RichText::new(icon)
+                        .color(icon_color)
+                        .size(10.0)
+                        .monospace()
+                        .strong(),
+                );
+                ui.add_space(4.0);
+
+                let title_width = (ui.available_width() - 28.0).max(48.0);
+                ui.add_sized(
+                    Vec2::new(title_width, 18.0),
+                    egui::Label::new(
+                        egui::RichText::new(&title)
+                            .color(if is_focused { theme::FG } else { theme::FG_SOFT })
+                            .size(12.5),
+                    )
+                    .truncate(),
+                );
+
                 let close =
                     ui.add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
                 if close.clicked() {
                     actions.close_panel = Some(panel_id);
                 }
-                if let Some(severity) = attention {
-                    let (label, color) = sidebar_attention_tag(severity);
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(label).size(9.0).color(color).strong());
-                }
             });
+
+            if let Some(attention_item) = &attention {
+                let (label, color) = sidebar_attention_tag(attention_item.severity);
+                ui.horizontal(|ui| {
+                    ui.add_space(56.0);
+                    ui.label(egui::RichText::new(label).size(8.5).color(color).strong());
+                    ui.add_space(4.0);
+                    ui.add_sized(
+                        Vec2::new(ui.available_width(), 14.0),
+                        egui::Label::new(
+                            egui::RichText::new(&attention_item.summary)
+                                .size(9.0)
+                                .color(theme::alpha(color, 180)),
+                        )
+                        .truncate(),
+                    );
+                });
+            }
         });
 
         let row_clicked =

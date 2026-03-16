@@ -40,8 +40,6 @@ const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
 const WS_LABEL_HEIGHT: f32 = 30.0;
 const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;
-const MINIMAP_MAX_W: f32 = 200.0;
-const MINIMAP_MAX_H: f32 = 140.0;
 const MINIMAP_MARGIN: f32 = 16.0;
 const MINIMAP_PAD: f32 = 6.0;
 
@@ -161,9 +159,7 @@ impl HorizonApp {
             )
         };
 
-        let config_last_mtime = std::fs::metadata(&config_path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
 
         Self {
             board,
@@ -438,13 +434,10 @@ impl HorizonApp {
             self.handle_canvas_double_click(ctx);
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
-            self.render_minimap(ctx);
-            let minimap_height = if self.minimap_visible && !self.board.workspaces.is_empty() {
-                MINIMAP_MAX_H + MINIMAP_PAD * 2.0
-            } else {
-                0.0
-            };
-            if let Some(panel_id) = attention_feed::render_attention_feed(ctx, &self.board, minimap_height) {
+            let minimap_height = self.render_minimap(ctx);
+            if let Some(panel_id) =
+                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays)
+            {
                 self.board.focus(panel_id);
                 if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(ws_id)

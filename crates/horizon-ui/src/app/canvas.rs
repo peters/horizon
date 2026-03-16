@@ -3,29 +3,28 @@ use egui::{Color32, Context, CornerRadius, Id, Margin, Order, Painter, Pos2, Rec
 use crate::theme;
 
 use super::util::{draw_dot_grid, format_grid_position, paint_canvas_glow, paint_empty_state, rounded_i32};
-use super::{
-    HorizonApp, MINIMAP_MARGIN, MINIMAP_MAX_H, MINIMAP_MAX_W, MINIMAP_PAD, SIDEBAR_WIDTH, WS_BG_PAD, WS_EMPTY_SIZE,
-    WS_TITLE_HEIGHT,
-};
+use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
 
 struct MinimapModel {
     content_min: [f32; 2],
-    scale: f32,
+    scale_x: f32,
+    scale_y: f32,
     outer_size: Vec2,
     view_min: Pos2,
     view_max: Pos2,
 }
 
 impl HorizonApp {
-    pub(super) fn render_minimap(&mut self, ctx: &Context) {
+    pub(super) fn render_minimap(&mut self, ctx: &Context) -> f32 {
         if !self.minimap_visible || self.board.workspaces.is_empty() {
-            return;
+            return 0.0;
         }
 
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let Some(model) = self.minimap_model(canvas_rect) else {
-            return;
+            return 0.0;
         };
+        let minimap_height = model.outer_size.y;
 
         let response = egui::Area::new(Id::new("minimap_overlay"))
             .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))
@@ -41,8 +40,8 @@ impl HorizonApp {
             && let Some(pointer) = ctx.input(|input| input.pointer.interact_pos())
         {
             let local = pointer - inner.rect.min;
-            let canvas_x = model.content_min[0] + (local.x - MINIMAP_PAD) / model.scale;
-            let canvas_y = model.content_min[1] + (local.y - MINIMAP_PAD) / model.scale;
+            let canvas_x = model.content_min[0] + (local.x - MINIMAP_PAD) / model.scale_x;
+            let canvas_y = model.content_min[1] + (local.y - MINIMAP_PAD) / model.scale_y;
 
             self.pan_target = None;
             self.pan_offset = Vec2::new(
@@ -51,18 +50,14 @@ impl HorizonApp {
             );
             self.mark_runtime_dirty();
         }
+
+        minimap_height
     }
 
     fn minimap_model(&self, canvas_rect: Rect) -> Option<MinimapModel> {
-        let (mut content_min, mut content_max) = workspace_content_bounds(self)?;
+        let (content_min, content_max) = workspace_content_bounds(self)?;
         let view_min = self.screen_to_canvas(canvas_rect, canvas_rect.min);
         let view_max = self.screen_to_canvas(canvas_rect, canvas_rect.max);
-        let view_w = view_max.x - view_min.x;
-        let view_h = view_max.y - view_min.y;
-        content_min[0] -= view_w * 0.5;
-        content_min[1] -= view_h * 0.5;
-        content_max[0] += view_w * 0.5;
-        content_max[1] += view_h * 0.5;
 
         let content_w = content_max[0] - content_min[0];
         let content_h = content_max[1] - content_min[1];
@@ -70,16 +65,14 @@ impl HorizonApp {
             return None;
         }
 
-        let aspect = content_w / content_h;
-        let (map_w, map_h) = if aspect > MINIMAP_MAX_W / MINIMAP_MAX_H {
-            (MINIMAP_MAX_W, MINIMAP_MAX_W / aspect)
-        } else {
-            (MINIMAP_MAX_H * aspect, MINIMAP_MAX_H)
-        };
+        let overlays = &self.template_config.overlays;
+        let map_w = overlays.minimap_width.max(120.0);
+        let map_h = overlays.minimap_height.max(120.0);
 
         Some(MinimapModel {
             content_min,
-            scale: map_w / content_w,
+            scale_x: map_w / content_w,
+            scale_y: map_h / content_h,
             outer_size: Vec2::new(map_w + MINIMAP_PAD * 2.0, map_h + MINIMAP_PAD * 2.0),
             view_min,
             view_max,
@@ -260,16 +253,24 @@ fn workspace_minimap_bounds(app: &HorizonApp, workspace_id: horizon_core::Worksp
 
 fn minimap_point(model: &MinimapModel, canvas_x: f32, canvas_y: f32) -> Pos2 {
     Pos2::new(
-        MINIMAP_PAD + (canvas_x - model.content_min[0]) * model.scale,
-        MINIMAP_PAD + (canvas_y - model.content_min[1]) * model.scale,
+        MINIMAP_PAD + (canvas_x - model.content_min[0]) * model.scale_x,
+        MINIMAP_PAD + (canvas_y - model.content_min[1]) * model.scale_y,
     )
 }
 
 fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel) {
+    let map_rect = Rect::from_min_max(
+        origin + Vec2::splat(MINIMAP_PAD),
+        origin + (model.outer_size - Vec2::splat(MINIMAP_PAD)),
+    );
     let viewport_rect = Rect::from_min_max(
         origin + minimap_point(model, model.view_min.x, model.view_min.y).to_vec2(),
         origin + minimap_point(model, model.view_max.x, model.view_max.y).to_vec2(),
-    );
+    )
+    .intersect(map_rect);
+    if !viewport_rect.is_positive() {
+        return;
+    }
     painter.rect_filled(viewport_rect, CornerRadius::same(1), theme::alpha(theme::FG, 14));
     painter.rect_stroke(
         viewport_rect,

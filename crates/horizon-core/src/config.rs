@@ -11,6 +11,8 @@ pub struct Config {
     pub window: WindowConfig,
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
+    #[serde(default)]
+    pub overlays: OverlaysConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -22,6 +24,7 @@ impl Default for Config {
         Self {
             window: WindowConfig::default(),
             shortcuts: ShortcutsConfig::default(),
+            overlays: OverlaysConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -169,6 +172,26 @@ impl Default for ShortcutsConfig {
             reset_view: "Ctrl+0".to_string(),
             fullscreen_panel: "F11".to_string(),
             fullscreen_window: "Ctrl+F11".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OverlaysConfig {
+    pub attention_feed_height: f32,
+    pub attention_feed_width: f32,
+    pub minimap_height: f32,
+    pub minimap_width: f32,
+}
+
+impl Default for OverlaysConfig {
+    fn default() -> Self {
+        Self {
+            attention_feed_height: 600.0,
+            attention_feed_width: 320.0,
+            minimap_height: 180.0,
+            minimap_width: 320.0,
         }
     }
 }

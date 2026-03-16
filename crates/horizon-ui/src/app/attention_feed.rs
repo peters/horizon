@@ -1,17 +1,24 @@
 use egui::{Color32, CornerRadius, Id, Order, RichText, ScrollArea, Sense, Vec2};
-use horizon_core::{AttentionItem, AttentionSeverity, Board, PanelId};
+use horizon_core::{AttentionItem, AttentionSeverity, Board, OverlaysConfig, PanelId};
 use std::time::SystemTime;
 
 use crate::theme;
 
-const FEED_WIDTH: f32 = 320.0;
-const FEED_MAX_HEIGHT: f32 = 360.0;
+const FEED_MIN_WIDTH: f32 = 240.0;
 const FEED_MARGIN: f32 = 16.0;
 const FEED_ITEM_SPACING: f32 = 4.0;
+const FEED_HEADER_BLOCK_HEIGHT: f32 = 30.0;
+const FEED_ITEM_VIEWPORT_HEIGHT: f32 = 74.0;
 
 /// Renders the attention feed overlay. Returns a panel ID if the user clicked
 /// an item to navigate to it.
-pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height: f32) -> Option<PanelId> {
+pub fn render_attention_feed(
+    ctx: &egui::Context,
+    board: &Board,
+    minimap_height: f32,
+    overlays: &OverlaysConfig,
+) -> Option<PanelId> {
+    let feed_width = overlays.attention_feed_width.max(FEED_MIN_WIDTH);
     let now = SystemTime::now();
     let mut items: Vec<&AttentionItem> = board
         .attention
@@ -37,7 +44,16 @@ pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height:
     items.truncate(10);
 
     let offset_y = FEED_MARGIN + minimap_height + if minimap_height > 0.0 { 8.0 } else { 0.0 };
+    let feed_target_height = overlays
+        .attention_feed_height
+        .max(FEED_HEADER_BLOCK_HEIGHT + FEED_ITEM_VIEWPORT_HEIGHT);
     let mut clicked_panel: Option<PanelId> = None;
+    let list_max_height = snapped_feed_list_height(feed_target_height);
+    let scroll_id = (
+        "attention_feed_list",
+        items.first().map(|item| item.id.0).unwrap_or_default(),
+        items.len(),
+    );
 
     egui::Area::new(Id::new("attention_feed"))
         .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-FEED_MARGIN, -offset_y))
@@ -54,12 +70,24 @@ pub fn render_attention_feed(ctx: &egui::Context, board: &Board, minimap_height:
                 .inner_margin(egui::Margin::symmetric(8, 6));
 
             frame.show(ui, |ui| {
-                ui.set_width(FEED_WIDTH);
+                ui.set_width(feed_width);
+                if feed_target_height > 0.0 {
+                    ui.set_min_height(feed_target_height);
+                    ui.set_max_height(feed_target_height);
+                }
                 render_feed_header(ui, &items);
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
-                clicked_panel = render_feed_list(ui, &items);
+                clicked_panel = render_feed_list(ui, &items, feed_width, list_max_height, scroll_id);
+                let remaining = if feed_target_height > 0.0 {
+                    (feed_target_height - FEED_HEADER_BLOCK_HEIGHT - list_max_height).max(0.0)
+                } else {
+                    0.0
+                };
+                if remaining > 0.0 {
+                    ui.add_space(remaining);
+                }
             });
         });
 
@@ -82,14 +110,21 @@ fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
     });
 }
 
-fn render_feed_list(ui: &mut egui::Ui, items: &[&AttentionItem]) -> Option<PanelId> {
+fn render_feed_list(
+    ui: &mut egui::Ui,
+    items: &[&AttentionItem],
+    feed_width: f32,
+    list_max_height: f32,
+    scroll_id: (&'static str, u64, usize),
+) -> Option<PanelId> {
     let mut clicked = None;
     ScrollArea::vertical()
-        .max_height(FEED_MAX_HEIGHT - 40.0)
+        .id_salt(scroll_id)
+        .max_height(list_max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             for item in items {
-                if let Some(panel_id) = render_feed_item(ui, item) {
+                if let Some(panel_id) = render_feed_item(ui, item, feed_width) {
                     clicked = Some(panel_id);
                 }
                 ui.add_space(FEED_ITEM_SPACING);
@@ -98,7 +133,7 @@ fn render_feed_list(ui: &mut egui::Ui, items: &[&AttentionItem]) -> Option<Panel
     clicked
 }
 
-fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) -> Option<PanelId> {
+fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) -> Option<PanelId> {
     let is_resolved = !item.is_open();
     let color = severity_color(item.severity);
     let bg_color = Color32::from_rgba_premultiplied(
@@ -115,7 +150,7 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) -> Option<PanelId> 
 
     let resp = frame
         .show(ui, |ui| {
-            ui.set_width(FEED_WIDTH - 16.0);
+            ui.set_width(feed_width - 16.0);
             render_feed_item_header(ui, item, is_resolved, color);
             let msg_color = if is_resolved {
                 theme::alpha(theme::FG_SOFT, 100)
@@ -128,14 +163,10 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem) -> Option<PanelId> 
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
-                            egui::Button::new(
-                                RichText::new("Go to panel \u{2192}")
-                                    .size(9.5)
-                                    .color(theme::ACCENT),
-                            )
-                            .fill(theme::alpha(theme::ACCENT, 20))
-                            .corner_radius(CornerRadius::same(4))
-                            .stroke(egui::Stroke::NONE),
+                            egui::Button::new(RichText::new("Go to panel \u{2192}").size(9.5).color(theme::ACCENT))
+                                .fill(theme::alpha(theme::ACCENT, 20))
+                                .corner_radius(CornerRadius::same(4))
+                                .stroke(egui::Stroke::NONE),
                         );
                     });
                 });
@@ -226,4 +257,11 @@ fn format_elapsed(time: SystemTime) -> String {
     } else {
         format!("{}h ago", secs / 3600)
     }
+}
+
+fn snapped_feed_list_height(feed_target_height: f32) -> f32 {
+    let available = (feed_target_height - FEED_HEADER_BLOCK_HEIGHT).max(FEED_ITEM_VIEWPORT_HEIGHT);
+    let row_span = FEED_ITEM_VIEWPORT_HEIGHT + FEED_ITEM_SPACING;
+    let visible_rows = ((available + FEED_ITEM_SPACING) / row_span).floor().max(1.0);
+    (visible_rows * FEED_ITEM_VIEWPORT_HEIGHT) + ((visible_rows - 1.0) * FEED_ITEM_SPACING)
 }
