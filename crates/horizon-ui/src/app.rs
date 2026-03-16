@@ -2271,6 +2271,11 @@ impl eframe::App for HorizonApp {
         self.handle_shortcuts(ctx);
         self.board.process_output();
 
+        // Auto-close panels whose child process has exited.
+        for panel_id in self.board.exited_panels() {
+            self.panels_to_close.push(panel_id);
+        }
+
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
 

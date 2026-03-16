@@ -318,6 +318,16 @@ impl Board {
         self.update_attention();
     }
 
+    /// Returns IDs of panels whose child process has exited.
+    #[must_use]
+    pub fn exited_panels(&self) -> Vec<PanelId> {
+        self.panels
+            .iter()
+            .filter(|panel| panel.child_exited())
+            .map(|panel| panel.id)
+            .collect()
+    }
+
     fn update_attention(&mut self) {
         use crate::attention::AttentionSeverity;
 

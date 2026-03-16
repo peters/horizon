@@ -227,6 +227,11 @@ impl Panel {
     }
 
     #[must_use]
+    pub fn child_exited(&self) -> bool {
+        self.terminal.child_exited()
+    }
+
+    #[must_use]
     pub fn rename(&mut self, name: &str) -> bool {
         let trimmed = name.trim();
         if trimmed.is_empty() {

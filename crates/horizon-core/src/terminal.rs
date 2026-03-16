@@ -94,6 +94,7 @@ pub struct Terminal {
     selection_contents: String,
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,
+    child_exited: bool,
 }
 
 impl Terminal {
@@ -169,6 +170,7 @@ impl Terminal {
             selection_contents: String::new(),
             pending_pty_resize: None,
             pty_resized: false,
+            child_exited: false,
         };
         terminal.process_events();
         Ok(terminal)
@@ -383,6 +385,11 @@ impl Terminal {
     }
 
     #[must_use]
+    pub fn child_exited(&self) -> bool {
+        self.child_exited
+    }
+
+    #[must_use]
     pub fn title(&self) -> &str {
         &self.title
     }
@@ -489,12 +496,10 @@ impl Terminal {
             Event::TextAreaSizeRequest(formatter) => {
                 self.write_input(formatter(self.window_size()).as_bytes());
             }
-            Event::MouseCursorDirty
-            | Event::CursorBlinkingChange
-            | Event::Wakeup
-            | Event::Bell
-            | Event::Exit
-            | Event::ChildExit(_) => {}
+            Event::Exit | Event::ChildExit(_) => {
+                self.child_exited = true;
+            }
+            Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup | Event::Bell => {}
         }
     }
 
