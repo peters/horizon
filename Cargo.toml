@@ -43,3 +43,8 @@ wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulka
 [profile.release]
 lto = true
 strip = true
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
