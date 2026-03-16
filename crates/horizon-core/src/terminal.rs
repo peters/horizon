@@ -585,7 +585,49 @@ fn default_terminal_rgb(index: usize) -> Rgb {
 
 fn replay_terminal_bytes(term: &Arc<FairMutex<Term<TerminalEventProxy>>>, bytes: &[u8]) {
     let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
-    parser.advance(&mut *term.lock(), bytes);
+    let mut terminal = term.lock();
+    parser.advance(&mut *terminal, bytes);
+
+    // Persisted transcripts can end while a fullscreen program has mouse
+    // reporting, the alternate screen, or application keypad modes enabled.
+    // Those modes must be re-established by the live PTY session, not carried
+    // over from replay, otherwise restored shell panels can inherit stale
+    // click/key handling state.
+    let reset_bytes = replay_mode_reset_bytes(*terminal.mode());
+    if !reset_bytes.is_empty() {
+        parser.advance(&mut *terminal, &reset_bytes);
+    }
+}
+
+fn replay_mode_reset_bytes(mode: TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+
+    if mode.contains(TermMode::APP_CURSOR) {
+        bytes.extend_from_slice(b"\x1b[?1l");
+    }
+    if mode.contains(TermMode::APP_KEYPAD) {
+        bytes.extend_from_slice(b"\x1b>");
+    }
+    if mode.intersects(TermMode::MOUSE_MODE) {
+        bytes.extend_from_slice(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l");
+    }
+    if mode.contains(TermMode::FOCUS_IN_OUT) {
+        bytes.extend_from_slice(b"\x1b[?1004l");
+    }
+    if mode.contains(TermMode::UTF8_MOUSE) {
+        bytes.extend_from_slice(b"\x1b[?1005l");
+    }
+    if mode.contains(TermMode::SGR_MOUSE) {
+        bytes.extend_from_slice(b"\x1b[?1006l");
+    }
+    if mode.contains(TermMode::ALT_SCREEN) {
+        bytes.extend_from_slice(b"\x1b[?1049l");
+    }
+    if !mode.contains(TermMode::SHOW_CURSOR) {
+        bytes.extend_from_slice(b"\x1b[?25h");
+    }
+
+    bytes
 }
 
 fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
@@ -628,8 +670,15 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 mod tests {
     use std::time::Duration;
 
-    use super::{Terminal, TerminalDimensions, TerminalSpawnOptions, current_cwd_for_pid, default_terminal_rgb};
+    use super::{
+        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, current_cwd_for_pid,
+        default_terminal_rgb, replay_terminal_bytes,
+    };
     use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::term::{self, Term, TermMode};
+    use std::sync::Arc;
+    use std::sync::mpsc;
 
     #[test]
     fn terminal_dimensions_clamp_to_supported_minimums() {
@@ -671,5 +720,33 @@ mod tests {
     fn current_cwd_for_pid_reads_procfs_cwd() {
         let cwd = current_cwd_for_pid(std::process::id()).expect("cwd");
         assert_eq!(cwd, std::env::current_dir().expect("current dir"));
+    }
+
+    #[test]
+    fn replay_clears_stale_fullscreen_modes_from_transcripts() {
+        let term = test_term();
+        replay_terminal_bytes(
+            &term,
+            b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b=\x1b[?1h\x1b[?25l",
+        );
+
+        let mode = *term.lock().mode();
+        assert_eq!(mode, TermMode::default());
+    }
+
+    fn test_term() -> Arc<FairMutex<Term<TerminalEventProxy>>> {
+        let (event_tx, _event_rx) = mpsc::channel();
+        let dimensions = TerminalDimensions::new(24, 80);
+        let config = term::Config {
+            scrolling_history: 256,
+            kitty_keyboard: true,
+            ..term::Config::default()
+        };
+
+        Arc::new(FairMutex::new(Term::new(
+            config,
+            &dimensions,
+            TerminalEventProxy { event_tx },
+        )))
     }
 }
