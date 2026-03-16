@@ -13,6 +13,8 @@ pub struct Config {
     pub shortcuts: ShortcutsConfig,
     #[serde(default)]
     pub overlays: OverlaysConfig,
+    #[serde(default)]
+    pub features: FeaturesConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -25,6 +27,7 @@ impl Default for Config {
             window: WindowConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
+            features: FeaturesConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -194,6 +197,12 @@ impl Default for OverlaysConfig {
             minimap_width: 320.0,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FeaturesConfig {
+    pub attention_feed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -148,7 +148,7 @@ impl HorizonApp {
         let transcript_root = transcript_root_path_for_config(&config_path);
         let startup_receiver = Self::runtime_state_needs_session_bootstrap(&runtime_state)
             .then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
-        let board = if startup_receiver.is_some() {
+        let mut board = if startup_receiver.is_some() {
             Board::new()
         } else {
             Board::from_runtime_state_with_transcripts(&runtime_state, transcript_root.as_deref()).unwrap_or_else(
@@ -158,6 +158,7 @@ impl HorizonApp {
                 },
             )
         };
+        board.attention_enabled = config.features.attention_feed;
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
 
@@ -435,22 +436,28 @@ impl HorizonApp {
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
             let minimap_height = self.render_minimap(ctx);
-            let feed_result =
-                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
-            for attention_id in feed_result.dismissed_ids {
-                let _ = self.board.dismiss_attention(attention_id);
-            }
-            if let Some(panel_id) = feed_result.focus_panel {
-                self.board.focus(panel_id);
-                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
-                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
-                {
-                    let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                    let size = Vec2::new(
-                        max[0] - min[0] + 2.0 * WS_BG_PAD,
-                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                    );
-                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+            if self.template_config.features.attention_feed {
+                let feed_result = attention_feed::render_attention_feed(
+                    ctx,
+                    &self.board,
+                    minimap_height,
+                    &self.template_config.overlays,
+                );
+                for attention_id in feed_result.dismissed_ids {
+                    let _ = self.board.dismiss_attention(attention_id);
+                }
+                if let Some(panel_id) = feed_result.focus_panel {
+                    self.board.focus(panel_id);
+                    if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
+                        && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+                    {
+                        let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                        let size = Vec2::new(
+                            max[0] - min[0] + 2.0 * WS_BG_PAD,
+                            max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                        );
+                        self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+                    }
                 }
             }
             self.render_canvas_hud(ctx);

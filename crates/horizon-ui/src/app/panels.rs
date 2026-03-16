@@ -195,10 +195,13 @@ impl HorizonApp {
                 .find(|(workspace_id, _, _)| *workspace_id == panel.workspace_id)
                 .map(|(_, _, color)| *color);
 
-            let attention_badge = self
-                .board
-                .unresolved_attention_for_panel(panel_id)
-                .map(|item| (item.severity, item.summary.clone()));
+            let attention_badge = if self.template_config.features.attention_feed {
+                self.board
+                    .unresolved_attention_for_panel(panel_id)
+                    .map(|item| (item.severity, item.summary.clone()))
+            } else {
+                None
+            };
 
             Some(PanelSnapshot {
                 screen_rect,

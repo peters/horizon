@@ -23,7 +23,8 @@ pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, WorkspaceLayout};
 pub use config::{
-    Config, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig,
+    Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig,
+    WorkspaceConfig,
 };
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};

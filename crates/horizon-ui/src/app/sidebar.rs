@@ -109,16 +109,21 @@ impl HorizonApp {
     }
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
+        let attention_enabled = self.template_config.features.attention_feed;
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
                 let (r, g, b) = workspace.accent();
                 let panel_ids = workspace.panels.clone();
-                let attention_count = panel_ids
-                    .iter()
-                    .filter(|panel_id| self.board.unresolved_attention_for_panel(**panel_id).is_some())
-                    .count();
+                let attention_count = if attention_enabled {
+                    panel_ids
+                        .iter()
+                        .filter(|panel_id| self.board.unresolved_attention_for_panel(**panel_id).is_some())
+                        .count()
+                } else {
+                    0
+                };
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
@@ -302,7 +307,11 @@ impl HorizonApp {
         let title = panel.title.clone();
         let kind = panel.kind;
         let is_focused = self.board.focused == Some(panel_id);
-        let attention = self.board.unresolved_attention_for_panel(panel_id).cloned();
+        let attention = if self.template_config.features.attention_feed {
+            self.board.unresolved_attention_for_panel(panel_id).cloned()
+        } else {
+            None
+        };
 
         let item_response = ui.vertical(|ui| {
             ui.set_min_height(if attention.is_some() { 46.0 } else { 30.0 });

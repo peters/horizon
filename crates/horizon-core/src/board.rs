@@ -65,6 +65,7 @@ pub struct Board {
     panel_attention_signals: HashMap<PanelId, String>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
+    pub attention_enabled: bool,
     next_panel_id: u64,
     next_workspace_id: u64,
     next_attention_id: u64,
@@ -80,6 +81,7 @@ impl Board {
             panel_attention_signals: HashMap::new(),
             focused: None,
             active_workspace: None,
+            attention_enabled: false,
             next_panel_id: 1,
             next_workspace_id: 1,
             next_attention_id: 1,
@@ -397,7 +399,9 @@ impl Board {
         for panel in &mut self.panels {
             had_output |= panel.process_output();
         }
-        self.update_attention();
+        if self.attention_enabled {
+            self.update_attention();
+        }
         had_output
     }
 

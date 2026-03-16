@@ -86,6 +86,7 @@ impl HorizonApp {
                     tracing::error!("failed to restore runtime state: {error}");
                     Board::new()
                 });
+                self.board.attention_enabled = self.template_config.features.attention_feed;
                 true
             }
             Err(TryRecvError::Empty) => {
