@@ -8,6 +8,7 @@ use crate::editor_widget::MarkdownEditorView;
 use crate::git_changes_widget::GitChangesView;
 use crate::terminal_widget::TerminalView;
 use crate::theme;
+use crate::usage_widget::UsageDashboardView;
 
 use super::util::{clamp_panel_size, format_compact_count, usize_to_f32};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
@@ -88,6 +89,7 @@ fn show_panel_body_contents(ui: &mut egui::Ui, panel: &mut Panel, is_focused: bo
     match panel.kind {
         PanelKind::Editor => MarkdownEditorView::new(panel).show(ui, is_focused),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
+        PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         _ => TerminalView::new(panel).show(ui, is_focused),
     }
 }
@@ -460,6 +462,10 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::GitChanges => (
             "GC",
             theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
+        ),
+        PanelKind::Usage => (
+            "US",
+            theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
         ),
     }
 }

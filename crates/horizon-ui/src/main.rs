@@ -9,6 +9,7 @@ mod input;
 mod quick_nav;
 mod terminal_widget;
 mod theme;
+mod usage_widget;
 
 use std::path::PathBuf;
 

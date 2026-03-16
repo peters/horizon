@@ -136,6 +136,14 @@ fn default_presets() -> Vec<PresetConfig> {
             args: Vec::new(),
             resume: PanelResume::Fresh,
         },
+        PresetConfig {
+            name: "Usage".to_string(),
+            alias: Some("u".to_string()),
+            kind: PanelKind::Usage,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+        },
     ]
 }
 

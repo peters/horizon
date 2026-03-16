@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::git_changes::GitChangesViewer;
 use crate::terminal::Terminal;
+use crate::usage_dashboard::UsageDashboard;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +81,7 @@ pub enum PanelContent {
     Terminal(Terminal),
     Editor(MarkdownEditor),
     GitChanges(GitChangesViewer),
+    Usage(UsageDashboard),
 }
 
 impl PanelContent {
@@ -87,14 +89,14 @@ impl PanelContent {
     pub fn terminal(&self) -> Option<&Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) | Self::GitChanges(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn terminal_mut(&mut self) -> Option<&mut Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) | Self::GitChanges(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
         }
     }
 
@@ -102,14 +104,14 @@ impl PanelContent {
     pub fn editor(&self) -> Option<&MarkdownEditor> {
         match self {
             Self::Editor(e) => Some(e),
-            Self::Terminal(_) | Self::GitChanges(_) => None,
+            Self::Terminal(_) | Self::GitChanges(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn editor_mut(&mut self) -> Option<&mut MarkdownEditor> {
         match self {
             Self::Editor(e) => Some(e),
-            Self::Terminal(_) | Self::GitChanges(_) => None,
+            Self::Terminal(_) | Self::GitChanges(_) | Self::Usage(_) => None,
         }
     }
 
@@ -117,14 +119,29 @@ impl PanelContent {
     pub fn git_changes(&self) -> Option<&GitChangesViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
-            Self::Terminal(_) | Self::Editor(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn git_changes_mut(&mut self) -> Option<&mut GitChangesViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
-            Self::Terminal(_) | Self::Editor(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn usage(&self) -> Option<&UsageDashboard> {
+        match self {
+            Self::Usage(u) => Some(u),
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) => None,
+        }
+    }
+
+    pub fn usage_mut(&mut self) -> Option<&mut UsageDashboard> {
+        match self {
+            Self::Usage(u) => Some(u),
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) => None,
         }
     }
 }

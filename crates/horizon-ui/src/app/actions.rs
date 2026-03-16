@@ -84,7 +84,12 @@ impl HorizonApp {
     }
 
     pub(super) fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
-        self.board.focused.is_some() && !ctx.wants_keyboard_input() && self.dir_picker.is_none()
+        let focused_has_terminal = self
+            .board
+            .focused
+            .and_then(|panel_id| self.board.panel(panel_id))
+            .is_some_and(|panel| panel.content.terminal().is_some());
+        focused_has_terminal && !ctx.wants_keyboard_input() && self.dir_picker.is_none()
     }
 
     pub(super) fn create_panel(&mut self) {

@@ -10,6 +10,7 @@ use crate::error::Result;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
+use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
@@ -32,6 +33,7 @@ pub enum PanelKind {
     Command,
     Editor,
     GitChanges,
+    Usage,
 }
 
 impl PanelKind {
@@ -49,6 +51,7 @@ impl PanelKind {
             Self::Command => "Command",
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
+            Self::Usage => "Usage",
         }
     }
 }
@@ -205,6 +208,10 @@ impl Panel {
 
         if kind == PanelKind::GitChanges {
             return Self::spawn_git_changes(id, workspace_id, local_id, name, position, size, template, cwd);
+        }
+
+        if kind == PanelKind::Usage {
+            return Self::spawn_usage(id, workspace_id, local_id, name, position, size, template);
         }
 
         let (transcript, replay_bytes) = prepare_transcript_restore(id, kind, transcript_root, &local_id);
@@ -381,6 +388,41 @@ impl Panel {
         })
     }
 
+    #[allow(clippy::unnecessary_wraps)]
+    fn spawn_usage(
+        id: PanelId,
+        workspace_id: WorkspaceId,
+        local_id: String,
+        name: Option<String>,
+        position: Option<[f32; 2]>,
+        size: Option<[f32; 2]>,
+        template: Option<PanelTemplateRef>,
+    ) -> Result<Self> {
+        let has_custom_name = name.is_some();
+        let title = name.unwrap_or_else(|| "Usage".to_string());
+        tracing::info!("created usage panel '{}' (id={})", title, id.0);
+        Ok(Self {
+            id,
+            local_id,
+            title,
+            kind: PanelKind::Usage,
+            resume: PanelResume::Fresh,
+            layout: PanelLayout {
+                position: position.unwrap_or_default(),
+                size: size.unwrap_or(DEFAULT_PANEL_SIZE),
+            },
+            workspace_id,
+            content: PanelContent::Usage(UsageDashboard::new()),
+            session_binding: None,
+            template,
+            launched_at_millis: current_unix_millis(),
+            has_custom_name,
+            launch_command: None,
+            launch_args: Vec::new(),
+            launch_cwd: None,
+        })
+    }
+
     /// Drain pending terminal events. Returns `true` if any output was processed.
     pub fn process_output(&mut self) -> bool {
         let Some(terminal) = self.content.terminal_mut() else {
@@ -429,7 +471,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) => {}
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
         }
     }
 
@@ -441,7 +483,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -453,7 +495,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -474,6 +516,11 @@ impl Panel {
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart(&mut self) -> Result<()> {
         if let PanelContent::GitChanges(_) = &self.content {
+            return Ok(());
+        }
+
+        if let PanelContent::Usage(_) = &self.content {
+            self.content = PanelContent::Usage(UsageDashboard::new());
             return Ok(());
         }
 
@@ -607,7 +654,7 @@ fn resolve_launch_command(
     should_resume_binding: bool,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges => (String::new(), Vec::new()),
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
         PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
         PanelKind::Command => {
             if let Some(program) = command {
@@ -722,7 +769,7 @@ fn resolve_session_binding(
             session_binding.is_some()
                 && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
         }
-        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor | PanelKind::GitChanges => {
+        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => {
             session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
         }
     };
@@ -756,7 +803,7 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     match kind {
         PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Shell | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-        PanelKind::Editor | PanelKind::GitChanges => 0,
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
     }
 }
 

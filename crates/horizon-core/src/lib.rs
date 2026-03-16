@@ -14,6 +14,8 @@ mod panel;
 mod runtime_state;
 mod terminal;
 mod transcript;
+mod usage_dashboard;
+mod usage_stats;
 mod workspace;
 
 pub use alacritty_terminal::index::Side as TerminalSide;
@@ -33,4 +35,6 @@ pub use runtime_state::{
 };
 pub use terminal::Terminal;
 pub use transcript::PanelTranscript;
+pub use usage_dashboard::UsageDashboard;
+pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_tokens};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
