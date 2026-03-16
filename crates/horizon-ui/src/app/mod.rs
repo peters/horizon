@@ -1,4 +1,5 @@
 mod actions;
+mod attention_feed;
 mod canvas;
 mod panels;
 mod persistence;
@@ -15,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PanelKind, PresetConfig, RuntimeState,
-    WindowConfig, WorkspaceId, transcript_root_path_for_config,
+    AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PanelKind, PresetConfig,
+    RuntimeState, WindowConfig, WorkspaceId, transcript_root_path_for_config,
 };
 
 use crate::dir_picker::DirPicker;
@@ -294,9 +295,7 @@ impl HorizonApp {
                     .launch_cwd
                     .clone()
                     .or_else(|| self.board.workspace(panel.workspace_id).and_then(|ws| ws.cwd.clone()));
-                workspaces_needing_watchers
-                    .entry(panel.workspace_id)
-                    .or_insert(cwd);
+                workspaces_needing_watchers.entry(panel.workspace_id).or_insert(cwd);
             }
         }
 
@@ -306,8 +305,7 @@ impl HorizonApp {
                 && let Some(path) = cwd
             {
                 tracing::info!(workspace = workspace_id.0, path = %path.display(), "starting git watcher");
-                self.git_watchers
-                    .insert(*workspace_id, GitWatcher::start(path.clone()));
+                self.git_watchers.insert(*workspace_id, GitWatcher::start(path.clone()));
             }
         }
 
@@ -320,7 +318,8 @@ impl HorizonApp {
 
         for (workspace_id, status) in updates {
             for panel in &mut self.board.panels {
-                if panel.workspace_id == workspace_id && panel.kind == PanelKind::GitChanges
+                if panel.workspace_id == workspace_id
+                    && panel.kind == PanelKind::GitChanges
                     && let Some(viewer) = panel.content.git_changes_mut()
                 {
                     viewer.update(std::sync::Arc::clone(&status));
@@ -398,6 +397,12 @@ impl HorizonApp {
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
             self.render_minimap(ctx);
+            let minimap_height = if self.minimap_visible && !self.board.workspaces.is_empty() {
+                MINIMAP_MAX_H + MINIMAP_PAD * 2.0
+            } else {
+                0.0
+            };
+            attention_feed::render_attention_feed(ctx, &self.board, minimap_height);
             self.render_canvas_hud(ctx);
         }
     }

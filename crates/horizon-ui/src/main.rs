@@ -24,6 +24,8 @@ fn main() -> eframe::Result {
         )
         .init();
 
+    install_agent_plugins();
+
     // Parse --config <path> from CLI args
     let config_path = parse_config_arg();
     let config = Config::load(config_path.as_deref()).unwrap_or_else(|e| {
@@ -93,4 +95,50 @@ fn parse_config_arg() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn install_agent_plugins() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let home = std::path::PathBuf::from(home);
+
+    // Claude Code plugin: extract to ~/.config/horizon/plugins/claude-code/
+    // so we can point --plugin-dir at it.
+    let claude_plugin_dir = home.join(".config").join("horizon").join("plugins").join("claude-code");
+    install_plugin_files(
+        &claude_plugin_dir,
+        &[
+            (
+                ".claude-plugin/plugin.json",
+                include_str!("../../../assets/plugins/claude-code/.claude-plugin/plugin.json"),
+            ),
+            (
+                "skills/horizon-notify/SKILL.md",
+                include_str!("../../../assets/plugins/claude-code/skills/horizon-notify/SKILL.md"),
+            ),
+        ],
+    );
+
+    // Codex skill: install to ~/.agents/skills/ (Codex auto-discovers this).
+    let codex_skill_dir = home.join(".agents").join("skills").join("horizon-notify");
+    install_plugin_files(
+        &codex_skill_dir,
+        &[(
+            "SKILL.md",
+            include_str!("../../../assets/plugins/codex/skills/horizon-notify/SKILL.md"),
+        )],
+    );
+}
+
+fn install_plugin_files(base: &std::path::Path, files: &[(&str, &str)]) {
+    for (relative_path, content) in files {
+        let path = base.join(relative_path);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        let _ = std::fs::write(&path, content);
+    }
 }

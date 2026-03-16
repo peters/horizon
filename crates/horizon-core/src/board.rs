@@ -382,11 +382,28 @@ impl Board {
             .iter_mut()
             .map(|panel| {
                 let bell = panel.take_bell();
-                (panel.id, panel.workspace_id, panel.kind, panel.detect_attention(), bell)
+                let notification = panel.take_notification();
+                (
+                    panel.id,
+                    panel.workspace_id,
+                    panel.kind,
+                    panel.detect_attention(),
+                    bell,
+                    notification,
+                )
             })
             .collect();
 
-        for (panel_id, workspace_id, kind, attention, bell) in panel_states {
+        for (panel_id, workspace_id, kind, attention, bell, notification) in panel_states {
+            if let Some(notif) = notification {
+                let severity = match notif.severity.as_str() {
+                    "attention" => AttentionSeverity::High,
+                    "done" => AttentionSeverity::Medium,
+                    _ => AttentionSeverity::Low,
+                };
+                self.create_attention(workspace_id, Some(panel_id), "agent-notify", notif.message, severity);
+            }
+
             let has_open = self.unresolved_attention_for_panel(panel_id).is_some();
 
             if let Some(summary) = attention {

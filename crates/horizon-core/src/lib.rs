@@ -24,16 +24,16 @@ pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionStat
 pub use board::{Board, WorkspaceLayout};
 pub use config::{Config, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
+pub use error::{Error, Result};
 pub use git_changes::GitChangesViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
-pub use error::{Error, Result};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, PanelState, PanelTemplateRef, RuntimeState,
     WorkspaceState, WorkspaceTemplateRef, new_local_id, runtime_state_path_for_config, transcript_root_path_for_config,
 };
-pub use terminal::Terminal;
+pub use terminal::{AgentNotification, Terminal};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_tokens};

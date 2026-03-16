@@ -1,0 +1,8 @@
+{
+    "name": "horizon",
+    "version": "0.1.0",
+    "description": "Horizon terminal workspace integration — enables agents to send structured notifications to the Horizon attention system.",
+    "author": {
+        "name": "Horizon"
+    }
+}

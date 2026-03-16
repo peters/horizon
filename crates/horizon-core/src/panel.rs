@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -257,6 +258,7 @@ impl Panel {
         } else {
             (program, launch_args)
         };
+        let env = agent_env(kind);
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
         let terminal = Terminal::spawn(TerminalSpawnOptions {
@@ -270,6 +272,7 @@ impl Panel {
             scrollback_limit: scrollback_limit_for_kind(kind),
             window_id: id.0,
             replay_bytes,
+            env,
         })?;
 
         tracing::info!("created panel '{}' (id={})", title, id.0);
@@ -449,6 +452,10 @@ impl Panel {
         self.content.terminal_mut().is_some_and(Terminal::take_bell)
     }
 
+    pub fn take_notification(&mut self) -> Option<crate::terminal::AgentNotification> {
+        self.content.terminal_mut()?.take_notification()
+    }
+
     #[must_use]
     pub fn rename(&mut self, name: &str) -> bool {
         let trimmed = name.trim();
@@ -564,6 +571,7 @@ impl Panel {
             );
         }
 
+        let env = agent_env(self.kind);
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
@@ -575,6 +583,7 @@ impl Panel {
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
             replay_bytes: Vec::new(),
+            env,
         })?);
 
         self.launched_at_millis = current_unix_millis();
@@ -680,6 +689,9 @@ fn resolve_launch_command(
         PanelKind::Claude => {
             let program = command.unwrap_or_else(|| "claude".to_string());
             let mut launch_args = Vec::new();
+            if let Some(plugin_path) = horizon_claude_plugin_dir() {
+                launch_args.extend(["--plugin-dir".to_string(), plugin_path]);
+            }
             if let Some(binding) = session_binding {
                 if should_resume_binding {
                     launch_args.extend(["--resume".to_string(), binding.session_id.clone()]);
@@ -797,6 +809,28 @@ fn shell_escape(s: &str) -> String {
 
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
+fn agent_env(kind: PanelKind) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    if kind.is_agent() {
+        env.insert("HORIZON".to_string(), "1".to_string());
+    }
+    env
+}
+
+fn horizon_claude_plugin_dir() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("horizon")
+        .join("plugins")
+        .join("claude-code");
+    if path.is_dir() {
+        Some(path.display().to_string())
+    } else {
+        None
+    }
 }
 
 fn scrollback_limit_for_kind(kind: PanelKind) -> usize {

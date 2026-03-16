@@ -1,7 +1,7 @@
 use egui::{
     Align, Button, Color32, Context, CornerRadius, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2,
 };
-use horizon_core::{PanelId, WorkspaceId, WorkspaceLayout};
+use horizon_core::{AttentionSeverity, PanelId, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
@@ -298,24 +298,23 @@ impl HorizonApp {
         let title = panel.title.clone();
         let kind = panel.kind;
         let is_focused = self.board.focused == Some(panel_id);
-        let has_attention = self.board.unresolved_attention_for_panel(panel_id).is_some();
+        let attention = self
+            .board
+            .unresolved_attention_for_panel(panel_id)
+            .map(|item| item.severity);
 
         let item_response = ui.horizontal(|ui| {
             ui.set_min_height(30.0);
             ui.add_space(30.0);
 
-            if has_attention {
-                ui.label(egui::RichText::new("!").color(theme::PALETTE_RED).size(12.0).strong());
-            } else {
-                let (icon, icon_color) = panel_kind_icon(kind, workspace.color, is_focused);
-                ui.label(
-                    egui::RichText::new(icon)
-                        .color(icon_color)
-                        .size(10.0)
-                        .monospace()
-                        .strong(),
-                );
-            }
+            let (icon, icon_color) = panel_kind_icon(kind, workspace.color, is_focused);
+            ui.label(
+                egui::RichText::new(icon)
+                    .color(icon_color)
+                    .size(10.0)
+                    .monospace()
+                    .strong(),
+            );
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(&title)
@@ -325,9 +324,15 @@ impl HorizonApp {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(14.0);
-                let close = ui.add(Button::new(egui::RichText::new("×").size(16.0).color(theme::FG_DIM)).frame(false));
+                let close =
+                    ui.add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
                 if close.clicked() {
                     actions.close_panel = Some(panel_id);
+                }
+                if let Some(severity) = attention {
+                    let (label, color) = sidebar_attention_tag(severity);
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(label).size(9.0).color(color).strong());
                 }
             });
         });
@@ -471,6 +476,14 @@ fn paint_workspace_row_bg(
             CornerRadius::same(10),
             theme::alpha(theme::PANEL_BG_ALT, 160),
         );
+    }
+}
+
+fn sidebar_attention_tag(severity: AttentionSeverity) -> (&'static str, Color32) {
+    match severity {
+        AttentionSeverity::High => ("NEEDS INPUT", theme::PALETTE_RED),
+        AttentionSeverity::Medium => ("DONE", theme::PALETTE_GREEN),
+        AttentionSeverity::Low => ("INFO", theme::ACCENT),
     }
 }
 

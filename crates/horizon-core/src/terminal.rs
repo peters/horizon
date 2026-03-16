@@ -36,6 +36,14 @@ pub struct TerminalSpawnOptions {
     pub scrollback_limit: usize,
     pub window_id: u64,
     pub replay_bytes: Vec<u8>,
+    pub env: HashMap<String, String>,
+}
+
+/// A structured notification parsed from an OSC title sequence.
+#[derive(Clone, Debug)]
+pub struct AgentNotification {
+    pub severity: String,
+    pub message: String,
 }
 
 #[derive(Clone)]
@@ -96,6 +104,7 @@ pub struct Terminal {
     pty_resized: bool,
     child_exited: bool,
     bell_pending: bool,
+    pending_notification: Option<AgentNotification>,
 }
 
 impl Terminal {
@@ -135,7 +144,7 @@ impl Terminal {
             shell: Some(Shell::new(options.program, options.args)),
             working_directory: options.cwd,
             drain_on_exit: true,
-            env: HashMap::new(),
+            env: options.env,
             #[cfg(target_os = "windows")]
             escape_args: true,
         };
@@ -173,6 +182,7 @@ impl Terminal {
             pty_resized: false,
             child_exited: false,
             bell_pending: false,
+            pending_notification: None,
         };
         terminal.process_events();
         Ok(terminal)
@@ -400,6 +410,22 @@ impl Terminal {
         std::mem::take(&mut self.bell_pending)
     }
 
+    pub fn take_notification(&mut self) -> Option<AgentNotification> {
+        self.pending_notification.take()
+    }
+
+    fn parse_horizon_notification(title: &str) -> Option<AgentNotification> {
+        let payload = title.strip_prefix("HORIZON_NOTIFY:")?;
+        let (severity, message) = payload.split_once(':')?;
+        if message.is_empty() {
+            return None;
+        }
+        Some(AgentNotification {
+            severity: severity.to_string(),
+            message: message.to_string(),
+        })
+    }
+
     #[must_use]
     pub fn title(&self) -> &str {
         &self.title
@@ -481,7 +507,11 @@ impl Terminal {
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Title(title) => {
-                self.title = title;
+                if let Some(notification) = Self::parse_horizon_notification(&title) {
+                    self.pending_notification = Some(notification);
+                } else {
+                    self.title = title;
+                }
             }
             Event::ResetTitle => {
                 self.title.clear();
@@ -670,6 +700,8 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 mod tests {
     use std::time::Duration;
 
+    use std::collections::HashMap;
+
     use super::{
         Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, current_cwd_for_pid,
         default_terminal_rgb, replay_terminal_bytes,
@@ -709,6 +741,7 @@ mod tests {
             scrollback_limit: 256,
             window_id: 41,
             replay_bytes: Vec::new(),
+            env: HashMap::new(),
         })
         .expect("terminal should spawn");
 

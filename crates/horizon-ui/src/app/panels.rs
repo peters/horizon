@@ -2,7 +2,7 @@ use egui::{
     Align, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder,
     Vec2,
 };
-use horizon_core::{AgentSessionBinding, Panel, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{AgentSessionBinding, AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
 
 use crate::editor_widget::MarkdownEditorView;
 use crate::git_changes_widget::GitChangesView;
@@ -26,6 +26,7 @@ struct PanelSnapshot {
     is_focused: bool,
     is_renaming: bool,
     rebind_options: Vec<(String, AgentSessionBinding)>,
+    attention_badge: Option<(AttentionSeverity, String)>,
 }
 
 #[derive(Default)]
@@ -194,6 +195,11 @@ impl HorizonApp {
                 .find(|(workspace_id, _, _)| *workspace_id == panel.workspace_id)
                 .map(|(_, _, color)| *color);
 
+            let attention_badge = self
+                .board
+                .unresolved_attention_for_panel(panel_id)
+                .map(|item| (item.severity, item.summary.clone()));
+
             Some(PanelSnapshot {
                 screen_rect,
                 canvas_position,
@@ -207,6 +213,7 @@ impl HorizonApp {
                 is_focused: self.board.focused == Some(panel_id),
                 is_renaming: self.renaming_panel == Some(panel_id),
                 rebind_options: self.session_rebind_options(panel_id),
+                attention_badge,
             })
         })
     }
@@ -280,6 +287,7 @@ impl HorizonApp {
                     snapshot.is_focused,
                     close_response.hovered(),
                     snapshot.workspace_accent,
+                    snapshot.attention_badge.as_ref(),
                 );
 
                 if snapshot.is_renaming {
@@ -484,6 +492,7 @@ pub(super) fn paint_panel_chrome(
     focused: bool,
     close_hovered: bool,
     workspace_accent: Option<Color32>,
+    attention_badge: Option<&(AttentionSeverity, String)>,
 ) {
     let painter = ui.painter_at(panel_rect);
     let accent = workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG });
@@ -519,6 +528,10 @@ pub(super) fn paint_panel_chrome(
             egui::FontId::proportional(13.0),
             theme::FG,
         );
+    }
+
+    if let Some((severity, summary)) = attention_badge {
+        paint_attention_badge(&painter, titlebar_rect, close_rect, *severity, summary);
     }
 
     if scrollback_limit > 0 {
@@ -634,6 +647,70 @@ fn paint_history_meter(
             theme::FG_DIM
         },
     );
+}
+
+fn paint_attention_badge(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    severity: AttentionSeverity,
+    summary: &str,
+) {
+    let color = attention_severity_color(severity);
+    let icon = attention_severity_icon(severity);
+
+    // Truncate the summary for display.
+    let display_text = if summary.len() > 30 {
+        let mut truncated = summary[..29].to_string();
+        truncated.push('\u{2026}');
+        truncated
+    } else {
+        summary.to_string()
+    };
+    let badge_text = format!("{icon} {display_text}");
+    let font = egui::FontId::proportional(10.0);
+
+    // Position the badge left of the history meter area.
+    let history_badge = panel_history_badge_rect(titlebar_rect, close_rect);
+    let badge_right = history_badge.min.x - 6.0;
+    let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
+    let text_width = text_galley.size().x;
+    let badge_width = text_width + 12.0;
+    let badge_height: f32 = 18.0;
+    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
+    let badge_rect = Rect::from_min_size(
+        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
+        Vec2::new(badge_right - badge_left, badge_height),
+    );
+
+    painter.rect_filled(
+        badge_rect,
+        CornerRadius::same(4),
+        Color32::from_rgba_premultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
+    );
+    painter.text(
+        Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        badge_text,
+        font,
+        color,
+    );
+}
+
+fn attention_severity_color(severity: AttentionSeverity) -> Color32 {
+    match severity {
+        AttentionSeverity::High => theme::PALETTE_RED,
+        AttentionSeverity::Medium => theme::PALETTE_GREEN,
+        AttentionSeverity::Low => theme::ACCENT,
+    }
+}
+
+fn attention_severity_icon(severity: AttentionSeverity) -> &'static str {
+    match severity {
+        AttentionSeverity::High => "\u{26A0}",
+        AttentionSeverity::Medium => "\u{2713}",
+        AttentionSeverity::Low => "\u{2139}",
+    }
 }
 
 fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
