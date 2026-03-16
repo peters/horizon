@@ -2,7 +2,7 @@ use egui::{
     Align, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder,
     Vec2,
 };
-use horizon_core::{AgentSessionBinding, AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
 
 use crate::editor_widget::MarkdownEditorView;
 use crate::git_changes_widget::GitChangesView;
@@ -25,7 +25,7 @@ struct PanelSnapshot {
     workspace_accent: Option<Color32>,
     is_focused: bool,
     is_renaming: bool,
-    rebind_options: Vec<(String, AgentSessionBinding)>,
+    is_active_workspace: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
 }
 
@@ -138,6 +138,8 @@ impl HorizonApp {
             })
             .collect();
 
+        let active_workspace_id = self.board.active_workspace;
+
         let mut panel_order: Vec<_> = self
             .board
             .panels
@@ -152,7 +154,7 @@ impl HorizonApp {
         let mut panels_to_close = Vec::new();
 
         for (panel_id, fallback_index) in panel_order {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
+            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces, active_workspace_id) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -168,8 +170,9 @@ impl HorizonApp {
         panel_id: PanelId,
         _fallback_index: usize,
         workspaces: &[(WorkspaceId, String, Color32)],
+        active_workspace_id: Option<WorkspaceId>,
     ) -> bool {
-        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
+        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces, active_workspace_id) else {
             return false;
         };
         let outcome = self.show_panel_area(ctx, panel_id, &snapshot, workspaces);
@@ -182,6 +185,7 @@ impl HorizonApp {
         panel_id: PanelId,
         canvas_rect: Rect,
         workspaces: &[(WorkspaceId, String, Color32)],
+        active_workspace_id: Option<WorkspaceId>,
     ) -> Option<PanelSnapshot> {
         self.board.panel(panel_id).and_then(|panel| {
             let terminal = panel.terminal();
@@ -207,6 +211,9 @@ impl HorizonApp {
                 None
             };
 
+            let is_active_workspace =
+                active_workspace_id.is_none_or(|ws_id| ws_id == panel.workspace_id);
+
             Some(PanelSnapshot {
                 screen_rect,
                 canvas_position,
@@ -219,7 +226,7 @@ impl HorizonApp {
                 workspace_accent,
                 is_focused: self.board.focused == Some(panel_id),
                 is_renaming: self.renaming_panel == Some(panel_id),
-                rebind_options: self.session_rebind_options(panel_id),
+                is_active_workspace,
                 attention_badge,
             })
         })
@@ -275,7 +282,7 @@ impl HorizonApp {
                     &mut outcome,
                 );
                 if !snapshot.is_renaming {
-                    self.show_panel_context_menu(&drag_response, panel_id, snapshot, workspaces, &mut outcome);
+                    self.show_panel_context_menu(&drag_response, panel_id, snapshot.current_workspace_id, snapshot.kind, workspaces, &mut outcome);
                 }
 
                 paint_panel_chrome(
@@ -307,16 +314,21 @@ impl HorizonApp {
                     );
                 }
 
-                ui.scope_builder(
-                    UiBuilder::new()
-                        .max_rect(rects.body)
-                        .layout(Layout::top_down(Align::Min)),
-                    |ui| {
-                        if let Some(panel) = self.board.panel_mut(panel_id) {
-                            outcome.focus_requested |= show_panel_body_contents(ui, panel, snapshot.is_focused);
-                        }
-                    },
-                );
+                // Only render full terminal body for panels in the active
+                // workspace.  Off-workspace panels still show chrome but skip
+                // the expensive grid/content render to cut idle CPU.
+                if snapshot.is_active_workspace {
+                    ui.scope_builder(
+                        UiBuilder::new()
+                            .max_rect(rects.body)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            if let Some(panel) = self.board.panel_mut(panel_id) {
+                                outcome.focus_requested |= show_panel_body_contents(ui, panel, snapshot.is_focused);
+                            }
+                        },
+                    );
+                }
             });
 
         outcome
@@ -355,7 +367,8 @@ impl HorizonApp {
         &mut self,
         drag_response: &egui::Response,
         panel_id: PanelId,
-        snapshot: &PanelSnapshot,
+        current_workspace_id: WorkspaceId,
+        kind: PanelKind,
         workspaces: &[(WorkspaceId, String, Color32)],
         outcome: &mut PanelUiOutcome,
     ) {
@@ -365,7 +378,7 @@ impl HorizonApp {
             ui.separator();
 
             for (workspace_id, workspace_name, workspace_color) in workspaces {
-                let is_current = snapshot.current_workspace_id == *workspace_id;
+                let is_current = current_workspace_id == *workspace_id;
                 let label = if is_current {
                     format!("● {workspace_name}")
                 } else {
@@ -381,10 +394,13 @@ impl HorizonApp {
             }
 
             ui.separator();
-            if !snapshot.rebind_options.is_empty() {
+            // Compute rebind options lazily — only when the context menu is
+            // actually open instead of every frame for every panel.
+            let rebind_options = self.session_rebind_options(panel_id);
+            if !rebind_options.is_empty() {
                 ui.menu_button("Rebind Session", |ui| {
                     ui.set_min_width(220.0);
-                    for (label, binding) in &snapshot.rebind_options {
+                    for (label, binding) in &rebind_options {
                         let button =
                             egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT)).frame(false);
                         if ui.add(button).clicked() {
@@ -399,7 +415,7 @@ impl HorizonApp {
                 outcome.command = Some(PanelCommand::CreateWorkspace);
                 ui.close();
             }
-            if snapshot.kind.is_agent() {
+            if kind.is_agent() {
                 ui.separator();
                 if ui.button("Restart").clicked() {
                     self.panels_to_restart.push(panel_id);
