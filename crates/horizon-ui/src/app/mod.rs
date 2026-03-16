@@ -111,6 +111,7 @@ pub struct HorizonApp {
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
+    exit_cleanup_complete: bool,
 }
 
 impl HorizonApp {
@@ -209,12 +210,15 @@ impl HorizonApp {
             git_watchers: HashMap::new(),
             config_last_mtime,
             config_last_check: None,
+            exit_cleanup_complete: false,
         }
     }
 }
 
 impl eframe::App for HorizonApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.exit_on_close_request(ctx);
+
         if !self.prepare_frame(ctx) {
             return;
         }
@@ -233,12 +237,39 @@ impl eframe::App for HorizonApp {
     }
 
     fn on_exit(&mut self) {
-        self.auto_save_runtime_state();
-        self.board.shutdown_agent_panels();
+        self.exit_after_cleanup();
     }
 }
 
 impl HorizonApp {
+    fn exit_on_close_request(&mut self, ctx: &Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+
+        // Keep the viewport alive while we flush state and stop PTY-backed panels.
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.exit_after_cleanup();
+    }
+
+    fn exit_after_cleanup(&mut self) -> ! {
+        self.run_exit_cleanup();
+        // macOS can leave Horizon running as a windowless app after eframe has
+        // already called `on_exit`, so terminate explicitly once cleanup is done.
+        std::process::exit(0);
+    }
+
+    fn run_exit_cleanup(&mut self) {
+        if self.exit_cleanup_complete {
+            return;
+        }
+
+        self.exit_cleanup_complete = true;
+        self.auto_save_runtime_state();
+        self.board.shutdown_terminal_panels();
+        self.git_watchers.clear();
+    }
+
     fn prepare_frame(&mut self, ctx: &Context) -> bool {
         if !self.theme_applied {
             theme::apply(ctx);

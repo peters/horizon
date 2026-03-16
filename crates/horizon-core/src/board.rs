@@ -17,7 +17,7 @@ use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
-const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 const STACK_OFFSET_X: f32 = 16.0;
 const STACK_OFFSET_Y: f32 = 20.0;
@@ -281,23 +281,23 @@ impl Board {
         panel.restart()
     }
 
-    pub fn shutdown_agent_panels(&mut self) {
+    pub fn shutdown_terminal_panels(&mut self) {
         for panel in &mut self.panels {
-            if panel.kind.is_agent() {
+            if panel.terminal().is_some() {
                 panel.request_shutdown();
             }
         }
 
         for panel in &mut self.panels {
-            if !panel.kind.is_agent() {
+            if panel.terminal().is_none() {
                 continue;
             }
-            if !panel.wait_for_shutdown(AGENT_PANEL_SHUTDOWN_TIMEOUT) {
+            if !panel.wait_for_shutdown(TERMINAL_PANEL_SHUTDOWN_TIMEOUT) {
                 tracing::warn!(
                     panel_id = panel.id.0,
                     kind = ?panel.kind,
-                    timeout_ms = AGENT_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
-                    "timed out waiting for agent panel shutdown"
+                    timeout_ms = TERMINAL_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
+                    "timed out waiting for terminal panel shutdown"
                 );
             }
         }
@@ -1440,6 +1440,39 @@ mod tests {
         assert_eq!(
             board.workspace(workspace_id).expect("workspace").layout,
             Some(WorkspaceLayout::Rows)
+        );
+    }
+
+    #[test]
+    fn shutdown_terminal_panels_waits_for_shell_and_command_panels() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("shutdown");
+        let shell_panel = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("shell panel should spawn");
+        let command_panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: crate::panel::PanelKind::Command,
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("command panel should spawn");
+
+        board.shutdown_terminal_panels();
+
+        assert!(
+            board
+                .panel_mut(shell_panel)
+                .expect("shell panel should exist")
+                .wait_for_shutdown(Duration::from_millis(10))
+        );
+        assert!(
+            board
+                .panel_mut(command_panel)
+                .expect("command panel should exist")
+                .wait_for_shutdown(Duration::from_millis(10))
         );
     }
 

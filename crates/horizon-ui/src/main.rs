@@ -69,6 +69,7 @@ fn main() -> eframe::Result {
         viewport,
         renderer: eframe::Renderer::Wgpu,
         centered: !has_saved_position,
+        run_and_return: false,
         ..Default::default()
     };
 

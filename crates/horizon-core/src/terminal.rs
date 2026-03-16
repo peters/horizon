@@ -227,14 +227,25 @@ impl Terminal {
             return true;
         };
 
+        enum JoinStatus {
+            Complete,
+            Panicked,
+        }
+
         let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
-            let _ = shutdown_tx.send(event_loop_handle.join());
+            // Drop the joined event loop on this helper thread so PTY teardown
+            // cannot block the UI thread in `Pty::drop`.
+            let status = match event_loop_handle.join() {
+                Ok(_) => JoinStatus::Complete,
+                Err(_) => JoinStatus::Panicked,
+            };
+            let _ = shutdown_tx.send(status);
         });
 
         match shutdown_rx.recv_timeout(timeout) {
-            Ok(Ok(_)) => true,
-            Ok(Err(_)) => {
+            Ok(JoinStatus::Complete) => true,
+            Ok(JoinStatus::Panicked) => {
                 tracing::warn!("terminal event loop panicked during shutdown");
                 true
             }
@@ -703,8 +714,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, current_cwd_for_pid,
-        default_terminal_rgb, replay_terminal_bytes,
+        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
+        replay_terminal_bytes,
     };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
