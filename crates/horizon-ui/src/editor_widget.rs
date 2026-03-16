@@ -286,7 +286,8 @@ fn render_list<'a>(
         };
 
         ui.horizontal(|ui| {
-            ui.add_space((indent_level + 1) as f32 * 16.0);
+            let indent = u16::try_from(indent_level.saturating_add(1)).unwrap_or(u16::MAX);
+            ui.add_space(f32::from(indent) * 16.0);
             ui.label(RichText::new(bullet).size(FONT_SIZE).color(theme::FG_DIM));
             ui.vertical(|ui| {
                 for item_child in child.children() {

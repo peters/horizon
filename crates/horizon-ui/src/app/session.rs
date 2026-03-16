@@ -1,0 +1,330 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
+
+use egui::Context;
+use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelOptions, PanelResume};
+
+use crate::theme;
+
+use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
+use super::{HorizonApp, StartupBootstrap};
+
+impl HorizonApp {
+    pub(super) fn runtime_state_needs_session_bootstrap(runtime_state: &horizon_core::RuntimeState) -> bool {
+        runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(|panel| {
+                panel.kind.is_agent() && panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)
+            })
+    }
+
+    fn panel_options_need_session_bootstrap(opts: &PanelOptions) -> bool {
+        opts.kind.is_agent() && opts.session_binding.is_none() && matches!(opts.resume, PanelResume::Last)
+    }
+
+    pub(super) fn spawn_startup_bootstrap(mut runtime_state: horizon_core::RuntimeState) -> Receiver<StartupBootstrap> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let session_catalog = AgentSessionCatalog::load().unwrap_or_else(|error| {
+                tracing::warn!("failed to load agent session catalog: {error}");
+                AgentSessionCatalog::default()
+            });
+            runtime_state.bootstrap_missing_agent_bindings(&session_catalog);
+            let _ = tx.send(StartupBootstrap {
+                runtime_state,
+                session_catalog,
+            });
+        });
+        rx
+    }
+
+    fn spawn_session_catalog_refresh() -> Receiver<horizon_core::Result<AgentSessionCatalog>> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(AgentSessionCatalog::load());
+        });
+        rx
+    }
+
+    pub(super) fn resolve_panel_launch_binding(&mut self, opts: &mut PanelOptions) {
+        if !Self::panel_options_need_session_bootstrap(opts) {
+            return;
+        }
+
+        match AgentSessionCatalog::load() {
+            Ok(catalog) => {
+                let cwd = opts.cwd.as_ref().map(|path| path.display().to_string());
+                opts.session_binding = catalog
+                    .recent_for(opts.kind, cwd.as_deref())
+                    .into_iter()
+                    .next()
+                    .map(horizon_core::AgentSessionRecord::into_binding);
+                self.session_catalog = catalog;
+                self.last_session_catalog_refresh = Some(Instant::now());
+            }
+            Err(error) => tracing::warn!("failed to load agent session catalog: {error}"),
+        }
+    }
+
+    pub(super) fn poll_startup_bootstrap(&mut self) -> bool {
+        let Some(receiver) = self.startup_receiver.take() else {
+            return true;
+        };
+
+        match receiver.try_recv() {
+            Ok(bootstrap) => {
+                self.session_catalog = bootstrap.session_catalog;
+                self.last_session_catalog_refresh = Some(Instant::now());
+                self.board = Board::from_runtime_state_with_transcripts(
+                    &bootstrap.runtime_state,
+                    self.transcript_root.as_deref(),
+                )
+                .unwrap_or_else(|error| {
+                    tracing::error!("failed to restore runtime state: {error}");
+                    Board::new()
+                });
+                true
+            }
+            Err(TryRecvError::Empty) => {
+                self.startup_receiver = Some(receiver);
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                tracing::warn!("startup bootstrap worker disconnected before sending runtime state");
+                true
+            }
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    pub(super) fn render_loading_view(&self, ctx: &Context) {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(theme::BG))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() * 0.32);
+                    ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Resolving saved sessions...")
+                            .size(13.0)
+                            .color(theme::FG_SOFT),
+                    );
+                });
+            });
+    }
+
+    pub(super) fn maybe_refresh_session_catalog(&mut self) {
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+        if let Some(receiver) = self.session_catalog_refresh.take() {
+            match receiver.try_recv() {
+                Ok(Ok(catalog)) => {
+                    self.session_catalog = catalog;
+                    self.last_session_catalog_refresh = Some(Instant::now());
+                    self.capture_new_agent_bindings();
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!("failed to refresh agent session catalog: {error}");
+                    self.last_session_catalog_refresh = Some(Instant::now());
+                }
+                Err(TryRecvError::Empty) => {
+                    self.session_catalog_refresh = Some(receiver);
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    tracing::warn!("session catalog refresh worker disconnected");
+                }
+            }
+        }
+
+        let has_unbound_agent = self
+            .board
+            .panels
+            .iter()
+            .any(|panel| panel.kind.is_agent() && panel.session_binding.is_none());
+        if !has_unbound_agent {
+            return;
+        }
+
+        let should_refresh = self
+            .last_session_catalog_refresh
+            .is_none_or(|last_refresh| last_refresh.elapsed() >= REFRESH_INTERVAL);
+
+        if should_refresh && self.session_catalog_refresh.is_none() {
+            self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());
+        }
+    }
+
+    fn capture_new_agent_bindings(&mut self) {
+        let mut used_session_ids: HashSet<String> = self
+            .board
+            .panels
+            .iter()
+            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
+            .collect();
+        let mut pending_panels: HashMap<(PanelKind, String), Vec<(PanelId, i64)>> = HashMap::new();
+
+        for panel in &self.board.panels {
+            if panel.kind.is_agent() && panel.session_binding.is_none() {
+                let cwd = panel
+                    .launch_cwd
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default();
+                pending_panels
+                    .entry((panel.kind, cwd))
+                    .or_default()
+                    .push((panel.id, panel.launched_at_millis));
+            }
+        }
+
+        let mut assignments = Vec::new();
+        for ((kind, cwd), mut panels) in pending_panels {
+            panels.sort_by(|left, right| right.1.cmp(&left.1));
+            let oldest_launch = panels.iter().map(|(_, launched_at)| *launched_at).min().unwrap_or(0);
+            let mut candidates = self.session_catalog.recent_for(kind, empty_string_as_none(&cwd));
+            candidates.retain(|candidate| {
+                !used_session_ids.contains(&candidate.session_id)
+                    && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
+            });
+            candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+            for ((panel_id, _), candidate) in panels.into_iter().zip(candidates) {
+                used_session_ids.insert(candidate.session_id.clone());
+                assignments.push((panel_id, candidate.into_binding()));
+            }
+        }
+
+        if assignments.is_empty() {
+            return;
+        }
+
+        for (panel_id, binding) in assignments {
+            if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.set_session_binding(Some(binding));
+            }
+        }
+        self.mark_runtime_dirty();
+    }
+
+    pub(super) fn session_rebind_options(&self, panel_id: PanelId) -> Vec<(String, AgentSessionBinding)> {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return Vec::new();
+        };
+        if !panel.kind.is_agent() {
+            return Vec::new();
+        }
+
+        let cwd = panel.launch_cwd.as_ref().map(|path| path.display().to_string());
+        let current_session_id = panel
+            .session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.as_str());
+        self.session_catalog
+            .recent_for(panel.kind, cwd.as_deref())
+            .into_iter()
+            .filter(|session| Some(session.session_id.as_str()) != current_session_id)
+            .take(8)
+            .map(|session| {
+                let short_id = short_session_id(&session.session_id);
+                let label = truncate_session_label(
+                    &session
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| format!("{} session", panel.kind.display_name())),
+                );
+                (format!("{label} · {short_id}"), session.into_binding())
+            })
+            .collect()
+    }
+
+    pub(super) fn apply_pending_session_rebinds(&mut self) {
+        if self.pending_session_rebinds.is_empty() {
+            return;
+        }
+
+        let mut changed = false;
+        for (panel_id, binding) in self.pending_session_rebinds.drain(..) {
+            if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.set_session_binding(Some(binding));
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.mark_runtime_dirty();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HorizonApp;
+    use horizon_core::{PanelKind, PanelResume, PanelState, RuntimeState, WorkspaceState};
+
+    #[test]
+    fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                cwd: None,
+                position: None,
+                template: None,
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Claude".to_string(),
+                    kind: PanelKind::Claude,
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                }],
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
+    fn runtime_state_skips_bootstrap_for_fresh_or_bound_panels() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                cwd: None,
+                position: None,
+                template: None,
+                panels: vec![
+                    PanelState {
+                        local_id: "fresh".to_string(),
+                        name: "Shell".to_string(),
+                        kind: PanelKind::Shell,
+                        resume: PanelResume::Fresh,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "bound".to_string(),
+                        name: "Codex".to_string(),
+                        kind: PanelKind::Codex,
+                        resume: PanelResume::Last,
+                        session_binding: Some(horizon_core::AgentSessionBinding::new(
+                            PanelKind::Codex,
+                            "session-9".to_string(),
+                            None,
+                            None,
+                            None,
+                        )),
+                        ..PanelState::default()
+                    },
+                ],
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(!HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+}
