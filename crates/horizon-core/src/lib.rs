@@ -22,7 +22,7 @@ pub use error::{Error, Result};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, PanelState, PanelTemplateRef, RuntimeState,
-    WorkspaceState, WorkspaceTemplateRef, new_local_id, new_session_binding, runtime_state_path_for_config,
+    WorkspaceState, WorkspaceTemplateRef, new_local_id, runtime_state_path_for_config,
     transcript_root_path_for_config,
 };
 pub use terminal::Terminal;

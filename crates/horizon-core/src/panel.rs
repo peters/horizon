@@ -3,10 +3,11 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id, new_session_binding};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::workspace::WorkspaceId;
@@ -562,11 +563,18 @@ fn resolve_launch_command(
             if let Some(binding) = session_binding {
                 if should_resume_binding {
                     launch_args.extend(["--resume".to_string(), binding.session_id.clone()]);
-                } else {
-                    launch_args.extend(["--session-id".to_string(), binding.session_id.clone()]);
                 }
             } else if let PanelResume::Session { session_id } = resume {
                 launch_args.extend(["--resume".to_string(), session_id.clone()]);
+            } else {
+                // Force a new session so multiple Claude panels in the
+                // same CWD don't share the most-recent conversation.
+                // This UUID is only used for launch isolation — the real
+                // session binding is discovered from the catalog later.
+                launch_args.extend([
+                    "--session-id".to_string(),
+                    Uuid::new_v4().to_string(),
+                ]);
             }
             launch_args.extend(args);
             wrap_in_login_shell(program, launch_args)
@@ -629,7 +637,11 @@ fn resolve_session_binding(
                 ))
             }
             (PanelResume::Fresh, PanelKind::Claude) => {
-                new_session_binding(kind, cwd.map(str::to_string), label.map(str::to_string))
+                // Don't generate a synthetic session binding — Claude Code
+                // only creates the session file after the first user message,
+                // so a pre-assigned UUID would not match any on-disk session.
+                // The binding is captured later once the session exists.
+                None
             }
             _ => None,
         };
@@ -721,22 +733,22 @@ mod tests {
     }
 
     #[test]
-    fn claude_fresh_binding_uses_session_id_flag() {
-        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-42".to_string(), None, None, None);
+    fn claude_fresh_without_binding_uses_ephemeral_session_id() {
         let (_program, args) = resolve_launch_command(
             None,
             vec!["--dangerously-skip-permissions".to_string()],
             PanelKind::Claude,
             &PanelResume::Fresh,
-            Some(&binding),
+            None,
             false,
         );
 
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-ic");
         assert!(args[1].contains("claude"));
-        assert!(args[1].contains("--session-id session-42"));
-        assert!(!args[1].contains("--resume session-42"));
+        assert!(args[1].contains("--dangerously-skip-permissions"));
+        assert!(args[1].contains("--session-id"), "fresh Claude panels must get an ephemeral --session-id");
+        assert!(!args[1].contains("--resume"));
     }
 
     #[test]

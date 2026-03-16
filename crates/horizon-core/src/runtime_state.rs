@@ -708,19 +708,6 @@ pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-#[must_use]
-pub fn new_session_binding(kind: PanelKind, cwd: Option<String>, label: Option<String>) -> Option<AgentSessionBinding> {
-    match kind {
-        PanelKind::Claude => Some(AgentSessionBinding::new(
-            kind,
-            Uuid::new_v4().to_string(),
-            cwd,
-            label,
-            None,
-        )),
-        PanelKind::Codex | PanelKind::Shell | PanelKind::Command | PanelKind::Editor => None,
-    }
-}
 
 fn xdg_state_home() -> Option<PathBuf> {
     std::env::var_os("XDG_STATE_HOME").map(PathBuf::from)
