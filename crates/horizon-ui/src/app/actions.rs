@@ -127,7 +127,12 @@ impl HorizonApp {
         self.panel_rename_buffer.clear();
     }
 
-    pub(super) fn add_panel_to_workspace(&mut self, workspace_id: WorkspaceId, preset: PresetConfig) {
+    pub(super) fn add_panel_to_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        preset: PresetConfig,
+        canvas_pos: Option<[f32; 2]>,
+    ) {
         let workspace_cwd = self
             .board
             .workspace(workspace_id)
@@ -135,12 +140,17 @@ impl HorizonApp {
         if let Some(cwd) = workspace_cwd {
             let mut options = preset.to_panel_options();
             options.cwd = Some(cwd);
+            options.position = canvas_pos;
             if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                 tracing::error!("failed to create panel: {error}");
             }
             self.mark_runtime_dirty();
         } else {
-            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel { workspace_id, preset }));
+            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
+                workspace_id,
+                preset,
+                canvas_pos,
+            }));
         }
     }
 
@@ -215,9 +225,14 @@ impl HorizonApp {
                     tracing::error!("failed to create panel: {error}");
                 }
             }
-            DirPickerPurpose::AddPanel { workspace_id, preset } => {
+            DirPickerPurpose::AddPanel {
+                workspace_id,
+                preset,
+                canvas_pos,
+            } => {
                 let mut options = preset.to_panel_options();
                 options.cwd = path;
+                options.position = canvas_pos;
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                     tracing::error!("failed to create panel: {error}");
                 }
@@ -281,7 +296,7 @@ impl HorizonApp {
         if ctx.input(|input| input.key_pressed(egui::Key::N) && input.modifiers.ctrl) {
             let workspace_id = self.board.ensure_workspace();
             if let Some(preset) = self.presets.first().cloned() {
-                self.add_panel_to_workspace(workspace_id, preset);
+                self.add_panel_to_workspace(workspace_id, preset, None);
             } else {
                 self.create_panel();
             }
@@ -407,6 +422,7 @@ impl HorizonApp {
                                     DirPickerPurpose::AddPanel {
                                         workspace_id,
                                         preset: preset.clone(),
+                                        canvas_pos: Some(canvas_pos),
                                     }
                                 } else {
                                     DirPickerPurpose::NewWorkspace {
@@ -422,8 +438,12 @@ impl HorizonApp {
         if let Some(purpose) = open_dir_picker {
             self.pending_preset_pick = None;
             match purpose {
-                DirPickerPurpose::AddPanel { workspace_id, preset } => {
-                    self.add_panel_to_workspace(workspace_id, preset);
+                DirPickerPurpose::AddPanel {
+                    workspace_id,
+                    preset,
+                    canvas_pos,
+                } => {
+                    self.add_panel_to_workspace(workspace_id, preset, canvas_pos);
                 }
                 purpose @ DirPickerPurpose::NewWorkspace { .. } => {
                     self.dir_picker = Some(DirPicker::new(purpose));

@@ -912,4 +912,40 @@ mod tests {
         assert_eq!(manual.name, "manual");
         assert_eq!(manual.cwd, Some(PathBuf::from("/tmp/manual")));
     }
+
+    /// Regression: when adding a panel with an explicit position (e.g. from a
+    /// click on a panned canvas), the panel must be placed at that position
+    /// instead of falling back to the default tiled slot.
+    #[test]
+    fn explicit_position_overrides_default_tiling() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("test");
+
+        // Create a first panel so the workspace is non-empty.
+        board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+
+        // Add a second panel with an explicit canvas position far from the
+        // workspace origin — simulating a Ctrl+double-click on a panned canvas.
+        let click_pos = [800.0, 600.0];
+        let panel_id = board
+            .create_panel(
+                PanelOptions {
+                    position: Some(click_pos),
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("second panel should spawn");
+
+        let panel = board.panel(panel_id).expect("panel should exist");
+        assert!(
+            (panel.layout.position[0] - click_pos[0]).abs() <= f32::EPSILON
+                && (panel.layout.position[1] - click_pos[1]).abs() <= f32::EPSILON,
+            "panel should be placed at the explicit click position ({:?}), not at the default tile position ({:?})",
+            click_pos,
+            panel.layout.position,
+        );
+    }
 }

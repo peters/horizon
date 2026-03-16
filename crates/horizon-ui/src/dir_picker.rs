@@ -27,6 +27,7 @@ pub enum DirPickerPurpose {
     AddPanel {
         workspace_id: WorkspaceId,
         preset: PresetConfig,
+        canvas_pos: Option<[f32; 2]>,
     },
 }
 
