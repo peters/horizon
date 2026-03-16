@@ -25,6 +25,7 @@ struct SidebarActions {
     pan_to_workspace: Option<WorkspaceId>,
     close_panel: Option<PanelId>,
     close_all_in_workspace: Option<WorkspaceId>,
+    clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
 }
 
@@ -254,6 +255,13 @@ impl HorizonApp {
         response.context_menu(|ui| {
             ui.set_min_width(160.0);
             ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
+            if ui
+                .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT)).frame(false))
+                .clicked()
+            {
+                actions.clear_layout = Some(workspace.id);
+                ui.close();
+            }
             for layout in WorkspaceLayout::ALL {
                 let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT);
                 if ui.add(Button::new(text).frame(false)).clicked() {
@@ -458,6 +466,11 @@ impl HorizonApp {
                 self.close_panel(panel_id);
                 self.panel_screen_rects.remove(&panel_id);
             }
+        }
+        if let Some(workspace_id) = actions.clear_layout
+            && self.board.clear_workspace_layout(workspace_id)
+        {
+            self.mark_runtime_dirty();
         }
         if let Some((workspace_id, layout)) = actions.arrange_layout {
             self.board.arrange_workspace(workspace_id, layout);

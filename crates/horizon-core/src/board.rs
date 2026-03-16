@@ -693,6 +693,15 @@ impl Board {
         self.apply_workspace_layout(id, layout);
     }
 
+    pub fn clear_workspace_layout(&mut self, id: WorkspaceId) -> bool {
+        if self.workspace_layout_value(id).is_none() {
+            return false;
+        }
+
+        self.set_workspace_layout(id, None);
+        true
+    }
+
     pub fn create_attention(
         &mut self,
         workspace_id: WorkspaceId,
@@ -1322,5 +1331,22 @@ mod tests {
         assert!(board.move_panel(panel_id, [420.0, 360.0]));
 
         assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
+    }
+
+    #[test]
+    fn clearing_workspace_layout_preserves_current_panel_positions() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        let panel_id = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        let arranged_position = board.panel(panel_id).expect("panel").layout.position;
+
+        assert!(board.clear_workspace_layout(workspace_id));
+
+        assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
+        assert_eq!(board.panel(panel_id).expect("panel").layout.position, arranged_position);
     }
 }
