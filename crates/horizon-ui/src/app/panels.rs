@@ -25,7 +25,6 @@ struct PanelSnapshot {
     workspace_accent: Option<Color32>,
     is_focused: bool,
     is_renaming: bool,
-    is_active_workspace: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
 }
 
@@ -138,8 +137,6 @@ impl HorizonApp {
             })
             .collect();
 
-        let active_workspace_id = self.board.active_workspace;
-
         let mut panel_order: Vec<_> = self
             .board
             .panels
@@ -154,7 +151,7 @@ impl HorizonApp {
         let mut panels_to_close = Vec::new();
 
         for (panel_id, fallback_index) in panel_order {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces, active_workspace_id) {
+            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -170,9 +167,8 @@ impl HorizonApp {
         panel_id: PanelId,
         _fallback_index: usize,
         workspaces: &[(WorkspaceId, String, Color32)],
-        active_workspace_id: Option<WorkspaceId>,
     ) -> bool {
-        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces, active_workspace_id) else {
+        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
             return false;
         };
         let outcome = self.show_panel_area(ctx, panel_id, &snapshot, workspaces);
@@ -185,7 +181,6 @@ impl HorizonApp {
         panel_id: PanelId,
         canvas_rect: Rect,
         workspaces: &[(WorkspaceId, String, Color32)],
-        active_workspace_id: Option<WorkspaceId>,
     ) -> Option<PanelSnapshot> {
         self.board.panel(panel_id).and_then(|panel| {
             let terminal = panel.terminal();
@@ -211,9 +206,6 @@ impl HorizonApp {
                 None
             };
 
-            let is_active_workspace =
-                active_workspace_id.is_none_or(|ws_id| ws_id == panel.workspace_id);
-
             Some(PanelSnapshot {
                 screen_rect,
                 canvas_position,
@@ -226,7 +218,6 @@ impl HorizonApp {
                 workspace_accent,
                 is_focused: self.board.focused == Some(panel_id),
                 is_renaming: self.renaming_panel == Some(panel_id),
-                is_active_workspace,
                 attention_badge,
             })
         })
@@ -282,7 +273,14 @@ impl HorizonApp {
                     &mut outcome,
                 );
                 if !snapshot.is_renaming {
-                    self.show_panel_context_menu(&drag_response, panel_id, snapshot.current_workspace_id, snapshot.kind, workspaces, &mut outcome);
+                    self.show_panel_context_menu(
+                        &drag_response,
+                        panel_id,
+                        snapshot.current_workspace_id,
+                        snapshot.kind,
+                        workspaces,
+                        &mut outcome,
+                    );
                 }
 
                 paint_panel_chrome(
@@ -314,21 +312,16 @@ impl HorizonApp {
                     );
                 }
 
-                // Only render full terminal body for panels in the active
-                // workspace.  Off-workspace panels still show chrome but skip
-                // the expensive grid/content render to cut idle CPU.
-                if snapshot.is_active_workspace {
-                    ui.scope_builder(
-                        UiBuilder::new()
-                            .max_rect(rects.body)
-                            .layout(Layout::top_down(Align::Min)),
-                        |ui| {
-                            if let Some(panel) = self.board.panel_mut(panel_id) {
-                                outcome.focus_requested |= show_panel_body_contents(ui, panel, snapshot.is_focused);
-                            }
-                        },
-                    );
-                }
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(rects.body)
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                        if let Some(panel) = self.board.panel_mut(panel_id) {
+                            outcome.focus_requested |= show_panel_body_contents(ui, panel, snapshot.is_focused);
+                        }
+                    },
+                );
             });
 
         outcome
