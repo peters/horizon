@@ -759,7 +759,6 @@ impl HorizonApp {
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
         let mut close_all_in_ws: Option<WorkspaceId> = None;
-        let mut create_from_preset: Option<(WorkspaceId, PresetConfig)> = None;
 
         let viewport = viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
@@ -853,35 +852,6 @@ impl HorizonApp {
                                         .strong(),
                                 );
 
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.add_space(10.0);
-                                    let plus_btn = ui.add(
-                                        Button::new(egui::RichText::new("+").size(15.0).color(theme::FG_DIM))
-                                            .frame(false),
-                                    );
-                                    let popup_id = plus_btn.id.with("preset_menu");
-                                    if plus_btn.clicked() {
-                                        #[allow(deprecated)]
-                                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-                                    }
-                                    #[allow(deprecated)]
-                                    egui::popup_below_widget(
-                                        ui,
-                                        popup_id,
-                                        &plus_btn,
-                                        egui::PopupCloseBehavior::CloseOnClick,
-                                        |ui| {
-                                            ui.set_min_width(160.0);
-                                            for preset in &self.presets {
-                                                let label =
-                                                    egui::RichText::new(&preset.name).size(12.0).color(theme::FG_SOFT);
-                                                if ui.add(Button::new(label).frame(false)).clicked() {
-                                                    create_from_preset = Some((ws_id, preset.clone()));
-                                                }
-                                            }
-                                        },
-                                    );
-                                });
                             });
 
                             // Workspace click → pan to workspace
@@ -1112,9 +1082,6 @@ impl HorizonApp {
                 self.close_panel(pid);
                 self.panel_screen_rects.remove(&pid);
             }
-        }
-        if let Some((ws_id, preset)) = create_from_preset {
-            self.add_panel_to_workspace(ws_id, preset);
         }
     }
 
