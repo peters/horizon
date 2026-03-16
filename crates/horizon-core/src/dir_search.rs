@@ -65,8 +65,13 @@ fn search_directories(query: &str) -> Vec<PathBuf> {
     }
 
     // Path-based completion: query contains a separator or starts with ~ /
-    if trimmed.starts_with('/') || trimmed.starts_with('~') || trimmed.contains('/') {
+    if trimmed.starts_with('/') || trimmed.starts_with('~') {
         return complete_path(trimmed);
+    }
+    if trimmed.contains('/') {
+        // The UI shows ~ as a prefix, so bare relative paths like "github/foo"
+        // should resolve against $HOME, not the current working directory.
+        return complete_path(&format!("~/{trimmed}"));
     }
 
     // Fuzzy name search from $HOME
