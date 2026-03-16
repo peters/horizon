@@ -1,62 +1,27 @@
+mod workspace_layout;
+
+pub use workspace_layout::WorkspaceLayout;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
 
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::Result;
 use crate::layout::{
-    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
-    tiled_panel_position, usize_to_f32, workspace_slot_width,
+    WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, tiled_panel_position,
+    workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::{RuntimeState, WorkspaceState};
 use crate::workspace::{Workspace, WorkspaceId};
+use workspace_layout::{arranged_panel_layout, vec2_eq};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
-const STACK_OFFSET_X: f32 = 16.0;
-const STACK_OFFSET_Y: f32 = 20.0;
-const CASCADE_OFFSET_X: f32 = 40.0;
-const CASCADE_OFFSET_Y: f32 = 30.0;
-
-fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
-    (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
-}
-
-/// Predefined layout arrangements for panels inside a workspace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub enum WorkspaceLayout {
-    /// Single column, panels stacked top-to-bottom.
-    Rows,
-    /// Single row, panels side by side.
-    Columns,
-    /// Square-ish grid (auto columns).
-    Grid,
-    /// Layered pile with slight offsets to keep nearby panels accessible.
-    Stack,
-    /// Diagonal overlap that fans panels across the workspace.
-    Cascade,
-}
-
-impl WorkspaceLayout {
-    pub const ALL: [Self; 5] = [Self::Rows, Self::Columns, Self::Grid, Self::Stack, Self::Cascade];
-
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Rows => "Rows",
-            Self::Columns => "Columns",
-            Self::Grid => "Grid",
-            Self::Stack => "Stack",
-            Self::Cascade => "Cascade",
-        }
-    }
-}
 
 pub struct Board {
     pub panels: Vec<Panel>,
@@ -929,46 +894,6 @@ impl Default for Board {
     }
 }
 
-fn arranged_panel_layout(
-    origin: [f32; 2],
-    layout: WorkspaceLayout,
-    index: usize,
-    count: usize,
-) -> ([f32; 2], [f32; 2]) {
-    let panel_size = DEFAULT_PANEL_SIZE;
-
-    match layout {
-        WorkspaceLayout::Rows => {
-            let x = origin[0] + WS_INNER_PAD;
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * (panel_size[1] + TILE_GAP);
-            ([x, y], panel_size)
-        }
-        WorkspaceLayout::Columns => {
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * (panel_size[0] + TILE_GAP);
-            let y = origin[1] + WS_INNER_PAD;
-            ([x, y], panel_size)
-        }
-        WorkspaceLayout::Grid => {
-            let cols = ceil_sqrt_usize(count);
-            let col = index % cols;
-            let row = index / cols;
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_size[0] + TILE_GAP);
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_size[1] + TILE_GAP);
-            ([x, y], panel_size)
-        }
-        WorkspaceLayout::Stack => {
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_X;
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_Y;
-            ([x, y], panel_size)
-        }
-        WorkspaceLayout::Cascade => {
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_X;
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_Y;
-            ([x, y], panel_size)
-        }
-    }
-}
-
 fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
     positions
         .iter()
@@ -1346,8 +1271,14 @@ mod tests {
 
         assert!((first_position[0] - (origin[0] + WS_INNER_PAD)).abs() <= f32::EPSILON);
         assert!((first_position[1] - (origin[1] + WS_INNER_PAD)).abs() <= f32::EPSILON);
-        assert!((second_position[0] - (origin[0] + WS_INNER_PAD + STACK_OFFSET_X)).abs() <= f32::EPSILON);
-        assert!((second_position[1] - (origin[1] + WS_INNER_PAD + STACK_OFFSET_Y)).abs() <= f32::EPSILON);
+        assert!(
+            (second_position[0] - (origin[0] + crate::layout::WS_INNER_PAD + workspace_layout::STACK_OFFSET_X)).abs()
+                <= f32::EPSILON
+        );
+        assert!(
+            (second_position[1] - (origin[1] + crate::layout::WS_INNER_PAD + workspace_layout::STACK_OFFSET_Y)).abs()
+                <= f32::EPSILON
+        );
     }
 
     #[test]
@@ -1370,8 +1301,14 @@ mod tests {
 
         assert!((first_position[0] - (origin[0] + WS_INNER_PAD)).abs() <= f32::EPSILON);
         assert!((first_position[1] - (origin[1] + WS_INNER_PAD)).abs() <= f32::EPSILON);
-        assert!((second_position[0] - (origin[0] + WS_INNER_PAD + CASCADE_OFFSET_X)).abs() <= f32::EPSILON);
-        assert!((second_position[1] - (origin[1] + WS_INNER_PAD + CASCADE_OFFSET_Y)).abs() <= f32::EPSILON);
+        assert!(
+            (second_position[0] - (origin[0] + crate::layout::WS_INNER_PAD + workspace_layout::CASCADE_OFFSET_X)).abs()
+                <= f32::EPSILON
+        );
+        assert!(
+            (second_position[1] - (origin[1] + crate::layout::WS_INNER_PAD + workspace_layout::CASCADE_OFFSET_Y)).abs()
+                <= f32::EPSILON
+        );
     }
 
     #[test]
@@ -1412,7 +1349,7 @@ mod tests {
             board.panel(second).expect("second panel").layout.position,
             [
                 origin[0] + WS_INNER_PAD,
-                origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
+                origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + crate::layout::TILE_GAP,
             ]
         ));
     }
@@ -1504,6 +1441,10 @@ mod tests {
         assert!(board.clear_workspace_layout(workspace_id));
 
         assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
-        assert_eq!(board.panel(panel_id).expect("panel").layout.position, arranged_position);
+        let current_position = board.panel(panel_id).expect("panel").layout.position;
+        assert!(
+            vec2_eq(current_position, arranged_position),
+            "expected {arranged_position:?}, got {current_position:?}"
+        );
     }
 }
