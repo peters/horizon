@@ -427,6 +427,7 @@ impl Panel {
     }
 
     /// Drain pending terminal events. Returns `true` if any output was processed.
+    #[profiling::function]
     pub fn process_output(&mut self) -> bool {
         let Some(terminal) = self.content.terminal_mut() else {
             return false;

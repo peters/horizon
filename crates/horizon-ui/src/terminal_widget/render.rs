@@ -7,6 +7,7 @@ use crate::theme;
 
 use super::layout::{GridMetrics, usize_to_f32};
 
+#[profiling::function]
 pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
     let painter = ui.painter_at(rect);
 
@@ -49,6 +50,7 @@ pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<
     }
 }
 
+#[profiling::function]
 pub(super) fn render_cursor(
     ui: &egui::Ui,
     rect: Rect,

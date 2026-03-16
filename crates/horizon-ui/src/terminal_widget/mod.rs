@@ -24,6 +24,7 @@ impl<'a> TerminalView<'a> {
     }
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
+    #[profiling::function]
     pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
         let font_id = FontId::monospace(FONT_SIZE);
         let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'M'));

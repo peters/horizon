@@ -218,6 +218,7 @@ impl HorizonApp {
 }
 
 impl eframe::App for HorizonApp {
+    #[profiling::function]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.exit_on_close_request(ctx);
 
@@ -253,6 +254,7 @@ impl eframe::App for HorizonApp {
 }
 
 impl HorizonApp {
+    #[profiling::function]
     fn exit_on_close_request(&mut self, ctx: &Context) {
         if !ctx.input(|input| input.viewport().close_requested()) {
             return;
@@ -266,6 +268,7 @@ impl HorizonApp {
     /// Starts asynchronous terminal shutdown. State is saved immediately,
     /// and background threads join each terminal event loop. The UI shows a
     /// progress overlay until all terminals are done or the budget expires.
+    #[profiling::function]
     fn begin_shutdown(&mut self) {
         if self.shutdown_progress.is_some() {
             return;
@@ -276,6 +279,7 @@ impl HorizonApp {
         self.shutdown_progress = Some(self.board.begin_async_shutdown());
     }
 
+    #[profiling::function]
     fn poll_shutdown_progress(&mut self) {
         const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
@@ -289,6 +293,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn render_shutdown_overlay(&self, ctx: &Context) {
         let Some(progress) = &self.shutdown_progress else {
             return;
@@ -322,6 +327,7 @@ impl HorizonApp {
     }
 
     /// Synchronous fallback for the `on_exit` eframe callback.
+    #[profiling::function]
     fn run_exit_cleanup(&mut self) {
         if self.exit_cleanup_complete {
             return;
@@ -333,6 +339,7 @@ impl HorizonApp {
         self.git_watchers.clear();
     }
 
+    #[profiling::function]
     fn prepare_frame(&mut self, ctx: &Context) -> bool {
         if !self.theme_applied {
             theme::apply(ctx);
@@ -352,6 +359,7 @@ impl HorizonApp {
         true
     }
 
+    #[profiling::function]
     fn seed_initial_pan(&mut self, ctx: &Context) {
         self.initial_pan_done = true;
         if let Some(workspace_id) = self.leftmost_workspace_id() {
@@ -368,6 +376,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
@@ -386,6 +395,7 @@ impl HorizonApp {
         had_terminal_output
     }
 
+    #[profiling::function]
     fn poll_git_watchers(&mut self) {
         // Collect which workspaces need watchers (have GitChanges panels).
         let mut workspaces_needing_watchers: HashMap<WorkspaceId, Option<std::path::PathBuf>> = HashMap::new();
@@ -432,6 +442,7 @@ impl HorizonApp {
             .retain(|ws_id, _| workspaces_needing_watchers.contains_key(ws_id));
     }
 
+    #[profiling::function]
     fn poll_config_reload(&mut self) {
         // Skip while settings editor is open (it manages its own save/reload).
         if self.settings.is_some() {
@@ -465,6 +476,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn apply_panel_transitions(&mut self) {
         let panels_to_close = std::mem::take(&mut self.panels_to_close);
         for panel_id in panels_to_close {
@@ -482,6 +494,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn normalize_workspace_state(&mut self) {
         self.board.remove_empty_workspaces();
         if self.board.workspaces.is_empty() {
@@ -501,6 +514,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn apply_pending_workspace_changes(&mut self) {
         for panel_id in self.workspace_creates.drain(..) {
             let name = format!("Workspace {}", self.board.workspaces.len() + 1);
@@ -513,6 +527,7 @@ impl HorizonApp {
         self.apply_pending_session_rebinds();
     }
 
+    #[profiling::function]
     fn render_active_view(&mut self, ctx: &Context) {
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
@@ -558,6 +573,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn finalize_frame(
         &mut self,
         ctx: &Context,

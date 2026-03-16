@@ -427,6 +427,7 @@ impl Board {
     }
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
+    #[profiling::function]
     pub fn process_output(&mut self) -> bool {
         let mut had_output = false;
         for panel in &mut self.panels {
@@ -800,8 +801,7 @@ impl Board {
         self.set_workspace_layout(id, Some(layout));
 
         for (index, panel_id) in panel_ids.iter().enumerate() {
-            let (position, size) =
-                arranged_panel_layout(origin, layout, index, count, content_size);
+            let (position, size) = arranged_panel_layout(origin, layout, index, count, content_size);
 
             if let Some(panel) = self.panel_mut(*panel_id) {
                 panel.move_to(position);

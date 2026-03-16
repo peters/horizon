@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
+
 [[bin]]
 name = "horizon"
 path = "src/main.rs"
@@ -19,6 +22,7 @@ egui.workspace = true
 wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+profiling.workspace = true
 serde_yaml.workspace = true
 tempfile.workspace = true
 alacritty_terminal.workspace = true

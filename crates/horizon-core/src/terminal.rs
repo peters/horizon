@@ -190,6 +190,7 @@ impl Terminal {
     }
 
     /// Drain pending PTY events. Returns `true` if any events were processed.
+    #[profiling::function]
     pub fn process_events(&mut self) -> bool {
         let mut had_events = false;
         while let Ok(event) = self.event_rx.try_recv() {

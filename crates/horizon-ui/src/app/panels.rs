@@ -96,6 +96,7 @@ fn show_panel_body_contents(ui: &mut egui::Ui, panel: &mut Panel, is_focused: bo
 }
 
 impl HorizonApp {
+    #[profiling::function]
     pub(super) fn render_fullscreen_panel(&mut self, ctx: &Context) {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
@@ -123,6 +124,7 @@ impl HorizonApp {
             });
     }
 
+    #[profiling::function]
     pub(super) fn render_panels(&mut self, ctx: &Context) {
         self.panel_screen_rects.clear();
 
@@ -158,6 +160,7 @@ impl HorizonApp {
         self.panels_to_close = panels_to_close;
     }
 
+    #[profiling::function]
     pub(super) fn render_panel(
         &mut self,
         ctx: &Context,
@@ -173,6 +176,7 @@ impl HorizonApp {
         self.apply_panel_outcome(panel_id, &snapshot, &outcome)
     }
 
+    #[profiling::function]
     fn panel_snapshot(
         &self,
         panel_id: PanelId,
@@ -221,6 +225,7 @@ impl HorizonApp {
         })
     }
 
+    #[profiling::function]
     fn show_panel_area(
         &mut self,
         ctx: &Context,

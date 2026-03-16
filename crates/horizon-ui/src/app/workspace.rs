@@ -43,6 +43,7 @@ const WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y: i8 = 5;
 const WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X: f32 = 10.0;
 
 impl HorizonApp {
+    #[profiling::function]
     pub(super) fn render_workspace_backgrounds(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let visuals = self.workspace_visuals(canvas_rect);
@@ -133,6 +134,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     fn workspace_visuals(&self, canvas_rect: Rect) -> Vec<WorkspaceVisual> {
         self.board
             .workspaces

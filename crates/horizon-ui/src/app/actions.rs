@@ -12,12 +12,14 @@ use super::util::{editor_panel_size_for_file, primary_shortcut_modifier, viewpor
 use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
+    #[profiling::function]
     pub(super) fn reset_view(&mut self) {
         self.pan_offset = Vec2::ZERO;
         self.pan_target = None;
         self.mark_runtime_dirty();
     }
 
+    #[profiling::function]
     pub(super) fn animate_pan(&mut self, ctx: &Context) {
         if let Some(target) = self.pan_target {
             let dt = ctx.input(|input| input.predicted_dt);
@@ -469,6 +471,7 @@ impl HorizonApp {
         }
     }
 
+    #[profiling::function]
     pub(super) fn handle_canvas_pan(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let panel_rects: Vec<Rect> = self.panel_screen_rects.values().copied().collect();

@@ -4,12 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+trace-profiling = ["profiling/profile-with-tracing"]
+
 [lints]
 workspace = true
 
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+profiling.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true

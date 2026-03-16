@@ -15,14 +15,10 @@ use std::path::PathBuf;
 
 use app::HorizonApp;
 use horizon_core::{Config, RuntimeState, runtime_state_path_for_config};
+use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info")),
-        )
-        .init();
+    init_tracing();
 
     install_agent_plugins();
 
@@ -86,6 +82,23 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"));
+
+    let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter);
+
+    if std::env::var_os("HORIZON_TRACE_SPANS").is_some() {
+        subscriber
+            .with_ansi(false)
+            .with_span_events(FmtSpan::CLOSE)
+            .compact()
+            .init();
+    } else {
+        subscriber.init();
+    }
 }
 
 fn parse_config_arg() -> Option<PathBuf> {
