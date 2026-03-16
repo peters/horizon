@@ -1105,6 +1105,10 @@ impl HorizonApp {
                 self.panel_screen_rects.remove(&pid);
             }
         }
+        if let Some((ws_id, layout)) = arrange_layout {
+            self.board.arrange_workspace(ws_id, layout);
+            self.mark_runtime_dirty();
+        }
     }
 
     fn toggle_settings(&mut self) {
