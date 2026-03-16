@@ -2,7 +2,11 @@ mod keyboard;
 mod mouse;
 mod sequence;
 
-pub use keyboard::{paste_bytes, translate_key_event};
+#[cfg(test)]
+pub use keyboard::translate_key_event;
+pub use keyboard::{
+    KeyTranslation, paste_bytes, should_defer_textual_key, translate_key_event_with_physical, translate_text_event,
+};
 pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, wheel_action};
 
 #[derive(Clone, Copy)]
@@ -22,7 +26,7 @@ pub struct PointerButtons {
 mod tests {
     use super::{
         GridPoint, PointerButtons, WheelAction, mouse_button_report, mouse_motion_report, paste_bytes,
-        translate_key_event, wheel_action,
+        translate_key_event, translate_text_event, wheel_action,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Key, Modifiers, MouseWheelUnit, PointerButton, Vec2};
@@ -132,19 +136,19 @@ mod tests {
 
     #[test]
     fn home_end_produce_correct_sequences_in_normal_mode() {
-        let home =
-            translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::NONE).expect("Home should produce a sequence");
+        let home = translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::NONE)
+            .expect("Home should produce a sequence");
         assert_eq!(home.bytes, b"\x1b[H", "Home in normal mode");
 
-        let end =
-            translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::NONE).expect("End should produce a sequence");
+        let end = translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::NONE)
+            .expect("End should produce a sequence");
         assert_eq!(end.bytes, b"\x1b[F", "End in normal mode");
     }
 
     #[test]
     fn home_end_use_ss3_in_app_cursor_mode() {
-        let home =
-            translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::APP_CURSOR).expect("Home app-cursor");
+        let home = translate_key_event(Key::Home, true, false, Modifiers::NONE, TermMode::APP_CURSOR)
+            .expect("Home app-cursor");
         assert_eq!(home.bytes, b"\x1bOH");
 
         let end =
@@ -167,42 +171,33 @@ mod tests {
         .expect("Home kitty");
         assert_eq!(home.bytes, b"\x1b[1H", "Home must be CSI 1 H in kitty mode");
 
-        let end = translate_key_event(
-            Key::End,
-            true,
-            false,
-            Modifiers::NONE,
-            TermMode::DISAMBIGUATE_ESC_CODES,
-        )
-        .expect("End kitty");
+        let end = translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::DISAMBIGUATE_ESC_CODES)
+            .expect("End kitty");
         assert_eq!(end.bytes, b"\x1b[1F", "End must be CSI 1 F in kitty mode");
     }
 
     #[test]
     fn navigation_keys_produce_correct_csi_sequences() {
-        let page_up =
-            translate_key_event(Key::PageUp, true, false, Modifiers::NONE, TermMode::NONE).expect("PageUp");
+        let page_up = translate_key_event(Key::PageUp, true, false, Modifiers::NONE, TermMode::NONE).expect("PageUp");
         assert_eq!(page_up.bytes, b"\x1b[5~");
 
         let page_down =
             translate_key_event(Key::PageDown, true, false, Modifiers::NONE, TermMode::NONE).expect("PageDown");
         assert_eq!(page_down.bytes, b"\x1b[6~");
 
-        let insert =
-            translate_key_event(Key::Insert, true, false, Modifiers::NONE, TermMode::NONE).expect("Insert");
+        let insert = translate_key_event(Key::Insert, true, false, Modifiers::NONE, TermMode::NONE).expect("Insert");
         assert_eq!(insert.bytes, b"\x1b[2~");
 
-        let delete =
-            translate_key_event(Key::Delete, true, false, Modifiers::NONE, TermMode::NONE).expect("Delete");
+        let delete = translate_key_event(Key::Delete, true, false, Modifiers::NONE, TermMode::NONE).expect("Delete");
         assert_eq!(delete.bytes, b"\x1b[3~");
     }
 
-    /// Regression: AltGr is reported by winit as Alt. When typing @
-    /// via AltGr+2, translate_key_event must NOT produce an alt-prefixed
+    /// Regression: `AltGr` is reported by winit as Alt. When typing @
+    /// via `AltGr+2`, `translate_key_event` must NOT produce an alt-prefixed
     /// sequence for Num2, because the actual character (@) arrives as a
     /// separate Text event. The deferred-alt logic in
-    /// handle_terminal_keyboard_input handles the mismatch, but
-    /// translate_key_event itself must return None for Shift+Num2 so
+    /// `handle_terminal_keyboard_input` handles the mismatch, but
+    /// `translate_key_event` itself must return None for Shift+Num2 so
     /// unshifted symbols don't leak through.
     #[test]
     fn altgr_character_keys_do_not_produce_alt_sequence_with_shift() {
@@ -212,5 +207,37 @@ mod tests {
             result.is_none(),
             "Shift+Num2 must not produce bytes (text event handles @)"
         );
+    }
+
+    #[test]
+    fn kitty_text_translation_uses_physical_digit_for_shifted_symbol() {
+        let translation = translate_text_event(
+            Key::Num2,
+            Some(Key::Num2),
+            "@",
+            true,
+            false,
+            Modifiers::SHIFT,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+        )
+        .expect("shifted symbol");
+
+        assert_eq!(translation.bytes, b"\x1b[50:64;2u");
+    }
+
+    #[test]
+    fn kitty_text_translation_reports_associated_text_for_altgr_symbol() {
+        let translation = translate_text_event(
+            Key::Num2,
+            Some(Key::Num2),
+            "@",
+            true,
+            false,
+            Modifiers::ALT,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS | TermMode::REPORT_ASSOCIATED_TEXT,
+        )
+        .expect("altgr symbol");
+
+        assert_eq!(translation.bytes, b"\x1b[50:64;3;64u");
     }
 }
