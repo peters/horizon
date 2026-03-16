@@ -212,6 +212,21 @@ impl Board {
         }
     }
 
+    /// Restart a panel's terminal process in-place, preserving identity and
+    /// session binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new terminal cannot be spawned.
+    pub fn restart_panel(&mut self, id: PanelId) -> Result<()> {
+        let panel = self
+            .panels
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| crate::error::Error::Pty(format!("panel {} not found", id.0)))?;
+        panel.restart()
+    }
+
     pub fn shutdown_agent_panels(&mut self) {
         for panel in &mut self.panels {
             if panel.kind.is_agent() {

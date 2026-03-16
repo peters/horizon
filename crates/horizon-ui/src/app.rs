@@ -84,6 +84,7 @@ struct StartupBootstrap {
 pub struct HorizonApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
+    panels_to_restart: Vec<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
     workspace_creates: Vec<PanelId>,
     theme_applied: bool,
@@ -165,6 +166,7 @@ impl HorizonApp {
         Self {
             board,
             panels_to_close: Vec::new(),
+            panels_to_restart: Vec::new(),
             workspace_assignments: Vec::new(),
             workspace_creates: Vec::new(),
             theme_applied: false,
@@ -265,13 +267,7 @@ impl HorizonApp {
         self.pan_to_canvas_pos_aligned(ctx, canvas_pos, canvas_size, false);
     }
 
-    fn pan_to_canvas_pos_aligned(
-        &mut self,
-        ctx: &Context,
-        canvas_pos: Pos2,
-        canvas_size: Vec2,
-        left_align: bool,
-    ) {
+    fn pan_to_canvas_pos_aligned(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2, left_align: bool) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let vw = canvas_rect.width();
         let vh = canvas_rect.height();
@@ -960,6 +956,20 @@ impl HorizonApp {
                                     }
 
                                     ui.separator();
+
+                                    if kind.is_agent()
+                                        && ui
+                                            .add(
+                                                Button::new(
+                                                    egui::RichText::new("Restart").size(12.0).color(theme::FG_SOFT),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .clicked()
+                                    {
+                                        self.panels_to_restart.push(panel_id);
+                                        ui.close();
+                                    }
 
                                     if ui
                                         .add(
@@ -1882,13 +1892,14 @@ impl HorizonApp {
         _fallback_index: usize,
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> bool {
-        let Some((canvas_position, canvas_size, current_ws_id, title, history_size, scrollback_limit)) =
+        let Some((canvas_position, canvas_size, current_ws_id, title, kind, history_size, scrollback_limit)) =
             self.board.panel(panel_id).map(|panel| {
                 (
                     Pos2::new(panel.layout.position[0], panel.layout.position[1]),
                     Vec2::new(panel.layout.size[0], panel.layout.size[1]),
                     panel.workspace_id,
                     panel.title.clone(),
+                    panel.kind,
                     panel.terminal.history_size(),
                     panel.terminal.scrollback_limit(),
                 )
@@ -2023,6 +2034,13 @@ impl HorizonApp {
                         if ui.button("New Workspace").clicked() {
                             ws_create = true;
                             ui.close();
+                        }
+                        if kind.is_agent() {
+                            ui.separator();
+                            if ui.button("Restart").clicked() {
+                                self.panels_to_restart.push(panel_id);
+                                ui.close();
+                            }
                         }
                     });
                 }
@@ -2236,6 +2254,7 @@ impl HorizonApp {
 }
 
 impl eframe::App for HorizonApp {
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         if !self.theme_applied {
             theme::apply(ctx);
@@ -2266,6 +2285,13 @@ impl eframe::App for HorizonApp {
                 self.clear_panel_rename();
             }
         }
+        let panels_to_restart = std::mem::take(&mut self.panels_to_restart);
+        for panel_id in panels_to_restart {
+            if let Err(error) = self.board.restart_panel(panel_id) {
+                tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
+            }
+        }
+
         if self.board.workspaces.is_empty() {
             self.reset_view();
         }

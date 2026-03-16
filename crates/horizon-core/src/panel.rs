@@ -264,6 +264,48 @@ impl Panel {
         self.layout.size = size;
     }
 
+    /// Restart the terminal process while keeping the same panel identity,
+    /// layout, and session binding.  For agent panels (Codex / Claude) this
+    /// resumes the existing session so no work is lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new terminal cannot be spawned.
+    pub fn restart(&mut self) -> Result<()> {
+        let rows = self.terminal.rows();
+        let cols = self.terminal.cols();
+
+        // Graceful shutdown of the old terminal.
+        let _ = self.terminal.shutdown_with_timeout(Duration::from_secs(2));
+
+        let should_resume = self.kind.is_agent() && self.session_binding.is_some();
+        let (program, launch_args) = resolve_launch_command(
+            self.launch_command.clone(),
+            self.launch_args.clone(),
+            self.kind,
+            &self.resume,
+            self.session_binding.as_ref(),
+            should_resume,
+        );
+
+        self.terminal = Terminal::spawn(TerminalSpawnOptions {
+            program,
+            args: launch_args,
+            cwd: self.launch_cwd.clone(),
+            rows,
+            cols,
+            cell_width: DEFAULT_CELL_WIDTH,
+            cell_height: DEFAULT_CELL_HEIGHT,
+            scrollback_limit: scrollback_limit_for_kind(self.kind),
+            window_id: self.id.0,
+            replay_bytes: Vec::new(),
+        })?;
+
+        self.launched_at_millis = current_unix_millis();
+        tracing::info!("restarted panel '{}' (id={})", self.title, self.id.0);
+        Ok(())
+    }
+
     pub fn set_session_binding(&mut self, session_binding: Option<AgentSessionBinding>) {
         self.session_binding = session_binding;
     }
