@@ -13,6 +13,17 @@ const WS_INNER_PAD: f32 = 20.0;
 const WORKSPACE_GAP: f32 = 80.0;
 const AGENT_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Predefined layout arrangements for panels inside a workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceLayout {
+    /// Single column, panels stacked top-to-bottom.
+    Rows,
+    /// Single row, panels side by side.
+    Columns,
+    /// Square-ish grid (auto columns).
+    Grid,
+}
+
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
@@ -519,6 +530,45 @@ impl Board {
         }
 
         false
+    }
+
+    /// Arrange all panels in a workspace according to a predefined layout.
+    /// Panels are equally sized and positioned with gaps.
+    pub fn arrange_workspace(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
+        let Some(workspace) = self.workspace(id) else {
+            return;
+        };
+        let panel_ids: Vec<PanelId> = workspace.panels.clone();
+        let origin = workspace.position;
+        let count = panel_ids.len();
+        if count == 0 {
+            return;
+        }
+
+        let (cols, _rows) = match layout {
+            WorkspaceLayout::Rows => (1, count),
+            WorkspaceLayout::Columns => (count, 1),
+            WorkspaceLayout::Grid => {
+                let cols = (count as f64).sqrt().ceil() as usize;
+                let rows = (count + cols - 1) / cols;
+                (cols, rows)
+            }
+        };
+
+        let panel_width = DEFAULT_PANEL_SIZE[0];
+        let panel_height = DEFAULT_PANEL_SIZE[1];
+
+        for (index, panel_id) in panel_ids.iter().enumerate() {
+            let col = index % cols;
+            let row = index / cols;
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_width + TILE_GAP);
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_height + TILE_GAP);
+
+            if let Some(panel) = self.panel_mut(*panel_id) {
+                panel.move_to([x, y]);
+                panel.resize_layout([panel_width, panel_height]);
+            }
+        }
     }
 
     pub fn create_attention(

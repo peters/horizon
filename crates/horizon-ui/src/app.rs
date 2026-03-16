@@ -9,7 +9,7 @@ use egui::{
 };
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, Board, Config, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
-    PanelTranscript, PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceState,
+    PanelTranscript, PresetConfig, RuntimeState, WindowConfig, WorkspaceId, WorkspaceLayout, WorkspaceState,
     transcript_root_path_for_config,
 };
 
@@ -759,6 +759,8 @@ impl HorizonApp {
         let mut pan_to_workspace: Option<WorkspaceId> = None;
         let mut close_panel: Option<PanelId> = None;
         let mut close_all_in_ws: Option<WorkspaceId> = None;
+        #[allow(unused_assignments, unused_mut)]
+        let mut arrange_layout: Option<(WorkspaceId, WorkspaceLayout)> = None;
 
         let viewport = viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
@@ -851,7 +853,6 @@ impl HorizonApp {
                                         .size(13.0)
                                         .strong(),
                                 );
-
                             });
 
                             // Workspace click → pan to workspace
@@ -859,12 +860,33 @@ impl HorizonApp {
                             let ws_interact_id = ui.make_persistent_id(("sidebar_ws", ws_id.0));
                             let ws_sense = ui.interact(ws_rect, ws_interact_id, Sense::click());
                             if ws_sense.clicked() {
-                                pan_to_workspace = Some(ws_id);
+                                if panel_ids.len() == 1 {
+                                    focus_panel = Some(panel_ids[0]);
+                                    pan_to_panel = Some(panel_ids[0]);
+                                } else {
+                                    pan_to_workspace = Some(ws_id);
+                                }
                             }
 
                             // Workspace right-click context menu
                             ws_response.response.context_menu(|ui| {
                                 ui.set_min_width(160.0);
+                                ui.label(
+                                    egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM),
+                                );
+                                for (label, layout) in [
+                                    ("Rows", WorkspaceLayout::Rows),
+                                    ("Columns", WorkspaceLayout::Columns),
+                                    ("Grid", WorkspaceLayout::Grid),
+                                ] {
+                                    let text = egui::RichText::new(label).size(12.0).color(theme::FG_SOFT);
+                                    if ui.add(Button::new(text).frame(false)).clicked() {
+                                        arrange_layout = Some((ws_id, layout));
+                                        ui.close();
+                                    }
+                                }
+
+                                ui.separator();
                                 if ui
                                     .add(
                                         Button::new(
