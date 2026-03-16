@@ -1388,7 +1388,7 @@ impl HorizonApp {
                 Ok(Ok(catalog)) => {
                     self.session_catalog = catalog;
                     self.last_session_catalog_refresh = Some(Instant::now());
-                    self.capture_new_codex_bindings();
+                    self.capture_new_agent_bindings();
                 }
                 Ok(Err(error)) => {
                     tracing::warn!("failed to refresh agent session catalog: {error}");
@@ -1404,12 +1404,12 @@ impl HorizonApp {
             }
         }
 
-        let has_unbound_codex = self
+        let has_unbound_agent = self
             .board
             .panels
             .iter()
-            .any(|panel| panel.kind == PanelKind::Codex && panel.session_binding.is_none());
-        if !has_unbound_codex {
+            .any(|panel| panel.kind.is_agent() && panel.session_binding.is_none());
+        if !has_unbound_agent {
             return;
         }
 
@@ -1426,36 +1426,36 @@ impl HorizonApp {
         }
     }
 
-    fn capture_new_codex_bindings(&mut self) {
+    fn capture_new_agent_bindings(&mut self) {
         let mut used_session_ids: HashSet<String> = self
             .board
             .panels
             .iter()
             .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
             .collect();
-        let mut pending_panels: HashMap<String, Vec<(PanelId, i64)>> = HashMap::new();
+        let mut pending_panels: HashMap<(PanelKind, String), Vec<(PanelId, i64)>> = HashMap::new();
 
         for panel in &self.board.panels {
-            if panel.kind == PanelKind::Codex && panel.session_binding.is_none() {
+            if panel.kind.is_agent() && panel.session_binding.is_none() {
                 let cwd = panel
                     .launch_cwd
                     .as_ref()
                     .map(|path| path.display().to_string())
                     .unwrap_or_default();
                 pending_panels
-                    .entry(cwd)
+                    .entry((panel.kind, cwd))
                     .or_default()
                     .push((panel.id, panel.launched_at_millis));
             }
         }
 
         let mut assignments = Vec::new();
-        for (cwd, mut panels) in pending_panels {
+        for ((kind, cwd), mut panels) in pending_panels {
             panels.sort_by(|left, right| right.1.cmp(&left.1));
             let oldest_launch = panels.iter().map(|(_, launched_at)| *launched_at).min().unwrap_or(0);
             let mut candidates = self
                 .session_catalog
-                .recent_for(PanelKind::Codex, empty_string_as_none(&cwd));
+                .recent_for(kind, empty_string_as_none(&cwd));
             candidates.retain(|candidate| {
                 !used_session_ids.contains(&candidate.session_id)
                     && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
