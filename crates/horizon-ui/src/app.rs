@@ -117,6 +117,7 @@ pub struct HorizonApp {
     dir_picker: Option<DirPicker>,
     quick_nav: Option<QuickNav>,
     runtime_dirty_since: Option<Instant>,
+    initial_pan_done: bool,
 }
 
 impl HorizonApp {
@@ -197,6 +198,7 @@ impl HorizonApp {
             pending_preset_pick: None,
             dir_picker: None,
             quick_nav: None,
+            initial_pan_done: false,
             pan_offset: runtime_state
                 .pan_offset
                 .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
@@ -264,6 +266,14 @@ impl HorizonApp {
             }
             self.mark_runtime_dirty();
         }
+    }
+
+    fn leftmost_workspace_id(&self) -> Option<WorkspaceId> {
+        self.board
+            .workspaces
+            .iter()
+            .min_by(|a, b| a.position[0].partial_cmp(&b.position[0]).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|ws| ws.id)
     }
 
     fn pan_to_canvas_pos_aligned(&mut self, ctx: &Context, canvas_pos: Pos2, canvas_size: Vec2, left_align: bool) {
@@ -1063,26 +1073,18 @@ impl HorizonApp {
         if let Some(panel_id) = focus_panel {
             self.board.focus(panel_id);
         }
-        if let Some(panel_id) = pan_to_panel {
-            if let Some(panel) = self.board.panel(panel_id) {
-                let ws_id = panel.workspace_id;
-                let panel_pos = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
-                let panel_size = Vec2::new(
-                    panel.layout.size[0] + 2.0 * PANEL_PADDING,
-                    panel.layout.size[1] + PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING,
-                );
-                // Use the workspace left edge for X so the panel is shown
-                // in context, and center vertically on the panel itself.
-                let ws_left = self
-                    .board
-                    .workspace_bounds(ws_id)
-                    .map_or(panel_pos.x, |(min, _)| min[0] - WS_BG_PAD);
-                let pan_pos = Pos2::new(ws_left, panel_pos.y);
-                let pan_size = Vec2::new(panel_pos.x - ws_left + panel_size.x, panel_size.y);
-                self.pan_to_canvas_pos_aligned(ctx, pan_pos, pan_size, true);
+        // Pan to panel or workspace — always show the full workspace,
+        // left-aligned, so the result is consistent regardless of which
+        // panel or workspace is clicked.
+        let pan_ws_id = if let Some(panel_id) = pan_to_panel {
+            self.board.panel(panel_id).map(|p| p.workspace_id)
+        } else {
+            pan_to_workspace
+        };
+        if let Some(ws_id) = pan_ws_id {
+            if pan_to_panel.is_none() {
+                self.board.focus_workspace(ws_id);
             }
-        } else if let Some(ws_id) = pan_to_workspace {
-            self.board.focus_workspace(ws_id);
             if let Some((min, max)) = self.board.workspace_bounds(ws_id) {
                 let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
                 let size = Vec2::new(
@@ -2313,6 +2315,26 @@ impl eframe::App for HorizonApp {
             self.render_loading_view(ctx);
             ctx.request_repaint_after(Duration::from_millis(16));
             return;
+        }
+
+        // On first frame after startup, pan to the leftmost workspace.
+        if !self.initial_pan_done {
+            self.initial_pan_done = true;
+            if let Some(ws_id) = self.leftmost_workspace_id() {
+                self.board.focus_workspace(ws_id);
+                if let Some((min, max)) = self.board.workspace_bounds(ws_id) {
+                    let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                    let size = Vec2::new(
+                        max[0] - min[0] + 2.0 * WS_BG_PAD,
+                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                    );
+                    // Set directly (no animation on startup).
+                    let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+                    let x = 40.0 - pos.x;
+                    let y = canvas_rect.height() * 0.5 - (pos.y + size.y * 0.5);
+                    self.pan_offset = Vec2::new(x, y);
+                }
+            }
         }
 
         self.handle_fullscreen_toggle(ctx);
