@@ -30,11 +30,11 @@ jobs:
           fetch-depth: 0
       - name: Verify GitVersion and Cargo baseline versions are aligned
         run: ./scripts/check-version-sync.sh
-      - uses: gittools/actions/gitversion/setup@v4.3.3
+      - uses: gittools/actions/gitversion/setup@v4.4.1
         with:
           versionSpec: '6.x'
       - id: gitversion
-        uses: gittools/actions/gitversion/execute@v4.3.3
+        uses: gittools/actions/gitversion/execute@v4.4.1
 
   fmt:
     name: Format
