@@ -38,6 +38,7 @@ pub struct TerminalSpawnOptions {
     pub window_id: u64,
     pub replay_bytes: Vec<u8>,
     pub env: HashMap<String, String>,
+    pub kitty_keyboard: bool,
 }
 
 /// A structured notification parsed from an OSC title sequence.
@@ -129,7 +130,7 @@ impl Terminal {
         let dimensions = TerminalDimensions::new(rows, cols);
         let terminal_config = term::Config {
             scrolling_history: scrollback_limit,
-            kitty_keyboard: true,
+            kitty_keyboard: options.kitty_keyboard,
             ..term::Config::default()
         };
         let replay_bytes = options.replay_bytes;
@@ -773,6 +774,7 @@ mod tests {
             window_id: 41,
             replay_bytes: Vec::new(),
             env: HashMap::new(),
+            kitty_keyboard: true,
         })
         .expect("terminal should spawn");
 

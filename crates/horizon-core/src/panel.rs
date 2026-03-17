@@ -302,6 +302,7 @@ impl Panel {
             window_id: id.0,
             replay_bytes,
             env: agent_env(kind),
+            kitty_keyboard: kitty_keyboard_for_kind(kind),
         })?;
 
         tracing::info!("created panel '{}' (id={})", title, id.0);
@@ -620,6 +621,7 @@ impl Panel {
             window_id: self.id.0,
             replay_bytes: Vec::new(),
             env,
+            kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);
 
         self.launched_at_millis = current_unix_millis();
@@ -895,13 +897,17 @@ fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     }
 }
 
+fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
+    !matches!(kind, PanelKind::Codex)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::runtime_state::AgentSessionBinding;
 
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, platform_default_shell,
-        resolve_launch_command, scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, kitty_keyboard_for_kind,
+        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
 
     #[test]
@@ -1031,6 +1037,13 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+    }
+
+    #[test]
+    fn codex_panels_disable_kitty_keyboard_protocol() {
+        assert!(!kitty_keyboard_for_kind(PanelKind::Codex));
+        assert!(kitty_keyboard_for_kind(PanelKind::Claude));
+        assert!(kitty_keyboard_for_kind(PanelKind::Shell));
     }
 
     #[test]
