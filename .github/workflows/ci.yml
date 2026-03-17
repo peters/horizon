@@ -41,7 +41,6 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -111,10 +110,6 @@ jobs:
           - os: macos-15-intel
             name: macOS x64
             cache_key: macos-intel-test
-          # Windows tests require PTY support; tracked in #TBD.
-          # - os: windows-latest
-          #   name: Windows x64
-          #   cache_key: windows-test
     steps:
       - uses: actions/checkout@v6
         with:
@@ -123,6 +118,18 @@ jobs:
         with:
           key: ${{ matrix.cache_key }}
       - run: cargo test --workspace
+
+  windows-smoke:
+    name: Windows test build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-test-build
+      - run: cargo test --workspace --no-run
 
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
@@ -234,6 +241,7 @@ jobs:
       - clippy
       - clippy-strict
       - rust-test
+      - windows-smoke
       - rust-artifacts
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     permissions:

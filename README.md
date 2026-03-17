@@ -104,6 +104,7 @@ Grab the latest binary from [**Releases**](https://github.com/peters/horizon/rel
 | Platform | Asset | |
 |:---------|:------|:-|
 | **Linux** x64 | `horizon-linux-x64.tar.gz` | Extract, `chmod +x`, run |
+| **macOS** arm64 | `horizon-osx-arm64.tar.gz` | Extract, `chmod +x`, run |
 | **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract, `chmod +x`, run |
 | **Windows** x64 | `horizon-windows-x64.exe` | Download and run |
 
