@@ -7,6 +7,7 @@ mod editor_widget;
 mod git_changes_widget;
 mod input;
 mod loading_spinner;
+mod plugin_install;
 mod quick_nav;
 mod terminal_widget;
 mod theme;
@@ -22,7 +23,7 @@ fn main() -> eframe::Result {
     init_tracing();
 
     let horizon_home = HorizonHome::resolve();
-    install_agent_plugins(&horizon_home);
+    plugin_install::install_agent_plugins(&horizon_home);
 
     let cli_args = parse_cli_args();
     let resolved_config_path =
@@ -184,55 +185,5 @@ fn parse_cli_args() -> CliArgs {
         new_session,
         ephemeral,
         blank,
-    }
-}
-
-fn install_agent_plugins(horizon_home: &HorizonHome) {
-    let Some(user_home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let user_home = std::path::PathBuf::from(user_home);
-
-    install_plugin_files(
-        &horizon_home.claude_plugin_dir(),
-        &[
-            (
-                ".claude-plugin/plugin.json",
-                include_str!("../../../assets/plugins/claude-code/.claude-plugin/plugin.json"),
-            ),
-            (
-                "skills/horizon-notify/SKILL.md",
-                include_str!("../../../assets/plugins/claude-code/skills/horizon-notify/SKILL.md"),
-            ),
-        ],
-    );
-
-    install_plugin_files(
-        &horizon_home.codex_skill_dir(),
-        &[(
-            "SKILL.md",
-            include_str!("../../../assets/plugins/codex/skills/horizon-notify/SKILL.md"),
-        )],
-    );
-
-    let codex_export_dir = user_home.join(".agents").join("skills").join("horizon-notify");
-    install_plugin_files(
-        &codex_export_dir,
-        &[(
-            "SKILL.md",
-            include_str!("../../../assets/plugins/codex/skills/horizon-notify/SKILL.md"),
-        )],
-    );
-}
-
-fn install_plugin_files(base: &std::path::Path, files: &[(&str, &str)]) {
-    for (relative_path, content) in files {
-        let path = base.join(relative_path);
-        if let Some(parent) = path.parent()
-            && std::fs::create_dir_all(parent).is_err()
-        {
-            continue;
-        }
-        let _ = std::fs::write(&path, content);
     }
 }
