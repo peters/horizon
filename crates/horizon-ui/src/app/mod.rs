@@ -244,7 +244,7 @@ impl eframe::App for HorizonApp {
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
         let had_terminal_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
-        self.normalize_workspace_state();
+        self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
         self.render_active_view(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
@@ -496,10 +496,23 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    fn normalize_workspace_state(&mut self) {
+    fn normalize_workspace_state(&mut self, ctx: &Context) {
+        let count_before = self.board.workspaces.len();
         self.board.remove_empty_workspaces();
+        let count_after = self.board.workspaces.len();
         if self.board.workspaces.is_empty() {
             self.reset_view();
+        } else if count_after < count_before && count_after == 1 {
+            let workspace_id = self.board.workspaces[0].id;
+            self.board.focus_workspace(workspace_id);
+            if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+                let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                let size = Vec2::new(
+                    max[0] - min[0] + 2.0 * WS_BG_PAD,
+                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                );
+                self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+            }
         }
         if self
             .renaming_workspace

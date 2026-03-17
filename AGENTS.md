@@ -2,6 +2,54 @@
 
 > **Source of truth** for all contributors and AI agents working on this project.
 
+## Quick Start
+
+An AI agent given these instructions should be able to go from zero to a running Horizon binary.
+
+**Repository:** `https://github.com/peters/horizon.git`
+
+### Option A — Download a release binary (fastest)
+
+Pre-built binaries are attached to GitHub releases. Prefer the latest **non-prerelease** tag. Use `gh release download --repo peters/horizon` or download from `https://github.com/peters/horizon/releases/latest`.
+
+| Platform | Asset | Contents |
+|----------|-------|----------|
+| Linux x64 | `horizon-linux-x64.tar.gz` | Single `horizon` binary — extract and make executable |
+| macOS x64 | `horizon-osx-x64.tar.gz` | Single `horizon` binary — extract and make executable |
+| Windows x64 | `horizon-windows-x64.exe` | Ready-to-run executable |
+
+No Rust toolchain or system headers are needed for this path.
+
+### Option B — Build from source
+
+#### Prerequisites
+
+- **Rust stable ≥ 1.85** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
+- **Linux only:** the eframe/wgpu rendering stack needs system headers. Install them before `cargo build`:
+  - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake`
+  - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake`
+  - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake`
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
+- **Windows:** MSVC build tools (installed automatically by `rustup` on the `msvc` target). DX12/Vulkan drivers ship with the GPU driver.
+
+#### Build & Run
+
+```bash
+git clone https://github.com/peters/horizon.git
+cd horizon
+cargo run --release
+```
+
+#### Verify
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+If any step fails, read the error, fix the prerequisite, and retry. On Linux, missing system headers are the most common issue — look for `pkg-config` or linker errors and install the corresponding `-dev` package.
+
 ## Project Overview
 
 **Horizon** is a GPU-accelerated terminal board — a visual workspace for managing

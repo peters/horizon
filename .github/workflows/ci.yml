@@ -96,6 +96,9 @@ jobs:
           - os: macos-latest
             name: macOS
             cache_key: macos-test
+          - os: windows-latest
+            name: Windows x64
+            cache_key: windows-test
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
@@ -121,6 +124,11 @@ jobs:
             cache_key: macos-artifacts
             artifact_name: osx-x64
             artifact_path: target/release/horizon
+          - os: windows-latest
+            name: Windows x64
+            cache_key: windows-artifacts
+            artifact_name: windows-x64
+            artifact_path: target/release/horizon.exe
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
@@ -196,6 +204,7 @@ jobs:
           cd artifacts
           tar czf ../horizon-linux-x64.tar.gz -C linux-x64 .
           tar czf ../horizon-osx-x64.tar.gz -C osx-x64 .
+          cp windows-x64/horizon.exe ../horizon-windows-x64.exe
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -208,3 +217,4 @@ jobs:
           files: |
             horizon-linux-x64.tar.gz
             horizon-osx-x64.tar.gz
+            horizon-windows-x64.exe
