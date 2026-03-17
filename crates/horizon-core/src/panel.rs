@@ -7,17 +7,16 @@ use serde::Deserialize;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
+use crate::git_changes::GitChangesViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
-use crate::terminal::{Terminal, TerminalSpawnOptions};
+use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
-use self::spawn::{
-    agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind, spawn_panel,
-};
+pub use self::spawn::current_unix_millis;
 #[cfg(test)]
 use self::spawn::platform_default_shell;
-pub use self::spawn::current_unix_millis;
+use self::spawn::{agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind, spawn_panel};
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
@@ -180,12 +179,12 @@ impl Panel {
 
     /// Convenience accessor for the git changes content (if this panel holds one).
     #[must_use]
-    pub fn git_changes(&self) -> Option<&crate::git_changes::GitChangesViewer> {
+    pub fn git_changes(&self) -> Option<&GitChangesViewer> {
         self.content.git_changes()
     }
 
     /// Mutable accessor for the git changes content.
-    pub fn git_changes_mut(&mut self) -> Option<&mut crate::git_changes::GitChangesViewer> {
+    pub fn git_changes_mut(&mut self) -> Option<&mut GitChangesViewer> {
         self.content.git_changes_mut()
     }
 }
@@ -229,7 +228,7 @@ impl Panel {
         self.content.terminal_mut().is_some_and(Terminal::take_bell)
     }
 
-    pub fn take_notification(&mut self) -> Option<crate::terminal::AgentNotification> {
+    pub fn take_notification(&mut self) -> Option<AgentNotification> {
         self.content.terminal_mut()?.take_notification()
     }
 
@@ -441,11 +440,9 @@ impl Panel {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime_state::AgentSessionBinding;
-
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume, kitty_keyboard_for_kind,
-        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume,
+        kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
 
     #[test]

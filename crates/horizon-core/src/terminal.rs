@@ -20,10 +20,12 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
-use self::support::{ColorLookup, current_cwd_for_pid, find_file_path_at_column, find_url_at_column, replay_terminal_bytes};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
+use self::support::{
+    ColorLookup, current_cwd_for_pid, find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
+};
 
 #[cfg(not(windows))]
 type TerminalPty = tty::Pty;

@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
+use crate::git_changes::GitChangesViewer;
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -185,7 +186,11 @@ fn spawn_editor(
     let title = name.unwrap_or_else(|| {
         command
             .as_deref()
-            .and_then(|path| PathBuf::from(path).file_name().map(|name| name.to_string_lossy().to_string()))
+            .and_then(|path| {
+                PathBuf::from(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "Markdown".to_string())
     });
 
@@ -240,7 +245,7 @@ fn spawn_git_changes(
             size: size.unwrap_or(DEFAULT_PANEL_SIZE),
         },
         workspace_id,
-        content: PanelContent::GitChanges(crate::git_changes::GitChangesViewer::new()),
+        content: PanelContent::GitChanges(GitChangesViewer::new()),
         session_binding: None,
         template,
         launched_at_millis: current_unix_millis(),

@@ -191,7 +191,8 @@ fn unmatched_closing_delimiter(chars: &[char], start: usize, end: usize, open: c
 pub(super) fn find_file_path_at_column(chars: &[char], col: usize) -> Option<String> {
     let mut index = 0;
     while index < chars.len() {
-        let is_path_start = (chars[index] == '/' || (chars[index] == '~' && index + 1 < chars.len() && chars[index + 1] == '/'))
+        let is_path_start = (chars[index] == '/'
+            || (chars[index] == '~' && index + 1 < chars.len() && chars[index + 1] == '/'))
             && (index == 0 || is_path_boundary(chars[index - 1]));
         if !is_path_start {
             index += 1;
