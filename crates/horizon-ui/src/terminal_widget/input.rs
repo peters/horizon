@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(bytes, b"\x1b[50:64;2u\x1b[50:64;2:3u");
     }
 
-    /// Regression: on some Linux setups, AltGr is NOT reported as
+    /// Regression: on some Linux setups, `AltGr` is NOT reported as
     /// `modifiers.alt` by winit.  When kitty keyboard protocol is active,
     /// the key press was immediately emitted as a kitty sequence for the
     /// base key ("2") and the text event ("@") passed through as raw

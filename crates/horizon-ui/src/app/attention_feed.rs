@@ -1,4 +1,4 @@
-use egui::{Button, Color32, CornerRadius, Id, Order, RichText, ScrollArea, Sense, Vec2};
+use egui::{Button, Color32, CornerRadius, Id, Order, Pos2, Rect, RichText, ScrollArea, Sense, Vec2};
 use horizon_core::{AttentionId, AttentionItem, AttentionSeverity, Board, OverlaysConfig, PanelId};
 use std::time::SystemTime;
 
@@ -302,6 +302,48 @@ fn format_elapsed(time: SystemTime) -> String {
     } else {
         format!("{}h ago", secs / 3600)
     }
+}
+
+/// Estimated outer bounding rect of the attention feed overlay.  Used by
+/// overlay exclusion to prevent canvas-space elements from rendering behind
+/// this widget.
+pub(super) fn estimated_outer_rect(
+    viewport: Rect,
+    minimap_height: f32,
+    overlays: &OverlaysConfig,
+    board: &Board,
+) -> Option<Rect> {
+    let now = std::time::SystemTime::now();
+    let has_visible_items = board.attention.iter().any(|item| {
+        if item.is_open() {
+            return true;
+        }
+        if item.is_resolved()
+            && let Some(resolved_at) = item.resolved_at
+            && let Ok(elapsed) = now.duration_since(resolved_at)
+        {
+            return elapsed.as_secs() < 30;
+        }
+        false
+    });
+    if !has_visible_items {
+        return None;
+    }
+
+    let feed_w = overlays.attention_feed_width.max(FEED_MIN_WIDTH) + 18.0;
+    let feed_h = overlays
+        .attention_feed_height
+        .max(FEED_HEADER_BLOCK_HEIGHT + FEED_ITEM_VIEWPORT_HEIGHT)
+        + 14.0;
+    let offset_y = FEED_MARGIN + minimap_height + if minimap_height > 0.0 { 8.0 } else { 0.0 };
+
+    Some(Rect::from_min_max(
+        Pos2::new(
+            viewport.max.x - FEED_MARGIN - feed_w,
+            viewport.max.y - offset_y - feed_h,
+        ),
+        Pos2::new(viewport.max.x - FEED_MARGIN, viewport.max.y - offset_y),
+    ))
 }
 
 fn snapped_feed_list_height(feed_target_height: f32) -> f32 {

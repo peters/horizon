@@ -8,8 +8,8 @@ use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
-use super::util::{editor_panel_size_for_file, primary_shortcut_modifier, viewport_local_rect};
-use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+use super::util::{OverlayExclusion, editor_panel_size_for_file, primary_shortcut_modifier, viewport_local_rect};
+use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
     #[profiling::function]
@@ -83,6 +83,50 @@ impl HorizonApp {
             rect.min.x
         };
         Rect::from_min_max(Pos2::new(left, rect.min.y + TOOLBAR_HEIGHT), rect.max)
+    }
+
+    /// Screen-space rectangles occupied by fixed overlay widgets.  Compute
+    /// this once per frame and pass to rendering code that positions
+    /// canvas-space elements (e.g. workspace labels) so they stay clear.
+    pub(super) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
+        let viewport = viewport_local_rect(ctx);
+        let mut zones = Vec::new();
+
+        if self.sidebar_visible {
+            zones.push(Rect::from_min_max(
+                Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
+                Pos2::new(viewport.min.x + SIDEBAR_WIDTH, viewport.max.y),
+            ));
+        }
+
+        let minimap_height = if self.minimap_visible && !self.board.workspaces.is_empty() {
+            let overlays = &self.template_config.overlays;
+            let w = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
+            let h = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
+            zones.push(Rect::from_min_size(
+                Pos2::new(
+                    viewport.max.x - MINIMAP_MARGIN - w,
+                    viewport.max.y - MINIMAP_MARGIN - h,
+                ),
+                Vec2::new(w, h),
+            ));
+            h
+        } else {
+            0.0
+        };
+
+        if self.template_config.features.attention_feed
+            && let Some(rect) = super::attention_feed::estimated_outer_rect(
+                viewport,
+                minimap_height,
+                &self.template_config.overlays,
+                &self.board,
+            )
+        {
+            zones.push(rect);
+        }
+
+        OverlayExclusion::new(zones)
     }
 
     pub(super) fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {

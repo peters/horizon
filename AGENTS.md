@@ -83,6 +83,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Concise imperative messages, optionally scoped: `feat(board):`, `fix(render):`, `ci:`
 - One logical change per commit
 - PRs include: purpose, behavior impact, test evidence
+- Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green
 
 ### Dependencies
 

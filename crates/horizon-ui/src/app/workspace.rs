@@ -7,7 +7,7 @@ use horizon_core::{WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
-use super::util::workspace_label_width;
+use super::util::{OverlayExclusion, workspace_label_width};
 use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
 
 struct WorkspaceVisual {
@@ -18,6 +18,7 @@ struct WorkspaceVisual {
     label_rect: Rect,
     is_active: bool,
     is_empty: bool,
+    label_hidden: bool,
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
 }
@@ -50,9 +51,10 @@ impl HorizonApp {
         &mut self,
         ctx: &Context,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+        overlay_zones: &OverlayExclusion,
     ) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds);
+        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones);
 
         self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
@@ -67,9 +69,9 @@ impl HorizonApp {
 
             let is_renaming = self.renaming_workspace == Some(workspace.id);
             let interaction = if is_renaming {
-                render_workspace_visual(ctx, workspace, Some(&mut self.rename_buffer))
+                render_workspace_visual(ctx, workspace, Some(&mut self.rename_buffer), overlay_zones)
             } else {
-                render_workspace_visual(ctx, workspace, None)
+                render_workspace_visual(ctx, workspace, None, overlay_zones)
             };
 
             if interaction.activate_workspace {
@@ -145,6 +147,7 @@ impl HorizonApp {
         &self,
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+        overlay_zones: &OverlayExclusion,
     ) -> Vec<WorkspaceVisual> {
         self.board
             .workspaces
@@ -185,17 +188,19 @@ impl HorizonApp {
                     return None;
                 }
 
+                let label_rect = Rect::from_min_size(
+                    screen_rect.min + Vec2::new(14.0, 12.0),
+                    Vec2::new(workspace_label_width(&workspace.name), WS_LABEL_HEIGHT),
+                );
                 Some(WorkspaceVisual {
                     id: workspace.id,
                     name: workspace.name.clone(),
                     color,
                     screen_rect,
-                    label_rect: Rect::from_min_size(
-                        screen_rect.min + Vec2::new(14.0, 12.0),
-                        Vec2::new(workspace_label_width(&workspace.name), WS_LABEL_HEIGHT),
-                    ),
+                    label_rect,
                     is_active,
                     is_empty,
+                    label_hidden: overlay_zones.intersects(label_rect),
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
                 })
@@ -208,6 +213,7 @@ fn render_workspace_visual(
     ctx: &Context,
     workspace: &WorkspaceVisual,
     rename_buffer: Option<&mut String>,
+    overlay_zones: &OverlayExclusion,
 ) -> WorkspaceInteraction {
     let is_renaming = rename_buffer.is_some();
 
@@ -223,6 +229,18 @@ fn render_workspace_visual(
                 paint_empty_workspace_hint(ui, rect, workspace.label_rect, workspace.color);
             }
         });
+
+    // Skip label and layout toolbar when behind a fixed overlay widget.
+    if workspace.label_hidden {
+        return WorkspaceInteraction {
+            activate_workspace: false,
+            drag_delta: Vec2::ZERO,
+            start_rename: false,
+            rename_action: RenameEditAction::None,
+            show_layout_toolbar: false,
+            layout_action: None,
+        };
+    }
 
     let mut interaction = egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
         .fixed_pos(workspace.label_rect.min)
@@ -289,7 +307,10 @@ fn render_workspace_visual(
         })
         .inner;
 
-    if !is_renaming && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar) {
+    if !is_renaming
+        && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar)
+        && !overlay_zones.intersects(workspace_layout_toolbar_rect(workspace))
+    {
         interaction.layout_action = render_workspace_layout_toolbar(ctx, workspace);
     }
 

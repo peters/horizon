@@ -2,6 +2,26 @@ use egui::{Button, Context, Modifiers, Pos2, Rect, Stroke, Vec2};
 
 use crate::theme;
 
+/// Screen-space rectangles occupied by fixed overlay widgets (sidebar,
+/// minimap, attention feed).  Canvas-space elements such as workspace
+/// labels must not render inside these regions.
+///
+/// Register any new fixed widget here so canvas-space content avoids it.
+pub(super) struct OverlayExclusion {
+    zones: Vec<Rect>,
+}
+
+impl OverlayExclusion {
+    pub(super) fn new(zones: Vec<Rect>) -> Self {
+        Self { zones }
+    }
+
+    /// Returns `true` if `rect` overlaps any exclusion zone.
+    pub(super) fn intersects(&self, rect: Rect) -> bool {
+        self.zones.iter().any(|zone| zone.intersects(rect))
+    }
+}
+
 pub(super) fn viewport_local_rect(ctx: &Context) -> Rect {
     ctx.input(|input| input.viewport().inner_rect.or(input.viewport().outer_rect))
         .map_or_else(
