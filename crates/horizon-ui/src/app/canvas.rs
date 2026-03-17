@@ -370,14 +370,9 @@ fn dot_grid_axis_count(length: f32) -> usize {
         return 1;
     }
 
-    let mut covered = 0.0;
-    let mut count = 1_usize;
-    let target = length + GRID_SPACING;
-    while covered < target {
-        covered += GRID_SPACING;
-        count = count.saturating_add(1);
-    }
-    count
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let steps = ((length + GRID_SPACING) / GRID_SPACING).ceil() as usize;
+    steps.saturating_add(1)
 }
 
 fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel) {
