@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::panel::{PanelId, PanelOptions};
+use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
@@ -70,8 +70,8 @@ impl Board {
         }
 
         let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
-        let layout_size = opts.size.unwrap_or(crate::panel::DEFAULT_PANEL_SIZE);
-        let mut panel = crate::panel::Panel::spawn(id, workspace, opts)?;
+        let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
+        let mut panel = Panel::spawn(id, workspace, opts)?;
         panel.move_to(layout_position);
         panel.resize_layout(layout_size);
         self.panels.push(panel);

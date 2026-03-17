@@ -315,12 +315,11 @@ mod tests {
 
     use uuid::Uuid;
 
+    use super::super::{PanelResume, PanelState, RuntimeState, WorkspaceState};
     use super::{
         AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, load_claude_project_session_summary,
         scan_claude_session_reader,
     };
-    use crate::panel::PanelResume;
-    use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
 
     fn parse_claude_project_session<R: std::io::BufRead>(
         reader: R,

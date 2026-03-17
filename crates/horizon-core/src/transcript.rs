@@ -219,8 +219,7 @@ fn shell_escape(value: &str) -> String {
 mod tests {
     use std::fs;
 
-    use super::{PanelTranscript, ensure_clean_prompt_boundary, strip_script_banners};
-    use crate::panel::PanelKind;
+    use super::{PanelKind, PanelTranscript, ensure_clean_prompt_boundary, strip_script_banners};
     use uuid::Uuid;
 
     #[test]
