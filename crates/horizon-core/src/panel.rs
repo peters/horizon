@@ -186,8 +186,47 @@ impl Panel {
     /// # Errors
     ///
     /// Returns an error if the terminal runtime cannot be created.
-    #[allow(clippy::too_many_lines)]
     pub fn spawn(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Self> {
+        let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+
+        match opts.kind {
+            PanelKind::Editor => {
+                let PanelOptions {
+                    name,
+                    command,
+                    position,
+                    size,
+                    template,
+                    ..
+                } = opts;
+                Self::spawn_editor(id, workspace_id, local_id, name, command, position, size, template)
+            }
+            PanelKind::GitChanges => {
+                let PanelOptions {
+                    name,
+                    position,
+                    size,
+                    template,
+                    cwd,
+                    ..
+                } = opts;
+                Self::spawn_git_changes(id, workspace_id, local_id, name, position, size, template, cwd)
+            }
+            PanelKind::Usage => {
+                let PanelOptions {
+                    name,
+                    position,
+                    size,
+                    template,
+                    ..
+                } = opts;
+                Self::spawn_usage(id, workspace_id, local_id, name, position, size, template)
+            }
+            _ => Self::spawn_terminal(id, workspace_id, local_id, opts),
+        }
+    }
+
+    fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts: PanelOptions) -> Result<Self> {
         let PanelOptions {
             name,
             command,
@@ -199,30 +238,13 @@ impl Panel {
             resume,
             position,
             size,
-            local_id,
             session_binding,
             template,
             transcript_root,
+            ..
         } = opts;
 
-        let local_id = local_id.unwrap_or_else(new_local_id);
-
-        if kind == PanelKind::Editor {
-            return Self::spawn_editor(id, workspace_id, local_id, name, command, position, size, template);
-        }
-
-        if kind == PanelKind::GitChanges {
-            return Self::spawn_git_changes(id, workspace_id, local_id, name, position, size, template, cwd);
-        }
-
-        if kind == PanelKind::Usage {
-            return Self::spawn_usage(id, workspace_id, local_id, name, position, size, template);
-        }
-
         let (transcript, replay_bytes) = prepare_transcript_restore(id, kind, transcript_root, &local_id);
-
-        // Save original launch params for persistence before they're
-        // transformed by resolve_launch_command.
         let saved_command = command.clone();
         let saved_args = args.clone();
         let saved_cwd = cwd.clone();
@@ -234,7 +256,6 @@ impl Panel {
             saved_cwd_string.as_deref(),
             name.as_deref(),
         );
-
         let (program, launch_args) = resolve_launch_command(
             command,
             args,
@@ -249,7 +270,7 @@ impl Panel {
                 panel_id = id.0,
                 kind = ?kind,
                 resume = ?resume,
-                session_id = session_binding.as_ref().map(|b| b.session_id.as_str()),
+                session_id = session_binding.as_ref().map(|binding| binding.session_id.as_str()),
                 should_resume = should_resume_binding,
                 cwd = saved_cwd_string.as_deref(),
                 cmd = %format!("{program} {}", launch_args.join(" ")),
@@ -262,7 +283,6 @@ impl Panel {
         } else {
             (program, launch_args)
         };
-        let env = agent_env(kind);
         let has_custom_name = name.is_some();
         let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
         let terminal = Terminal::spawn(TerminalSpawnOptions {
@@ -276,7 +296,7 @@ impl Panel {
             scrollback_limit: scrollback_limit_for_kind(kind),
             window_id: id.0,
             replay_bytes,
-            env,
+            env: agent_env(kind),
         })?;
 
         tracing::info!("created panel '{}' (id={})", title, id.0);

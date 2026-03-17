@@ -898,7 +898,7 @@ fn arranged_panel_layout(
         }
         WorkspaceLayout::Grid => {
             let cols = ceil_sqrt_usize(count);
-            let rows = (count + cols - 1) / cols;
+            let rows = count.div_ceil(cols);
             let col = index % cols;
             let row = index / cols;
 
