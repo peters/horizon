@@ -383,7 +383,9 @@ impl KeyboardInputForwarder {
         {
             if pressed
                 && translation.suppress_text.is_some()
-                && (modifiers.alt || input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode))
+                && (modifiers.alt
+                    || mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
+                    || input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode))
             {
                 self.deferred_text_key = Some(DeferredTextKey::new(key, physical_key, modifiers, Some(translation)));
                 return emission;
@@ -573,6 +575,71 @@ mod tests {
         );
 
         assert_eq!(bytes, b"\x1b[50:64;2u\x1b[50:64;2:3u");
+    }
+
+    /// Regression: on some Linux setups, AltGr is NOT reported as
+    /// `modifiers.alt` by winit.  When kitty keyboard protocol is active,
+    /// the key press was immediately emitted as a kitty sequence for the
+    /// base key ("2") and the text event ("@") passed through as raw
+    /// text because suppression expected "2".  Result: "2@" instead of
+    /// just the kitty sequence for "@".
+    #[test]
+    fn altgr_without_alt_modifier_in_kitty_mode_does_not_leak_base_key() {
+        let events = vec![
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+            Event::Text("@".to_owned()),
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        // Must produce kitty sequences for "@" (codepoint 64), NOT
+        // the base key "2" (codepoint 50) followed by raw "@".
+        // Release includes ";1" (no-modifier marker) because
+        // REPORT_EVENT_TYPES forces the modifier field.
+        assert_eq!(bytes, b"\x1b[50:64u\x1b[50:64;1:3u");
+    }
+
+    /// Same scenario as above but in non-kitty mode: the text event
+    /// should pass through as raw "@" with no preceding "2".
+    #[test]
+    fn altgr_without_alt_modifier_in_legacy_mode_emits_only_text() {
+        let events = vec![
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+            Event::Text("@".to_owned()),
+            Event::Key {
+                key: Key::Num2,
+                physical_key: Some(Key::Num2),
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+
+        let bytes = forward_bytes(&events, TermMode::NONE);
+
+        assert_eq!(bytes, b"@");
     }
 
     fn forward_bytes(events: &[Event], mode: TermMode) -> Vec<u8> {
