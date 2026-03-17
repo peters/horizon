@@ -97,6 +97,29 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Test panel creation, PTY lifecycle, resize, input routing
 - For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
 
+### Performance Profiling
+
+- Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket
+- Start with `cargo build --profile profiling --features trace-profiling`, then use `HORIZON_TRACE_SPANS=1 RUST_LOG=info target/profiling/horizon` or `scripts/profile.sh <seconds>`; the script already falls back to traced spans when `perf` is blocked
+- Keep before/after comparisons workload-matched: same board layout, same interaction script, same binary profile, same tracing mode
+- When profiling pointer-driven regressions, automate the interaction with `xdotool` so hover paths can be compared consistently instead of relying on manual movement
+- For UI perf changes, capture a live screenshot after the profiled interaction as well as at launch; some "wins" are just incorrect culling
+
+### Typical Hotspots
+
+- `crates/horizon-ui/src/app/panels.rs` — panel composition, titlebar chrome, history meter, hover work, and context-menu setup
+- `crates/horizon-ui/src/terminal_widget/render.rs` — per-cell iteration, text batching, default-color conversion, decorations, and redundant fills
+- `crates/horizon-ui/src/terminal_widget/input.rs` — per-panel event cloning/scanning and pointer-move fan-out
+- `crates/horizon-ui/src/app/workspace.rs` and `crates/horizon-ui/src/app/canvas.rs` — workspace hover effects, cursor changes, and canvas redraws while moving the mouse
+- Mouse-move spikes are often hover/redraw problems, not PTY/output problems; compare against an idle trace before touching terminal I/O
+
+### Performance Guardrails
+
+- Safe optimizations usually reduce repeated work on the common path: batch default terminal text, fast-path default colors, gate per-panel pointer processing behind actual interaction, and remove redundant paint passes
+- Off-screen culling is generally safe; active-workspace culling is not. Do not skip panel body rendering just because a panel belongs to a non-active workspace if it can still be visible on screen
+- If a perf change affects visibility, focus, hover, or selection behavior, treat it as correctness-sensitive and verify it live before keeping it
+- Record the exact workload used for any reported perf gain in the commit message or PR notes so later agents can reproduce it
+
 ### UI Launch Troubleshooting
 
 - If Horizon "doesn't launch", first distinguish a crash from an unmapped window: `ps -C horizon` then `xwininfo -root -tree | rg Horizon`
