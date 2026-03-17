@@ -137,7 +137,6 @@ pub struct HorizonApp {
 }
 
 impl HorizonApp {
-    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         config: &Config,

@@ -197,24 +197,6 @@ impl HorizonApp {
         active_session.last_lease_refresh = None;
     }
 
-    #[allow(clippy::unused_self)]
-    pub(super) fn render_loading_view(&self, ctx: &Context) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::BG))
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.28);
-                    ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
-                    ui.add_space(16.0);
-                });
-                loading_spinner::show(
-                    ui,
-                    egui::Id::new("startup_loading_spinner"),
-                    Some("Resolving saved sessions\u{2026}"),
-                );
-            });
-    }
-
     pub(super) fn maybe_refresh_session_catalog(&mut self) {
         const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -357,6 +339,23 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+pub(super) fn render_loading_view(ctx: &Context) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::default().fill(theme::BG))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.28);
+                ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
+                ui.add_space(16.0);
+            });
+            loading_spinner::show(
+                ui,
+                egui::Id::new("startup_loading_spinner"),
+                Some("Resolving saved sessions\u{2026}"),
+            );
+        });
 }
 
 #[cfg(test)]

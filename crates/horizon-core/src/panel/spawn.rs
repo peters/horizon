@@ -19,6 +19,75 @@ use super::{
     DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
 };
 
+struct StaticPanelSeed {
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    local_id: String,
+    name: Option<String>,
+    position: Option<[f32; 2]>,
+    size: Option<[f32; 2]>,
+    template: Option<PanelTemplateRef>,
+}
+
+impl StaticPanelSeed {
+    fn new(
+        id: PanelId,
+        workspace_id: WorkspaceId,
+        local_id: String,
+        name: Option<String>,
+        position: Option<[f32; 2]>,
+        size: Option<[f32; 2]>,
+        template: Option<PanelTemplateRef>,
+    ) -> Self {
+        Self {
+            id,
+            workspace_id,
+            local_id,
+            name,
+            position,
+            size,
+            template,
+        }
+    }
+
+    fn take_title(&mut self, fallback: impl FnOnce() -> String) -> (String, bool) {
+        let has_custom_name = self.name.is_some();
+        (self.name.take().unwrap_or_else(fallback), has_custom_name)
+    }
+
+    fn into_panel(
+        self,
+        title: String,
+        kind: PanelKind,
+        content: PanelContent,
+        launch_command: Option<String>,
+        launch_cwd: Option<PathBuf>,
+        has_custom_name: bool,
+    ) -> Panel {
+        Panel {
+            id: self.id,
+            local_id: self.local_id,
+            title,
+            kind,
+            resume: PanelResume::Fresh,
+            layout: PanelLayout {
+                position: self.position.unwrap_or_default(),
+                size: self.size.unwrap_or(DEFAULT_PANEL_SIZE),
+            },
+            workspace_id: self.workspace_id,
+            content,
+            session_binding: None,
+            template: self.template,
+            launched_at_millis: current_unix_millis(),
+            has_custom_name,
+            had_recent_output: false,
+            launch_command,
+            launch_args: Vec::new(),
+            launch_cwd,
+        }
+    }
+}
+
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Panel> {
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 
@@ -32,7 +101,8 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 template,
                 ..
             } = opts;
-            spawn_editor(id, workspace_id, local_id, name, command, position, size, template)
+            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            spawn_editor(seed, command)
         }
         PanelKind::GitChanges => {
             let PanelOptions {
@@ -43,7 +113,8 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 cwd,
                 ..
             } = opts;
-            spawn_git_changes(id, workspace_id, local_id, name, position, size, template, cwd)
+            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            Ok(spawn_git_changes(seed, cwd))
         }
         PanelKind::Usage => {
             let PanelOptions {
@@ -53,7 +124,8 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 template,
                 ..
             } = opts;
-            spawn_usage(id, workspace_id, local_id, name, position, size, template)
+            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            Ok(spawn_usage(seed))
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -158,17 +230,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_editor(
-    id: PanelId,
-    workspace_id: WorkspaceId,
-    local_id: String,
-    name: Option<String>,
-    command: Option<String>,
-    position: Option<[f32; 2]>,
-    size: Option<[f32; 2]>,
-    template: Option<PanelTemplateRef>,
-) -> Result<Panel> {
+fn spawn_editor(mut seed: StaticPanelSeed, command: Option<String>) -> Result<Panel> {
     let editor = if let Some(ref path_str) = command {
         let path = PathBuf::from(path_str);
         if path.exists() {
@@ -182,8 +244,7 @@ fn spawn_editor(
         MarkdownEditor::scratch()
     };
 
-    let has_custom_name = name.is_some();
-    let title = name.unwrap_or_else(|| {
+    let (title, has_custom_name) = seed.take_title(|| {
         command
             .as_deref()
             .and_then(|path| {
@@ -194,104 +255,44 @@ fn spawn_editor(
             .unwrap_or_else(|| "Markdown".to_string())
     });
 
-    tracing::info!("created editor panel '{}' (id={})", title, id.0);
+    tracing::info!("created editor panel '{}' (id={})", title, seed.id.0);
 
-    Ok(Panel {
-        id,
-        local_id,
+    Ok(seed.into_panel(
         title,
-        kind: PanelKind::Editor,
-        resume: PanelResume::Fresh,
-        layout: PanelLayout {
-            position: position.unwrap_or_default(),
-            size: size.unwrap_or(DEFAULT_PANEL_SIZE),
-        },
-        workspace_id,
-        content: PanelContent::Editor(editor),
-        session_binding: None,
-        template,
-        launched_at_millis: current_unix_millis(),
+        PanelKind::Editor,
+        PanelContent::Editor(editor),
+        command,
+        None,
         has_custom_name,
-        had_recent_output: false,
-        launch_command: command,
-        launch_args: Vec::new(),
-        launch_cwd: None,
-    })
+    ))
 }
 
-#[allow(clippy::too_many_arguments, clippy::unnecessary_wraps)]
-fn spawn_git_changes(
-    id: PanelId,
-    workspace_id: WorkspaceId,
-    local_id: String,
-    name: Option<String>,
-    position: Option<[f32; 2]>,
-    size: Option<[f32; 2]>,
-    template: Option<PanelTemplateRef>,
-    cwd: Option<PathBuf>,
-) -> Result<Panel> {
-    let has_custom_name = name.is_some();
-    let title = name.unwrap_or_else(|| "Git Changes".to_string());
-    tracing::info!("created git changes panel '{}' (id={})", title, id.0);
+fn spawn_git_changes(mut seed: StaticPanelSeed, cwd: Option<PathBuf>) -> Panel {
+    let (title, has_custom_name) = seed.take_title(|| "Git Changes".to_string());
+    tracing::info!("created git changes panel '{}' (id={})", title, seed.id.0);
 
-    Ok(Panel {
-        id,
-        local_id,
+    seed.into_panel(
         title,
-        kind: PanelKind::GitChanges,
-        resume: PanelResume::Fresh,
-        layout: PanelLayout {
-            position: position.unwrap_or_default(),
-            size: size.unwrap_or(DEFAULT_PANEL_SIZE),
-        },
-        workspace_id,
-        content: PanelContent::GitChanges(DiffViewer::new()),
-        session_binding: None,
-        template,
-        launched_at_millis: current_unix_millis(),
+        PanelKind::GitChanges,
+        PanelContent::GitChanges(DiffViewer::new()),
+        None,
+        cwd,
         has_custom_name,
-        had_recent_output: false,
-        launch_command: None,
-        launch_args: Vec::new(),
-        launch_cwd: cwd,
-    })
+    )
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn spawn_usage(
-    id: PanelId,
-    workspace_id: WorkspaceId,
-    local_id: String,
-    name: Option<String>,
-    position: Option<[f32; 2]>,
-    size: Option<[f32; 2]>,
-    template: Option<PanelTemplateRef>,
-) -> Result<Panel> {
-    let has_custom_name = name.is_some();
-    let title = name.unwrap_or_else(|| "Usage".to_string());
-    tracing::info!("created usage panel '{}' (id={})", title, id.0);
+fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
+    let (title, has_custom_name) = seed.take_title(|| "Usage".to_string());
+    tracing::info!("created usage panel '{}' (id={})", title, seed.id.0);
 
-    Ok(Panel {
-        id,
-        local_id,
+    seed.into_panel(
         title,
-        kind: PanelKind::Usage,
-        resume: PanelResume::Fresh,
-        layout: PanelLayout {
-            position: position.unwrap_or_default(),
-            size: size.unwrap_or(DEFAULT_PANEL_SIZE),
-        },
-        workspace_id,
-        content: PanelContent::Usage(UsageDashboard::new()),
-        session_binding: None,
-        template,
-        launched_at_millis: current_unix_millis(),
+        PanelKind::Usage,
+        PanelContent::Usage(UsageDashboard::new()),
+        None,
+        None,
         has_custom_name,
-        had_recent_output: false,
-        launch_command: None,
-        launch_args: Vec::new(),
-        launch_cwd: None,
-    })
+    )
 }
 
 pub(super) fn resolve_launch_command(

@@ -93,7 +93,7 @@ impl HorizonApp {
         }
 
         if !self.poll_startup_bootstrap() {
-            self.render_loading_view(ctx);
+            super::session::render_loading_view(ctx);
             ctx.request_repaint_after(Duration::from_millis(16));
             return false;
         }
