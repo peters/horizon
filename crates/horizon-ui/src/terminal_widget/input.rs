@@ -72,6 +72,15 @@ pub(super) fn handle_terminal_pointer_input(
     );
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
+
+    // Show pointing hand when Ctrl/Cmd hovering over clickable content.
+    if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
+        && let Some(point) = hovered_point
+        && let Some(terminal) = panel.terminal()
+        && terminal.clickable_at_point(point.line, point.column).is_some()
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -172,15 +181,15 @@ fn handle_pointer_button(
     terminal_mode: TermMode,
     mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
 ) {
-    // Ctrl+click / Cmd+click opens URLs regardless of mouse mode.
+    // Ctrl+click / Cmd+click opens URLs and file paths regardless of mouse mode.
     if (modifiers.ctrl || modifiers.command)
         && button == egui::PointerButton::Primary
         && pressed
         && let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
         && let Some(terminal) = panel.terminal()
-        && let Some(url) = terminal.url_at_point(point.line, point.column)
+        && let Some(target) = terminal.clickable_at_point(point.line, point.column)
     {
-        horizon_core::open_url(&url);
+        horizon_core::open_url(&target);
         return;
     }
 

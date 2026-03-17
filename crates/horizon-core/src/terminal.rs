@@ -534,10 +534,10 @@ impl Terminal {
         self.term.lock().selection_to_string()
     }
 
-    /// Return the URL at the given viewport-relative row and column, if the
-    /// clicked position falls inside a recognized URL scheme.
+    /// Return a clickable target (URL or file path) at the given
+    /// viewport-relative row and column, if any is detected.
     #[must_use]
-    pub fn url_at_point(&self, row: usize, col: usize) -> Option<String> {
+    pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
         let content = term.renderable_content();
         let cols = usize::from(self.cols);
@@ -556,7 +556,7 @@ impl Terminal {
             }
         }
 
-        find_url_at_column(&line_chars, col)
+        find_url_at_column(&line_chars, col).or_else(|| find_file_path_at_column(&line_chars, col))
     }
 
     fn handle_event(&mut self, event: Event) {
@@ -787,7 +787,60 @@ fn url_end_column(chars: &[char], start: usize) -> usize {
     end
 }
 
-/// Open a URL with the platform's default handler.
+fn find_file_path_at_column(chars: &[char], col: usize) -> Option<String> {
+    let mut i = 0;
+    while i < chars.len() {
+        let is_path_start = (chars[i] == '/' || (chars[i] == '~' && i + 1 < chars.len() && chars[i + 1] == '/'))
+            && (i == 0 || is_path_boundary(chars[i - 1]));
+        if !is_path_start {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let end = path_end_column(chars, start);
+        let path = strip_line_col_suffix_chars(&chars[start..end]);
+        if path.len() > 1 && col >= start && col < start + path.len() {
+            return Some(path.iter().collect());
+        }
+        i = end;
+    }
+    None
+}
+
+fn is_path_boundary(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '(' | '[' | '{' | '<' | '=' | ':')
+}
+
+fn path_end_column(chars: &[char], start: usize) -> usize {
+    let mut end = chars.len();
+    for (i, ch) in chars.iter().enumerate().skip(start) {
+        if ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'' | ')' | ']' | '}') {
+            end = i;
+            break;
+        }
+    }
+    while end > start && matches!(chars[end - 1], '.' | ',' | ';' | '!' | '?') {
+        end -= 1;
+    }
+    end
+}
+
+fn strip_line_col_suffix_chars(chars: &[char]) -> &[char] {
+    let mut result = chars;
+    loop {
+        let Some(colon_pos) = result.iter().rposition(|c| *c == ':') else {
+            return result;
+        };
+        let suffix = &result[colon_pos + 1..];
+        if !suffix.is_empty() && suffix.iter().all(char::is_ascii_digit) {
+            result = &result[..colon_pos];
+        } else {
+            return result;
+        }
+    }
+}
+
+/// Open a URL or file path with the platform's default handler.
 pub fn open_url(url: &str) {
     let command = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let result = std::process::Command::new(command)
@@ -811,7 +864,7 @@ mod tests {
     use super::current_cwd_for_pid;
     use super::{
         Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
-        find_url_at_column, replay_terminal_bytes,
+        find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
     };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
@@ -925,5 +978,48 @@ mod tests {
             find_url_at_column(&line, 0),
             Some("file:///home/user/doc.pdf".to_string()),
         );
+    }
+
+    #[test]
+    fn absolute_file_path_detected() {
+        let line: Vec<char> = "error at /home/user/project/src/main.rs rest".chars().collect();
+        assert_eq!(
+            find_file_path_at_column(&line, 10),
+            Some("/home/user/project/src/main.rs".to_string()),
+        );
+    }
+
+    #[test]
+    fn home_relative_path_detected() {
+        let line: Vec<char> = "see ~/project/config.yaml for details".chars().collect();
+        assert_eq!(
+            find_file_path_at_column(&line, 5),
+            Some("~/project/config.yaml".to_string()),
+        );
+    }
+
+    #[test]
+    fn line_col_suffix_stripped_from_path() {
+        let line: Vec<char> = "error: /src/lib.rs:42:15 something".chars().collect();
+        assert_eq!(find_file_path_at_column(&line, 8), Some("/src/lib.rs".to_string()),);
+    }
+
+    #[test]
+    fn click_outside_path_returns_none() {
+        let line: Vec<char> = "error at /home/user/file.rs".chars().collect();
+        assert_eq!(find_file_path_at_column(&line, 0), None);
+    }
+
+    #[test]
+    fn bare_slash_not_detected_as_path() {
+        let line: Vec<char> = "a / b".chars().collect();
+        assert_eq!(find_file_path_at_column(&line, 2), None);
+    }
+
+    #[test]
+    fn url_takes_priority_over_path() {
+        let line: Vec<char> = "see file:///home/user/doc.pdf".chars().collect();
+        // find_url_at_column should match file:// scheme first
+        assert!(find_url_at_column(&line, 5).is_some());
     }
 }
