@@ -6,6 +6,8 @@ members = ["crates/horizon-core", "crates/horizon-ui"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "GPU-accelerated terminal board — a visual workspace for managing multiple terminal sessions"
+repository = "https://github.com/peters/horizon"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

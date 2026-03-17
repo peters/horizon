@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Release action'
+        required: true
+        type: choice
+        options:
+          - promote-beta
+          - cut-stable
+
+permissions:
+  contents: write
+
+jobs:
+  promote-beta:
+    name: Promote to beta
+    if: inputs.action == 'promote-beta'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: gittools/actions/gitversion/setup@v4.4.2
+        with:
+          versionSpec: '6.x'
+
+      - id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.4.2
+
+      - name: Create release branch
+        run: |
+          BRANCH="release/${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${{ steps.gitversion.outputs.patch }}"
+          echo "Creating branch: ${BRANCH}"
+          git checkout -b "${BRANCH}"
+          git push origin "${BRANCH}"
+          echo "## Beta promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "Created \`${BRANCH}\` from main." >> "$GITHUB_STEP_SUMMARY"
+          echo "Subsequent pushes to this branch will publish **beta** prereleases." >> "$GITHUB_STEP_SUMMARY"
+
+  cut-stable:
+    name: Cut stable release
+    if: inputs.action == 'cut-stable'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: gittools/actions/gitversion/setup@v4.4.2
+        with:
+          versionSpec: '6.x'
+
+      - id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.4.2
+
+      - name: Verify on release branch
+        run: |
+          BRANCH="$(git branch --show-current)"
+          if [[ ! "${BRANCH}" =~ ^release/ ]]; then
+            echo "::error::Must be run from a release/* branch (current: ${BRANCH})."
+            exit 1
+          fi
+
+      - name: Tag stable release
+        run: |
+          TAG="v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${{ steps.gitversion.outputs.patch }}"
+          echo "Tagging: ${TAG}"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "## Stable release" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tagged \`${TAG}\` — CI will build and publish the stable release." >> "$GITHUB_STEP_SUMMARY"

@@ -140,6 +140,53 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - PRs include: purpose, behavior impact, test evidence
 - Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green
 
+### Versioning
+
+- The authoritative version lives in `GitVersion.yml` (`next-version`); `[workspace.package].version` in `Cargo.toml` must always match
+- CI validates this with `scripts/check-version-sync.sh` — update both files together when bumping the version
+
+### Release Flow
+
+Alpha → Beta → Stable, managed via CI and the **Release** workflow dispatch.
+
+#### Alpha (automatic — no agent action needed)
+
+Every push to `main` publishes an alpha prerelease to crates.io and GitHub Releases (e.g. `0.1.0-alpha.3`). No manual steps required.
+
+#### Promote to Beta
+
+When `main` is ready for stabilization:
+
+1. Go to **Actions → Release → Run workflow**
+2. Select branch: `main`
+3. Choose action: **promote-beta**
+
+This creates a `release/X.Y.Z` branch from main. Subsequent pushes to that branch auto-publish beta prereleases (e.g. `0.1.0-beta.1`). Cherry-pick bug fixes to the release branch for additional betas. Meanwhile, `main` continues the next alpha cycle (`0.2.0-alpha.1`).
+
+#### Cut Stable Release
+
+When the release branch is ready:
+
+1. Go to **Actions → Release → Run workflow**
+2. Select branch: `release/X.Y.Z`
+3. Choose action: **cut-stable**
+
+This tags `vX.Y.Z` on the release branch. CI publishes the stable version to crates.io and creates a **draft** GitHub release for you to review and publish.
+
+#### CLI equivalents (if not using the GitHub UI)
+
+```bash
+# promote to beta
+git checkout main && git pull
+git checkout -b release/0.1.0
+git push origin release/0.1.0
+
+# cut stable
+git checkout release/0.1.0 && git pull
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ### Dependencies
 
 - Always check crates.io for the latest stable version before adding

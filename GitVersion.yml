@@ -4,10 +4,12 @@ branches:
   main:
     regex: ^main$
     increment: Minor
-    label: ''
+    label: alpha
     prevent-increment:
       when-current-commit-tagged: true
-  develop:
-    regex: ^develop$
-    increment: Minor
-    label: preview
+  release:
+    regex: ^release/.*$
+    increment: Patch
+    label: beta
+    prevent-increment:
+      when-current-commit-tagged: true

@@ -3,6 +3,8 @@ name = "horizon-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [features]
 trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
@@ -15,7 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-horizon-core = { path = "../horizon-core" }
+horizon-core = { path = "../horizon-core", version = "0.1.0" }
 eframe.workspace = true
 egui.workspace = true
 # Ensure native renderer backends are enabled for eframe's wgpu stack.
