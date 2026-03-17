@@ -2,15 +2,71 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use egui::Context;
+use egui::{Context, Vec2};
 use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelOptions, PanelResume};
 
 use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
-use super::{HorizonApp, StartupBootstrap};
+use super::{ActiveSession, HorizonApp, ResolvedSession, StartupBootstrap};
 
 impl HorizonApp {
+    pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
+        self.release_active_session_lease();
+        self.transcript_root = Some(session.transcript_root.clone());
+        self.startup_chooser = None;
+        self.active_session = Some(ActiveSession {
+            session_id: session.session_id.clone(),
+            lease: match self.session_store.acquire_lease(&session.session_id) {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    tracing::warn!("failed to acquire session lease: {error}");
+                    None
+                }
+            },
+            last_lease_refresh: Some(Instant::now()),
+            persistent: true,
+        });
+        self.apply_runtime_state(&session.runtime_state);
+    }
+
+    pub(super) fn activate_ephemeral_session(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.release_active_session_lease();
+        self.active_session = Some(ActiveSession {
+            session_id: "ephemeral".to_string(),
+            lease: None,
+            last_lease_refresh: None,
+            persistent: false,
+        });
+        self.transcript_root = None;
+        self.startup_chooser = None;
+        self.apply_runtime_state(runtime_state);
+    }
+
+    pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.window_config = runtime_state.window_or(&self.template_config.window).clone();
+        self.pan_offset = runtime_state
+            .pan_offset
+            .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1]));
+        self.pan_target = None;
+        self.initial_pan_done = false;
+        self.runtime_dirty_since = None;
+        self.git_watchers.clear();
+        self.startup_receiver = Self::runtime_state_needs_session_bootstrap(runtime_state)
+            .then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
+        self.board = if self.startup_receiver.is_some() {
+            Board::new()
+        } else {
+            Board::from_runtime_state_with_transcripts(runtime_state, self.transcript_root.as_deref()).unwrap_or_else(
+                |error| {
+                    tracing::error!("failed to restore runtime state: {error}");
+                    Board::new()
+                },
+            )
+        };
+        self.board.attention_enabled = self.template_config.features.attention_feed;
+    }
+
     pub(super) fn runtime_state_needs_session_bootstrap(runtime_state: &horizon_core::RuntimeState) -> bool {
         runtime_state
             .workspaces
@@ -98,6 +154,47 @@ impl HorizonApp {
                 true
             }
         }
+    }
+
+    pub(super) fn refresh_active_session_lease(&mut self) {
+        const LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+        let Some(active_session) = self.active_session.as_mut() else {
+            return;
+        };
+        if !active_session.persistent {
+            return;
+        }
+
+        let Some(lease) = active_session.lease.as_mut() else {
+            return;
+        };
+        if active_session
+            .last_lease_refresh
+            .is_some_and(|last_refresh| last_refresh.elapsed() < LEASE_REFRESH_INTERVAL)
+        {
+            return;
+        }
+
+        match self.session_store.refresh_lease(lease) {
+            Ok(()) => active_session.last_lease_refresh = Some(Instant::now()),
+            Err(error) => tracing::warn!("failed to refresh session lease: {error}"),
+        }
+    }
+
+    pub(super) fn release_active_session_lease(&mut self) {
+        let Some(active_session) = self.active_session.as_mut() else {
+            return;
+        };
+        if !active_session.persistent {
+            return;
+        }
+
+        if let Err(error) = self.session_store.release_lease(&active_session.session_id) {
+            tracing::warn!("failed to release session lease: {error}");
+        }
+        active_session.lease = None;
+        active_session.last_lease_refresh = None;
     }
 
     #[allow(clippy::unused_self)]

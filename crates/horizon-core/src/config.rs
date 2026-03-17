@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -305,14 +306,19 @@ impl Config {
         serde_yaml::to_string(self).map_err(|e| Error::Config(e.to_string()))
     }
 
-    /// Return the default config file path (`~/.config/horizon/config.yaml`).
+    /// Return the default config file path (`~/.horizon/config.yaml`).
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        if let Ok(home) = std::env::var("HOME") {
-            Some(PathBuf::from(home).join(".config/horizon/config.yaml"))
-        } else {
-            None
+        Some(HorizonHome::resolve().config_path())
+    }
+
+    #[must_use]
+    pub fn resolve_path(path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = path {
+            return Some(path.to_path_buf());
         }
+
+        Self::default_path()
     }
 
     #[must_use]
@@ -336,14 +342,12 @@ fn config_candidates() -> Vec<PathBuf> {
 fn config_candidates_with_env(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    if let Some(xdg) = xdg_config_home {
-        push_config_dir_candidates(&mut paths, &xdg.join("horizon"));
+    if let Some(home) = home {
+        paths.push(home.join(".horizon").join("config.yaml"));
     }
 
-    if let Some(home) = home {
-        push_config_dir_candidates(&mut paths, &home.join(".config/horizon"));
-        paths.push(home.join(".horizon.yaml"));
-        paths.push(home.join(".horizon.yml"));
+    if let Some(xdg) = xdg_config_home {
+        push_config_dir_candidates(&mut paths, &xdg.join("horizon"));
     }
 
     paths.push(PathBuf::from("horizon.yaml"));
@@ -368,8 +372,15 @@ mod tests {
         let temp_home = PathBuf::from("/tmp/horizon-home");
         let candidates = config_candidates_with_env(Some(temp_home.join(".config")), Some(temp_home));
 
-        assert!(candidates.iter().any(|path| path.ends_with("horizon/config.yaml")));
-        assert!(candidates.iter().any(|path| path.ends_with(".horizon.yaml")));
+        assert_eq!(
+            candidates.first(),
+            Some(&PathBuf::from("/tmp/horizon-home/.horizon/config.yaml"))
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with(".config/horizon/config.yaml"))
+        );
         assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
     }
 }

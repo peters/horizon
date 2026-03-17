@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 use horizon_core::RuntimeState;
 
 use super::HorizonApp;
-use super::util::atomic_write;
 
 impl HorizonApp {
     pub(super) fn mark_runtime_dirty(&mut self) {
@@ -21,27 +20,19 @@ impl HorizonApp {
     }
 
     pub(super) fn auto_save_runtime_state(&self) {
+        let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
+            return;
+        };
+
         let runtime_state = RuntimeState::from_board(
             &self.board,
             self.window_config.clone(),
             [self.pan_offset.x, self.pan_offset.y],
         );
-        let yaml = match runtime_state.to_yaml() {
-            Ok(yaml) => yaml,
-            Err(error) => {
-                tracing::error!("failed to serialize runtime state: {error}");
-                return;
-            }
-        };
-
-        if let Some(parent) = self.runtime_state_path.parent()
-            && let Err(error) = std::fs::create_dir_all(parent)
+        if let Err(error) = self
+            .session_store
+            .save_runtime_state(&active_session.session_id, &runtime_state)
         {
-            tracing::error!("failed to create runtime state dir {}: {error}", parent.display());
-            return;
-        }
-
-        if let Err(error) = atomic_write(&self.runtime_state_path, &yaml) {
             tracing::error!("failed to auto-save runtime state: {error}");
         }
     }

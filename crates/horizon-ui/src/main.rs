@@ -15,32 +15,27 @@ mod usage_widget;
 use std::path::PathBuf;
 
 use app::HorizonApp;
-use horizon_core::{Config, RuntimeState, runtime_state_path_for_config};
+use horizon_core::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
     init_tracing();
 
-    install_agent_plugins();
+    let horizon_home = HorizonHome::resolve();
+    install_agent_plugins(&horizon_home);
 
-    // Parse --config <path> from CLI args
-    let config_path = parse_config_arg();
-    let config = Config::load(config_path.as_deref()).unwrap_or_else(|e| {
-        tracing::error!("failed to load config: {e}");
-        Config::default()
-    });
+    let cli_args = parse_cli_args();
     let resolved_config_path =
-        config_path.unwrap_or_else(|| Config::default_path().unwrap_or_else(|| PathBuf::from("horizon.yaml")));
-    let runtime_state_path =
-        runtime_state_path_for_config(&resolved_config_path).unwrap_or_else(|| PathBuf::from(".horizon-runtime.yaml"));
-    let runtime_state = RuntimeState::load(&runtime_state_path)
-        .unwrap_or_else(|error| {
-            tracing::warn!("failed to load runtime state {}: {error}", runtime_state_path.display());
-            None
-        })
-        .unwrap_or_else(|| RuntimeState::from_config(&config));
+        Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
+    let config = load_config_or_default(&resolved_config_path);
+    let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
+    let startup = prepare_startup(&session_store, &config, &cli_args);
 
-    let window = runtime_state.window_or(&config.window);
+    let window = match &startup {
+        StartupDecision::Open { session, .. } => session.runtime_state.window_or(&config.window),
+        StartupDecision::Ephemeral { runtime_state } => runtime_state.window_or(&config.window),
+        StartupDecision::Choose(_) => &config.window,
+    };
     // Clamp to reasonable bounds so we don't open larger than the screen.
     let width = window.width.clamp(800.0, 7680.0);
     let height = window.height.clamp(600.0, 4320.0);
@@ -78,11 +73,67 @@ fn main() -> eframe::Result {
                 cc,
                 &config,
                 resolved_config_path.clone(),
-                runtime_state_path.clone(),
-                runtime_state.clone(),
+                session_store.clone(),
+                startup.clone(),
             )))
         }),
     )
+}
+
+fn load_config_or_default(config_path: &std::path::Path) -> Config {
+    if !config_path.exists() {
+        tracing::info!("no config found at {}, using defaults", config_path.display());
+        return Config::default();
+    }
+
+    Config::load(Some(config_path)).unwrap_or_else(|error| {
+        tracing::error!("failed to load config: {error}");
+        Config::default()
+    })
+}
+
+fn prepare_startup(session_store: &SessionStore, config: &Config, cli_args: &CliArgs) -> StartupDecision {
+    if cli_args.ephemeral || cli_args.new_session || cli_args.blank {
+        let runtime_state = if cli_args.blank {
+            RuntimeState::default()
+        } else {
+            RuntimeState::from_config(config)
+        };
+
+        if cli_args.ephemeral {
+            return StartupDecision::Ephemeral {
+                runtime_state: Box::new(runtime_state),
+            };
+        }
+
+        return match session_store.create_session_from_runtime(runtime_state) {
+            Ok(session) => StartupDecision::Open {
+                disposition: SessionOpenDisposition::New,
+                session: Box::new(session),
+            },
+            Err(error) => {
+                eprintln!("fatal: failed to create Horizon session: {error}");
+                std::process::exit(1);
+            }
+        };
+    }
+
+    match session_store.prepare_startup(config) {
+        Ok(startup) => startup,
+        Err(error) => {
+            tracing::error!("failed to prepare startup session: {error}");
+            match session_store.create_new_session(config) {
+                Ok(session) => StartupDecision::Open {
+                    disposition: SessionOpenDisposition::New,
+                    session: Box::new(session),
+                },
+                Err(create_error) => {
+                    eprintln!("fatal: failed to create Horizon session: {create_error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 }
 
 fn init_tracing() {
@@ -102,27 +153,48 @@ fn init_tracing() {
     }
 }
 
-fn parse_config_arg() -> Option<PathBuf> {
-    let args: Vec<String> = std::env::args().collect();
-    for (i, arg) in args.iter().enumerate() {
-        if (arg == "--config" || arg == "-c") && i + 1 < args.len() {
-            return Some(PathBuf::from(&args[i + 1]));
-        }
-    }
-    None
+struct CliArgs {
+    config_path: Option<PathBuf>,
+    new_session: bool,
+    ephemeral: bool,
+    blank: bool,
 }
 
-fn install_agent_plugins() {
-    let Some(home) = std::env::var_os("HOME") else {
+fn parse_cli_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().collect();
+    let mut config_path = None;
+    let mut new_session = false;
+    let mut ephemeral = false;
+    let mut blank = false;
+
+    for (i, arg) in args.iter().enumerate() {
+        if (arg == "--config" || arg == "-c") && i + 1 < args.len() {
+            config_path = Some(PathBuf::from(&args[i + 1]));
+        } else if arg == "--new-session" {
+            new_session = true;
+        } else if arg == "--ephemeral" {
+            ephemeral = true;
+        } else if arg == "--blank" {
+            blank = true;
+        }
+    }
+
+    CliArgs {
+        config_path,
+        new_session,
+        ephemeral,
+        blank,
+    }
+}
+
+fn install_agent_plugins(horizon_home: &HorizonHome) {
+    let Some(user_home) = std::env::var_os("HOME") else {
         return;
     };
-    let home = std::path::PathBuf::from(home);
+    let user_home = std::path::PathBuf::from(user_home);
 
-    // Claude Code plugin: extract to ~/.config/horizon/plugins/claude-code/
-    // so we can point --plugin-dir at it.
-    let claude_plugin_dir = home.join(".config").join("horizon").join("plugins").join("claude-code");
     install_plugin_files(
-        &claude_plugin_dir,
+        &horizon_home.claude_plugin_dir(),
         &[
             (
                 ".claude-plugin/plugin.json",
@@ -135,10 +207,17 @@ fn install_agent_plugins() {
         ],
     );
 
-    // Codex skill: install to ~/.agents/skills/ (Codex auto-discovers this).
-    let codex_skill_dir = home.join(".agents").join("skills").join("horizon-notify");
     install_plugin_files(
-        &codex_skill_dir,
+        &horizon_home.codex_skill_dir(),
+        &[(
+            "SKILL.md",
+            include_str!("../../../assets/plugins/codex/skills/horizon-notify/SKILL.md"),
+        )],
+    );
+
+    let codex_export_dir = user_home.join(".agents").join("skills").join("horizon-notify");
+    install_plugin_files(
+        &codex_export_dir,
         &[(
             "SKILL.md",
             include_str!("../../../assets/plugins/codex/skills/horizon-notify/SKILL.md"),

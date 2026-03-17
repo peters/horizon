@@ -756,47 +756,8 @@ fn load_codex_sessions() -> Result<Vec<AgentSessionRecord>> {
 }
 
 #[must_use]
-pub fn runtime_state_path_for_config(config_path: &Path) -> Option<PathBuf> {
-    let base_dir = xdg_state_home()
-        .or_else(default_home_state_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let stable_config_path = std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
-    let key = stable_state_key(&stable_config_path.to_string_lossy());
-    Some(base_dir.join("horizon/runtime").join(format!("{key}.yaml")))
-}
-
-#[must_use]
-pub fn transcript_root_path_for_config(config_path: &Path) -> Option<PathBuf> {
-    let base_dir = xdg_state_home()
-        .or_else(default_home_state_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let stable_config_path = std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
-    let key = stable_state_key(&stable_config_path.to_string_lossy());
-    Some(base_dir.join("horizon/transcripts").join(key))
-}
-
-#[must_use]
 pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
-}
-
-fn xdg_state_home() -> Option<PathBuf> {
-    std::env::var_os("XDG_STATE_HOME").map(PathBuf::from)
-}
-
-fn default_home_state_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join(".local/state"))
-}
-
-fn stable_state_key(value: &str) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
 }
 
 fn normalize_cwd(cwd: Option<&str>) -> Option<String> {
@@ -873,24 +834,6 @@ mod tests {
             .collect();
         assert_eq!(bindings.len(), 2);
         assert_ne!(bindings[0], bindings[1]);
-    }
-
-    #[test]
-    fn runtime_state_path_is_stable_for_config_path() {
-        let path = PathBuf::from("/tmp/horizon/config.yaml");
-        let first = runtime_state_path_for_config(&path).expect("state path");
-        let second = runtime_state_path_for_config(&path).expect("state path");
-        assert_eq!(first, second);
-        assert!(first.to_string_lossy().ends_with(".yaml"));
-    }
-
-    #[test]
-    fn transcript_root_path_is_stable_for_config_path() {
-        let path = PathBuf::from("/tmp/horizon/config.yaml");
-        let first = transcript_root_path_for_config(&path).expect("transcript root");
-        let second = transcript_root_path_for_config(&path).expect("transcript root");
-        assert_eq!(first, second);
-        assert!(!first.to_string_lossy().ends_with(".yaml"));
     }
 
     #[test]

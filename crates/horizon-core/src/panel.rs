@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
+use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
@@ -876,12 +877,7 @@ fn agent_env(kind: PanelKind) -> HashMap<String, String> {
 }
 
 fn horizon_claude_plugin_dir() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::PathBuf::from(home)
-        .join(".config")
-        .join("horizon")
-        .join("plugins")
-        .join("claude-code");
+    let path = HorizonHome::resolve().claude_plugin_dir();
     if path.is_dir() {
         Some(path.display().to_string())
     } else {

@@ -9,9 +9,11 @@ mod error;
 pub mod git_changes;
 pub mod git_status;
 pub mod git_watcher;
+mod horizon_home;
 mod layout;
 mod panel;
 mod runtime_state;
+mod session_store;
 mod terminal;
 mod transcript;
 mod usage_dashboard;
@@ -31,10 +33,15 @@ pub use error::{Error, Result};
 pub use git_changes::GitChangesViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
+pub use horizon_home::HorizonHome;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, PanelState, PanelTemplateRef, RuntimeState,
-    WorkspaceState, WorkspaceTemplateRef, new_local_id, runtime_state_path_for_config, transcript_root_path_for_config,
+    WorkspaceState, WorkspaceTemplateRef, new_local_id,
+};
+pub use session_store::{
+    ResolvedSession, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary, StartupChooser,
+    StartupDecision, StartupPromptReason,
 };
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;

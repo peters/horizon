@@ -6,6 +6,7 @@ mod persistence;
 mod session;
 mod settings;
 mod sidebar;
+mod startup_session;
 mod util;
 mod workspace;
 mod yaml_highlight;
@@ -18,7 +19,8 @@ use std::time::{Duration, Instant};
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PanelKind, PresetConfig,
-    RuntimeState, ShutdownProgress, WindowConfig, WorkspaceId, transcript_root_path_for_config,
+    ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision,
+    WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -72,6 +74,19 @@ struct StartupBootstrap {
     session_catalog: AgentSessionCatalog,
 }
 
+struct ActiveSession {
+    session_id: String,
+    lease: Option<SessionLease>,
+    last_lease_refresh: Option<Instant>,
+    persistent: bool,
+}
+
+struct StartupChooserState {
+    chooser: StartupChooser,
+    selected_session_id: Option<String>,
+    error: Option<String>,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -95,8 +110,10 @@ pub struct HorizonApp {
     rename_buffer: String,
     renaming_panel: Option<PanelId>,
     panel_rename_buffer: String,
+    session_store: SessionStore,
+    active_session: Option<ActiveSession>,
+    startup_chooser: Option<StartupChooserState>,
     config_path: PathBuf,
-    runtime_state_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
     presets: Vec<PresetConfig>,
@@ -127,8 +144,8 @@ impl HorizonApp {
         cc: &eframe::CreationContext<'_>,
         config: &Config,
         config_path: PathBuf,
-        runtime_state_path: PathBuf,
-        runtime_state: RuntimeState,
+        session_store: SessionStore,
+        startup: StartupDecision,
     ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
 
@@ -153,24 +170,12 @@ impl HorizonApp {
             .insert(0, "jetbrains-mono".to_owned());
 
         cc.egui_ctx.set_fonts(fonts);
-        let transcript_root = transcript_root_path_for_config(&config_path);
-        let startup_receiver = Self::runtime_state_needs_session_bootstrap(&runtime_state)
-            .then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
-        let mut board = if startup_receiver.is_some() {
-            Board::new()
-        } else {
-            Board::from_runtime_state_with_transcripts(&runtime_state, transcript_root.as_deref()).unwrap_or_else(
-                |error| {
-                    tracing::error!("failed to restore runtime state: {error}");
-                    Board::new()
-                },
-            )
-        };
+        let mut board = Board::new();
         board.attention_enabled = config.features.attention_feed;
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
 
-        Self {
+        let mut app = Self {
             board,
             panels_to_close: Vec::new(),
             panels_to_restart: Vec::new(),
@@ -189,14 +194,16 @@ impl HorizonApp {
             rename_buffer: String::new(),
             renaming_panel: None,
             panel_rename_buffer: String::new(),
+            session_store,
+            active_session: None,
+            startup_chooser: None,
             config_path,
-            runtime_state_path,
-            transcript_root,
+            transcript_root: None,
             template_config: config.clone(),
             presets: config.presets.clone(),
-            window_config: runtime_state.window_or(&config.window).clone(),
+            window_config: config.window.clone(),
             session_catalog: AgentSessionCatalog::default(),
-            startup_receiver,
+            startup_receiver: None,
             session_catalog_refresh: None,
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
@@ -205,16 +212,10 @@ impl HorizonApp {
             pending_preset_pick: None,
             dir_picker: None,
             quick_nav: None,
-            runtime_dirty_since: Some(
-                Instant::now()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap_or_else(Instant::now),
-            ),
+            runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_pos: None,
-            pan_offset: runtime_state
-                .pan_offset
-                .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1])),
+            pan_offset: Vec2::ZERO,
             pan_target: None,
             is_panning: false,
             git_watchers: HashMap::new(),
@@ -222,7 +223,15 @@ impl HorizonApp {
             config_last_check: None,
             shutdown_progress: None,
             exit_cleanup_complete: false,
+        };
+
+        match startup {
+            StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
+            StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
+            StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
+
+        app
     }
 }
 
@@ -238,6 +247,11 @@ impl eframe::App for HorizonApp {
         }
 
         if !self.prepare_frame(ctx) {
+            return;
+        }
+
+        if self.startup_chooser.is_some() {
+            self.render_startup_chooser(ctx);
             return;
         }
 
@@ -298,6 +312,7 @@ impl HorizonApp {
 
         if progress.is_complete() || progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT {
             self.exit_cleanup_complete = true;
+            self.release_active_session_lease();
             std::process::exit(0);
         }
     }
@@ -335,6 +350,7 @@ impl HorizonApp {
         self.auto_save_runtime_state();
         self.board.shutdown_terminal_panels();
         self.git_watchers.clear();
+        self.release_active_session_lease();
     }
 
     #[profiling::function]
@@ -350,7 +366,7 @@ impl HorizonApp {
             return false;
         }
 
-        if !self.initial_pan_done {
+        if self.startup_chooser.is_none() && !self.initial_pan_done {
             self.seed_initial_pan(ctx);
         }
 
@@ -599,6 +615,7 @@ impl HorizonApp {
         self.render_dir_picker(ctx);
         self.render_quick_nav(ctx);
         self.sync_window_config(ctx);
+        self.refresh_active_session_lease();
 
         if self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before {
             self.auto_save_runtime_state();
@@ -632,6 +649,17 @@ impl HorizonApp {
                 }
             };
             ctx.request_repaint_after(poll);
+        }
+    }
+}
+
+impl StartupChooserState {
+    fn new(chooser: StartupChooser) -> Self {
+        let selected_session_id = chooser.sessions.first().map(|session| session.session_id.clone());
+        Self {
+            chooser,
+            selected_session_id,
+            error: None,
         }
     }
 }
