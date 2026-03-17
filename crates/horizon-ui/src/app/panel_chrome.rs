@@ -6,6 +6,33 @@ use crate::theme;
 use super::RenameEditAction;
 use super::util::{format_compact_count, usize_to_f32};
 
+#[derive(Clone, Copy)]
+pub(super) struct PanelChrome<'a> {
+    pub panel_id: PanelId,
+    pub panel_rect: Rect,
+    pub titlebar_rect: Rect,
+    pub close_rect: Rect,
+    pub resize_rect: Rect,
+    pub title: Option<&'a str>,
+    pub history_size: usize,
+    pub scrollback_limit: usize,
+    pub focused: bool,
+    pub close_hovered: bool,
+    pub workspace_accent: Option<Color32>,
+    pub attention_badge: Option<&'a (AttentionSeverity, String)>,
+}
+
+#[derive(Clone, Copy)]
+struct HistoryMeter {
+    panel_id: PanelId,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    accent: Color32,
+    history_size: usize,
+    scrollback_limit: usize,
+    focused: bool,
+}
+
 pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused: bool) -> (&'static str, Color32) {
     match kind {
         PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(workspace_color, if focused { 200 } else { 80 })),
@@ -32,51 +59,40 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn paint_panel_chrome(
-    ui: &mut egui::Ui,
-    panel_id: PanelId,
-    panel_rect: Rect,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    resize_rect: Rect,
-    title: Option<&str>,
-    history_size: usize,
-    scrollback_limit: usize,
-    focused: bool,
-    close_hovered: bool,
-    workspace_accent: Option<Color32>,
-    attention_badge: Option<&(AttentionSeverity, String)>,
-) {
-    let painter = ui.painter_at(panel_rect);
-    let accent = workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG });
+pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
+    let painter = ui.painter_at(chrome.panel_rect);
+    let accent = chrome.workspace_accent.unwrap_or(if chrome.focused {
+        theme::ACCENT
+    } else {
+        theme::BORDER_STRONG
+    });
 
-    painter.rect_filled(panel_rect, CornerRadius::same(16), theme::PANEL_BG);
+    painter.rect_filled(chrome.panel_rect, CornerRadius::same(16), theme::PANEL_BG);
     painter.rect_stroke(
-        panel_rect,
+        chrome.panel_rect,
         CornerRadius::same(16),
-        Stroke::new(1.2, theme::panel_border(accent, focused)),
+        Stroke::new(1.2, theme::panel_border(accent, chrome.focused)),
         StrokeKind::Outside,
     );
     painter.rect_filled(
-        titlebar_rect,
+        chrome.titlebar_rect,
         CornerRadius::same(16),
-        theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.18 } else { 0.10 }),
+        theme::blend(theme::PANEL_BG_ALT, accent, if chrome.focused { 0.18 } else { 0.10 }),
     );
 
-    if let Some(title) = title {
-        let title_x = if let Some(color) = workspace_accent {
+    if let Some(title) = chrome.title {
+        let title_x = if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
-                Pos2::new(titlebar_rect.min.x + 14.0, titlebar_rect.center().y),
+                Pos2::new(chrome.titlebar_rect.min.x + 14.0, chrome.titlebar_rect.center().y),
                 4.5,
                 color,
             );
-            titlebar_rect.min.x + 26.0
+            chrome.titlebar_rect.min.x + 26.0
         } else {
-            titlebar_rect.min.x + 12.0
+            chrome.titlebar_rect.min.x + 12.0
         };
         painter.text(
-            Pos2::new(title_x, titlebar_rect.center().y),
+            Pos2::new(title_x, chrome.titlebar_rect.center().y),
             egui::Align2::LEFT_CENTER,
             title,
             egui::FontId::proportional(13.0),
@@ -84,28 +100,30 @@ pub(super) fn paint_panel_chrome(
         );
     }
 
-    if let Some((severity, summary)) = attention_badge {
-        paint_attention_badge(&painter, titlebar_rect, close_rect, *severity, summary);
+    if let Some((severity, summary)) = chrome.attention_badge {
+        paint_attention_badge(&painter, chrome.titlebar_rect, chrome.close_rect, *severity, summary);
     }
 
-    if scrollback_limit > 0 {
+    if chrome.scrollback_limit > 0 {
         paint_history_meter(
             ui,
             &painter,
-            panel_id,
-            titlebar_rect,
-            close_rect,
-            accent,
-            history_size,
-            scrollback_limit,
-            focused,
+            HistoryMeter {
+                panel_id: chrome.panel_id,
+                titlebar_rect: chrome.titlebar_rect,
+                close_rect: chrome.close_rect,
+                accent,
+                history_size: chrome.history_size,
+                scrollback_limit: chrome.scrollback_limit,
+                focused: chrome.focused,
+            },
         );
     }
 
     painter.circle_filled(
-        close_rect.center(),
+        chrome.close_rect.center(),
         5.0,
-        if close_hovered {
+        if chrome.close_hovered {
             theme::BTN_CLOSE
         } else {
             theme::alpha(theme::FG_DIM, 140)
@@ -115,45 +133,34 @@ pub(super) fn paint_panel_chrome(
     let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM, 170));
     painter.line_segment(
         [
-            resize_rect.right_bottom(),
-            resize_rect.left_top() + Vec2::new(6.0, 12.0),
+            chrome.resize_rect.right_bottom(),
+            chrome.resize_rect.left_top() + Vec2::new(6.0, 12.0),
         ],
         handle_stroke,
     );
     painter.line_segment(
         [
-            resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
-            resize_rect.left_top() + Vec2::new(12.0, 12.0),
+            chrome.resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
+            chrome.resize_rect.left_top() + Vec2::new(12.0, 12.0),
         ],
         handle_stroke,
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_history_meter(
-    ui: &egui::Ui,
-    painter: &egui::Painter,
-    panel_id: PanelId,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    accent: Color32,
-    history_size: usize,
-    scrollback_limit: usize,
-    focused: bool,
-) {
-    let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
+fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMeter) {
+    let badge_rect = panel_history_badge_rect(meter.titlebar_rect, meter.close_rect);
     let track_rect = Rect::from_min_max(
         Pos2::new(badge_rect.min.x + 8.0, badge_rect.max.y - 5.0),
         Pos2::new(badge_rect.max.x - 8.0, badge_rect.max.y - 3.0),
     );
-    let ratio = if scrollback_limit == 0 {
+    let ratio = if meter.scrollback_limit == 0 {
         0.0
     } else {
-        (usize_to_f32(history_size) / usize_to_f32(scrollback_limit)).clamp(0.0, 1.0)
+        (usize_to_f32(meter.history_size) / usize_to_f32(meter.scrollback_limit)).clamp(0.0, 1.0)
     };
-    let animated_ratio = ui
-        .ctx()
-        .animate_value_with_time(Id::new(("panel_history_ratio", panel_id.0)), ratio, 0.16);
+    let animated_ratio =
+        ui.ctx()
+            .animate_value_with_time(Id::new(("panel_history_ratio", meter.panel_id.0)), ratio, 0.16);
     let fill_width = track_rect.width() * animated_ratio.clamp(0.0, 1.0);
     let fill_rect = Rect::from_min_max(
         track_rect.min,
@@ -161,22 +168,25 @@ fn paint_history_meter(
     );
     let history_text = format!(
         "{}/{}",
-        format_compact_count(history_size),
-        format_compact_count(scrollback_limit)
+        format_compact_count(meter.history_size),
+        format_compact_count(meter.scrollback_limit)
     );
 
     painter.rect_filled(
         badge_rect,
         CornerRadius::same(7),
         theme::alpha(
-            theme::blend(theme::BG_ELEVATED, accent, 0.10),
-            if focused { 214 } else { 184 },
+            theme::blend(theme::BG_ELEVATED, meter.accent, 0.10),
+            if meter.focused { 214 } else { 184 },
         ),
     );
     painter.rect_stroke(
         badge_rect,
         CornerRadius::same(7),
-        Stroke::new(1.0, theme::alpha(theme::blend(theme::BORDER_SUBTLE, accent, 0.34), 180)),
+        Stroke::new(
+            1.0,
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE, meter.accent, 0.34), 180),
+        ),
         StrokeKind::Outside,
     );
     painter.rect_filled(track_rect, CornerRadius::same(2), theme::alpha(theme::FG_DIM, 52));
@@ -185,8 +195,8 @@ fn paint_history_meter(
             fill_rect,
             CornerRadius::same(2),
             theme::alpha(
-                theme::blend(theme::ACCENT, accent, 0.35),
-                if focused { 224 } else { 188 },
+                theme::blend(theme::ACCENT, meter.accent, 0.35),
+                if meter.focused { 224 } else { 188 },
             ),
         );
     }
@@ -195,7 +205,7 @@ fn paint_history_meter(
         egui::Align2::CENTER_CENTER,
         history_text,
         egui::FontId::monospace(10.5),
-        if history_size > 0 {
+        if meter.history_size > 0 {
             theme::FG_SOFT
         } else {
             theme::FG_DIM

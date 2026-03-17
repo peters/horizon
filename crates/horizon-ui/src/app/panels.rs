@@ -8,7 +8,7 @@ use crate::theme;
 use crate::usage_widget::UsageDashboardView;
 
 pub(super) use super::panel_chrome::{
-    paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
+    PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
 use super::util::clamp_panel_size;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
@@ -290,22 +290,24 @@ impl HorizonApp {
 
                 paint_panel_chrome(
                     ui,
-                    panel_id,
-                    rects.panel,
-                    rects.titlebar,
-                    rects.close,
-                    rects.resize,
-                    if snapshot.is_renaming {
-                        None
-                    } else {
-                        Some(snapshot.title.as_str())
+                    PanelChrome {
+                        panel_id,
+                        panel_rect: rects.panel,
+                        titlebar_rect: rects.titlebar,
+                        close_rect: rects.close,
+                        resize_rect: rects.resize,
+                        title: if snapshot.is_renaming {
+                            None
+                        } else {
+                            Some(snapshot.title.as_str())
+                        },
+                        history_size: snapshot.history_size,
+                        scrollback_limit: snapshot.scrollback_limit,
+                        focused: snapshot.is_focused,
+                        close_hovered: close_response.hovered(),
+                        workspace_accent: snapshot.workspace_accent,
+                        attention_badge: snapshot.attention_badge.as_ref(),
                     },
-                    snapshot.history_size,
-                    snapshot.scrollback_limit,
-                    snapshot.is_focused,
-                    close_response.hovered(),
-                    snapshot.workspace_accent,
-                    snapshot.attention_badge.as_ref(),
                 );
 
                 if snapshot.is_renaming {
