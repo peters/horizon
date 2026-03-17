@@ -8,6 +8,7 @@ mod settings;
 mod sidebar;
 mod util;
 mod workspace;
+mod yaml_highlight;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -531,48 +532,47 @@ impl HorizonApp {
     fn render_active_view(&mut self, ctx: &Context) {
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
-        } else if self.settings.is_some() {
-            self.render_toolbar(ctx);
-            self.render_sidebar(ctx);
+            return;
+        }
+
+        // Settings side panel renders first so egui reserves the space
+        // before the canvas `CentralPanel` claims the remainder.
+        if self.settings.is_some() {
             self.render_settings(ctx);
-        } else {
-            let workspace_bounds = self.board.workspace_bounds_map();
-            self.handle_canvas_pan(ctx);
-            self.render_toolbar(ctx);
-            self.render_sidebar(ctx);
-            self.render_canvas(ctx);
-            let overlay_zones = self.overlay_exclusion_zones(ctx);
-            self.render_workspace_backgrounds(ctx, &workspace_bounds, &overlay_zones);
-            self.handle_canvas_double_click(ctx);
-            self.render_panels(ctx);
-            self.render_preset_picker(ctx);
-            let minimap_height = self.render_minimap(ctx, &workspace_bounds);
-            if self.template_config.features.attention_feed {
-                let feed_result = attention_feed::render_attention_feed(
-                    ctx,
-                    &self.board,
-                    minimap_height,
-                    &self.template_config.overlays,
-                );
-                for attention_id in feed_result.dismissed_ids {
-                    let _ = self.board.dismiss_attention(attention_id);
-                }
-                if let Some(panel_id) = feed_result.focus_panel {
-                    self.board.focus(panel_id);
-                    if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
-                        && let Some((min, max)) = self.board.workspace_bounds(ws_id)
-                    {
-                        let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                        let size = Vec2::new(
-                            max[0] - min[0] + 2.0 * WS_BG_PAD,
-                            max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                        );
-                        self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
-                    }
+        }
+
+        let workspace_bounds = self.board.workspace_bounds_map();
+        self.handle_canvas_pan(ctx);
+        self.render_toolbar(ctx);
+        self.render_sidebar(ctx);
+        self.render_canvas(ctx);
+        let overlay_zones = self.overlay_exclusion_zones(ctx);
+        self.render_workspace_backgrounds(ctx, &workspace_bounds, &overlay_zones);
+        self.handle_canvas_double_click(ctx);
+        self.render_panels(ctx);
+        self.render_preset_picker(ctx);
+        let minimap_height = self.render_minimap(ctx, &workspace_bounds);
+        if self.template_config.features.attention_feed {
+            let feed_result =
+                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
+            for attention_id in feed_result.dismissed_ids {
+                let _ = self.board.dismiss_attention(attention_id);
+            }
+            if let Some(panel_id) = feed_result.focus_panel {
+                self.board.focus(panel_id);
+                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
+                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+                {
+                    let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                    let size = Vec2::new(
+                        max[0] - min[0] + 2.0 * WS_BG_PAD,
+                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                    );
+                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
                 }
             }
-            self.render_canvas_hud(ctx);
         }
+        self.render_canvas_hud(ctx);
     }
 
     #[profiling::function]

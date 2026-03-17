@@ -1,9 +1,10 @@
-use egui::{Align, Button, Color32, Context, Layout, Margin, Pos2, Rect, Stroke, UiBuilder, Vec2};
+use egui::{Align, Button, Color32, Context, FontId, Layout, Margin, Stroke, Vec2};
 use horizon_core::Config;
 
 use crate::theme;
 
 use super::util::{atomic_write, chrome_button, primary_button};
+use super::yaml_highlight::highlight_yaml;
 use super::{HorizonApp, SettingsEditor, SettingsStatus};
 
 #[derive(Clone, Copy)]
@@ -60,7 +61,7 @@ impl HorizonApp {
         let parsed = serde_yaml::from_str::<Config>(&buffer);
         let is_valid = parsed.is_ok();
         if let Ok(config) = &parsed {
-            self.board.sync_workspace_metadata(config);
+            self.apply_live_preview(config);
             if let Some(editor) = self.settings.as_mut()
                 && !matches!(editor.status, SettingsStatus::Saved)
             {
@@ -77,9 +78,8 @@ impl HorizonApp {
         self.apply_settings_action(action);
 
         let config_path = self.config_path.display().to_string();
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_editor(ctx, canvas_rect, &config_path, &mut editor.buffer);
+            render_settings_editor(ctx, &config_path, &mut editor.buffer);
         }
     }
 
@@ -134,6 +134,13 @@ impl HorizonApp {
         action
     }
 
+    fn apply_live_preview(&mut self, config: &Config) {
+        self.board.sync_workspace_metadata(config);
+        self.template_config = config.clone();
+        self.presets.clone_from(&config.presets);
+        self.board.attention_enabled = config.features.attention_feed;
+    }
+
     fn apply_settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::None => {}
@@ -141,17 +148,19 @@ impl HorizonApp {
                 if let Some(editor) = self.settings.take()
                     && let Ok(config) = serde_yaml::from_str::<Config>(&editor.original)
                 {
-                    self.board.sync_workspace_metadata(&config);
+                    self.apply_live_preview(&config);
                 }
             }
             SettingsAction::Revert => {
-                if let Some(editor) = self.settings.as_mut() {
-                    let original = editor.original.clone();
+                let original = self.settings.as_ref().map(|e| e.original.clone());
+                if let Some(original) = original {
                     if let Ok(config) = serde_yaml::from_str::<Config>(&original) {
-                        self.board.sync_workspace_metadata(&config);
+                        self.apply_live_preview(&config);
                     }
-                    editor.buffer = original;
-                    editor.status = SettingsStatus::None;
+                    if let Some(editor) = self.settings.as_mut() {
+                        editor.buffer = original;
+                        editor.status = SettingsStatus::None;
+                    }
                 }
             }
             SettingsAction::ResetDefaults => {
@@ -198,53 +207,59 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     }
 }
 
-fn render_settings_editor(ctx: &Context, canvas_rect: Rect, config_path: &str, buffer: &mut String) {
-    egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(theme::BG_ELEVATED))
-        .show(ctx, |ui| {
-            let content_rect = Rect::from_min_max(
-                Pos2::new(canvas_rect.min.x + 24.0, canvas_rect.min.y + 16.0),
-                Pos2::new(canvas_rect.max.x - 24.0, ui.max_rect().max.y),
-            );
-            ui.scope_builder(
-                UiBuilder::new()
-                    .max_rect(content_rect)
-                    .layout(Layout::top_down(Align::Min)),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Config File").color(theme::FG).size(18.0).strong());
-                        ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new(config_path)
-                                .color(theme::FG_DIM)
-                                .size(12.0)
-                                .monospace(),
-                        );
-                    });
-                    ui.add_space(12.0);
+fn render_settings_editor(ctx: &Context, config_path: &str, buffer: &mut String) {
+    let font_id = FontId::monospace(13.0);
+    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
+        let job = highlight_yaml(text.as_str(), &ui.style().text_styles[&egui::TextStyle::Monospace]);
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
 
-                    let available = ui.available_size() - Vec2::new(0.0, 8.0);
-                    egui::Frame::default()
-                        .fill(theme::PANEL_BG)
-                        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
-                        .corner_radius(8)
-                        .inner_margin(Margin::same(12))
+    let viewport_width = super::util::viewport_local_rect(ctx).width();
+    let default_width = (viewport_width * 0.3).clamp(340.0, 900.0);
+
+    egui::SidePanel::right("settings_panel")
+        .default_width(default_width)
+        .min_width(viewport_width * 0.15)
+        .max_width(viewport_width * 0.5)
+        .frame(
+            egui::Frame::default()
+                .fill(theme::BG_ELEVATED)
+                .inner_margin(Margin::symmetric(24, 16))
+                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Config File").color(theme::FG).size(18.0).strong());
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new(config_path)
+                        .color(theme::FG_DIM)
+                        .size(12.0)
+                        .monospace(),
+                );
+            });
+            ui.add_space(12.0);
+
+            let available = ui.available_size() - Vec2::new(0.0, 8.0);
+            egui::Frame::default()
+                .fill(theme::PANEL_BG)
+                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+                .corner_radius(8)
+                .inner_margin(Margin::same(12))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(available.y)
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(available.y)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(buffer)
-                                            .font(egui::FontId::monospace(13.0))
-                                            .text_color(theme::FG)
-                                            .desired_width(available.x)
-                                            .desired_rows(40)
-                                            .frame(false),
-                                    );
-                                });
+                            ui.add(
+                                egui::TextEdit::multiline(buffer)
+                                    .font(font_id)
+                                    .desired_width(available.x)
+                                    .desired_rows(40)
+                                    .frame(false)
+                                    .layouter(&mut layouter),
+                            );
                         });
-                },
-            );
+                });
         });
 }
