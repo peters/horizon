@@ -102,7 +102,7 @@ pub(super) fn paint_empty_state(ui: &mut egui::Ui) {
     painter.text(
         Pos2::new(card_rect.center().x, card_rect.min.y + 30.0),
         egui::Align2::CENTER_CENTER,
-        "Spatial agent observatory",
+        "Spatial terminal observatory",
         egui::FontId::proportional(17.0),
         theme::FG,
     );

@@ -2,7 +2,7 @@ use egui::IconData;
 
 pub const APP_NAME: &str = "Horizon";
 pub const APP_ID: &str = "horizon";
-pub const APP_TAGLINE: &str = "spatial terminal observatory";
+pub const APP_TAGLINE: &str = "spatial terminal observatory for multi-agent development";
 
 const ICON_SIZE: u32 = 256;
 const BG: [u8; 4] = [10, 22, 34, 255];
