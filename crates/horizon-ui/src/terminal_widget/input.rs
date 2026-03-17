@@ -9,6 +9,17 @@ use crate::input;
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
 
+struct PointerContext<'a> {
+    interaction: &'a TerminalInteraction,
+    metrics: &'a GridMetrics,
+    visible_rows: u16,
+    visible_cols: u16,
+    terminal_mode: TermMode,
+    pointer_buttons: input::PointerButtons,
+    current_modifiers: egui::Modifiers,
+    hovered_point: Option<input::GridPoint>,
+}
+
 pub(super) fn handle_terminal_pointer_input(
     ui: &mut egui::Ui,
     panel: &mut Panel,
@@ -52,14 +63,7 @@ pub(super) fn handle_terminal_pointer_input(
         .and_then(|position| {
             grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
         });
-
-    let mouse_mode_active = |modifiers: &egui::Modifiers| -> bool {
-        !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
-    };
-
-    handle_pointer_events(
-        &events,
-        panel,
+    let pointer_context = PointerContext {
         interaction,
         metrics,
         visible_rows,
@@ -68,14 +72,15 @@ pub(super) fn handle_terminal_pointer_input(
         pointer_buttons,
         current_modifiers,
         hovered_point,
-        &mouse_mode_active,
-    );
+    };
+
+    handle_pointer_events(&events, panel, &pointer_context);
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
 
     // Show pointing hand when Ctrl/Cmd hovering over clickable content.
     if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
-        && let Some(point) = hovered_point
+        && let Some(point) = pointer_context.hovered_point
         && let Some(terminal) = panel.terminal()
         && terminal.clickable_at_point(point.line, point.column).is_some()
     {
@@ -83,20 +88,11 @@ pub(super) fn handle_terminal_pointer_input(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_pointer_events(
-    events: &[egui::Event],
-    panel: &mut Panel,
-    interaction: &TerminalInteraction,
-    metrics: &GridMetrics,
-    visible_rows: u16,
-    visible_cols: u16,
-    terminal_mode: TermMode,
-    pointer_buttons: input::PointerButtons,
-    current_modifiers: egui::Modifiers,
-    hovered_point: Option<input::GridPoint>,
-    mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
-) {
+fn mouse_mode_active(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
+    !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
+}
+
+fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &PointerContext<'_>) {
     for event in events {
         match event {
             egui::Event::PointerButton {
@@ -104,54 +100,50 @@ fn handle_pointer_events(
                 button,
                 pressed,
                 modifiers,
-            } if interaction.layout.body.contains(*pos) => {
+            } if pointer.interaction.layout.body.contains(*pos) => {
                 if *pressed {
-                    interaction.body.request_focus();
+                    pointer.interaction.body.request_focus();
                 }
-                handle_pointer_button(
-                    panel,
-                    interaction,
-                    *pos,
-                    *button,
-                    *pressed,
-                    *modifiers,
-                    metrics,
-                    visible_rows,
-                    visible_cols,
-                    terminal_mode,
-                    mouse_mode_active,
-                );
+                handle_pointer_button(panel, pointer, *pos, *button, *pressed, *modifiers);
             }
             egui::Event::PointerMoved(pos) => {
-                let inside = interaction.layout.body.contains(*pos);
-                if inside && mouse_mode_active(&current_modifiers) {
-                    if let Some(point) =
-                        grid_point_from_position(interaction.layout.body, *pos, metrics, visible_rows, visible_cols)
-                        && let Some(bytes) =
-                            input::mouse_motion_report(pointer_buttons, current_modifiers, terminal_mode, point)
-                        && !bytes.is_empty()
+                let inside = pointer.interaction.layout.body.contains(*pos);
+                if inside && mouse_mode_active(pointer.terminal_mode, pointer.current_modifiers) {
+                    if let Some(point) = grid_point_from_position(
+                        pointer.interaction.layout.body,
+                        *pos,
+                        pointer.metrics,
+                        pointer.visible_rows,
+                        pointer.visible_cols,
+                    ) && let Some(bytes) = input::mouse_motion_report(
+                        pointer.pointer_buttons,
+                        pointer.current_modifiers,
+                        pointer.terminal_mode,
+                        point,
+                    ) && !bytes.is_empty()
                     {
                         panel.write_input(&bytes);
                     }
-                } else if interaction.body.dragged() && panel.terminal_mut().is_some_and(|t| t.has_selection()) {
+                } else if pointer.interaction.body.dragged() && panel.terminal_mut().is_some_and(|t| t.has_selection())
+                {
                     handle_pointer_selection_drag(
                         panel,
                         *pos,
-                        interaction.layout.body,
-                        metrics,
-                        visible_rows,
-                        visible_cols,
+                        pointer.interaction.layout.body,
+                        pointer.metrics,
+                        pointer.visible_rows,
+                        pointer.visible_cols,
                     );
                 }
             }
             egui::Event::MouseWheel { delta, unit, modifiers } => {
-                if let Some(point) = hovered_point
+                if let Some(point) = pointer.hovered_point
                     && let Some(action) = input::wheel_action(
                         *delta,
                         *unit,
-                        Vec2::new(metrics.char_width, metrics.line_height),
+                        Vec2::new(pointer.metrics.char_width, pointer.metrics.line_height),
                         *modifiers,
-                        terminal_mode,
+                        pointer.terminal_mode,
                         point,
                     )
                 {
@@ -167,25 +159,25 @@ fn handle_pointer_events(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_pointer_button(
     panel: &mut Panel,
-    interaction: &TerminalInteraction,
+    pointer: &PointerContext<'_>,
     pos: Pos2,
     button: egui::PointerButton,
     pressed: bool,
     modifiers: egui::Modifiers,
-    metrics: &GridMetrics,
-    visible_rows: u16,
-    visible_cols: u16,
-    terminal_mode: TermMode,
-    mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
 ) {
     // Ctrl+click / Cmd+click opens URLs and file paths regardless of mouse mode.
     if (modifiers.ctrl || modifiers.command)
         && button == egui::PointerButton::Primary
         && pressed
-        && let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
+        && let Some(point) = grid_point_from_position(
+            pointer.interaction.layout.body,
+            pos,
+            pointer.metrics,
+            pointer.visible_rows,
+            pointer.visible_cols,
+        )
         && let Some(terminal) = panel.terminal()
         && let Some(target) = terminal.clickable_at_point(point.line, point.column)
     {
@@ -193,20 +185,31 @@ fn handle_pointer_button(
         return;
     }
 
-    if mouse_mode_active(&modifiers) {
-        if let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
-            && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, terminal_mode, point)
+    if mouse_mode_active(pointer.terminal_mode, modifiers) {
+        if let Some(point) = grid_point_from_position(
+            pointer.interaction.layout.body,
+            pos,
+            pointer.metrics,
+            pointer.visible_rows,
+            pointer.visible_cols,
+        ) && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, pointer.terminal_mode, point)
             && !bytes.is_empty()
         {
             panel.write_input(&bytes);
         }
     } else if button == egui::PointerButton::Primary
         && pressed
-        && let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
+        && let Some(point) = grid_point_from_position(
+            pointer.interaction.layout.body,
+            pos,
+            pointer.metrics,
+            pointer.visible_rows,
+            pointer.visible_cols,
+        )
     {
-        let sel_type = if interaction.body.triple_clicked() {
+        let sel_type = if pointer.interaction.body.triple_clicked() {
             SelectionType::Lines
-        } else if interaction.body.double_clicked() {
+        } else if pointer.interaction.body.double_clicked() {
             SelectionType::Semantic
         } else {
             SelectionType::Simple
