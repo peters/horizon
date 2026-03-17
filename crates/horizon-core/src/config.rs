@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
-use crate::panel::{PanelKind, PanelResume};
+use crate::panel::{PanelKind, PanelOptions, PanelResume};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -53,14 +53,14 @@ pub struct PresetConfig {
 impl PresetConfig {
     /// Convert this preset into `PanelOptions` for panel creation.
     #[must_use]
-    pub fn to_panel_options(&self) -> crate::panel::PanelOptions {
-        crate::panel::PanelOptions {
+    pub fn to_panel_options(&self) -> PanelOptions {
+        PanelOptions {
             name: Some(self.name.clone()),
             command: self.command.clone(),
             args: self.args.clone(),
             kind: self.kind,
             resume: self.resume.clone(),
-            ..crate::panel::PanelOptions::default()
+            ..PanelOptions::default()
         }
     }
 }

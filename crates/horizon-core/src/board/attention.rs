@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
-use crate::panel::PanelId;
+use crate::panel::{PanelId, current_unix_millis};
 use crate::workspace::WorkspaceId;
 
 use super::Board;
@@ -49,7 +49,7 @@ impl Board {
             let has_open = self.unresolved_attention_for_panel(panel_id).is_some();
 
             if attention.is_none() && bell && kind.is_agent() {
-                let age_ms = crate::panel::current_unix_millis().saturating_sub(launched_at);
+                let age_ms = current_unix_millis().saturating_sub(launched_at);
                 if !has_open && age_ms >= 10_000 {
                     self.create_attention(
                         workspace_id,

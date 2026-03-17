@@ -13,6 +13,7 @@ use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
+use crate::terminal::Terminal;
 
 const RUNTIME_STATE_VERSION: u32 = 1;
 const DEFAULT_ROWS: u16 = 24;
@@ -182,12 +183,12 @@ impl RuntimeState {
                                 panel.launch_cwd.clone()
                             } else {
                                 terminal
-                                    .and_then(crate::terminal::Terminal::current_cwd)
+                                    .and_then(Terminal::current_cwd)
                                     .or_else(|| panel.launch_cwd.clone())
                             }
                             .map(|path| path.display().to_string()),
-                            rows: terminal.map_or(DEFAULT_ROWS, crate::terminal::Terminal::rows),
-                            cols: terminal.map_or(DEFAULT_COLS, crate::terminal::Terminal::cols),
+                            rows: terminal.map_or(DEFAULT_ROWS, Terminal::rows),
+                            cols: terminal.map_or(DEFAULT_COLS, Terminal::cols),
                             resume: panel.resume.clone(),
                             position: Some(panel.layout.position),
                             size: Some(panel.layout.size),
@@ -760,8 +761,6 @@ fn empty_to_none(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Board;
-    use crate::config::WindowConfig;
     use std::io::Cursor;
 
     fn parse_claude_project_session<R: BufRead>(

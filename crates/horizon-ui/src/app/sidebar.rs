@@ -3,7 +3,7 @@ use egui::{
 };
 use horizon_core::{AttentionSeverity, PanelId, WorkspaceId, WorkspaceLayout};
 
-use crate::theme;
+use crate::{branding, theme};
 
 use super::panels::panel_kind_icon;
 use super::util;
@@ -62,13 +62,13 @@ impl HorizonApp {
                         .layout(Layout::left_to_right(Align::Center)),
                     |ui| {
                         ui.label(
-                            egui::RichText::new(crate::branding::APP_NAME)
+                            egui::RichText::new(branding::APP_NAME)
                                 .color(theme::FG)
                                 .size(14.0)
                                 .strong(),
                         );
                         ui.label(
-                            egui::RichText::new(crate::branding::APP_TAGLINE)
+                            egui::RichText::new(branding::APP_TAGLINE)
                                 .color(theme::FG_DIM)
                                 .size(10.5),
                         );

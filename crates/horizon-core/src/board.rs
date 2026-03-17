@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::attention::AttentionItem;
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::layout::{
     TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
     tiled_panel_position, usize_to_f32, workspace_slot_width,
@@ -285,7 +285,7 @@ impl Board {
             .panels
             .iter_mut()
             .find(|p| p.id == id)
-            .ok_or_else(|| crate::error::Error::Pty(format!("panel {} not found", id.0)))?;
+            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
         panel.restart()
     }
 
@@ -973,8 +973,9 @@ fn collision_push(a: [f32; 4], b: [f32; 4], drag_dir: [f32; 2], gap: f32) -> [f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::AttentionSeverity;
+    use crate::attention::{AttentionSeverity, AttentionState};
     use crate::config::WorkspaceConfig;
+    use crate::panel::PanelKind;
     use crate::runtime_state::WorkspaceTemplateRef;
     use std::path::PathBuf;
 
@@ -1103,7 +1104,7 @@ mod tests {
             .iter()
             .find(|item| item.id == attention_id)
             .expect("attention item");
-        assert_eq!(item.state, crate::attention::AttentionState::Dismissed);
+        assert_eq!(item.state, AttentionState::Dismissed);
     }
 
     #[test]
@@ -1395,7 +1396,7 @@ mod tests {
         let command_panel = board
             .create_panel(
                 PanelOptions {
-                    kind: crate::panel::PanelKind::Command,
+                    kind: PanelKind::Command,
                     ..PanelOptions::default()
                 },
                 workspace_id,
