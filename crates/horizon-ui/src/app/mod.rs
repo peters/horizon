@@ -20,6 +20,7 @@ use horizon_core::{
     RuntimeState, ShutdownProgress, WindowConfig, WorkspaceId, transcript_root_path_for_config,
 };
 
+use crate::app::canvas::CanvasGridCache;
 use crate::dir_picker::DirPicker;
 use crate::quick_nav::QuickNav;
 use crate::terminal_widget::TerminalGridCache;
@@ -83,6 +84,7 @@ pub struct HorizonApp {
     is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
+    canvas_grid_cache: CanvasGridCache,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
@@ -176,6 +178,7 @@ impl HorizonApp {
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
             terminal_grid_cache: HashMap::new(),
+            canvas_grid_cache: CanvasGridCache::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,

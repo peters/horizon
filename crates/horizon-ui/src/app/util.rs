@@ -109,25 +109,6 @@ pub(super) fn paint_empty_state(ui: &mut egui::Ui) {
     );
 }
 
-pub(super) fn draw_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2) {
-    let rect = ui.max_rect();
-    let painter = ui.painter();
-    let spacing = 22.0;
-    let dot_radius = 1.15;
-    let offset_x = pan_offset.x.rem_euclid(spacing);
-    let offset_y = pan_offset.y.rem_euclid(spacing);
-
-    let mut x = rect.min.x + offset_x;
-    while x <= rect.max.x {
-        let mut y = rect.min.y + offset_y;
-        while y <= rect.max.y {
-            painter.circle_filled(Pos2::new(x, y), dot_radius, theme::GRID_DOT);
-            y += spacing;
-        }
-        x += spacing;
-    }
-}
-
 pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
     let rect = ui.max_rect();
     let painter = ui.painter();

@@ -1,9 +1,15 @@
-use egui::{Color32, Context, CornerRadius, Id, Margin, Order, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use egui::{
+    Color32, Context, CornerRadius, Id, Margin, Mesh, Order, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind,
+    Vec2,
+};
 
 use crate::theme;
 
-use super::util::{draw_dot_grid, format_grid_position, paint_canvas_glow, paint_empty_state, rounded_i32};
+use super::util::{format_grid_position, paint_canvas_glow, paint_empty_state, rounded_i32};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
+
+const GRID_SPACING: f32 = 22.0;
+const GRID_DOT_DIAMETER: f32 = 2.3;
 
 struct MinimapModel {
     content_min: [f32; 2],
@@ -12,6 +18,35 @@ struct MinimapModel {
     outer_size: Vec2,
     view_min: Pos2,
     view_max: Pos2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CanvasGridCacheKey {
+    rect_min_x_bits: u32,
+    rect_min_y_bits: u32,
+    rect_width_bits: u32,
+    rect_height_bits: u32,
+    offset_x_bits: u32,
+    offset_y_bits: u32,
+}
+
+impl CanvasGridCacheKey {
+    fn new(rect: Rect, pan_offset: Vec2) -> Self {
+        Self {
+            rect_min_x_bits: rect.min.x.to_bits(),
+            rect_min_y_bits: rect.min.y.to_bits(),
+            rect_width_bits: rect.width().to_bits(),
+            rect_height_bits: rect.height().to_bits(),
+            offset_x_bits: pan_offset.x.rem_euclid(GRID_SPACING).to_bits(),
+            offset_y_bits: pan_offset.y.rem_euclid(GRID_SPACING).to_bits(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct CanvasGridCache {
+    key: Option<CanvasGridCacheKey>,
+    shape: Option<Shape>,
 }
 
 impl HorizonApp {
@@ -204,12 +239,13 @@ impl HorizonApp {
             });
     }
 
-    pub(super) fn render_canvas(&self, ctx: &Context) {
+    #[profiling::function]
+    pub(super) fn render_canvas(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::BG))
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
-                draw_dot_grid(ui, self.pan_offset);
+                paint_dot_grid(ui, self.pan_offset, &mut self.canvas_grid_cache);
                 if self.board.panels.is_empty() {
                     paint_empty_state(ui);
                 }
@@ -256,6 +292,45 @@ fn minimap_point(model: &MinimapModel, canvas_x: f32, canvas_y: f32) -> Pos2 {
         MINIMAP_PAD + (canvas_x - model.content_min[0]) * model.scale_x,
         MINIMAP_PAD + (canvas_y - model.content_min[1]) * model.scale_y,
     )
+}
+
+fn paint_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, cache: &mut CanvasGridCache) {
+    let rect = ui.max_rect();
+    let key = CanvasGridCacheKey::new(rect, pan_offset);
+
+    if cache.key != Some(key) {
+        cache.key = Some(key);
+        cache.shape = Some(build_dot_grid_shape(rect, pan_offset));
+    }
+
+    if let Some(shape) = &cache.shape {
+        ui.painter().add(shape.clone());
+    }
+}
+
+fn build_dot_grid_shape(rect: Rect, pan_offset: Vec2) -> Shape {
+    let offset_x = pan_offset.x.rem_euclid(GRID_SPACING);
+    let offset_y = pan_offset.y.rem_euclid(GRID_SPACING);
+    let columns = (((rect.width() + GRID_SPACING) / GRID_SPACING).ceil() as usize).saturating_add(1);
+    let rows = (((rect.height() + GRID_SPACING) / GRID_SPACING).ceil() as usize).saturating_add(1);
+    let dot_count = columns.saturating_mul(rows);
+
+    let mut mesh = Mesh::default();
+    mesh.reserve_vertices(dot_count.saturating_mul(4));
+    mesh.reserve_triangles(dot_count.saturating_mul(2));
+
+    let mut x = rect.min.x + offset_x;
+    while x <= rect.max.x {
+        let mut y = rect.min.y + offset_y;
+        while y <= rect.max.y {
+            let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(GRID_DOT_DIAMETER));
+            mesh.add_colored_rect(dot_rect, theme::GRID_DOT);
+            y += GRID_SPACING;
+        }
+        x += GRID_SPACING;
+    }
+
+    Shape::mesh(mesh)
 }
 
 fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel) {
