@@ -111,7 +111,9 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - `crates/horizon-ui/src/terminal_widget/render.rs` — per-cell iteration, text batching, default-color conversion, decorations, and redundant fills
 - `crates/horizon-ui/src/terminal_widget/input.rs` — per-panel event cloning/scanning and pointer-move fan-out
 - `crates/horizon-ui/src/app/workspace.rs` and `crates/horizon-ui/src/app/canvas.rs` — workspace hover effects, cursor changes, and canvas redraws while moving the mouse
+- `crates/horizon-ui/src/app/canvas.rs` and the minimap path — repeated static geometry such as dot grids, glows, and overview rects can become tessellation-heavy under pointer-only redraws
 - Mouse-move spikes are often hover/redraw problems, not PTY/output problems; compare against an idle trace before touching terminal I/O
+- Moving the pointer anywhere inside the Horizon window can trigger full-scene redraws; "empty canvas" is not a free case if visible panels still repaint
 
 ### Performance Guardrails
 
@@ -119,6 +121,18 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Off-screen culling is generally safe; active-workspace culling is not. Do not skip panel body rendering just because a panel belongs to a non-active workspace if it can still be visible on screen
 - If a perf change affects visibility, focus, hover, or selection behavior, treat it as correctness-sensitive and verify it live before keeping it
 - Record the exact workload used for any reported perf gain in the commit message or PR notes so later agents can reproduce it
+
+### UI Feature Perf Checklist
+
+- Any new UI feature must identify its redraw surface up front: what pointer movement, hover state, animation, terminal output, or config changes will cause it to update
+- Treat pointer-only frames as a first-class perf budget; if a feature adds hover behavior, compare idle vs scripted mouse-move before and after, including a pass over empty canvas outside any workspace
+- Do not add unconditional per-frame work across every panel or workspace for convenience. Compute lazily on interaction, gate by on-screen visibility, or cache by stable keys
+- Prefer cached meshes or cached shapes for repeated static decoration such as grids, minimaps, badges, panel chrome, and other geometry that does not semantically change every frame
+- Avoid broad `request_repaint` or animation loops for passive UI polish. Repaint continuously only when there is active interaction, active animation, or real terminal/output change
+- New menus, tooltips, badges, and summary labels should avoid eager text layout, string building, or list construction for every visible panel each frame
+- If a feature needs per-panel pointer inspection, keep the hot path narrow: no cloning/scanning full input state for inactive panels unless the pointer is actually relevant to that panel
+- When a feature adds a new always-visible overlay, include the overlay in the perf trace and live screenshot verification; overlays can dominate pointer redraw cost even when the cursor is elsewhere
+- If a feature cannot be made lazy or cache-friendly, document why in the commit message or PR notes and include the measured cost on the target workload
 
 ### UI Launch Troubleshooting
 
