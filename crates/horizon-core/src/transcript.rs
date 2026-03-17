@@ -43,24 +43,33 @@ impl PanelTranscript {
             return (program, args);
         };
 
-        let mut parts = vec![program];
-        parts.extend(args);
-        let command = parts
-            .iter()
-            .map(|part| shell_escape(part))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let session_path = self.session_path().display().to_string();
 
-        (
-            script_program,
-            vec![
-                "-qef".to_string(),
-                "--log-out".to_string(),
-                self.session_path().display().to_string(),
-                "--command".to_string(),
-                command,
-            ],
-        )
+        if cfg!(target_os = "macos") {
+            // BSD script: script [-flags] <file> <command...>
+            let mut script_args = vec!["-qeF".to_string(), session_path, program];
+            script_args.extend(args);
+            (script_program, script_args)
+        } else {
+            // GNU script: script [-flags] --log-out <file> --command "<command>"
+            let mut parts = vec![program];
+            parts.extend(args);
+            let command = parts
+                .iter()
+                .map(|part| shell_escape(part))
+                .collect::<Vec<_>>()
+                .join(" ");
+            (
+                script_program,
+                vec![
+                    "-qef".to_string(),
+                    "--log-out".to_string(),
+                    session_path,
+                    "--command".to_string(),
+                    command,
+                ],
+            )
+        }
     }
 
     /// Finalize any previous in-flight capture and return the retained replay bytes.

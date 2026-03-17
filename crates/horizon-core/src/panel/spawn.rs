@@ -305,7 +305,15 @@ pub(super) fn resolve_launch_command(
 ) -> (String, Vec<String>) {
     match kind {
         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
-        PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
+        PanelKind::Shell => {
+            let program = command.unwrap_or_else(default_shell);
+            let shell_args = if args.is_empty() {
+                vec!["-l".to_string()]
+            } else {
+                args
+            };
+            (program, shell_args)
+        }
         PanelKind::Command => {
             if let Some(program) = command {
                 (program, args)
