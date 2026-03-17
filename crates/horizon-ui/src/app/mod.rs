@@ -2,6 +2,7 @@ mod actions;
 mod attention_feed;
 mod canvas;
 mod lifecycle;
+mod panel_chrome;
 mod panels;
 mod persistence;
 mod session;

@@ -28,7 +28,8 @@ back into large multi-purpose modules.
 - `app/` leaf modules stay focused:
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
-  - `panels`: panel chrome and panel rendering orchestration
+  - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
+  - `panels`: panel-area orchestration and body rendering
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows
