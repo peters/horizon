@@ -99,8 +99,11 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 ### Code Quality Bar
 
-- Self-documenting code preferred over comments
+- Self-documenting code preferred over comments; add comments only for invariants, non-obvious tradeoffs, or safety contracts
+- Use idiomatic Rust naming: `snake_case` (functions/modules), `CamelCase` (types), `SCREAMING_SNAKE_CASE` (consts)
 - Typed error enums (thiserror) — no `Box<dyn Error>` or `.unwrap()` in library code
+- Keep APIs explicit: prefer `Result<T, E>` and typed structs/enums over ad-hoc tuples
+- Prefer `tracing` for structured logging
 - `#![forbid(unsafe_code)]` on all crates
 - Consolidate repeated helpers into shared modules in horizon-core
 - Keep new or edited modules single-purpose; avoid mixing rendering, persistence, session bootstrap, and filesystem logic in one file
@@ -110,6 +113,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Keep inline `#[cfg(test)]` modules at the end of the file so maintainability checks can measure production code cleanly
 - Minimize allocations in the render hot path (per-frame code)
 - Every `unsafe` block (if ever needed) must have a `// SAFETY:` rationale
+- Avoid unnecessary `crate::` path prefixes in module-local code/tests when imports already provide the item
+- Prefer `unwrap_or_else(std::sync::PoisonError::into_inner)` over manual `match` for poisoned mutex recovery
+- `expect_used` is treated the same as `unwrap_used`: both can hide panic paths in runtime code
+- Fix clippy/rustc warnings instead of suppressing them
 
 ### Maintainability Rules
 
