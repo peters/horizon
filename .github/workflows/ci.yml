@@ -175,21 +175,10 @@ jobs:
       - name: Package release asset
         shell: bash
         run: |
-          case "${{ matrix.asset_kind }}" in
-            tar)
-              chmod +x "${{ matrix.binary_path }}"
-              tar czf "${{ matrix.release_asset }}" \
-                -C "$(dirname "${{ matrix.binary_path }}")" \
-                "$(basename "${{ matrix.binary_path }}")"
-              ;;
-            file)
-              cp "${{ matrix.binary_path }}" "${{ matrix.release_asset }}"
-              ;;
-            *)
-              echo "Unsupported asset kind: ${{ matrix.asset_kind }}"
-              exit 1
-              ;;
-          esac
+          ./scripts/package-release-asset.sh \
+            --binary "${{ matrix.binary_path }}" \
+            --kind "${{ matrix.asset_kind }}" \
+            --output "${{ matrix.release_asset }}"
       - name: Upload release asset
         uses: actions/upload-artifact@v7
         with:
@@ -223,7 +212,7 @@ jobs:
         run: |
           VERSION="${{ needs.version.outputs.semver }}"
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          sed -i "s/version = \"0\.1\.0\"/version = \"${VERSION}\"/" crates/horizon-ui/Cargo.toml
+          sed -i -E 's|horizon-core = \{ path = "\.\./horizon-core", version = ".*" \}|horizon-core = { path = "../horizon-core", version = "'"${VERSION}"'" }|' crates/horizon-ui/Cargo.toml
           cargo generate-lockfile
       - name: Publish horizon-core to crates.io
         run: cargo publish -p horizon-core --allow-dirty

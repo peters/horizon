@@ -130,7 +130,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 | Tier | Command | Status |
 |------|---------|--------|
 | Blocking | `cargo clippy --all-targets --all-features -- -D warnings` | Must pass |
-| Strict | `cargo clippy --workspace --lib --bins -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
+| Strict | `cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
 | Pedantic | `cargo clippy ... -W clippy::pedantic` | Advisory (will promote) |
 
 ### Commit Guidelines
@@ -142,8 +142,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 ### Versioning
 
-- The authoritative version lives in `GitVersion.yml` (`next-version`); `[workspace.package].version` in `Cargo.toml` must always match
-- CI validates this with `scripts/check-version-sync.sh` — update both files together when bumping the version
+- The authoritative version lives in `GitVersion.yml` (`next-version`); `[workspace.package].version` in `Cargo.toml` and the internal `horizon-core` dependency version in `crates/horizon-ui/Cargo.toml` must always match
+- CI validates this with `scripts/check-version-sync.sh` — update all three files together when bumping the version
 
 ### Release Flow
 
