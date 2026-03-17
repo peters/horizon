@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -197,8 +196,8 @@ fn script_program() -> Option<String> {
 
     #[cfg(not(windows))]
     {
-        let path = env::var_os("PATH")?;
-        env::split_paths(&path)
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path)
             .map(|dir| dir.join("script"))
             .find(|candidate| candidate.is_file())
             .map(|candidate| candidate.display().to_string())

@@ -548,7 +548,8 @@ impl SessionIndex {
             profile
         } else {
             self.profiles.push(SessionProfileIndex::new(profile_id.to_string()));
-            self.profiles.last_mut().expect("session index profile was just pushed")
+            let len = self.profiles.len();
+            &mut self.profiles[len - 1]
         };
 
         profile.last_session_id = Some(session_id.to_string());
