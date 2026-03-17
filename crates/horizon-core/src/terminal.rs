@@ -781,10 +781,36 @@ fn url_end_column(chars: &[char], start: usize) -> usize {
             break;
         }
     }
+    strip_trailing_url_chars(chars, start, end)
+}
+
+fn strip_trailing_url_chars(chars: &[char], start: usize, mut end: usize) -> usize {
     while end > start && matches!(chars[end - 1], '.' | ',' | ';' | '!' | '?') {
         end -= 1;
     }
+
+    for (open, close) in [('(', ')'), ('[', ']'), ('{', '}')] {
+        while end > start && chars[end - 1] == close && unmatched_closing_delimiter(chars, start, end, open, close) {
+            end -= 1;
+        }
+    }
+
     end
+}
+
+fn unmatched_closing_delimiter(chars: &[char], start: usize, end: usize, open: char, close: char) -> bool {
+    let mut balance = 0usize;
+    for ch in &chars[start..end] {
+        if *ch == open {
+            balance += 1;
+        } else if *ch == close {
+            if balance == 0 {
+                return true;
+            }
+            balance -= 1;
+        }
+    }
+    false
 }
 
 fn find_file_path_at_column(chars: &[char], col: usize) -> Option<String> {
@@ -977,6 +1003,21 @@ mod tests {
         assert_eq!(
             find_url_at_column(&line, 0),
             Some("file:///home/user/doc.pdf".to_string()),
+        );
+    }
+
+    #[test]
+    fn markdown_link_target_strips_unmatched_closing_parenthesis() {
+        let line: Vec<char> = "[YouPark.no](https://youpark.no)".chars().collect();
+        assert_eq!(find_url_at_column(&line, 15), Some("https://youpark.no".to_string()),);
+    }
+
+    #[test]
+    fn balanced_parentheses_preserved_in_url() {
+        let line: Vec<char> = "See https://example.com/a(b)".chars().collect();
+        assert_eq!(
+            find_url_at_column(&line, 10),
+            Some("https://example.com/a(b)".to_string()),
         );
     }
 
