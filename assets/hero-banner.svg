@@ -1,0 +1,162 @@
+<svg width="1200" height="400" viewBox="0 0 1200 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#070A10"/>
+      <stop offset="1" stop-color="#0F1620"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.3" cy="0.5" r="0.4">
+      <stop stop-color="#4D70DC" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#4D70DC" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.75" cy="0.4" r="0.35">
+      <stop stop-color="#FF9250" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FF9250" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="horizonLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#76D8FF" stop-opacity="0"/>
+      <stop offset="0.2" stop-color="#76D8FF" stop-opacity="0.6"/>
+      <stop offset="0.5" stop-color="#74A2F7"/>
+      <stop offset="0.8" stop-color="#FFAA72" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#FFAA72" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="horizonLine2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7EE1C6" stop-opacity="0"/>
+      <stop offset="0.3" stop-color="#7EE1C6" stop-opacity="0.3"/>
+      <stop offset="0.7" stop-color="#76D8FF" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#76D8FF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="400" fill="url(#bg)"/>
+  <rect width="1200" height="400" fill="url(#glow1)"/>
+  <rect width="1200" height="400" fill="url(#glow2)"/>
+
+  <!-- Dot grid (subtle) -->
+  <g opacity="0.12">
+    <circle cx="80" cy="80" r="1.5" fill="#AAB5C7"/>
+    <circle cx="140" cy="80" r="1.5" fill="#AAB5C7"/>
+    <circle cx="200" cy="80" r="1.5" fill="#AAB5C7"/>
+    <circle cx="260" cy="80" r="1.5" fill="#AAB5C7"/>
+    <circle cx="320" cy="80" r="1.5" fill="#AAB5C7"/>
+    <circle cx="80" cy="140" r="1.5" fill="#AAB5C7"/>
+    <circle cx="140" cy="140" r="1.5" fill="#AAB5C7"/>
+    <circle cx="200" cy="140" r="1.5" fill="#AAB5C7"/>
+    <circle cx="260" cy="140" r="1.5" fill="#AAB5C7"/>
+    <circle cx="320" cy="140" r="1.5" fill="#AAB5C7"/>
+    <circle cx="80" cy="200" r="1.5" fill="#AAB5C7"/>
+    <circle cx="140" cy="200" r="1.5" fill="#AAB5C7"/>
+    <circle cx="200" cy="200" r="1.5" fill="#AAB5C7"/>
+    <circle cx="260" cy="200" r="1.5" fill="#AAB5C7"/>
+    <circle cx="320" cy="200" r="1.5" fill="#AAB5C7"/>
+    <circle cx="80" cy="260" r="1.5" fill="#AAB5C7"/>
+    <circle cx="140" cy="260" r="1.5" fill="#AAB5C7"/>
+    <circle cx="200" cy="260" r="1.5" fill="#AAB5C7"/>
+    <circle cx="260" cy="260" r="1.5" fill="#AAB5C7"/>
+    <circle cx="320" cy="260" r="1.5" fill="#AAB5C7"/>
+    <circle cx="880" cy="120" r="1.5" fill="#AAB5C7"/>
+    <circle cx="940" cy="120" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1000" cy="120" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1060" cy="120" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1120" cy="120" r="1.5" fill="#AAB5C7"/>
+    <circle cx="880" cy="180" r="1.5" fill="#AAB5C7"/>
+    <circle cx="940" cy="180" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1000" cy="180" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1060" cy="180" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1120" cy="180" r="1.5" fill="#AAB5C7"/>
+    <circle cx="880" cy="240" r="1.5" fill="#AAB5C7"/>
+    <circle cx="940" cy="240" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1000" cy="240" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1060" cy="240" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1120" cy="240" r="1.5" fill="#AAB5C7"/>
+    <circle cx="880" cy="300" r="1.5" fill="#AAB5C7"/>
+    <circle cx="940" cy="300" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1000" cy="300" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1060" cy="300" r="1.5" fill="#AAB5C7"/>
+    <circle cx="1120" cy="300" r="1.5" fill="#AAB5C7"/>
+  </g>
+
+  <!-- Horizon lines -->
+  <line x1="40" y1="290" x2="1160" y2="290" stroke="url(#horizonLine)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="100" y1="320" x2="1100" y2="320" stroke="url(#horizonLine2)" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- Decorative terminal panels (left side) -->
+  <g opacity="0.35">
+    <rect x="60" y="90" width="160" height="110" rx="10" fill="#0F131C" stroke="#25303D" stroke-width="1.5"/>
+    <rect x="60" y="90" width="160" height="22" rx="10" fill="#080B11"/>
+    <circle cx="76" cy="101" r="4" fill="#EB6058"/>
+    <circle cx="90" cy="101" r="4" fill="#E9BE6D"/>
+    <circle cx="104" cy="101" r="4" fill="#7EE1C6"/>
+    <rect x="72" y="124" width="80" height="6" rx="3" fill="#74A2F7" opacity="0.5"/>
+    <rect x="72" y="138" width="120" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+    <rect x="72" y="152" width="60" height="6" rx="3" fill="#A6E3A1" opacity="0.4"/>
+    <rect x="72" y="166" width="100" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+  </g>
+
+  <g opacity="0.25">
+    <rect x="240" y="130" width="140" height="100" rx="10" fill="#0F131C" stroke="#25303D" stroke-width="1.5"/>
+    <rect x="240" y="130" width="140" height="22" rx="10" fill="#080B11"/>
+    <circle cx="256" cy="141" r="4" fill="#EB6058"/>
+    <circle cx="270" cy="141" r="4" fill="#E9BE6D"/>
+    <circle cx="284" cy="141" r="4" fill="#7EE1C6"/>
+    <rect x="252" y="164" width="100" height="6" rx="3" fill="#FFAA72" opacity="0.4"/>
+    <rect x="252" y="178" width="70" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+    <rect x="252" y="192" width="110" height="6" rx="3" fill="#76D8FF" opacity="0.4"/>
+  </g>
+
+  <!-- Decorative terminal panels (right side) -->
+  <g opacity="0.3">
+    <rect x="920" y="100" width="170" height="120" rx="10" fill="#0F131C" stroke="#25303D" stroke-width="1.5"/>
+    <rect x="920" y="100" width="170" height="22" rx="10" fill="#080B11"/>
+    <circle cx="936" cy="111" r="4" fill="#EB6058"/>
+    <circle cx="950" cy="111" r="4" fill="#E9BE6D"/>
+    <circle cx="964" cy="111" r="4" fill="#7EE1C6"/>
+    <rect x="932" y="134" width="90" height="6" rx="3" fill="#CA97EA" opacity="0.5"/>
+    <rect x="932" y="148" width="140" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+    <rect x="932" y="162" width="50" height="6" rx="3" fill="#7EE1C6" opacity="0.4"/>
+    <rect x="932" y="176" width="120" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+    <rect x="932" y="190" width="80" height="6" rx="3" fill="#74A2F7" opacity="0.4"/>
+  </g>
+
+  <g opacity="0.2">
+    <rect x="1000" y="240" width="130" height="80" rx="10" fill="#0F131C" stroke="#25303D" stroke-width="1.5"/>
+    <rect x="1000" y="240" width="130" height="22" rx="10" fill="#080B11"/>
+    <circle cx="1016" cy="251" r="4" fill="#EB6058"/>
+    <circle cx="1030" cy="251" r="4" fill="#E9BE6D"/>
+    <circle cx="1044" cy="251" r="4" fill="#7EE1C6"/>
+    <rect x="1012" y="274" width="60" height="6" rx="3" fill="#F28287" opacity="0.4"/>
+    <rect x="1012" y="288" width="100" height="6" rx="3" fill="#AAB5C7" opacity="0.3"/>
+  </g>
+
+  <!-- Center logo -->
+  <g transform="translate(544, 80)">
+    <rect x="0" y="0" width="112" height="112" rx="26" fill="#0B1B2A" stroke="#36587C" stroke-width="2"/>
+    <circle cx="56" cy="48" r="44" fill="#4A7FD0" fill-opacity="0.12"/>
+    <path d="M24 38A32 14 0 0 1 88 38" stroke="#36587C" stroke-width="2.5" stroke-linecap="round"/>
+    <circle cx="34" cy="26" r="5.5" fill="#7EE1C6"/>
+    <circle cx="34" cy="26" r="2.2" fill="#EFF5FB"/>
+    <circle cx="56" cy="18" r="5.5" fill="#76D8FF"/>
+    <circle cx="56" cy="18" r="2.2" fill="#EFF5FB"/>
+    <circle cx="78" cy="26" r="5.5" fill="#FFAA72"/>
+    <circle cx="78" cy="26" r="2.2" fill="#EFF5FB"/>
+    <path d="M4 72A52 22 0 0 1 108 72" stroke="#76D8FF" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M-6 82A62 28 0 0 1 118 82" stroke="#FFAA72" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="16" y="30" width="80" height="48" rx="14" fill="#142638" stroke="#5E84AD" stroke-width="2"/>
+    <line x1="28" y1="42" x2="84" y2="42" stroke="#36587C" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="26" cy="42" r="1.8" fill="#FFAA72"/>
+    <circle cx="33" cy="42" r="1.8" fill="#7EE1C6"/>
+    <circle cx="40" cy="42" r="1.8" fill="#76D8FF"/>
+    <rect x="28" y="50" width="14" height="10" rx="3.5" fill="#102030" stroke="#7EE1C6" stroke-width="1"/>
+    <rect x="47" y="50" width="14" height="10" rx="3.5" fill="#102030" stroke="#76D8FF" stroke-width="1"/>
+    <rect x="66" y="50" width="14" height="10" rx="3.5" fill="#102030" stroke="#FFAA72" stroke-width="1"/>
+    <path d="M32 68L40 62" stroke="#76D8FF" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M32 68L40 74" stroke="#76D8FF" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="46" y1="68" x2="76" y2="68" stroke="#EFF5FB" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Title -->
+  <text x="600" y="232" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="52" font-weight="700" fill="#E0E6F1" letter-spacing="6">HORIZON</text>
+
+  <!-- Subtitle -->
+  <text x="600" y="264" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" fill="#6C788E" letter-spacing="3">YOUR TERMINALS, ONE CANVAS</text>
+</svg>

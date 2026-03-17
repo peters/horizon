@@ -95,7 +95,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 ### Configuration Changes
 
-- When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.config/horizon/config.yaml`) to match
+- When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match
 
 ### Code Quality Bar
 

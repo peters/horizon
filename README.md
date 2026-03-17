@@ -1,61 +1,113 @@
 <p align="center">
-  <img src="assets/icons/icon-256.png" alt="Horizon" width="128" />
-</p>
-
-<h1 align="center">Horizon</h1>
-
-<p align="center">
-  <strong>A GPU-accelerated terminal board for managing multiple sessions on an infinite canvas.</strong>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-banner.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/hero-banner.svg" />
+    <img src="assets/hero-banner.svg" alt="Horizon — Your Terminals, One Canvas" width="100%" />
+  </picture>
 </p>
 
 <p align="center">
   <a href="https://github.com/peters/horizon/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/peters/horizon?style=flat-square&color=74a2f7" /></a>
   <a href="https://github.com/peters/horizon/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/peters/horizon/ci.yml?branch=main&style=flat-square&label=CI" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-a6e3a1?style=flat-square" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-cba6f7?style=flat-square" />
+  <img alt="Platform" src="https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-cba6f7?style=flat-square" />
+</p>
+
+<p align="center">
+  <b>Horizon</b> is a GPU-accelerated terminal board that puts all your sessions<br/>
+  on an infinite canvas. Organize, pan, zoom, and never lose a terminal again.
+</p>
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Horizon demo — panning across AI Agents, Dev, and Monitoring workspaces" width="800" />
 </p>
 
 ---
 
-Horizon gives you an infinite 2D canvas where terminal sessions live as freely positioned, resizable panels. Organize them into workspaces, arrange them however you like, and see everything at once with the minimap. Built with Rust and GPU-rendered via wgpu.
+## Why Horizon?
 
-## Features
+Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal lives as a panel you can place, resize, and group however you want.
 
-**Infinite canvas** -- Pan, zoom, and arrange terminals anywhere on a boundless surface. A minimap keeps you oriented.
+Think of it as a whiteboard for your terminal sessions. Keep your frontend, backend, logs, and AI agents all visible at once — across multiple color-coded workspaces — and navigate between them with a minimap.
 
-**Workspaces** -- Group related panels into color-coded workspaces. Five auto-layout modes (rows, columns, grid, stack, cascade) or go freeform.
+---
 
-**Full terminal emulation** -- 24-bit color, mouse reporting, scrollback history, Kitty keyboard protocol, and alt-screen support powered by the Alacritty terminal engine.
+## Highlights
 
-**Smart detection** -- Ctrl+click URLs to open them in a browser. Hover file paths to open them in your editor.
+<table>
+<tr>
+<td width="50%">
 
-**Built-in agent panels** -- First-class Claude Code and Codex integration with session persistence, auto-resume, and a live usage dashboard.
+### Infinite Canvas
+Pan and zoom freely across a boundless workspace surface. Place terminals anywhere. A **minimap** in the corner keeps you oriented — click it to jump.
 
-**Git integration** -- Real-time git status panel with inline diffs, file grouping, and background watching.
+</td>
+<td width="50%">
 
-**Markdown editor** -- Drag-and-drop `.md` files onto the canvas to edit with live preview.
+### Workspaces
+Group related panels into **color-coded workspaces**. Auto-arrange with five layout modes — rows, columns, grid, stack, cascade — or drag panels freely.
 
-**Settings with live preview** -- Edit your YAML config in a side panel with syntax highlighting. Changes apply instantly.
+</td>
+</tr>
+<tr>
+<td>
 
-**Session persistence** -- Close and reopen Horizon -- your workspaces, panel positions, and terminal history are restored.
+### Full Terminal Emulation
+24-bit color, mouse reporting, scrollback, alt-screen, and Kitty keyboard protocol. Powered by the **Alacritty terminal engine** — the same one behind the fastest terminal on the planet.
 
-**Attention feed** -- Get notified when panels need your attention without constantly watching every terminal.
+</td>
+<td>
+
+### AI Agent Panels
+First-class **Claude Code** and **Codex** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
+
+</td>
+</tr>
+<tr>
+<td>
+
+### Git Integration
+A built-in **git status panel** watches your repo in the background. See changed files, inline diffs, and hunk-level detail — no context switching.
+
+</td>
+<td>
+
+### Smart Detection
+**Ctrl+click** a URL to open it. Hover a file path and click to jump to it. Horizon sees what your terminal prints and makes it interactive.
+
+</td>
+</tr>
+<tr>
+<td>
+
+### Live Settings Editor
+Open the config with **Ctrl+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
+
+</td>
+<td>
+
+### Session Persistence
+Close Horizon, come back tomorrow. Your workspaces, panel positions, scroll positions, and terminal history are **restored exactly as you left them**.
+
+</td>
+</tr>
+</table>
+
+---
 
 ## Install
 
-### Download a release binary
+### Download (fastest)
 
-Grab the latest binary from [Releases](https://github.com/peters/horizon/releases/latest). No dependencies required.
+Grab the latest binary from [**Releases**](https://github.com/peters/horizon/releases/latest) — no dependencies needed.
 
-| Platform | Asset |
-|----------|-------|
-| Linux x64 | `horizon-linux-x64.tar.gz` |
-| macOS x64 | `horizon-osx-x64.tar.gz` |
-| Windows x64 | `horizon-windows-x64.exe` |
+| Platform | Asset | |
+|:---------|:------|:-|
+| **Linux** x64 | `horizon-linux-x64.tar.gz` | Extract, `chmod +x`, run |
+| **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract, `chmod +x`, run |
+| **Windows** x64 | `horizon-windows-x64.exe` | Download and run |
 
 ### Build from source
-
-Requires [Rust](https://rustup.rs) stable 1.85+. On Linux, install system headers first (see [AGENTS.md](AGENTS.md#option-b--build-from-source) for per-distro commands).
 
 ```bash
 git clone https://github.com/peters/horizon.git
@@ -63,34 +115,46 @@ cd horizon
 cargo run --release
 ```
 
-## Keyboard shortcuts
+> Requires **Rust 1.85+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | New terminal panel |
-| `Ctrl+K` | Quick workspace navigator |
-| `Ctrl+B` | Toggle sidebar |
-| `Ctrl+M` | Toggle minimap |
-| `Ctrl+,` | Open settings |
-| `Ctrl+0` | Reset canvas view |
-| `F11` | Fullscreen active panel |
-| `Ctrl+F11` | Toggle window fullscreen |
-| `Ctrl+Click` | Open URL or file path |
+---
 
-<sub>On macOS, use Cmd instead of Ctrl.</sub>
+## Quick Tour
+
+| Shortcut | What it does |
+|:---------|:-------------|
+| **Ctrl+N** | New terminal panel |
+| **Ctrl+K** | Quick-navigate to any workspace |
+| **Ctrl+,** | Open settings editor |
+| **Ctrl+B** | Toggle sidebar |
+| **Ctrl+M** | Toggle minimap |
+| **Ctrl+0** | Reset canvas view |
+| **F11** | Fullscreen the active panel |
+| **Ctrl+Click** | Open URL or file path under cursor |
+| **Ctrl+double-click** canvas | Create a new workspace |
+
+<sub>On macOS, substitute Cmd for Ctrl.</sub>
+
+---
 
 ## Configuration
 
-Horizon stores its config at `~/.config/horizon/config.yaml`. Open the built-in editor with **Ctrl+,** to edit with syntax highlighting and live preview.
+Horizon reads `~/.horizon/config.yaml`. Define workspaces, panel presets, and feature flags:
 
 ```yaml
 workspaces:
-  - name: Dev
-    cwd: ~/projects/myapp
+  - name: Backend
+    cwd: ~/projects/api
     panels:
       - kind: shell
       - kind: claude
       - kind: git_changes
+
+  - name: Frontend
+    cwd: ~/projects/web
+    panels:
+      - kind: shell
+      - kind: shell
 
 presets:
   - name: Shell
@@ -99,21 +163,31 @@ presets:
   - name: Claude Code
     alias: cc
     kind: claude
+  - name: Git Changes
+    alias: gc
+    kind: git_changes
+
+features:
+  attention_feed: true
 ```
 
-## Tech stack
+---
 
-| Component | Role |
-|-----------|------|
-| [Rust](https://www.rust-lang.org) (edition 2024) | Language |
-| [eframe](https://github.com/emilk/egui/tree/master/crates/eframe) / [egui](https://github.com/emilk/egui) | UI framework |
-| [wgpu](https://wgpu.rs) | GPU rendering (Vulkan, Metal, DX12, OpenGL) |
-| [alacritty_terminal](https://github.com/alacritty/alacritty) | Terminal emulation |
-| [Catppuccin Mocha](https://catppuccin.com) | Color palette |
+## Built With
+
+| | |
+|:--|:--|
+| [**Rust**](https://www.rust-lang.org) | Edition 2024, safe and fast |
+| [**eframe / egui**](https://github.com/emilk/egui) | Immediate-mode UI framework |
+| [**wgpu**](https://wgpu.rs) | GPU rendering — Vulkan, Metal, DX12, OpenGL |
+| [**alacritty_terminal**](https://github.com/alacritty/alacritty) | Battle-tested terminal emulation |
+| [**Catppuccin Mocha**](https://catppuccin.com) | Dark color palette |
+
+---
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for development setup, coding standards, and CI requirements.
+See [**AGENTS.md**](AGENTS.md) for development setup, architecture, coding standards, and CI requirements.
 
 ```bash
 cargo fmt --all -- --check
@@ -121,6 +195,8 @@ cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## License
+---
 
-[MIT](Cargo.toml)
+<p align="center">
+  <sub>MIT License</sub>
+</p>
