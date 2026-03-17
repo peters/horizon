@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
-use crate::git_changes::GitChangesViewer;
+use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
@@ -179,12 +179,12 @@ impl Panel {
 
     /// Convenience accessor for the git changes content (if this panel holds one).
     #[must_use]
-    pub fn git_changes(&self) -> Option<&GitChangesViewer> {
+    pub fn git_changes(&self) -> Option<&DiffViewer> {
         self.content.git_changes()
     }
 
     /// Mutable accessor for the git changes content.
-    pub fn git_changes_mut(&mut self) -> Option<&mut GitChangesViewer> {
+    pub fn git_changes_mut(&mut self) -> Option<&mut DiffViewer> {
         self.content.git_changes_mut()
     }
 }

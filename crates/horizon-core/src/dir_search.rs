@@ -31,7 +31,7 @@ const MAX_RESULTS: usize = 200;
 /// When the query changes the caller simply drops the old receiver and calls
 /// this again — the orphaned thread finishes harmlessly.
 #[must_use]
-pub fn spawn_dir_search(query: String) -> mpsc::Receiver<Vec<PathBuf>> {
+pub fn spawn_lookup(query: String) -> mpsc::Receiver<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let results = search_directories(&query);

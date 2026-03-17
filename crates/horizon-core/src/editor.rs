@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::git_changes::GitChangesViewer;
+use crate::git_changes::DiffViewer;
 use crate::terminal::Terminal;
 use crate::usage_dashboard::UsageDashboard;
 
@@ -80,7 +80,7 @@ impl MarkdownEditor {
 pub enum PanelContent {
     Terminal(Terminal),
     Editor(MarkdownEditor),
-    GitChanges(GitChangesViewer),
+    GitChanges(DiffViewer),
     Usage(UsageDashboard),
 }
 
@@ -116,14 +116,14 @@ impl PanelContent {
     }
 
     #[must_use]
-    pub fn git_changes(&self) -> Option<&GitChangesViewer> {
+    pub fn git_changes(&self) -> Option<&DiffViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
             Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,
         }
     }
 
-    pub fn git_changes_mut(&mut self) -> Option<&mut GitChangesViewer> {
+    pub fn git_changes_mut(&mut self) -> Option<&mut DiffViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
             Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,

@@ -5,12 +5,12 @@ use crate::git_status::GitStatus;
 
 /// Panel-level state for the Git Changes viewer.
 #[derive(Default)]
-pub struct GitChangesViewer {
+pub struct DiffViewer {
     pub status: Option<Arc<GitStatus>>,
     pub expanded_files: HashSet<String>,
 }
 
-impl GitChangesViewer {
+impl DiffViewer {
     #[must_use]
     pub fn new() -> Self {
         Self {

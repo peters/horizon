@@ -64,7 +64,7 @@ struct PickerLayout {
 
 impl DirPicker {
     pub fn new(purpose: DirPickerPurpose) -> Self {
-        let rx = dir_search::spawn_dir_search(String::new());
+        let rx = dir_search::spawn_lookup(String::new());
         Self {
             query: String::new(),
             results: Vec::new(),
@@ -100,7 +100,7 @@ impl DirPicker {
         if self.query != self.last_query_sent && self.last_query_time.elapsed().as_millis() >= u128::from(DEBOUNCE_MS) {
             self.last_query_sent.clone_from(&self.query);
             self.last_query_time = Instant::now();
-            self.search_rx = Some(dir_search::spawn_dir_search(self.query.clone()));
+            self.search_rx = Some(dir_search::spawn_lookup(self.query.clone()));
         }
     }
 

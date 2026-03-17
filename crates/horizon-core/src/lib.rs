@@ -30,7 +30,7 @@ pub use config::{
 };
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
-pub use git_changes::GitChangesViewer;
+pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;

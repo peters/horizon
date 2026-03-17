@@ -72,7 +72,7 @@ impl GitStatus {
 /// # Errors
 ///
 /// Returns an error if the repository cannot be opened or the diff computation fails.
-pub fn compute_git_status(repo_path: &Path) -> Result<GitStatus> {
+pub fn compute_status(repo_path: &Path) -> Result<GitStatus> {
     let repo = Repository::discover(repo_path).map_err(|e| Error::Git(e.message().to_string()))?;
     let repo_root = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
 

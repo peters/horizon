@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
-use crate::git_changes::GitChangesViewer;
+use crate::git_changes::DiffViewer;
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -245,7 +245,7 @@ fn spawn_git_changes(
             size: size.unwrap_or(DEFAULT_PANEL_SIZE),
         },
         workspace_id,
-        content: PanelContent::GitChanges(GitChangesViewer::new()),
+        content: PanelContent::GitChanges(DiffViewer::new()),
         session_binding: None,
         template,
         launched_at_millis: current_unix_millis(),

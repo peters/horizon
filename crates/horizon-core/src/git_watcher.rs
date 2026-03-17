@@ -4,7 +4,7 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use crate::git_status::{GitStatus, compute_git_status};
+use crate::git_status::{GitStatus, compute_status};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -101,7 +101,7 @@ fn watcher_loop(repo_path: &Path, sender: &mpsc::Sender<Arc<GitStatus>>, shutdow
 }
 
 fn try_compute_status(repo_path: &Path) -> Option<GitStatus> {
-    match compute_git_status(repo_path) {
+    match compute_status(repo_path) {
         Ok(status) => Some(status),
         Err(error) => {
             tracing::warn!(path = %repo_path.display(), %error, "git status failed");
