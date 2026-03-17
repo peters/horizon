@@ -24,7 +24,7 @@ use crate::app::canvas::CanvasGridCache;
 use crate::dir_picker::DirPicker;
 use crate::quick_nav::QuickNav;
 use crate::terminal_widget::TerminalGridCache;
-use crate::theme;
+use crate::{loading_spinner, theme};
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
 const SIDEBAR_WIDTH: f32 = 210.0;
@@ -310,28 +310,17 @@ impl HorizonApp {
         let total = progress.terminal_count();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let height = ui.available_height();
-            ui.add_space(height * 0.5 - 36.0);
-            ui.vertical_centered(|ui| {
-                ui.add(egui::Spinner::new().size(24.0));
-                ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new("Closing Horizon…")
-                        .size(18.0)
-                        .color(egui::Color32::from_gray(200)),
+            if total > 0 {
+                loading_spinner::show_with_detail(
+                    ui,
+                    egui::Id::new("shutdown_spinner"),
+                    "Closing Horizon\u{2026}",
+                    &format!("{completed} / {total} terminals shut down"),
                 );
-                if total > 0 {
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(format!("{completed} / {total} terminals shut down"))
-                            .size(14.0)
-                            .color(egui::Color32::from_gray(140)),
-                    );
-                }
-            });
+            } else {
+                loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
+            }
         });
-
-        ctx.request_repaint_after(Duration::from_millis(100));
     }
 
     /// Synchronous fallback for the `on_exit` eframe callback.

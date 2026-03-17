@@ -6,6 +6,7 @@ mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;
 mod input;
+mod loading_spinner;
 mod quick_nav;
 mod terminal_widget;
 mod theme;

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use egui::Context;
 use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelOptions, PanelResume};
 
-use crate::theme;
+use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
 use super::{HorizonApp, StartupBootstrap};
@@ -106,15 +106,15 @@ impl HorizonApp {
             .frame(egui::Frame::default().fill(theme::BG))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.32);
+                    ui.add_space(ui.available_height() * 0.28);
                     ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new("Resolving saved sessions...")
-                            .size(13.0)
-                            .color(theme::FG_SOFT),
-                    );
+                    ui.add_space(16.0);
                 });
+                loading_spinner::show(
+                    ui,
+                    egui::Id::new("startup_loading_spinner"),
+                    Some("Resolving saved sessions\u{2026}"),
+                );
             });
     }
 

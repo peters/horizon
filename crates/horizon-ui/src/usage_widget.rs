@@ -4,7 +4,7 @@ use std::time::Duration;
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
 use horizon_core::{DailyUsage, Panel, ToolUsage, UsageSnapshot, format_tokens};
 
-use crate::theme;
+use crate::{loading_spinner, theme};
 
 const CODEX_COLOR: Color32 = Color32::from_rgb(100, 200, 120);
 const SECTION_FONT_SIZE: f32 = 11.0;
@@ -301,10 +301,11 @@ fn render_footer(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
 }
 
 fn render_loading(ui: &mut egui::Ui) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        ui.label(RichText::new("Loading usage data...").size(13.0).color(theme::FG_SOFT));
-    });
+    loading_spinner::show(
+        ui,
+        egui::Id::new("usage_loading_spinner"),
+        Some("Loading usage data\u{2026}"),
+    );
 }
 
 /// Convert "2026-03-16" to "Mar 16".

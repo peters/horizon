@@ -1,7 +1,7 @@
 use egui::{Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
 use horizon_core::{DiffLineKind, FileStatus, GitStatus, Panel};
 
-use crate::theme;
+use crate::{loading_spinner, theme};
 
 const SECTION_LABEL_SIZE: f32 = 10.0;
 const FILE_ROW_SIZE: f32 = 11.0;
@@ -46,10 +46,11 @@ impl<'a> GitChangesView<'a> {
 }
 
 fn render_scanning(ui: &mut egui::Ui) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        ui.label(RichText::new("Scanning repository...").size(12.0).color(theme::FG_DIM));
-    });
+    loading_spinner::show(
+        ui,
+        egui::Id::new("git_scanning_spinner"),
+        Some("Scanning repository\u{2026}"),
+    );
 }
 
 fn render_clean(ui: &mut egui::Ui, status: &GitStatus) {
