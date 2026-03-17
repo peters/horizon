@@ -8,6 +8,7 @@ use horizon_core::Panel;
 
 use self::input::{handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, quantize_dimension, terminal_interaction, terminal_layout};
+pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
 use self::scrollbar::render_scrollbar;
 
@@ -16,11 +17,12 @@ const LINE_HEIGHT_FACTOR: f32 = 1.3;
 
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
+    grid_cache: Option<&'a mut TerminalGridCache>,
 }
 
 impl<'a> TerminalView<'a> {
-    pub fn new(panel: &'a mut Panel) -> Self {
-        Self { panel }
+    pub fn new(panel: &'a mut Panel, grid_cache: Option<&'a mut TerminalGridCache>) -> Self {
+        Self { panel, grid_cache }
     }
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
@@ -77,15 +79,28 @@ impl<'a> TerminalView<'a> {
             });
         }
 
+        let allow_grid_cache = !self.panel.had_recent_output()
+            && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
+            && !interaction.body.dragged()
+            && !interaction.scrollbar.dragged();
+
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
         {
             let history_size = terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
+            let mut grid_cache = self.grid_cache.take();
             terminal.with_renderable_content(|content| {
                 let cursor = content.cursor;
                 let display_offset = content.display_offset;
-                render_grid(ui, interaction.layout.body, content, &metrics);
+                render_grid(
+                    ui,
+                    interaction.layout.body,
+                    content,
+                    &metrics,
+                    grid_cache.as_deref_mut(),
+                    allow_grid_cache,
+                );
                 render_cursor(
                     ui,
                     interaction.layout.body,
@@ -103,6 +118,7 @@ impl<'a> TerminalView<'a> {
                     scrollbar_highlighted,
                 );
             });
+            self.grid_cache = grid_cache;
         }
 
         if has_terminal_focus {

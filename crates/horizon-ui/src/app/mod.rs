@@ -22,6 +22,7 @@ use horizon_core::{
 
 use crate::dir_picker::DirPicker;
 use crate::quick_nav::QuickNav;
+use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
@@ -81,6 +82,7 @@ pub struct HorizonApp {
     pan_target: Option<Vec2>,
     is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
+    terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
@@ -173,6 +175,7 @@ impl HorizonApp {
             workspace_creates: Vec::new(),
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
+            terminal_grid_cache: HashMap::new(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
@@ -484,6 +487,7 @@ impl HorizonApp {
         for panel_id in panels_to_close {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
+            self.terminal_grid_cache.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -492,6 +496,8 @@ impl HorizonApp {
         for panel_id in panels_to_restart {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
+            } else {
+                self.terminal_grid_cache.remove(&panel_id);
             }
         }
     }

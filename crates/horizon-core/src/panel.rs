@@ -157,6 +157,11 @@ impl Panel {
         self.content.terminal_mut()
     }
 
+    #[must_use]
+    pub const fn had_recent_output(&self) -> bool {
+        self.had_recent_output
+    }
+
     /// Convenience accessor for the editor content (if this panel holds one).
     #[must_use]
     pub fn editor(&self) -> Option<&MarkdownEditor> {

@@ -117,6 +117,7 @@ impl HorizonApp {
             .panel(panel_id)
             .and_then(|panel| PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id));
         self.board.close_panel(panel_id);
+        self.terminal_grid_cache.remove(&panel_id);
         if let Some(transcript) = transcript
             && let Err(error) = transcript.delete_all()
         {

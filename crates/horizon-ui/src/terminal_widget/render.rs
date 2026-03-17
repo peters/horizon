@@ -2,7 +2,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableContent, RenderableCursor, point_to_viewport};
 use alacritty_terminal::vte::ansi::CursorShape;
 use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor};
-use egui::{Color32, CornerRadius, Pos2, Rect, StrokeKind, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Shape, StrokeKind, Vec2};
 
 use crate::theme;
 
@@ -17,82 +17,145 @@ struct TextRun {
     text: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridCacheKey {
+    rect_min_x_bits: u32,
+    rect_min_y_bits: u32,
+    rect_width_bits: u32,
+    rect_height_bits: u32,
+    char_width_bits: u32,
+    line_height_bits: u32,
+    display_offset: usize,
+}
+
+impl GridCacheKey {
+    fn new(rect: Rect, display_offset: usize, metrics: &GridMetrics) -> Self {
+        Self {
+            rect_min_x_bits: rect.min.x.to_bits(),
+            rect_min_y_bits: rect.min.y.to_bits(),
+            rect_width_bits: rect.width().to_bits(),
+            rect_height_bits: rect.height().to_bits(),
+            char_width_bits: metrics.char_width.to_bits(),
+            line_height_bits: metrics.line_height.to_bits(),
+            display_offset,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct TerminalGridCache {
+    key: Option<GridCacheKey>,
+    shapes: Vec<Shape>,
+}
+
 #[profiling::function]
-pub(super) fn render_grid(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) {
+pub(super) fn render_grid(
+    ui: &egui::Ui,
+    rect: Rect,
+    content: RenderableContent<'_>,
+    metrics: &GridMetrics,
+    grid_cache: Option<&mut TerminalGridCache>,
+    allow_grid_cache: bool,
+) {
     let painter = ui.painter_at(rect);
+    let key = GridCacheKey::new(rect, content.display_offset, metrics);
 
-    let mut text_run: Option<TextRun> = None;
+    if let Some(grid_cache) = grid_cache {
+        if allow_grid_cache && grid_cache.key == Some(key) {
+            painter.extend(grid_cache.shapes.iter().cloned());
+            return;
+        }
 
-    for indexed in content.display_iter {
-        let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
-            continue;
-        };
-        let x = rect.min.x + usize_to_f32(point.column.0) * metrics.char_width;
-        let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
-        let width = if indexed.cell.flags.contains(Flags::WIDE_CHAR) {
-            metrics.char_width * 2.0
-        } else {
-            metrics.char_width
-        };
-        let cell_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, metrics.line_height));
-        let selected = content
-            .selection
-            .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
-        let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
-        let batchable_char = batchable_cell_char(indexed.cell, selected)
-            .filter(|_| bg == theme::PANEL_BG && !has_cell_decoration(indexed.cell));
+        let shapes = build_grid_shapes(ui, rect, content, metrics);
+        painter.extend(shapes.iter().cloned());
+        grid_cache.key = Some(key);
+        grid_cache.shapes = shapes;
+        return;
+    }
 
-        if let Some(ch) = batchable_char {
-            let can_continue = text_run
-                .as_ref()
-                .is_some_and(|run| run.line == point.line && run.next_column == point.column.0 && run.fg == fg);
+    painter.extend(build_grid_shapes(ui, rect, content, metrics));
+}
 
-            if can_continue {
-                if let Some(run) = &mut text_run {
-                    run.text.push(ch);
-                    run.next_column += 1;
+fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
+    let mut shapes = Vec::new();
+
+    ui.fonts_mut(|fonts| {
+        let mut text_run: Option<TextRun> = None;
+
+        for indexed in content.display_iter {
+            let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
+                continue;
+            };
+            let x = rect.min.x + usize_to_f32(point.column.0) * metrics.char_width;
+            let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
+            let width = if indexed.cell.flags.contains(Flags::WIDE_CHAR) {
+                metrics.char_width * 2.0
+            } else {
+                metrics.char_width
+            };
+            let cell_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, metrics.line_height));
+            let selected = content
+                .selection
+                .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
+            let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
+            let batchable_char = batchable_cell_char(indexed.cell, selected)
+                .filter(|_| bg == theme::PANEL_BG && !has_cell_decoration(indexed.cell));
+
+            if let Some(ch) = batchable_char {
+                let can_continue = text_run
+                    .as_ref()
+                    .is_some_and(|run| run.line == point.line && run.next_column == point.column.0 && run.fg == fg);
+
+                if can_continue {
+                    if let Some(run) = &mut text_run {
+                        run.text.push(ch);
+                        run.next_column += 1;
+                    }
+                    continue;
+                }
+
+                flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+                if ch != ' ' {
+                    let mut text = String::with_capacity(64);
+                    text.push(ch);
+                    text_run = Some(TextRun {
+                        line: point.line,
+                        next_column: point.column.0 + 1,
+                        x,
+                        y,
+                        fg,
+                        text,
+                    });
                 }
                 continue;
             }
 
-            flush_text_run(&painter, metrics, &mut text_run);
-            if ch != ' ' {
-                let mut text = String::with_capacity(64);
-                text.push(ch);
-                text_run = Some(TextRun {
-                    line: point.line,
-                    next_column: point.column.0 + 1,
-                    x,
-                    y,
-                    fg,
-                    text,
-                });
+            flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+
+            if bg != theme::PANEL_BG || selected {
+                shapes.push(Shape::rect_filled(cell_rect, CornerRadius::ZERO, bg));
             }
-            continue;
+
+            if let Some(text) = cell_text(indexed.cell)
+                && !text.is_empty()
+            {
+                shapes.push(Shape::text(
+                    fonts,
+                    Pos2::new(x, y),
+                    egui::Align2::LEFT_TOP,
+                    text,
+                    metrics.font_id.clone(),
+                    fg,
+                ));
+            }
+
+            append_cell_decoration(&mut shapes, cell_rect, indexed.cell, content.colors, fg);
         }
 
-        flush_text_run(&painter, metrics, &mut text_run);
+        flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+    });
 
-        if bg != theme::PANEL_BG || selected {
-            painter.rect_filled(cell_rect, CornerRadius::ZERO, bg);
-        }
-
-        if let Some(text) = cell_text(indexed.cell)
-            && !text.is_empty()
-        {
-            painter.text(
-                Pos2::new(x, y),
-                egui::Align2::LEFT_TOP,
-                text,
-                metrics.font_id.clone(),
-                fg,
-            );
-        }
-
-        paint_cell_decoration(&painter, cell_rect, indexed.cell, content.colors, fg);
-    }
-
-    flush_text_run(&painter, metrics, &mut text_run);
+    shapes
 }
 
 #[profiling::function]
@@ -221,7 +284,12 @@ fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
     Some(cell.c)
 }
 
-fn flush_text_run(painter: &egui::Painter, metrics: &GridMetrics, run: &mut Option<TextRun>) {
+fn flush_text_run(
+    fonts: &mut egui::epaint::text::FontsView<'_>,
+    shapes: &mut Vec<Shape>,
+    metrics: &GridMetrics,
+    run: &mut Option<TextRun>,
+) {
     let Some(run) = run.take() else {
         return;
     };
@@ -229,13 +297,14 @@ fn flush_text_run(painter: &egui::Painter, metrics: &GridMetrics, run: &mut Opti
         return;
     }
 
-    painter.text(
+    shapes.push(Shape::text(
+        fonts,
         Pos2::new(run.x, run.y),
         egui::Align2::LEFT_TOP,
         run.text,
         metrics.font_id.clone(),
         run.fg,
-    );
+    ));
 }
 
 fn has_cell_decoration(cell: &Cell) -> bool {
@@ -249,8 +318,8 @@ fn has_cell_decoration(cell: &Cell) -> bool {
     )
 }
 
-fn paint_cell_decoration(
-    painter: &egui::Painter,
+fn append_cell_decoration(
+    shapes: &mut Vec<Shape>,
     cell_rect: Rect,
     cell: &Cell,
     colors: &alacritty_terminal::term::color::Colors,
@@ -267,17 +336,17 @@ fn paint_cell_decoration(
             .underline_color()
             .map_or(color, |underline| theme::terminal_color_to_egui(underline, colors));
         let y = cell_rect.max.y - 1.5;
-        painter.line_segment(
+        shapes.push(Shape::line_segment(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
             egui::Stroke::new(1.0, underline_color),
-        );
+        ));
     }
 
     if cell.flags.contains(Flags::STRIKEOUT) {
         let y = cell_rect.center().y;
-        painter.line_segment(
+        shapes.push(Shape::line_segment(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
             egui::Stroke::new(1.0, color),
-        );
+        ));
     }
 }
