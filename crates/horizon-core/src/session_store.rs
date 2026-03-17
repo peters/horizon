@@ -55,6 +55,12 @@ impl SessionStore {
         &self.profile_id
     }
 
+    /// Decide how Horizon should open the current profile on startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored profile snapshot cannot be read, or if
+    /// the selected session cannot be created or loaded from disk.
     pub fn prepare_startup(&self, config: &Config) -> Result<StartupDecision> {
         let profile = self.load_profile_snapshot()?;
 
@@ -105,11 +111,23 @@ impl SessionStore {
         })
     }
 
+    /// Create and persist a fresh session for the current profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the initial runtime state or session metadata
+    /// cannot be serialized or written to disk.
     pub fn create_new_session(&self, config: &Config) -> Result<ResolvedSession> {
         let runtime_state = RuntimeState::from_config(config);
         self.create_session_from_runtime(runtime_state)
     }
 
+    /// Clone an existing session's runtime state and transcripts into a new session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source session cannot be loaded or if the new
+    /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
         let source_runtime_path = self.home.session_runtime_path(source_session_id);
         let runtime_state = RuntimeState::load(&source_runtime_path)?
@@ -122,14 +140,30 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Load an existing session for resumption.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session runtime state or metadata cannot be read.
     pub fn resume_session(&self, session_id: &str) -> Result<ResolvedSession> {
         self.load_existing_session(session_id)
     }
 
+    /// Load an existing session after explicitly taking over a stale lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session runtime state or metadata cannot be read.
     pub fn take_over_session(&self, session_id: &str) -> Result<ResolvedSession> {
         self.load_existing_session(session_id)
     }
 
+    /// Persist the runtime state and refreshed metadata for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime state or session metadata cannot be
+    /// serialized or written to disk.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
         let runtime_path = self.home.session_runtime_path(session_id);
         let meta_path = self.home.session_meta_path(session_id);
@@ -160,6 +194,12 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Create or replace the lease file for an active session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lease directory cannot be created or if the
+    /// lease file cannot be serialized and written.
     pub fn acquire_lease(&self, session_id: &str) -> Result<SessionLease> {
         let lease_path = self.home.session_lease_path(session_id);
         if let Some(parent) = lease_path.parent() {
@@ -172,6 +212,11 @@ impl SessionStore {
         Ok(lease)
     }
 
+    /// Update the heartbeat timestamp on an existing session lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the refreshed lease cannot be serialized or written.
     pub fn refresh_lease(&self, lease: &mut SessionLease) -> Result<()> {
         lease.last_heartbeat_at = current_unix_millis();
         let json = serde_json::to_vec_pretty(lease).map_err(|error| Error::State(error.to_string()))?;
@@ -179,6 +224,11 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Remove a session lease file if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lease file exists but cannot be removed.
     pub fn release_lease(&self, session_id: &str) -> Result<()> {
         let path = self.home.session_lease_path(session_id);
         match fs::remove_file(&path) {
@@ -188,6 +238,12 @@ impl SessionStore {
         }
     }
 
+    /// Persist a new session from an already prepared runtime state snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime state, session metadata, or session
+    /// index cannot be serialized or written to disk.
     pub fn create_session_from_runtime(&self, mut runtime_state: RuntimeState) -> Result<ResolvedSession> {
         runtime_state.ensure_local_ids();
         let session_id = Uuid::new_v4().to_string();
