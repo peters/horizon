@@ -475,30 +475,39 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn handle_canvas_pan(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let panel_rects: Vec<Rect> = self.panel_screen_rects.values().copied().collect();
-        let pan_delta = ctx.input(|input| {
-            let pointer_position = input.pointer.hover_pos();
-            let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
-            let pointer_over_panel =
-                pointer_position.is_some_and(|position| panel_rects.iter().any(|rect| rect.contains(position)));
-            let drag_panning = pointer_in_canvas
-                && (input.pointer.middle_down() || (input.key_down(egui::Key::Space) && input.pointer.primary_down()));
-            let scroll_panning =
-                pointer_in_canvas && !pointer_over_panel && !input.modifiers.ctrl && !input.modifiers.command;
-
-            if drag_panning {
-                input.pointer.delta()
-            } else if scroll_panning {
-                let scroll = input.smooth_scroll_delta + input.raw_scroll_delta;
-                if input.modifiers.shift && scroll.x == 0.0 {
-                    Vec2::new(scroll.y, 0.0)
-                } else {
-                    scroll
-                }
-            } else {
-                Vec2::ZERO
-            }
+        let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta) =
+            ctx.input(|input| {
+                (
+                    input.pointer.hover_pos(),
+                    input.pointer.middle_down(),
+                    input.pointer.primary_down(),
+                    input.key_down(egui::Key::Space),
+                    input.modifiers,
+                    input.smooth_scroll_delta + input.raw_scroll_delta,
+                    input.pointer.delta(),
+                )
+            });
+        let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
+        let drag_panning = pointer_in_canvas && (middle_down || (space_down && primary_down));
+        let pointer_over_panel = pointer_position.is_some_and(|position| {
+            pointer_in_canvas
+                && !drag_panning
+                && scroll != Vec2::ZERO
+                && !modifiers.ctrl
+                && !modifiers.command
+                && self.panel_screen_rects.values().any(|rect| rect.contains(position))
         });
+        let pan_delta = if drag_panning {
+            pointer_delta
+        } else if pointer_in_canvas && !pointer_over_panel && !modifiers.ctrl && !modifiers.command {
+            if modifiers.shift && scroll.x == 0.0 {
+                Vec2::new(scroll.y, 0.0)
+            } else {
+                scroll
+            }
+        } else {
+            Vec2::ZERO
+        };
 
         self.is_panning = pan_delta != Vec2::ZERO;
         if self.is_panning {

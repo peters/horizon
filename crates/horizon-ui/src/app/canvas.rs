@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use egui::{
     Color32, Context, CornerRadius, Id, Margin, Mesh, Order, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind,
     Vec2,
 };
+use horizon_core::WorkspaceId;
 
 use crate::theme;
 
@@ -22,23 +25,23 @@ struct MinimapModel {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanvasGridCacheKey {
-    rect_min_x_bits: u32,
-    rect_min_y_bits: u32,
-    rect_width_bits: u32,
-    rect_height_bits: u32,
-    offset_x_bits: u32,
-    offset_y_bits: u32,
+    rect_min_x: u32,
+    rect_min_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+    offset_x: u32,
+    offset_y: u32,
 }
 
 impl CanvasGridCacheKey {
     fn new(rect: Rect, pan_offset: Vec2) -> Self {
         Self {
-            rect_min_x_bits: rect.min.x.to_bits(),
-            rect_min_y_bits: rect.min.y.to_bits(),
-            rect_width_bits: rect.width().to_bits(),
-            rect_height_bits: rect.height().to_bits(),
-            offset_x_bits: pan_offset.x.rem_euclid(GRID_SPACING).to_bits(),
-            offset_y_bits: pan_offset.y.rem_euclid(GRID_SPACING).to_bits(),
+            rect_min_x: rect.min.x.to_bits(),
+            rect_min_y: rect.min.y.to_bits(),
+            rect_width: rect.width().to_bits(),
+            rect_height: rect.height().to_bits(),
+            offset_x: pan_offset.x.rem_euclid(GRID_SPACING).to_bits(),
+            offset_y: pan_offset.y.rem_euclid(GRID_SPACING).to_bits(),
         }
     }
 }
@@ -50,13 +53,17 @@ pub(super) struct CanvasGridCache {
 }
 
 impl HorizonApp {
-    pub(super) fn render_minimap(&mut self, ctx: &Context) -> f32 {
+    pub(super) fn render_minimap(
+        &mut self,
+        ctx: &Context,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) -> f32 {
         if !self.minimap_visible || self.board.workspaces.is_empty() {
             return 0.0;
         }
 
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let Some(model) = self.minimap_model(canvas_rect) else {
+        let Some(model) = self.minimap_model(canvas_rect, workspace_bounds) else {
             return 0.0;
         };
         let minimap_height = model.outer_size.y;
@@ -66,7 +73,7 @@ impl HorizonApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 let (response, painter) = ui.allocate_painter(model.outer_size, Sense::click_and_drag());
-                self.paint_minimap_contents(&painter, response.rect, &model);
+                self.paint_minimap_contents(&painter, response.rect, &model, workspace_bounds);
                 response
             });
 
@@ -89,8 +96,12 @@ impl HorizonApp {
         minimap_height
     }
 
-    fn minimap_model(&self, canvas_rect: Rect) -> Option<MinimapModel> {
-        let (content_min, content_max) = workspace_content_bounds(self)?;
+    fn minimap_model(
+        &self,
+        canvas_rect: Rect,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) -> Option<MinimapModel> {
+        let (content_min, content_max) = workspace_content_bounds(self, workspace_bounds)?;
         let view_min = self.screen_to_canvas(canvas_rect, canvas_rect.min);
         let view_max = self.screen_to_canvas(canvas_rect, canvas_rect.max);
 
@@ -114,7 +125,13 @@ impl HorizonApp {
         })
     }
 
-    fn paint_minimap_contents(&self, painter: &Painter, rect: Rect, model: &MinimapModel) {
+    fn paint_minimap_contents(
+        &self,
+        painter: &Painter,
+        rect: Rect,
+        model: &MinimapModel,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) {
         painter.rect_filled(rect, CornerRadius::same(8), theme::alpha(theme::BG_ELEVATED, 220));
         painter.rect_stroke(
             rect,
@@ -124,20 +141,27 @@ impl HorizonApp {
         );
 
         let origin = rect.min;
-        self.paint_minimap_workspaces(painter, origin, model);
+        self.paint_minimap_workspaces(painter, origin, model, workspace_bounds);
         self.paint_minimap_panels(painter, origin, model);
         paint_minimap_viewport(painter, origin, model);
     }
 
-    fn paint_minimap_workspaces(&self, painter: &Painter, origin: Pos2, model: &MinimapModel) {
+    fn paint_minimap_workspaces(
+        &self,
+        painter: &Painter,
+        origin: Pos2,
+        model: &MinimapModel,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) {
         for workspace in &self.board.workspaces {
             let (r, g, b) = workspace.accent();
             let workspace_color = Color32::from_rgb(r, g, b);
             let is_active = self.board.active_workspace == Some(workspace.id);
-            let (workspace_min, workspace_max) = workspace_minimap_bounds(self, workspace.id).unwrap_or_else(|| {
-                let pos = workspace.position;
-                (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
-            });
+            let (workspace_min, workspace_max) = workspace_minimap_bounds(workspace.id, workspace_bounds)
+                .unwrap_or_else(|| {
+                    let pos = workspace.position;
+                    (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
+                });
             let workspace_rect = Rect::from_min_max(
                 origin + minimap_point(model, workspace_min[0], workspace_min[1]).to_vec2(),
                 origin + minimap_point(model, workspace_max[0], workspace_max[1]).to_vec2(),
@@ -253,16 +277,20 @@ impl HorizonApp {
     }
 }
 
-fn workspace_content_bounds(app: &HorizonApp) -> Option<([f32; 2], [f32; 2])> {
+fn workspace_content_bounds(
+    app: &HorizonApp,
+    workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+) -> Option<([f32; 2], [f32; 2])> {
     let mut content_min = [f32::MAX, f32::MAX];
     let mut content_max = [f32::MIN, f32::MIN];
     let mut has_content = false;
 
     for workspace in &app.board.workspaces {
-        let (workspace_min, workspace_max) = workspace_minimap_bounds(app, workspace.id).unwrap_or_else(|| {
-            let pos = workspace.position;
-            (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
-        });
+        let (workspace_min, workspace_max) =
+            workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
+                let pos = workspace.position;
+                (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
+            });
         content_min[0] = content_min[0].min(workspace_min[0]);
         content_min[1] = content_min[1].min(workspace_min[1]);
         content_max[0] = content_max[0].max(workspace_max[0]);
@@ -273,9 +301,13 @@ fn workspace_content_bounds(app: &HorizonApp) -> Option<([f32; 2], [f32; 2])> {
     has_content.then_some((content_min, content_max))
 }
 
-fn workspace_minimap_bounds(app: &HorizonApp, workspace_id: horizon_core::WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
-    app.board
-        .workspace_bounds(workspace_id)
+fn workspace_minimap_bounds(
+    workspace_id: WorkspaceId,
+    workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+) -> Option<([f32; 2], [f32; 2])> {
+    workspace_bounds
+        .get(&workspace_id)
+        .copied()
         .map(|(workspace_min, workspace_max)| {
             (
                 [

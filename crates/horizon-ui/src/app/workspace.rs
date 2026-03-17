@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use egui::{
     Button, Color32, Context, CornerRadius, CursorIcon, Id, Margin, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
@@ -44,9 +46,13 @@ const WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X: f32 = 10.0;
 
 impl HorizonApp {
     #[profiling::function]
-    pub(super) fn render_workspace_backgrounds(&mut self, ctx: &Context) {
+    pub(super) fn render_workspace_backgrounds(
+        &mut self,
+        ctx: &Context,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let visuals = self.workspace_visuals(canvas_rect);
+        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds);
 
         self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
@@ -135,7 +141,11 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    fn workspace_visuals(&self, canvas_rect: Rect) -> Vec<WorkspaceVisual> {
+    fn workspace_visuals(
+        &self,
+        canvas_rect: Rect,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    ) -> Vec<WorkspaceVisual> {
         self.board
             .workspaces
             .iter()
@@ -143,7 +153,7 @@ impl HorizonApp {
                 let (r, g, b) = workspace.accent();
                 let color = Color32::from_rgb(r, g, b);
                 let is_active = self.board.active_workspace == Some(workspace.id);
-                let (screen_rect, is_empty) = if let Some((min, max)) = self.board.workspace_bounds(workspace.id) {
+                let (screen_rect, is_empty) = if let Some((min, max)) = workspace_bounds.get(&workspace.id).copied() {
                     let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
                     let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
                     let screen_min = self.canvas_to_screen(canvas_rect, top_left);

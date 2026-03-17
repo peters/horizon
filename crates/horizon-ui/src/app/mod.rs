@@ -547,15 +547,16 @@ impl HorizonApp {
             self.render_sidebar(ctx);
             self.render_settings(ctx);
         } else {
+            let workspace_bounds = self.board.workspace_bounds_map();
             self.handle_canvas_pan(ctx);
             self.render_toolbar(ctx);
             self.render_sidebar(ctx);
             self.render_canvas(ctx);
-            self.render_workspace_backgrounds(ctx);
+            self.render_workspace_backgrounds(ctx, &workspace_bounds);
             self.handle_canvas_double_click(ctx);
             self.render_panels(ctx);
             self.render_preset_picker(ctx);
-            let minimap_height = self.render_minimap(ctx);
+            let minimap_height = self.render_minimap(ctx, &workspace_bounds);
             if self.template_config.features.attention_feed {
                 let feed_result = attention_feed::render_attention_feed(
                     ctx,
