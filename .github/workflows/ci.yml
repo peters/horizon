@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -28,6 +29,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          lfs: true
       - name: Verify GitVersion and Cargo baseline versions are aligned
         run: ./scripts/check-version-sync.sh
       - uses: gittools/actions/gitversion/setup@v4.4.2
@@ -42,6 +44,8 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - run: rustup component add rustfmt
       - run: cargo fmt --all -- --check
 
@@ -50,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - run: ./scripts/check-maintainability.sh
 
   clippy:
@@ -57,6 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -66,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - run: cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
@@ -75,6 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - name: Run pedantic audit (non-blocking)
@@ -94,14 +106,19 @@ jobs:
             name: Linux x64
             cache_key: linux-test
           - os: macos-latest
-            name: macOS
+            name: macOS arm64
             cache_key: macos-test
+          - os: macos-15-intel
+            name: macOS x64
+            cache_key: macos-intel-test
           # Windows tests require PTY support; tracked in #TBD.
           # - os: windows-latest
           #   name: Windows x64
           #   cache_key: windows-test
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
@@ -109,7 +126,7 @@ jobs:
 
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -118,29 +135,58 @@ jobs:
           - os: ubuntu-latest
             name: Linux x64
             cache_key: linux-artifacts
-            artifact_name: linux-x64
-            artifact_path: target/release/horizon
+            release_asset: horizon-linux-x64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
           - os: macos-latest
-            name: macOS
+            name: macOS arm64
             cache_key: macos-artifacts
-            artifact_name: osx-x64
-            artifact_path: target/release/horizon
+            release_asset: horizon-osx-arm64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
+          - os: macos-15-intel
+            name: macOS x64
+            cache_key: macos-intel-artifacts
+            release_asset: horizon-osx-x64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
           - os: windows-latest
             name: Windows x64
             cache_key: windows-artifacts
-            artifact_name: windows-x64
-            artifact_path: target/release/horizon.exe
+            release_asset: horizon-windows-x64.exe
+            binary_path: target/release/horizon.exe
+            asset_kind: file
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
       - run: cargo build --release
-      - name: Upload artifacts
+      - name: Package release asset
+        shell: bash
+        run: |
+          case "${{ matrix.asset_kind }}" in
+            tar)
+              chmod +x "${{ matrix.binary_path }}"
+              tar czf "${{ matrix.release_asset }}" \
+                -C "$(dirname "${{ matrix.binary_path }}")" \
+                "$(basename "${{ matrix.binary_path }}")"
+              ;;
+            file)
+              cp "${{ matrix.binary_path }}" "${{ matrix.release_asset }}"
+              ;;
+            *)
+              echo "Unsupported asset kind: ${{ matrix.asset_kind }}"
+              exit 1
+              ;;
+          esac
+      - name: Upload release asset
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_path }}
+          name: ${{ matrix.release_asset }}
+          path: ${{ matrix.release_asset }}
 
   # ── Publishing (not yet enabled) ────────────────────────────────────
   #
@@ -193,19 +239,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Package release assets
+      - name: Collect release assets
         run: |
-          cd artifacts
-          tar czf ../horizon-linux-x64.tar.gz -C linux-x64 .
-          tar czf ../horizon-osx-x64.tar.gz -C osx-x64 .
-          cp windows-x64/horizon.exe ../horizon-windows-x64.exe
+          mkdir -p release-assets
+          find artifacts -maxdepth 2 -type f -exec cp {} release-assets/ \;
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -216,6 +258,7 @@ jobs:
           prerelease: ${{ github.ref == 'refs/heads/develop' }}
           generate_release_notes: true
           files: |
-            horizon-linux-x64.tar.gz
-            horizon-osx-x64.tar.gz
-            horizon-windows-x64.exe
+            release-assets/horizon-linux-x64.tar.gz
+            release-assets/horizon-osx-x64.tar.gz
+            release-assets/horizon-osx-arm64.tar.gz
+            release-assets/horizon-windows-x64.exe
