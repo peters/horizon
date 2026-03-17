@@ -29,7 +29,9 @@ pub fn app_icon() -> IconData {
     // Use the embedded 128x128 PNG icon. A 256x256 icon exceeds the X11 base
     // protocol max request size (262,140 bytes) when set via _NET_WM_ICON,
     // causing the icon to silently fail on X11 without BIG-REQUESTS.
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!(concat!(env!("OUT_DIR"), "/assets/icons/icon-128.png"))) {
+    if let Ok(icon) =
+        eframe::icon_data::from_png_bytes(include_bytes!(concat!(env!("OUT_DIR"), "/assets/icons/icon-128.png")))
+    {
         return icon;
     }
     let mut pixels = vec![0_u8; (ICON_SIZE * ICON_SIZE * 4) as usize];

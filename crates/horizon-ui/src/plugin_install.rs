@@ -11,17 +11,26 @@ struct EmbeddedFile {
 const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
     EmbeddedFile {
         relative_path: ".claude-plugin/plugin.json",
-        content: include_str!(concat!(env!("OUT_DIR"), "/assets/plugins/claude-code/.claude-plugin/plugin.json")),
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/.claude-plugin/plugin.json"
+        )),
     },
     EmbeddedFile {
         relative_path: "skills/horizon-notify/SKILL.md",
-        content: include_str!(concat!(env!("OUT_DIR"), "/assets/plugins/claude-code/skills/horizon-notify/SKILL.md")),
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-notify/SKILL.md"
+        )),
     },
 ];
 
 const CODEX_PLUGIN_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
-    content: include_str!(concat!(env!("OUT_DIR"), "/assets/plugins/codex/skills/horizon-notify/SKILL.md")),
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-notify/SKILL.md"
+    )),
 }];
 
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
