@@ -152,7 +152,7 @@ fn render_feed_list(
 fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) -> FeedItemAction {
     let is_resolved = !item.is_open();
     let color = severity_color(item.severity);
-    let bg_color = Color32::from_rgba_premultiplied(
+    let bg_color = Color32::from_rgba_unmultiplied(
         color.r() / 8,
         color.g() / 8,
         color.b() / 8,

@@ -16,8 +16,8 @@ pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(37, 46, 61);
 pub const BORDER_STRONG: Color32 = Color32::from_rgb(63, 78, 101);
 pub const TITLEBAR_BG: Color32 = Color32::from_rgb(8, 11, 17);
 pub const TOOLBAR_BG: Color32 = Color32::from_rgb(11, 15, 22);
-pub const CANVAS_COOL_GLOW: Color32 = Color32::from_rgba_premultiplied(77, 112, 220, 20);
-pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_premultiplied(255, 146, 80, 28);
+pub const CANVAS_COOL_GLOW: Color32 = Color32::from_rgba_unmultiplied_const(77, 112, 220, 20);
+pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_unmultiplied_const(255, 146, 80, 28);
 
 pub const BTN_CLOSE: Color32 = Color32::from_rgb(235, 96, 88);
 pub const PALETTE_GREEN: Color32 = Color32::from_rgb(166, 227, 161);
@@ -65,7 +65,7 @@ pub fn blend(base: Color32, tint: Color32, tint_amount: f32) -> Color32 {
 }
 
 pub fn alpha(color: Color32, alpha: u8) -> Color32 {
-    Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha)
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
 pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
@@ -200,4 +200,18 @@ fn palette_color(index: u8, colors: &Colors) -> Color32 {
 
 fn rgb_to_egui(rgb: Rgb) -> Color32 {
     Color32::from_rgb(rgb.r, rgb.g, rgb.b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alpha;
+    use egui::Color32;
+
+    #[test]
+    fn alpha_preserves_unmultiplied_color_channels() {
+        assert_eq!(
+            alpha(Color32::from_rgb(116, 162, 247), 40),
+            Color32::from_rgba_unmultiplied(116, 162, 247, 40),
+        );
+    }
 }
