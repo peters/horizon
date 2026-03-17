@@ -27,6 +27,7 @@ back into large multi-purpose modules.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
   - `canvas`: canvas rendering and HUD
+  - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panels`: panel chrome and panel rendering orchestration
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
