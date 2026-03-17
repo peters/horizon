@@ -2,8 +2,6 @@ mod keyboard;
 mod mouse;
 mod sequence;
 
-#[cfg(test)]
-pub use keyboard::translate_key_event;
 pub use keyboard::{
     KeyTranslation, paste_bytes, should_defer_textual_key, translate_key_event_with_physical, translate_text_event,
 };
@@ -26,10 +24,20 @@ pub struct PointerButtons {
 mod tests {
     use super::{
         GridPoint, PointerButtons, WheelAction, mouse_button_report, mouse_motion_report, paste_bytes,
-        translate_key_event, translate_text_event, wheel_action,
+        translate_key_event_with_physical, translate_text_event, wheel_action,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Key, Modifiers, MouseWheelUnit, PointerButton, Vec2};
+
+    fn translate_key_event(
+        key: Key,
+        pressed: bool,
+        repeat: bool,
+        modifiers: Modifiers,
+        mode: TermMode,
+    ) -> Option<super::KeyTranslation> {
+        translate_key_event_with_physical(key, None, pressed, repeat, modifiers, mode)
+    }
 
     #[test]
     fn app_cursor_mode_uses_ss3_sequences() {

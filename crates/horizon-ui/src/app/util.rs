@@ -145,16 +145,6 @@ pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
     );
 }
 
-#[cfg(test)]
-pub(super) fn default_panel_canvas_pos(index: usize) -> Pos2 {
-    let column = usize_to_f32(index % 3);
-    let row = usize_to_f32(index / 3);
-    Pos2::new(
-        120.0 + column * super::PANEL_COLUMN_SPACING,
-        120.0 + row * super::PANEL_ROW_SPACING,
-    )
-}
-
 pub(super) fn clamp_panel_size(size: Vec2) -> Vec2 {
     Vec2::new(
         size.x.max(super::PANEL_MIN_SIZE[0]),
@@ -246,11 +236,17 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        clamp_panel_size, default_panel_canvas_pos, format_grid_position, primary_shortcut_label,
-        primary_shortcut_modifier,
-    };
+    use super::{clamp_panel_size, format_grid_position, primary_shortcut_label, primary_shortcut_modifier};
     use egui::{Modifiers, Pos2, Vec2};
+
+    fn default_panel_canvas_pos(index: usize) -> Pos2 {
+        const PANEL_COLUMN_SPACING: f32 = 540.0;
+        const PANEL_ROW_SPACING: f32 = 360.0;
+
+        let column = super::usize_to_f32(index % 3);
+        let row = super::usize_to_f32(index / 3);
+        Pos2::new(120.0 + column * PANEL_COLUMN_SPACING, 120.0 + row * PANEL_ROW_SPACING)
+    }
 
     #[test]
     fn default_panel_positions_tile_in_rows() {

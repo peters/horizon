@@ -582,17 +582,6 @@ fn load_claude_project_session_summary(path: &Path, updated_at: i64) -> Result<O
     Ok(summary.into_record(&session_id, updated_at))
 }
 
-#[cfg(test)]
-fn parse_claude_project_session<R: BufRead>(
-    reader: R,
-    fallback_session_id: &str,
-    fallback_updated_at: i64,
-) -> Option<AgentSessionRecord> {
-    let mut summary = ClaudeSessionSummary::default();
-    scan_claude_session_reader(reader, None, &mut summary);
-    summary.into_record(fallback_session_id, fallback_updated_at)
-}
-
 #[derive(Default)]
 struct ClaudeSessionSummary {
     session_id: Option<String>,
@@ -774,6 +763,16 @@ mod tests {
     use crate::board::Board;
     use crate::config::WindowConfig;
     use std::io::Cursor;
+
+    fn parse_claude_project_session<R: BufRead>(
+        reader: R,
+        fallback_session_id: &str,
+        fallback_updated_at: i64,
+    ) -> Option<AgentSessionRecord> {
+        let mut summary = ClaudeSessionSummary::default();
+        scan_claude_session_reader(reader, None, &mut summary);
+        summary.into_record(fallback_session_id, fallback_updated_at)
+    }
 
     #[test]
     fn bootstrap_assigns_distinct_sessions_per_group() {

@@ -9,17 +9,6 @@ pub struct KeyTranslation {
     pub suppress_text: Option<String>,
 }
 
-#[cfg(test)]
-pub fn translate_key_event(
-    key: Key,
-    pressed: bool,
-    repeat: bool,
-    modifiers: Modifiers,
-    mode: TermMode,
-) -> Option<KeyTranslation> {
-    translate_key_event_with_physical(key, None, pressed, repeat, modifiers, mode)
-}
-
 pub fn translate_key_event_with_physical(
     key: Key,
     physical_key: Option<Key>,

@@ -34,10 +34,6 @@ const SIDEBAR_WIDTH: f32 = 210.0;
 const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_MIN_SIZE: [f32; 2] = [320.0, 220.0];
-#[cfg(test)]
-const PANEL_COLUMN_SPACING: f32 = 540.0;
-#[cfg(test)]
-const PANEL_ROW_SPACING: f32 = 360.0;
 const RESIZE_HANDLE_SIZE: f32 = 18.0;
 const WS_BG_PAD: f32 = 16.0;
 const WS_TITLE_HEIGHT: f32 = 38.0;
@@ -661,33 +657,5 @@ impl StartupChooserState {
             selected_session_id,
             error: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PANEL_MIN_SIZE;
-    use super::util::{clamp_panel_size, default_panel_canvas_pos, format_grid_position};
-    use egui::{Pos2, Vec2};
-
-    #[test]
-    fn default_panel_positions_tile_in_rows() {
-        assert_eq!(default_panel_canvas_pos(0), Pos2::new(120.0, 120.0));
-        assert_eq!(default_panel_canvas_pos(1), Pos2::new(660.0, 120.0));
-        assert_eq!(default_panel_canvas_pos(3), Pos2::new(120.0, 480.0));
-    }
-
-    #[test]
-    fn panel_size_is_clamped_to_minimums() {
-        let clamped = clamp_panel_size(Vec2::new(100.0, 120.0));
-
-        assert!((clamped.x - PANEL_MIN_SIZE[0]).abs() <= f32::EPSILON);
-        assert!(clamped.y >= PANEL_MIN_SIZE[1]);
-    }
-
-    #[test]
-    fn grid_positions_are_rounded_for_display() {
-        assert_eq!(format_grid_position(Pos2::new(12.4, -7.6)), "12, -8");
-        assert_eq!(format_grid_position(Pos2::new(-3.5, 2.5)), "-4, 3");
     }
 }
