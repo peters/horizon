@@ -716,7 +716,7 @@ fn paint_attention_badge(
     painter.rect_filled(
         badge_rect,
         CornerRadius::same(4),
-        Color32::from_rgba_premultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
+        Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
     );
     painter.text(
         Pos2::new(badge_left + 6.0, titlebar_rect.center().y),

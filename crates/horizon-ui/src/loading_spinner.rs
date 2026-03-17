@@ -90,7 +90,7 @@ fn paint_arc(ui: &egui::Ui, id: Id, center: Pos2, color: Color32) {
         let alpha_frac = (i + 1) as f32 / segments as f32;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let a = (alpha_frac * f32::from(color.a())).round().clamp(0.0, 255.0) as u8;
-        let seg_color = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), a);
+        let seg_color = theme::alpha(color, a);
         painter.line_segment(
             [points[i as usize], points[(i + 1) as usize]],
             Stroke::new(stroke.width, seg_color),

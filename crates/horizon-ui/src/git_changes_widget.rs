@@ -9,8 +9,8 @@ const DIFF_FONT_SIZE: f32 = 11.0;
 const SUMMARY_SIZE: f32 = 11.0;
 const HEADER_HEIGHT: f32 = 28.0;
 
-const DIFF_ADD_BG: Color32 = Color32::from_rgba_premultiplied(166, 227, 161, 18);
-const DIFF_DEL_BG: Color32 = Color32::from_rgba_premultiplied(243, 139, 168, 18);
+const DIFF_ADD_BG: Color32 = Color32::from_rgba_unmultiplied_const(166, 227, 161, 18);
+const DIFF_DEL_BG: Color32 = Color32::from_rgba_unmultiplied_const(243, 139, 168, 18);
 
 pub struct GitChangesView<'a> {
     panel: &'a mut Panel,
