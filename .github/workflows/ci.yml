@@ -214,6 +214,10 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           sed -i -E 's|horizon-core = \{ path = "\.\./horizon-core", version = ".*" \}|horizon-core = { path = "../horizon-core", version = "'"${VERSION}"'" }|' crates/horizon-ui/Cargo.toml
           cargo generate-lockfile
+      - name: Stage assets for publish
+        run: |
+          mkdir -p crates/horizon-ui/publish-assets
+          cp -r assets/icons assets/plugins crates/horizon-ui/publish-assets/
       - name: Publish horizon-core to crates.io
         run: cargo publish -p horizon-core --allow-dirty
       - name: Publish horizon-ui to crates.io

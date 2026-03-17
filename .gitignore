@@ -3,6 +3,9 @@
 *.swo
 .DS_Store
 
+# Staging directory created by CI for cargo publish verification
+crates/horizon-ui/publish-assets/
+
 # JetBrains IDE — ignore user-specific files, commit shared config
 .idea/workspace.xml
 .idea/tasks.xml
