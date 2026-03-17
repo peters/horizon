@@ -9,6 +9,9 @@ back into large multi-purpose modules.
 
 - Owns board state, workspace metadata, panel lifecycle, persistence
   projections, and shared layout math.
+- `board.rs` should stay orchestration-focused, with board-local submodules for
+  attention flows, workspace and panel membership changes, arrangement/collision
+  logic, geometry queries, and shutdown state.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
