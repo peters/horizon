@@ -36,7 +36,7 @@ pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, PanelState, PanelTemplateRef, RuntimeState,
     WorkspaceState, WorkspaceTemplateRef, new_local_id, runtime_state_path_for_config, transcript_root_path_for_config,
 };
-pub use terminal::{AgentNotification, Terminal};
+pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_tokens};

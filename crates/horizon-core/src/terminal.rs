@@ -534,6 +534,31 @@ impl Terminal {
         self.term.lock().selection_to_string()
     }
 
+    /// Return the URL at the given viewport-relative row and column, if the
+    /// clicked position falls inside a recognized URL scheme.
+    #[must_use]
+    pub fn url_at_point(&self, row: usize, col: usize) -> Option<String> {
+        let term = self.term.lock();
+        let content = term.renderable_content();
+        let cols = usize::from(self.cols);
+        let mut line_chars: Vec<char> = vec![' '; cols];
+
+        for indexed in content.display_iter {
+            let Ok(r) = usize::try_from(indexed.point.line.0) else {
+                continue;
+            };
+            if r != row {
+                continue;
+            }
+            let c = indexed.point.column.0;
+            if c < cols {
+                line_chars[c] = indexed.cell.c;
+            }
+        }
+
+        find_url_at_column(&line_chars, col)
+    }
+
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Title(title) => {
@@ -726,6 +751,56 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
     Rgb { r, g, b }
 }
 
+const URL_SCHEMES: [&str; 3] = ["https://", "http://", "file://"];
+
+fn find_url_at_column(chars: &[char], col: usize) -> Option<String> {
+    for scheme in URL_SCHEMES {
+        let scheme_chars: Vec<char> = scheme.chars().collect();
+        let scheme_len = scheme_chars.len();
+        if chars.len() < scheme_len {
+            continue;
+        }
+        for start in 0..=chars.len() - scheme_len {
+            if chars[start..start + scheme_len] != *scheme_chars {
+                continue;
+            }
+            let end = url_end_column(chars, start);
+            if col >= start && col < end {
+                return Some(chars[start..end].iter().collect());
+            }
+        }
+    }
+    None
+}
+
+fn url_end_column(chars: &[char], start: usize) -> usize {
+    let mut end = chars.len();
+    for (i, ch) in chars.iter().enumerate().skip(start) {
+        if ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'') {
+            end = i;
+            break;
+        }
+    }
+    while end > start && matches!(chars[end - 1], '.' | ',' | ';' | '!' | '?') {
+        end -= 1;
+    }
+    end
+}
+
+/// Open a URL with the platform's default handler.
+pub fn open_url(url: &str) {
+    let command = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let result = std::process::Command::new(command)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Err(error) = result {
+        tracing::warn!("failed to open URL {url}: {error}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -736,7 +811,7 @@ mod tests {
     use super::current_cwd_for_pid;
     use super::{
         Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
-        replay_terminal_bytes,
+        find_url_at_column, replay_terminal_bytes,
     };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
@@ -814,5 +889,41 @@ mod tests {
             &dimensions,
             TerminalEventProxy { event_tx },
         )))
+    }
+
+    #[test]
+    fn url_detected_at_clicked_column() {
+        let line: Vec<char> = "Created: https://github.com/foo/bar/issues/123".chars().collect();
+        assert_eq!(
+            find_url_at_column(&line, 10),
+            Some("https://github.com/foo/bar/issues/123".to_string()),
+        );
+    }
+
+    #[test]
+    fn click_outside_url_returns_none() {
+        let line: Vec<char> = "Created: https://github.com/foo".chars().collect();
+        assert_eq!(find_url_at_column(&line, 0), None);
+    }
+
+    #[test]
+    fn trailing_punctuation_stripped_from_url() {
+        let line: Vec<char> = "See https://example.com.".chars().collect();
+        assert_eq!(find_url_at_column(&line, 5), Some("https://example.com".to_string()),);
+    }
+
+    #[test]
+    fn http_and_file_schemes_detected() {
+        let line: Vec<char> = "open http://localhost:3000/api".chars().collect();
+        assert_eq!(
+            find_url_at_column(&line, 6),
+            Some("http://localhost:3000/api".to_string()),
+        );
+
+        let line: Vec<char> = "file:///home/user/doc.pdf rest".chars().collect();
+        assert_eq!(
+            find_url_at_column(&line, 0),
+            Some("file:///home/user/doc.pdf".to_string()),
+        );
     }
 }

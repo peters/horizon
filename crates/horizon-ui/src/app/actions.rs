@@ -104,10 +104,7 @@ impl HorizonApp {
             let w = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
             let h = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
             zones.push(Rect::from_min_size(
-                Pos2::new(
-                    viewport.max.x - MINIMAP_MARGIN - w,
-                    viewport.max.y - MINIMAP_MARGIN - h,
-                ),
+                Pos2::new(viewport.max.x - MINIMAP_MARGIN - w, viewport.max.y - MINIMAP_MARGIN - h),
                 Vec2::new(w, h),
             ));
             h

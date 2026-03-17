@@ -172,6 +172,18 @@ fn handle_pointer_button(
     terminal_mode: TermMode,
     mouse_mode_active: &dyn Fn(&egui::Modifiers) -> bool,
 ) {
+    // Ctrl+click / Cmd+click opens URLs regardless of mouse mode.
+    if (modifiers.ctrl || modifiers.command)
+        && button == egui::PointerButton::Primary
+        && pressed
+        && let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
+        && let Some(terminal) = panel.terminal()
+        && let Some(url) = terminal.url_at_point(point.line, point.column)
+    {
+        horizon_core::open_url(&url);
+        return;
+    }
+
     if mouse_mode_active(&modifiers) {
         if let Some(point) = grid_point_from_position(interaction.layout.body, pos, metrics, visible_rows, visible_cols)
             && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, terminal_mode, point)
