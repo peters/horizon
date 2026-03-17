@@ -9,6 +9,7 @@ const SPINNER_RADIUS: f32 = 12.0;
 const STROKE_WIDTH: f32 = 2.0;
 const ARC_LENGTH: f32 = TAU * 0.28;
 const ROTATION_PERIOD: f64 = 1.2;
+const ROTATION_PERIOD_F32: f32 = 1.2;
 const LABEL_SPACING: f32 = 10.0;
 
 /// Paints a centered loading spinner with an optional label below it.
@@ -64,7 +65,8 @@ fn show_inner(ui: &mut egui::Ui, id: Id, label: Option<&str>, detail: Option<&st
 
 fn paint_arc(ui: &egui::Ui, id: Id, center: Pos2, color: Color32) {
     let time = ui.input(|i| i.time);
-    let angle = ((time % ROTATION_PERIOD) / ROTATION_PERIOD) as f32 * TAU;
+    let phase = Duration::from_secs_f64(time.rem_euclid(ROTATION_PERIOD)).as_secs_f32() / ROTATION_PERIOD_F32;
+    let angle = phase * TAU;
 
     // Fade the arc: full opacity at the leading edge, fading toward the tail.
     let segments = 32_u32;

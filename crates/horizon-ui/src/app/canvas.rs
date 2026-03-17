@@ -343,8 +343,8 @@ fn paint_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, cache: &mut CanvasGridCac
 fn build_dot_grid_shape(rect: Rect, pan_offset: Vec2) -> Shape {
     let offset_x = pan_offset.x.rem_euclid(GRID_SPACING);
     let offset_y = pan_offset.y.rem_euclid(GRID_SPACING);
-    let columns = (((rect.width() + GRID_SPACING) / GRID_SPACING).ceil() as usize).saturating_add(1);
-    let rows = (((rect.height() + GRID_SPACING) / GRID_SPACING).ceil() as usize).saturating_add(1);
+    let columns = dot_grid_axis_count(rect.width());
+    let rows = dot_grid_axis_count(rect.height());
     let dot_count = columns.saturating_mul(rows);
 
     let mut mesh = Mesh::default();
@@ -363,6 +363,21 @@ fn build_dot_grid_shape(rect: Rect, pan_offset: Vec2) -> Shape {
     }
 
     Shape::mesh(mesh)
+}
+
+fn dot_grid_axis_count(length: f32) -> usize {
+    if !length.is_finite() || length < 0.0 {
+        return 1;
+    }
+
+    let mut covered = 0.0;
+    let mut count = 1_usize;
+    let target = length + GRID_SPACING;
+    while covered < target {
+        covered += GRID_SPACING;
+        count = count.saturating_add(1);
+    }
+    count
 }
 
 fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel) {
