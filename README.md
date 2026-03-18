@@ -113,10 +113,12 @@ Grab the latest binary from [**Releases**](https://github.com/peters/horizon/rel
 ```bash
 git clone https://github.com/peters/horizon.git
 cd horizon
+git lfs install
+git lfs pull
 cargo run --release
 ```
 
-> Requires **Rust 1.85+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
+> Requires **Git LFS** for bundled assets and **Rust 1.85+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
 
 ---
 
