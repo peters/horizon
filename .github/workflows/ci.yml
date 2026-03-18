@@ -63,6 +63,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -74,6 +75,7 @@ jobs:
   clippy-strict:
     name: Clippy (strict)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -85,6 +87,7 @@ jobs:
   clippy-pedantic:
     name: Clippy (pedantic — advisory)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -100,6 +103,7 @@ jobs:
   rust-test:
     name: Tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -125,6 +129,7 @@ jobs:
   windows-smoke:
     name: Windows test build
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -138,6 +143,7 @@ jobs:
     name: Artifacts (${{ matrix.name }})
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -190,6 +196,7 @@ jobs:
   cargo-publish:
     name: Publish Cargo (crates.io)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [version, clippy, clippy-strict, rust-test, rust-artifacts]
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (
