@@ -193,6 +193,8 @@ features:
 ## Contributing
 
 See [**AGENTS.md**](AGENTS.md) for development setup, architecture, coding standards, and CI requirements.
+Manual smoke-test plans live under [**docs/testing**](docs/testing), including the
+[**workspace close smoke test**](docs/testing/workspace-close-smoketest-plan.md).
 
 ```bash
 cargo fmt --all -- --check
