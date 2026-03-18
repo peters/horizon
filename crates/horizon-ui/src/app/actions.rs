@@ -147,6 +147,8 @@ impl HorizonApp {
         mut options: PanelOptions,
         workspace_id: WorkspaceId,
     ) -> horizon_core::Result<PanelId> {
+        let workspace_cwd = workspace_cwd(&self.board, workspace_id);
+        inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         self.resolve_panel_launch_binding(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
         self.board.create_panel(options, workspace_id)
@@ -182,13 +184,8 @@ impl HorizonApp {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     ) {
-        let workspace_cwd = self
-            .board
-            .workspace(workspace_id)
-            .and_then(|workspace| workspace.cwd.clone());
-        if let Some(cwd) = workspace_cwd {
+        if workspace_cwd(&self.board, workspace_id).is_some() {
             let mut options = preset.to_panel_options();
-            options.cwd = Some(cwd);
             options.position = canvas_pos;
             if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                 tracing::error!("failed to create panel: {error}");
@@ -252,23 +249,18 @@ impl HorizonApp {
             DirPickerAction::Cancelled => self.dir_picker = None,
             DirPickerAction::Selected(path, purpose) => {
                 self.dir_picker = None;
-                self.execute_dir_picker_result(path, purpose);
+                self.execute_dir_picker_result(path.as_ref(), purpose);
             }
         }
     }
 
-    fn execute_dir_picker_result(&mut self, path: Option<PathBuf>, purpose: DirPickerPurpose) {
+    fn execute_dir_picker_result(&mut self, path: Option<&PathBuf>, purpose: DirPickerPurpose) {
         match purpose {
             DirPickerPurpose::NewWorkspace { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
                 let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
-                if let Some(ref cwd) = path
-                    && let Some(workspace) = self.board.workspace_mut(workspace_id)
-                {
-                    workspace.cwd = Some(cwd.clone());
-                }
+                update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
                 let mut options = preset.to_panel_options();
-                options.cwd = path;
                 options.position = Some(canvas_pos);
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                     tracing::error!("failed to create panel: {error}");
@@ -279,8 +271,8 @@ impl HorizonApp {
                 preset,
                 canvas_pos,
             } => {
+                update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
                 let mut options = preset.to_panel_options();
-                options.cwd = path;
                 options.position = canvas_pos;
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                     tracing::error!("failed to create panel: {error}");
@@ -563,5 +555,91 @@ impl HorizonApp {
                 }
             }
         }
+    }
+}
+
+fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
+    board
+        .workspace(workspace_id)
+        .and_then(|workspace| workspace.cwd.clone())
+}
+
+fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&PathBuf>) {
+    if options.cwd.is_none()
+        && let Some(workspace_cwd) = workspace_cwd
+    {
+        options.cwd = Some(workspace_cwd.clone());
+    }
+}
+
+fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: Option<&PathBuf>) {
+    if let Some(path) = path
+        && let Some(workspace) = workspace
+    {
+        workspace.cwd = Some(path.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use horizon_core::{Board, PanelOptions, Workspace, WorkspaceId};
+
+    use super::{inherit_workspace_cwd, update_workspace_cwd, workspace_cwd};
+
+    #[test]
+    fn inherit_workspace_cwd_populates_missing_panel_cwd() {
+        let mut options = PanelOptions::default();
+        let workspace_path = PathBuf::from("/repo");
+
+        inherit_workspace_cwd(&mut options, Some(&workspace_path));
+
+        assert_eq!(options.cwd, Some(workspace_path));
+    }
+
+    #[test]
+    fn inherit_workspace_cwd_preserves_explicit_panel_cwd() {
+        let panel_path = PathBuf::from("/panel");
+        let workspace_path = PathBuf::from("/repo");
+        let mut options = PanelOptions {
+            cwd: Some(panel_path.clone()),
+            ..PanelOptions::default()
+        };
+
+        inherit_workspace_cwd(&mut options, Some(&workspace_path));
+
+        assert_eq!(options.cwd, Some(panel_path));
+    }
+
+    #[test]
+    fn update_workspace_cwd_promotes_selected_panel_directory() {
+        let mut workspace = Workspace::new(WorkspaceId(1), "alpha".to_string(), 0);
+        let selected_path = PathBuf::from("/repo");
+
+        update_workspace_cwd(Some(&mut workspace), Some(&selected_path));
+
+        assert_eq!(workspace.cwd, Some(selected_path));
+    }
+
+    #[test]
+    fn update_workspace_cwd_keeps_existing_directory_when_picker_is_skipped() {
+        let existing_path = PathBuf::from("/repo");
+        let mut workspace = Workspace::new(WorkspaceId(1), "alpha".to_string(), 0);
+        workspace.cwd = Some(existing_path.clone());
+
+        update_workspace_cwd(Some(&mut workspace), None);
+
+        assert_eq!(workspace.cwd, Some(existing_path));
+    }
+
+    #[test]
+    fn workspace_cwd_reads_workspace_default_directory() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("alpha");
+        let path = PathBuf::from("/repo");
+        board.workspace_mut(workspace_id).expect("workspace").cwd = Some(path.clone());
+
+        assert_eq!(workspace_cwd(&board, workspace_id), Some(path));
     }
 }
