@@ -57,7 +57,7 @@ impl HorizonApp {
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
     ) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
         let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones);
