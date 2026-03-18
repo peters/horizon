@@ -7,6 +7,22 @@ use crate::panel::PanelKind;
 
 const TRANSCRIPT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const TRANSCRIPT_COMPACT_SLACK_BYTES: u64 = 512 * 1024;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const USES_BSD_SCRIPT: bool = true;
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+const USES_BSD_SCRIPT: bool = false;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PanelTranscript {
@@ -43,24 +59,11 @@ impl PanelTranscript {
             return (program, args);
         };
 
-        let mut parts = vec![program];
-        parts.extend(args);
-        let command = parts
-            .iter()
-            .map(|part| shell_escape(part))
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        (
-            script_program,
-            vec![
-                "-qef".to_string(),
-                "--log-out".to_string(),
-                self.session_path().display().to_string(),
-                "--command".to_string(),
-                command,
-            ],
-        )
+        if USES_BSD_SCRIPT {
+            build_bsd_script_command(script_program, self.session_path(), program, args)
+        } else {
+            build_util_linux_script_command(script_program, self.session_path(), program, args)
+        }
     }
 
     /// Finalize any previous in-flight capture and return the retained replay bytes.
@@ -204,6 +207,49 @@ fn script_program() -> Option<String> {
     }
 }
 
+fn build_bsd_script_command(
+    script_program: String,
+    session_path: PathBuf,
+    program: String,
+    args: Vec<String>,
+) -> (String, Vec<String>) {
+    let mut script_args = vec![
+        "-q".to_string(),
+        "-e".to_string(),
+        "-F".to_string(),
+        session_path.display().to_string(),
+        program,
+    ];
+    script_args.extend(args);
+    (script_program, script_args)
+}
+
+fn build_util_linux_script_command(
+    script_program: String,
+    session_path: PathBuf,
+    program: String,
+    args: Vec<String>,
+) -> (String, Vec<String>) {
+    let mut parts = vec![program];
+    parts.extend(args);
+    let command = parts
+        .iter()
+        .map(|part| shell_escape(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    (
+        script_program,
+        vec![
+            "-qef".to_string(),
+            "--log-out".to_string(),
+            session_path.display().to_string(),
+            "--command".to_string(),
+            command,
+        ],
+    )
+}
+
 fn shell_escape(value: &str) -> String {
     if value
         .bytes()
@@ -218,8 +264,12 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
-    use super::{PanelKind, PanelTranscript, ensure_clean_prompt_boundary, strip_script_banners};
+    use super::{
+        PanelKind, PanelTranscript, build_bsd_script_command, build_util_linux_script_command,
+        ensure_clean_prompt_boundary, strip_script_banners,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -292,5 +342,51 @@ mod tests {
         ensure_clean_prompt_boundary(&mut bytes);
 
         assert_eq!(bytes, b"nvtop footer\r\n".to_vec());
+    }
+
+    #[test]
+    fn build_script_command_uses_bsd_syntax() {
+        let (program, args) = build_bsd_script_command(
+            "/usr/bin/script".to_string(),
+            PathBuf::from("/tmp/panel.session"),
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "echo hi".to_string()],
+        );
+
+        assert_eq!(program, "/usr/bin/script");
+        assert_eq!(
+            args,
+            vec![
+                "-q".to_string(),
+                "-e".to_string(),
+                "-F".to_string(),
+                "/tmp/panel.session".to_string(),
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_script_command_uses_util_linux_syntax() {
+        let (program, args) = build_util_linux_script_command(
+            "/usr/bin/script".to_string(),
+            PathBuf::from("/tmp/panel.session"),
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "echo hi".to_string()],
+        );
+
+        assert_eq!(program, "/usr/bin/script");
+        assert_eq!(
+            args,
+            vec![
+                "-qef".to_string(),
+                "--log-out".to_string(),
+                "/tmp/panel.session".to_string(),
+                "--command".to_string(),
+                "/bin/sh -c 'echo hi'".to_string(),
+            ]
+        );
     }
 }
