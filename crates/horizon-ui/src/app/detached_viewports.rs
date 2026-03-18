@@ -159,6 +159,10 @@ impl HorizonApp {
         let saved_canvas_view = self.canvas_view;
         let saved_pan_target = self.pan_target;
         let saved_is_panning = self.is_panning;
+        // Detached rendering must not overwrite root-window hit-testing or
+        // close requests that were collected earlier in the frame.
+        let saved_panel_screen_rects = std::mem::take(&mut self.panel_screen_rects);
+        let saved_panels_to_close = std::mem::take(&mut self.panels_to_close);
         self.canvas_view = self.detached_canvas_view(ctx, workspace_id);
         self.pan_target = None;
         self.is_panning = false;
@@ -170,6 +174,8 @@ impl HorizonApp {
         self.canvas_view = saved_canvas_view;
         self.pan_target = saved_pan_target;
         self.is_panning = saved_is_panning;
+        self.panel_screen_rects = saved_panel_screen_rects;
+        self.panels_to_close = saved_panels_to_close;
     }
 
     fn render_detached_workspace_frame(&self, ctx: &Context, workspace_id: WorkspaceId) {
