@@ -19,6 +19,13 @@ struct TextRun {
     text: String,
 }
 
+struct BackgroundRun {
+    line: usize,
+    next_column: usize,
+    rect: Rect,
+    bg: Color32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GridCacheKey {
     rect_min_x_bits: u32,
@@ -122,6 +129,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
 
     ui.fonts_mut(|fonts| {
         let mut text_run: Option<TextRun> = None;
+        let mut background_run: Option<BackgroundRun> = None;
 
         for indexed in content.display_iter {
             let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
@@ -139,8 +147,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                 .selection
                 .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
             let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
-            let batchable_char = batchable_cell_char(indexed.cell, selected)
-                .filter(|_| bg == theme::PANEL_BG && !has_cell_decoration(indexed.cell));
+            let batchable_char = batchable_cell_char(indexed.cell).filter(|_| !has_cell_decoration(indexed.cell));
             let visible_cell = cell_has_visible_content(indexed.cell, bg, selected);
             if visible_cell {
                 occupied_cells += 1;
@@ -148,6 +155,20 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                     non_empty_rows += 1;
                     last_non_empty_row = Some(point.line);
                 }
+            }
+
+            if cell_is_spacer(indexed.cell) {
+                flush_background_run(&mut shapes, &mut background_run);
+            } else {
+                append_background_rect(
+                    &mut shapes,
+                    &mut background_run,
+                    point.line,
+                    point.column.0,
+                    cell_rect,
+                    bg,
+                    selected,
+                );
             }
 
             if let Some(ch) = batchable_char {
@@ -181,10 +202,6 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
 
             flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
 
-            if bg != theme::PANEL_BG || selected {
-                shapes.push(Shape::rect_filled(cell_rect, CornerRadius::ZERO, bg));
-            }
-
             if let Some(text) = cell_text(indexed.cell)
                 && !text.is_empty()
             {
@@ -202,6 +219,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
         }
 
         flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+        flush_background_run(&mut shapes, &mut background_run);
     });
 
     BuiltGrid {
@@ -333,11 +351,10 @@ fn cell_has_text(cell: &Cell) -> bool {
         && (cell.c != ' ' || cell.zerowidth().is_some())
 }
 
-fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
-    if selected
-        || cell
-            .flags
-            .intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
+fn batchable_cell_char(cell: &Cell) -> Option<char> {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
         || cell.zerowidth().is_some()
     {
         return None;
@@ -347,11 +364,20 @@ fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
 }
 
 fn cell_has_visible_content(cell: &Cell, bg: Color32, selected: bool) -> bool {
+    if cell_is_spacer(cell) {
+        return false;
+    }
+
     if selected || bg != theme::PANEL_BG || has_cell_decoration(cell) {
         return true;
     }
 
     cell_has_text(cell)
+}
+
+fn cell_is_spacer(cell: &Cell) -> bool {
+    cell.flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
 }
 
 fn flush_text_run(
@@ -375,6 +401,47 @@ fn flush_text_run(
         metrics.font_id.clone(),
         run.fg,
     ));
+}
+
+fn append_background_rect(
+    shapes: &mut Vec<Shape>,
+    run: &mut Option<BackgroundRun>,
+    line: usize,
+    column: usize,
+    cell_rect: Rect,
+    bg: Color32,
+    selected: bool,
+) {
+    if bg == theme::PANEL_BG && !selected {
+        flush_background_run(shapes, run);
+        return;
+    }
+
+    let can_continue = run
+        .as_ref()
+        .is_some_and(|current| current.line == line && current.next_column == column && current.bg == bg);
+    if can_continue {
+        if let Some(current) = run {
+            current.rect.max.x = cell_rect.max.x;
+            current.next_column = column + 1;
+        }
+        return;
+    }
+
+    flush_background_run(shapes, run);
+    *run = Some(BackgroundRun {
+        line,
+        next_column: column + 1,
+        rect: cell_rect,
+        bg,
+    });
+}
+
+fn flush_background_run(shapes: &mut Vec<Shape>, run: &mut Option<BackgroundRun>) {
+    let Some(run) = run.take() else {
+        return;
+    };
+    shapes.push(Shape::rect_filled(run.rect, CornerRadius::ZERO, run.bg));
 }
 
 fn has_cell_decoration(cell: &Cell) -> bool {
