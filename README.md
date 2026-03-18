@@ -172,8 +172,9 @@ presets:
     alias: gc
     kind: git_changes
 
+# Optional: disable the default attention feed
 features:
-  attention_feed: true
+  attention_feed: false
 ```
 
 ---
