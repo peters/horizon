@@ -51,10 +51,18 @@ pub struct TerminalSpawnOptions {
 }
 
 /// A structured notification parsed from an OSC title sequence.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentNotification {
     pub severity: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HorizonOscTitle {
+    Notification(AgentNotification),
+    SetTitle(String),
+    ClearTitle,
+    Ignore,
 }
 
 #[derive(Clone)]
@@ -453,16 +461,32 @@ impl Terminal {
         self.pending_notification.take()
     }
 
-    fn parse_horizon_notification(title: &str) -> Option<AgentNotification> {
-        let payload = title.strip_prefix("HORIZON_NOTIFY:")?;
-        let (severity, message) = payload.split_once(':')?;
-        if message.is_empty() {
-            return None;
+    fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
+        if let Some(payload) = title.strip_prefix("HORIZON_NOTIFY:") {
+            let (severity, message) = payload.split_once(':')?;
+            if message.is_empty() {
+                return Some(HorizonOscTitle::Ignore);
+            }
+            return Some(HorizonOscTitle::Notification(AgentNotification {
+                severity: severity.to_string(),
+                message: message.to_string(),
+            }));
         }
-        Some(AgentNotification {
-            severity: severity.to_string(),
-            message: message.to_string(),
-        })
+
+        let payload = match title.strip_prefix("HORIZON_TITLE:") {
+            Some(payload) => payload,
+            None => return None,
+        };
+
+        if payload == "clear" {
+            return Some(HorizonOscTitle::ClearTitle);
+        }
+
+        if let Some(next_title) = payload.strip_prefix("set:") {
+            return Some(HorizonOscTitle::SetTitle(next_title.to_string()));
+        }
+
+        Some(HorizonOscTitle::Ignore)
     }
 
     #[must_use]
@@ -570,13 +594,21 @@ impl Terminal {
 
     fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Title(title) => {
-                if let Some(notification) = Self::parse_horizon_notification(&title) {
+            Event::Title(title) => match Self::parse_horizon_title(&title) {
+                Some(HorizonOscTitle::Notification(notification)) => {
                     self.pending_notification = Some(notification);
-                } else {
+                }
+                Some(HorizonOscTitle::SetTitle(next_title)) => {
+                    self.title = next_title;
+                }
+                Some(HorizonOscTitle::ClearTitle) => {
+                    self.title.clear();
+                }
+                Some(HorizonOscTitle::Ignore) => {}
+                None => {
                     self.title = title;
                 }
-            }
+            },
             Event::ResetTitle => {
                 self.title.clear();
             }
@@ -645,8 +677,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
     use super::{
-        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
-        find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
+        AgentNotification, HorizonOscTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
+        default_terminal_rgb, find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
     };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
@@ -708,6 +740,41 @@ mod tests {
 
         let mode = *term.lock().mode();
         assert_eq!(mode, TermMode::default());
+    }
+
+    #[test]
+    fn parse_horizon_notify_title() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_NOTIFY:attention:Need review"),
+            Some(HorizonOscTitle::Notification(AgentNotification {
+                severity: "attention".to_string(),
+                message: "Need review".to_string(),
+            })),
+        );
+    }
+
+    #[test]
+    fn parse_horizon_title_set_command() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:set:Fix issue #42"),
+            Some(HorizonOscTitle::SetTitle("Fix issue #42".to_string())),
+        );
+    }
+
+    #[test]
+    fn parse_horizon_title_clear_command() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:clear"),
+            Some(HorizonOscTitle::ClearTitle),
+        );
+    }
+
+    #[test]
+    fn parse_invalid_horizon_title_command_is_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:rename:Fix issue #42"),
+            Some(HorizonOscTitle::Ignore),
+        );
     }
 
     fn test_term() -> Arc<FairMutex<Term<TerminalEventProxy>>> {
