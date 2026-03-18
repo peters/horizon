@@ -13,6 +13,14 @@ pub(super) struct GridMetrics {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) struct TerminalViewportSize {
+    pub(crate) rows: u16,
+    pub(crate) cols: u16,
+    pub(crate) cell_width: u16,
+    pub(crate) cell_height: u16,
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct TerminalLayout {
     pub(super) outer: Rect,
     pub(super) body: Rect,
@@ -41,6 +49,17 @@ pub(super) fn terminal_layout(available: Vec2, char_width: f32, line_height: f32
     );
 
     TerminalLayout { outer, body, scrollbar }
+}
+
+pub(crate) fn terminal_viewport_size(available: Vec2, char_width: f32, line_height: f32) -> TerminalViewportSize {
+    let layout = terminal_layout(available, char_width, line_height);
+
+    TerminalViewportSize {
+        rows: quantize_dimension(layout.body.height() / line_height).max(1),
+        cols: quantize_dimension(layout.body.width() / char_width).max(2),
+        cell_width: quantize_dimension(char_width),
+        cell_height: quantize_dimension(line_height),
+    }
 }
 
 pub(super) fn terminal_interaction(ui: &mut egui::Ui, layout: TerminalLayout, panel_id: u64) -> TerminalInteraction {
