@@ -192,12 +192,25 @@ impl HorizonApp {
             }
             self.mark_runtime_dirty();
         } else {
-            self.dir_picker = Some(DirPicker::new(DirPickerPurpose::AddPanel {
+            self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
+        }
+    }
+
+    pub(super) fn open_panel_dir_picker(
+        &mut self,
+        workspace_id: WorkspaceId,
+        preset: PresetConfig,
+        canvas_pos: Option<[f32; 2]>,
+    ) {
+        let workspace_cwd = workspace_cwd(&self.board, workspace_id);
+        self.dir_picker = Some(DirPicker::with_seed(
+            DirPickerPurpose::AddPanel {
                 workspace_id,
                 preset,
                 canvas_pos,
-            }));
-        }
+            },
+            workspace_cwd.as_deref(),
+        ));
     }
 
     pub(super) fn render_quick_nav(&mut self, ctx: &Context) {
@@ -429,7 +442,7 @@ impl HorizonApp {
         let popup_id = Id::new("canvas_preset_picker");
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
-        let mut open_dir_picker: Option<DirPickerPurpose> = None;
+        let mut selected_action: Option<PresetPickerAction> = None;
 
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
@@ -457,37 +470,59 @@ impl HorizonApp {
                             } else {
                                 preset.name.clone()
                             };
-                            let text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-                            if ui.add(Button::new(text).frame(false)).clicked() {
-                                open_dir_picker = Some(if let Some(workspace_id) = target_workspace {
-                                    DirPickerPurpose::AddPanel {
-                                        workspace_id,
-                                        preset: preset.clone(),
-                                        canvas_pos: Some(canvas_pos),
+                            if let Some(workspace_id) = target_workspace {
+                                ui.horizontal(|ui| {
+                                    let create_text =
+                                        egui::RichText::new(label.clone()).size(12.5).color(theme::FG_SOFT);
+                                    if ui.add(Button::new(create_text).frame(false)).clicked() {
+                                        selected_action = Some(PresetPickerAction::CreatePanel {
+                                            workspace_id,
+                                            preset: preset.clone(),
+                                            canvas_pos: Some(canvas_pos),
+                                        });
                                     }
-                                } else {
-                                    DirPickerPurpose::NewWorkspace {
-                                        canvas_pos,
-                                        preset: preset.clone(),
+
+                                    let dir_text = egui::RichText::new("Dir").size(11.0).color(theme::FG_DIM);
+                                    if ui.add(Button::new(dir_text).frame(false)).clicked() {
+                                        selected_action = Some(PresetPickerAction::ChooseDirectory {
+                                            workspace_id,
+                                            preset: preset.clone(),
+                                            canvas_pos: Some(canvas_pos),
+                                        });
                                     }
                                 });
+                            } else {
+                                let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
+                                if ui.add(Button::new(create_text).frame(false)).clicked() {
+                                    selected_action = Some(PresetPickerAction::CreateWorkspace {
+                                        canvas_pos,
+                                        preset: preset.clone(),
+                                    });
+                                }
                             }
                         }
                     });
             });
 
-        if let Some(purpose) = open_dir_picker {
+        if let Some(action) = selected_action {
             self.pending_preset_pick = None;
-            match purpose {
-                DirPickerPurpose::AddPanel {
+            match action {
+                PresetPickerAction::CreatePanel {
                     workspace_id,
                     preset,
                     canvas_pos,
                 } => {
                     self.add_panel_to_workspace(workspace_id, preset, canvas_pos);
                 }
-                purpose @ DirPickerPurpose::NewWorkspace { .. } => {
-                    self.dir_picker = Some(DirPicker::new(purpose));
+                PresetPickerAction::ChooseDirectory {
+                    workspace_id,
+                    preset,
+                    canvas_pos,
+                } => {
+                    self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
+                }
+                PresetPickerAction::CreateWorkspace { canvas_pos, preset } => {
+                    self.dir_picker = Some(DirPicker::new(DirPickerPurpose::NewWorkspace { canvas_pos, preset }));
                 }
             }
         } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
@@ -562,6 +597,23 @@ fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Opti
     board
         .workspace(workspace_id)
         .and_then(|workspace| workspace.cwd.clone())
+}
+
+enum PresetPickerAction {
+    CreatePanel {
+        workspace_id: WorkspaceId,
+        preset: PresetConfig,
+        canvas_pos: Option<[f32; 2]>,
+    },
+    ChooseDirectory {
+        workspace_id: WorkspaceId,
+        preset: PresetConfig,
+        canvas_pos: Option<[f32; 2]>,
+    },
+    CreateWorkspace {
+        canvas_pos: [f32; 2],
+        preset: PresetConfig,
+    },
 }
 
 fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&PathBuf>) {
