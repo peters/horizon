@@ -35,6 +35,8 @@ pub struct RuntimeState {
     pub pan_offset: Option<[f32; 2]>,
     pub active_workspace_local_id: Option<String>,
     pub focused_panel_local_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
 }
 
@@ -60,6 +62,7 @@ impl RuntimeState {
             pan_offset: None,
             active_workspace_local_id: None,
             focused_panel_local_id: None,
+            detached_workspaces: Vec::new(),
             workspaces,
         }
     }
@@ -185,6 +188,16 @@ impl RuntimeState {
 
     #[must_use]
     pub fn from_board(board: &Board, window: WindowConfig, canvas_view: CanvasViewState) -> Self {
+        Self::from_board_with_detached_workspaces(board, window, canvas_view, Vec::new())
+    }
+
+    #[must_use]
+    pub fn from_board_with_detached_workspaces(
+        board: &Board,
+        window: WindowConfig,
+        canvas_view: CanvasViewState,
+        detached_workspaces: Vec<DetachedWorkspaceState>,
+    ) -> Self {
         let workspaces = board
             .workspaces
             .iter()
@@ -250,6 +263,7 @@ impl RuntimeState {
                 .focused
                 .and_then(|panel_id| board.panel(panel_id))
                 .map(|panel| panel.local_id.clone()),
+            detached_workspaces,
             workspaces,
         }
     }
@@ -264,9 +278,17 @@ impl Default for RuntimeState {
             pan_offset: None,
             active_workspace_local_id: None,
             focused_panel_local_id: None,
+            detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DetachedWorkspaceState {
+    pub workspace_local_id: String,
+    pub window: WindowConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -668,5 +690,94 @@ workspaces: []
 
         assert_eq!(state.canvas_view_or_default(), CanvasViewState::default());
         assert!(!state.has_persisted_canvas_view());
+    }
+
+    #[test]
+    fn from_board_persists_detached_workspaces() {
+        let mut board = Board::new();
+        let alpha = board.create_workspace_at("alpha", [120.0, 64.0]);
+        let beta = board.create_workspace_at("beta", [860.0, 64.0]);
+
+        let alpha_local_id = board.workspace(alpha).expect("alpha workspace").local_id.clone();
+        let beta_local_id = board.workspace(beta).expect("beta workspace").local_id.clone();
+
+        let detached_workspaces = vec![DetachedWorkspaceState {
+            workspace_local_id: beta_local_id.clone(),
+            window: WindowConfig {
+                width: 1440.0,
+                height: 900.0,
+                x: Some(2560.0),
+                y: Some(80.0),
+            },
+        }];
+
+        let state = RuntimeState::from_board_with_detached_workspaces(
+            &board,
+            WindowConfig::default(),
+            CanvasViewState::new([18.0, -12.0], 1.25),
+            detached_workspaces.clone(),
+        );
+
+        assert_eq!(state.detached_workspaces.len(), 1);
+        assert_eq!(state.detached_workspaces[0].workspace_local_id, beta_local_id);
+        assert!((state.detached_workspaces[0].window.width - 1440.0).abs() <= f32::EPSILON);
+        assert!((state.detached_workspaces[0].window.height - 900.0).abs() <= f32::EPSILON);
+        assert_eq!(state.detached_workspaces[0].window.x, Some(2560.0));
+        assert_eq!(state.detached_workspaces[0].window.y, Some(80.0));
+
+        assert_eq!(
+            state.workspaces[0].local_id, alpha_local_id,
+            "workspace ordering should remain unchanged when detached metadata is added"
+        );
+    }
+
+    #[test]
+    fn to_yaml_omits_empty_detached_workspaces() {
+        let yaml = RuntimeState::default().to_yaml().expect("serialize runtime state");
+
+        assert!(!yaml.contains("detached_workspaces"));
+    }
+
+    #[test]
+    fn load_preserves_detached_workspaces() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("runtime.yaml");
+        std::fs::write(
+            &path,
+            r"version: 2
+canvas_view:
+  pan_offset:
+    - 24.0
+    - -12.0
+  zoom: 1.5
+detached_workspaces:
+  - workspace_local_id: ws-beta
+    window:
+      width: 1440.0
+      height: 900.0
+      x: 2560.0
+      y: 80.0
+workspaces:
+  - local_id: ws-alpha
+    name: Alpha
+    panels: []
+  - local_id: ws-beta
+    name: Beta
+    panels: []
+",
+        )
+        .expect("write runtime state");
+
+        let state = RuntimeState::load(&path)
+            .expect("load runtime state")
+            .expect("runtime state present");
+
+        assert_eq!(state.detached_workspaces.len(), 1);
+        assert_eq!(state.detached_workspaces[0].workspace_local_id, "ws-beta");
+        assert!((state.detached_workspaces[0].window.width - 1440.0).abs() <= f32::EPSILON);
+        assert!((state.detached_workspaces[0].window.height - 900.0).abs() <= f32::EPSILON);
+        assert_eq!(state.detached_workspaces[0].window.x, Some(2560.0));
+        assert_eq!(state.detached_workspaces[0].window.y, Some(80.0));
+        assert_eq!(state.canvas_view, Some(CanvasViewState::new([24.0, -12.0], 1.5)));
     }
 }

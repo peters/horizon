@@ -148,6 +148,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
+            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
             .enumerate()
             .map(|(index, panel)| (panel.id, index))
             .collect();

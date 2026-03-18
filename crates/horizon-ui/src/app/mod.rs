@@ -1,6 +1,7 @@
 mod actions;
 mod attention_feed;
 mod canvas;
+mod detached_viewports;
 mod lifecycle;
 mod panel_chrome;
 mod panels;
@@ -14,7 +15,7 @@ mod view;
 mod workspace;
 mod yaml_highlight;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -117,6 +118,8 @@ pub struct HorizonApp {
     template_config: Config,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
+    detached_workspaces: BTreeMap<String, WindowConfig>,
+    pending_detached_reattach: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
     startup_receiver: Option<Receiver<StartupBootstrap>>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
@@ -200,6 +203,8 @@ impl HorizonApp {
             template_config: config.clone(),
             presets: config.presets.clone(),
             window_config: config.window.clone(),
+            detached_workspaces: BTreeMap::new(),
+            pending_detached_reattach: BTreeSet::new(),
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
             session_catalog_refresh: None,

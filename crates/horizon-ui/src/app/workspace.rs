@@ -36,11 +36,11 @@ struct WorkspaceInteraction {
     action: Option<WorkspaceAction>,
 }
 
-#[derive(Clone, Copy)]
 enum WorkspaceAction {
     ClearLayout,
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
+    Detach,
 }
 
 const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
@@ -110,6 +110,10 @@ impl HorizonApp {
                     focus_workspace = Some(workspace.id);
                     arrange_workspace = Some((workspace.id, layout));
                 }
+                Some(WorkspaceAction::Detach) => {
+                    focus_workspace = Some(workspace.id);
+                    self.detach_workspace(workspace.id);
+                }
                 Some(WorkspaceAction::CloseAllPanels) => {
                     focus_workspace = Some(workspace.id);
                     close_workspace_panels = Some(workspace.id);
@@ -175,6 +179,10 @@ impl HorizonApp {
             .workspaces
             .iter()
             .filter_map(|workspace| {
+                if self.workspace_is_detached(workspace.id) {
+                    return None;
+                }
+
                 let (r, g, b) = workspace.accent();
                 let color = Color32::from_rgb(r, g, b);
                 let is_active = self.board.active_workspace == Some(workspace.id);
@@ -554,6 +562,10 @@ fn render_workspace_layout_toolbar(
                                 action = Some(WorkspaceAction::ArrangeLayout(layout));
                             }
                         }
+
+                        if render_detach_button(ui, workspace) {
+                            action = Some(WorkspaceAction::Detach);
+                        }
                     });
                 });
         });
@@ -626,7 +638,8 @@ fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()
-                + 3.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + 4.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + 54.0
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
         ),
@@ -637,6 +650,24 @@ fn workspace_layout_preset_row_width() -> f32 {
     workspace_layout_button_width(WorkspaceLayout::Rows)
         + workspace_layout_button_width(WorkspaceLayout::Columns)
         + workspace_layout_button_width(WorkspaceLayout::Grid)
+}
+
+fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
+    ui.add(
+        Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT))
+            .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+            .fill(theme::alpha(
+                theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05),
+                220,
+            ))
+            .stroke(Stroke::new(
+                1.0,
+                theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216),
+            ))
+            .corner_radius(8),
+    )
+    .on_hover_text("Open in a separate window")
+    .clicked()
 }
 
 fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_rect: Rect, color: Color32) {

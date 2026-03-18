@@ -161,6 +161,9 @@ impl HorizonApp {
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     ) {
         for workspace in &self.board.workspaces {
+            if self.workspace_is_detached(workspace.id) {
+                continue;
+            }
             let (r, g, b) = workspace.accent();
             let workspace_color = Color32::from_rgb(r, g, b);
             let is_active = self.board.active_workspace == Some(workspace.id);
@@ -190,6 +193,9 @@ impl HorizonApp {
 
     fn paint_minimap_panels(&self, painter: &Painter, origin: Pos2, model: &MinimapModel) {
         for panel in &self.board.panels {
+            if self.workspace_is_detached(panel.workspace_id) {
+                continue;
+            }
             let pos = panel.layout.position;
             let size = panel.layout.size;
             let panel_rect = Rect::from_min_max(
@@ -300,6 +306,9 @@ fn workspace_content_bounds(
     let mut has_content = false;
 
     for workspace in &app.board.workspaces {
+        if app.workspace_is_detached(workspace.id) {
+            continue;
+        }
         let (workspace_min, workspace_max) =
             workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
                 let pos = workspace.position;
