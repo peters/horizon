@@ -473,10 +473,7 @@ impl Terminal {
             }));
         }
 
-        let payload = match title.strip_prefix("HORIZON_TITLE:") {
-            Some(payload) => payload,
-            None => return None,
-        };
+        let payload = title.strip_prefix("HORIZON_TITLE:")?;
 
         if payload == "clear" {
             return Some(HorizonOscTitle::ClearTitle);
