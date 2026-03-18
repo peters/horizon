@@ -16,6 +16,7 @@ impl Board {
         let mut ws = Workspace::new(id, name.to_string(), color_idx);
         ws.position = position;
         self.workspaces.push(ws);
+        self.retained_empty_workspaces.insert(id);
         self.active_workspace.get_or_insert(id);
         tracing::info!(
             "created workspace '{}' ({}) at [{}, {}]",
@@ -79,6 +80,7 @@ impl Board {
         if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace) {
             ws.add_panel(id);
         }
+        self.retained_empty_workspaces.remove(&workspace);
 
         self.focus(id);
         if let Some(layout) = workspace_layout {
@@ -111,10 +113,12 @@ impl Board {
         if let Some(ws_id) = ws_id {
             let is_empty = self.workspaces.iter().any(|ws| ws.id == ws_id && ws.panels.is_empty());
             if is_empty {
-                self.workspaces.retain(|ws| ws.id != ws_id);
-                self.attention.retain(|item| item.workspace_id != ws_id);
-                if self.active_workspace == Some(ws_id) {
-                    self.active_workspace = self.workspaces.first().map(|ws| ws.id);
+                if !self.retained_empty_workspaces.contains(&ws_id) {
+                    self.workspaces.retain(|ws| ws.id != ws_id);
+                    self.attention.retain(|item| item.workspace_id != ws_id);
+                    if self.active_workspace == Some(ws_id) {
+                        self.active_workspace = self.workspaces.first().map(|ws| ws.id);
+                    }
                 }
             } else {
                 self.reflow_workspace_layout(ws_id);
@@ -130,6 +134,27 @@ impl Board {
         {
             panel.request_shutdown();
         }
+    }
+
+    pub fn close_panels_in_workspace(&mut self, workspace_id: WorkspaceId) -> Vec<PanelId> {
+        let Some(panel_ids) = self.workspace(workspace_id).map(|workspace| workspace.panels.clone()) else {
+            return Vec::new();
+        };
+
+        self.retained_empty_workspaces.insert(workspace_id);
+        for panel_id in panel_ids.iter().copied() {
+            self.close_panel(panel_id);
+        }
+
+        if self
+            .workspace(workspace_id)
+            .is_some_and(|workspace| workspace.panels.is_empty())
+        {
+            self.focused = None;
+            self.active_workspace = Some(workspace_id);
+        }
+
+        panel_ids
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
@@ -150,6 +175,7 @@ impl Board {
         }
 
         self.attention.retain(|item| item.workspace_id != id);
+        self.retained_empty_workspaces.remove(&id);
         if self.active_workspace == Some(id) {
             self.active_workspace = Some(target_id);
         }
@@ -173,6 +199,7 @@ impl Board {
         if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
             ws.add_panel(panel_id);
         }
+        self.retained_empty_workspaces.remove(&workspace_id);
         if let Some(panel) = self.panel_mut(panel_id) {
             panel.workspace_id = workspace_id;
         }
@@ -227,7 +254,7 @@ impl Board {
         let empty_ids: Vec<_> = self
             .workspaces
             .iter()
-            .filter(|ws| ws.panels.is_empty())
+            .filter(|ws| ws.panels.is_empty() && !self.retained_empty_workspaces.contains(&ws.id))
             .map(|ws| ws.id)
             .collect();
         for ws_id in empty_ids {
@@ -237,6 +264,9 @@ impl Board {
                 self.active_workspace = self.workspaces.first().map(|ws| ws.id);
             }
         }
+        let existing_workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.retained_empty_workspaces
+            .retain(|ws_id| existing_workspace_ids.contains(ws_id));
     }
 
     pub fn move_workspace(&mut self, id: WorkspaceId, position: [f32; 2]) -> bool {

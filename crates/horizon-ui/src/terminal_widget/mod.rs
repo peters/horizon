@@ -4,11 +4,11 @@ mod render;
 mod scrollbar;
 
 use alacritty_terminal::term::TermMode;
-use egui::FontId;
+use egui::{Context, FontId, Vec2};
 use horizon_core::Panel;
 
 use self::input::{handle_terminal_keyboard_input, handle_terminal_pointer_input};
-use self::layout::{GridMetrics, quantize_dimension, terminal_interaction, terminal_layout};
+use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
 use self::scrollbar::render_scrollbar;
@@ -29,24 +29,16 @@ impl<'a> TerminalView<'a> {
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
     #[profiling::function]
     pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
-        let font_id = FontId::monospace(FONT_SIZE);
-        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'M'));
-        let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
+        let metrics = grid_metrics(ui.ctx());
+        let char_width = metrics.char_width;
+        let line_height = metrics.line_height;
         let layout = terminal_layout(ui.available_size(), char_width, line_height);
-        let new_cols = quantize_dimension(layout.body.width() / char_width).max(2);
-        let new_rows = quantize_dimension(layout.body.height() / line_height);
-        let metrics = GridMetrics {
-            char_width,
-            line_height,
-            font_id,
-        };
+        let viewport = terminal_viewport_size(ui.available_size(), char_width, line_height);
+        let new_cols = viewport.cols;
+        let new_rows = viewport.rows;
 
-        self.panel.resize(
-            new_rows,
-            new_cols,
-            quantize_dimension(char_width),
-            quantize_dimension(line_height),
-        );
+        self.panel
+            .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0);
         handle_terminal_pointer_input(
@@ -136,4 +128,21 @@ impl<'a> TerminalView<'a> {
 
         interaction.body.clicked()
     }
+}
+
+fn grid_metrics(ctx: &Context) -> GridMetrics {
+    let font_id = FontId::monospace(FONT_SIZE);
+    let char_width = ctx.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'M'));
+    let line_height = FONT_SIZE * LINE_HEIGHT_FACTOR;
+
+    GridMetrics {
+        char_width,
+        line_height,
+        font_id,
+    }
+}
+
+pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
+    let metrics = grid_metrics(ctx);
+    terminal_viewport_size(available, metrics.char_width, metrics.line_height)
 }

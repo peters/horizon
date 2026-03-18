@@ -33,7 +33,7 @@ impl HorizonApp {
         canvas_size: Vec2,
         left_align: bool,
     ) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let zoom = self.canvas_view.zoom;
         let pan_margin = 40.0;
         let x = if left_align {

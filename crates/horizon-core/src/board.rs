@@ -6,7 +6,7 @@ mod workspaces;
 
 pub use shutdown::ShutdownProgress;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -58,6 +58,7 @@ pub struct Board {
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
     panel_attention_signals: HashMap<PanelId, String>,
+    retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     pub attention_enabled: bool,
@@ -74,6 +75,7 @@ impl Board {
             workspaces: Vec::new(),
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
+            retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
             attention_enabled: false,
@@ -662,6 +664,42 @@ mod tests {
     }
 
     #[test]
+    fn closing_middle_panel_reflows_arranged_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("rows");
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+        let third = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("third panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        board.close_panel(second);
+
+        assert!(vec2_eq(
+            board.panel(first).expect("first panel").layout.position,
+            [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+        ));
+        assert!(vec2_eq(
+            board.panel(third).expect("third panel").layout.position,
+            [
+                origin[0] + WS_INNER_PAD,
+                origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
+            ]
+        ));
+        assert_eq!(
+            board.workspace(workspace_id).expect("workspace").layout,
+            Some(WorkspaceLayout::Rows)
+        );
+    }
+
+    #[test]
     fn resizing_rows_layout_reflows_siblings_in_tandem() {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("rows");
@@ -781,6 +819,38 @@ mod tests {
                 origin[1] + WS_INNER_PAD + 2.0 * (400.0 + TILE_GAP)
             ]
         ));
+    }
+
+    #[test]
+    fn close_panels_in_workspace_keeps_workspace_available() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("alpha");
+        let other_workspace_id = board.create_workspace("beta");
+        let first = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(PanelOptions::default(), workspace_id)
+            .expect("second panel should spawn");
+        let other_panel = board
+            .create_panel(PanelOptions::default(), other_workspace_id)
+            .expect("other panel should spawn");
+        board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+        let closed = board.close_panels_in_workspace(workspace_id);
+        board.remove_empty_workspaces();
+
+        assert_eq!(closed, vec![first, second]);
+        assert!(board.panel(first).is_none());
+        assert!(board.panel(second).is_none());
+        assert!(board.panel(other_panel).is_some());
+        assert_eq!(board.focused, None);
+        assert_eq!(board.active_workspace, Some(workspace_id));
+        assert_eq!(
+            board.workspace(workspace_id).expect("workspace").layout,
+            Some(WorkspaceLayout::Rows)
+        );
+        assert!(board.workspace(workspace_id).expect("workspace").panels.is_empty());
     }
 
     #[test]

@@ -404,6 +404,12 @@ impl Panel {
         }
     }
 
+    pub fn resize_immediately(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
+        if let Some(terminal) = self.content.terminal_mut() {
+            terminal.resize_immediately(rows, cols, cell_width, cell_height);
+        }
+    }
+
     pub fn set_focused(&mut self, focused: bool) {
         if let Some(terminal) = self.content.terminal_mut() {
             terminal.set_focused(focused);

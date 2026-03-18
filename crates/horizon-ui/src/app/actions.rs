@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
+use egui::containers::panel::PanelState;
 use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
 use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
@@ -8,6 +9,7 @@ use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
+use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use super::util::{OverlayExclusion, editor_panel_size_for_file, primary_shortcut_modifier, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
@@ -24,14 +26,31 @@ impl HorizonApp {
             .map(|workspace| workspace.id)
     }
 
-    pub(super) fn canvas_rect(ctx: &Context, sidebar_visible: bool) -> Rect {
-        let rect = viewport_local_rect(ctx);
-        let left = if sidebar_visible {
-            rect.min.x + SIDEBAR_WIDTH
-        } else {
-            rect.min.x
-        };
-        Rect::from_min_max(Pos2::new(left, rect.min.y + TOOLBAR_HEIGHT), rect.max)
+    pub(super) fn canvas_rect(&self, ctx: &Context) -> Rect {
+        let viewport = viewport_local_rect(ctx);
+        let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
+        let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
+        canvas_rect_for_layout(viewport, self.sidebar_visible, settings_panel_rect, settings_bar_rect)
+    }
+
+    pub(super) fn fixed_overlays_visible(&self) -> bool {
+        self.settings.is_none()
+    }
+
+    fn settings_panel_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
+        estimated_settings_panel_rect(
+            viewport,
+            self.settings.is_some(),
+            PanelState::load(ctx, Id::new(SETTINGS_PANEL_ID)).map(|state| state.rect),
+        )
+    }
+
+    fn settings_bar_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
+        estimated_settings_bar_rect(
+            viewport,
+            self.settings.is_some(),
+            PanelState::load(ctx, Id::new(SETTINGS_BAR_ID)).map(|state| state.rect),
+        )
     }
 
     /// Screen-space rectangles occupied by fixed overlay widgets.  Compute
@@ -48,20 +67,29 @@ impl HorizonApp {
             ));
         }
 
-        let minimap_height = if self.minimap_visible && !self.board.workspaces.is_empty() {
-            let overlays = &self.template_config.overlays;
-            let w = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
-            let h = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
-            zones.push(Rect::from_min_size(
-                Pos2::new(viewport.max.x - MINIMAP_MARGIN - w, viewport.max.y - MINIMAP_MARGIN - h),
-                Vec2::new(w, h),
-            ));
-            h
-        } else {
-            0.0
-        };
+        if let Some(rect) = self.settings_panel_rect(ctx, viewport) {
+            zones.push(rect);
+        }
+        if let Some(rect) = self.settings_bar_rect(ctx, viewport) {
+            zones.push(rect);
+        }
 
-        if self.template_config.features.attention_feed
+        let minimap_height =
+            if self.fixed_overlays_visible() && self.minimap_visible && !self.board.workspaces.is_empty() {
+                let overlays = &self.template_config.overlays;
+                let w = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
+                let h = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
+                zones.push(Rect::from_min_size(
+                    Pos2::new(viewport.max.x - MINIMAP_MARGIN - w, viewport.max.y - MINIMAP_MARGIN - h),
+                    Vec2::new(w, h),
+                ));
+                h
+            } else {
+                0.0
+            };
+
+        if self.fixed_overlays_visible()
+            && self.template_config.features.attention_feed
             && let Some(rect) = super::attention_feed::estimated_outer_rect(
                 viewport,
                 minimap_height,
@@ -114,6 +142,53 @@ impl HorizonApp {
             && let Err(error) = transcript.delete_all()
         {
             tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+        }
+    }
+
+    pub(super) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        let panels_to_close: Vec<_> = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| {
+                workspace
+                    .panels
+                    .iter()
+                    .filter_map(|panel_id| {
+                        self.board.panel(*panel_id).map(|panel| {
+                            (
+                                *panel_id,
+                                PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if panels_to_close.is_empty() {
+            self.board.close_panels_in_workspace(workspace_id);
+            return;
+        }
+
+        let closed_panel_ids = self.board.close_panels_in_workspace(workspace_id);
+        for panel_id in &closed_panel_ids {
+            self.panel_screen_rects.remove(panel_id);
+            self.terminal_grid_cache.remove(panel_id);
+        }
+
+        if self
+            .renaming_panel
+            .is_some_and(|panel_id| closed_panel_ids.contains(&panel_id))
+        {
+            self.clear_panel_rename();
+        }
+
+        for (panel_id, transcript) in panels_to_close {
+            if let Some(transcript) = transcript
+                && let Err(error) = transcript.delete_all()
+            {
+                tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+            }
         }
     }
 
@@ -284,7 +359,7 @@ impl HorizonApp {
             self.reset_view();
         }
 
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         if ctx.input(|input| {
             primary_shortcut_modifier(input.modifiers)
                 && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals))
@@ -340,7 +415,7 @@ impl HorizonApp {
 
         let screen_pos = self.file_hover_pos.or(pointer_pos);
         self.file_hover_pos = None;
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
 
         for file in dropped {
@@ -370,7 +445,7 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_canvas_double_click(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let ctrl_double_click = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl || input.modifiers.command;
             let double = input.pointer.button_double_clicked(egui::PointerButton::Primary);
@@ -401,7 +476,7 @@ impl HorizonApp {
         };
 
         let popup_id = Id::new("canvas_preset_picker");
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
         let mut selected_action: Option<PresetPickerAction> = None;
 
@@ -503,7 +578,7 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta, zoom_delta) =
             ctx.input(|input| {
                 (
@@ -568,6 +643,53 @@ impl HorizonApp {
     }
 }
 
+fn canvas_rect_for_layout(
+    viewport: Rect,
+    sidebar_visible: bool,
+    settings_panel_rect: Option<Rect>,
+    settings_bar_rect: Option<Rect>,
+) -> Rect {
+    let left = if sidebar_visible {
+        viewport.min.x + SIDEBAR_WIDTH
+    } else {
+        viewport.min.x
+    };
+    let right = settings_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
+    let bottom = settings_bar_rect.map_or(viewport.max.y, |rect| rect.min.y);
+
+    Rect::from_min_max(
+        Pos2::new(left, viewport.min.y + TOOLBAR_HEIGHT),
+        Pos2::new(right, bottom),
+    )
+}
+
+fn estimated_settings_panel_rect(viewport: Rect, settings_open: bool, remembered_rect: Option<Rect>) -> Option<Rect> {
+    if !settings_open {
+        return None;
+    }
+
+    remembered_rect.or_else(|| {
+        let width = settings_panel_default_width(viewport.width());
+        Some(Rect::from_min_max(
+            Pos2::new(viewport.max.x - width, viewport.min.y + TOOLBAR_HEIGHT),
+            Pos2::new(viewport.max.x, viewport.max.y - SETTINGS_BAR_HEIGHT),
+        ))
+    })
+}
+
+fn estimated_settings_bar_rect(viewport: Rect, settings_open: bool, remembered_rect: Option<Rect>) -> Option<Rect> {
+    if !settings_open {
+        return None;
+    }
+
+    remembered_rect.or_else(|| {
+        Some(Rect::from_min_max(
+            Pos2::new(viewport.min.x, viewport.max.y - SETTINGS_BAR_HEIGHT),
+            viewport.max,
+        ))
+    })
+}
+
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
         .workspace(workspace_id)
@@ -611,9 +733,14 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
 mod tests {
     use std::path::PathBuf;
 
+    use egui::{Pos2, Rect};
     use horizon_core::{Board, PanelOptions, Workspace, WorkspaceId};
 
-    use super::{inherit_workspace_cwd, update_workspace_cwd, workspace_cwd};
+    use super::{
+        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, canvas_rect_for_layout, estimated_settings_bar_rect,
+        estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd,
+    };
+    use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
     #[test]
     fn inherit_workspace_cwd_populates_missing_panel_cwd() {
@@ -668,5 +795,55 @@ mod tests {
         board.workspace_mut(workspace_id).expect("workspace").cwd = Some(path.clone());
 
         assert_eq!(workspace_cwd(&board, workspace_id), Some(path));
+    }
+
+    #[test]
+    fn estimated_settings_panel_rect_uses_default_wide_fallback() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+
+        let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
+
+        assert_eq!(rect.min, Pos2::new(840.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(1200.0, 752.0));
+    }
+
+    #[test]
+    fn estimated_settings_panel_rect_clamps_narrow_fallback_width() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(700.0, 800.0));
+
+        let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
+
+        assert_eq!(rect.min, Pos2::new(360.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(700.0, 752.0));
+    }
+
+    #[test]
+    fn estimated_settings_panel_rect_prefers_remembered_panel_state() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+        let remembered = Rect::from_min_max(Pos2::new(900.0, 60.0), Pos2::new(1200.0, 720.0));
+
+        let rect = estimated_settings_panel_rect(viewport, true, Some(remembered)).expect("settings rect");
+
+        assert_eq!(rect, remembered);
+    }
+
+    #[test]
+    fn estimated_settings_rects_close_when_settings_are_hidden() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+
+        assert_eq!(estimated_settings_panel_rect(viewport, false, None), None);
+        assert_eq!(estimated_settings_bar_rect(viewport, false, None), None);
+    }
+
+    #[test]
+    fn canvas_rect_for_layout_excludes_sidebar_settings_panel_and_bar() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+        let settings_panel = Rect::from_min_max(Pos2::new(840.0, TOOLBAR_HEIGHT), Pos2::new(1200.0, 752.0));
+        let settings_bar = Rect::from_min_max(Pos2::new(0.0, 800.0 - SETTINGS_BAR_HEIGHT), Pos2::new(1200.0, 800.0));
+
+        let rect = canvas_rect_for_layout(viewport, true, Some(settings_panel), Some(settings_bar));
+
+        assert_eq!(rect.min, Pos2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(840.0, 800.0 - SETTINGS_BAR_HEIGHT));
     }
 }
