@@ -235,6 +235,7 @@ jobs:
         run: |
           mkdir -p crates/horizon-ui/publish-assets
           cp -r assets/icons assets/plugins crates/horizon-ui/publish-assets/
+          git add crates/horizon-ui/publish-assets
       - name: Publish horizon-core to crates.io
         run: cargo publish -p horizon-core --allow-dirty
       - name: Publish horizon-ui to crates.io
