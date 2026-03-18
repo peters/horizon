@@ -611,16 +611,12 @@ fn workspace_layout_label(layout: WorkspaceLayout) -> &'static str {
         WorkspaceLayout::Rows => "Rows",
         WorkspaceLayout::Columns => "Cols",
         WorkspaceLayout::Grid => "Grid",
-        WorkspaceLayout::Stack => "Stack",
-        WorkspaceLayout::Cascade => "Cascade",
     }
 }
 
 fn workspace_layout_button_width(layout: WorkspaceLayout) -> f32 {
     match layout {
         WorkspaceLayout::Rows | WorkspaceLayout::Columns | WorkspaceLayout::Grid => 44.0,
-        WorkspaceLayout::Stack => 52.0,
-        WorkspaceLayout::Cascade => 68.0,
     }
 }
 
@@ -630,7 +626,7 @@ fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()
-                + 5.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + 3.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
         ),
@@ -641,8 +637,6 @@ fn workspace_layout_preset_row_width() -> f32 {
     workspace_layout_button_width(WorkspaceLayout::Rows)
         + workspace_layout_button_width(WorkspaceLayout::Columns)
         + workspace_layout_button_width(WorkspaceLayout::Grid)
-        + workspace_layout_button_width(WorkspaceLayout::Stack)
-        + workspace_layout_button_width(WorkspaceLayout::Cascade)
 }
 
 fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_rect: Rect, color: Color32) {

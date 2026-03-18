@@ -5,7 +5,7 @@ use crate::layout::{
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 use crate::workspace::{Workspace, WorkspaceId};
 
-use super::{Board, CASCADE_OFFSET_X, CASCADE_OFFSET_Y, STACK_OFFSET_X, STACK_OFFSET_Y, WorkspaceLayout, vec2_eq};
+use super::{Board, WorkspaceLayout, vec2_eq};
 
 impl Board {
     /// After a panel is resized, push every overlapping sibling panel
@@ -105,6 +105,19 @@ impl Board {
         }
         let ws_id = self.panel_workspace_id(id);
         let old_size = self.panel(id).map(|panel| panel.layout.size);
+        if let Some(workspace_id) = ws_id
+            && let Some(layout) = self.workspace_layout_value(workspace_id)
+        {
+            self.apply_workspace_layout_with_panel_size(workspace_id, layout, size);
+            if let Some(old) = old_size {
+                let delta = [size[0] - old[0], size[1] - old[1]];
+                if delta[0] != 0.0 || delta[1] != 0.0 {
+                    self.resolve_workspace_collisions(workspace_id, delta);
+                }
+            }
+            return true;
+        }
+
         if let Some(workspace_id) = ws_id {
             self.set_workspace_layout(workspace_id, None);
         }
@@ -176,36 +189,26 @@ impl Board {
     }
 
     pub(super) fn apply_workspace_layout(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
-        let Some((panel_ids, origin)) = self
-            .workspace(id)
-            .map(|workspace| (workspace.panels.clone(), workspace.position))
-        else {
+        let Some(count) = self.workspace(id).map(|workspace| workspace.panels.len()) else {
             return;
         };
-        let count = panel_ids.len();
         if count == 0 {
             self.set_workspace_layout(id, Some(layout));
             return;
         }
 
-        // For Grid layout, compute the current workspace content size so panels
-        // expand to fill the existing area rather than shrinking it.
-        let content_size = if layout == WorkspaceLayout::Grid {
-            self.workspace_content_size(id)
+        let current_layout = self.workspace_layout_value(id);
+        let panel_size = if current_layout == Some(layout) {
+            self.workspace_layout_panel_size(id)
+                .or_else(|| layout_panel_size_from_content(layout, count, self.workspace_content_size(id)))
+                .unwrap_or(DEFAULT_PANEL_SIZE)
         } else {
-            None
+            layout_panel_size_from_content(layout, count, self.workspace_content_size(id))
+                .or_else(|| self.workspace_layout_panel_size(id))
+                .unwrap_or(DEFAULT_PANEL_SIZE)
         };
 
-        self.set_workspace_layout(id, Some(layout));
-
-        for (index, panel_id) in panel_ids.iter().enumerate() {
-            let (position, size) = arranged_panel_layout(origin, layout, index, count, content_size);
-
-            if let Some(panel) = self.panel_mut(*panel_id) {
-                panel.move_to(position);
-                panel.resize_layout(size);
-            }
-        }
+        self.apply_workspace_layout_with_panel_size(id, layout, panel_size);
     }
 
     /// Compute the content area of a workspace from its current panel layout
@@ -229,6 +232,44 @@ impl Board {
         let min_x = origin[0] + WS_INNER_PAD;
         let min_y = origin[1] + WS_INNER_PAD;
         Some([(max[0] - min_x).max(0.0), (max[1] - min_y).max(0.0)])
+    }
+
+    fn workspace_layout_panel_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
+        let workspace = self.workspace(id)?;
+        workspace
+            .panels
+            .iter()
+            .find_map(|panel_id| self.panel(*panel_id).map(|panel| panel.layout.size))
+    }
+
+    fn apply_workspace_layout_with_panel_size(
+        &mut self,
+        id: WorkspaceId,
+        layout: WorkspaceLayout,
+        panel_size: [f32; 2],
+    ) {
+        let Some((panel_ids, origin)) = self
+            .workspace(id)
+            .map(|workspace| (workspace.panels.clone(), workspace.position))
+        else {
+            return;
+        };
+        let count = panel_ids.len();
+        if count == 0 {
+            self.set_workspace_layout(id, Some(layout));
+            return;
+        }
+
+        self.set_workspace_layout(id, Some(layout));
+
+        for (index, panel_id) in panel_ids.iter().enumerate() {
+            let (position, size) = arranged_panel_layout(origin, layout, index, count, panel_size);
+
+            if let Some(panel) = self.panel_mut(*panel_id) {
+                panel.move_to(position);
+                panel.resize_layout(size);
+            }
+        }
     }
 
     fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
@@ -274,10 +315,8 @@ fn arranged_panel_layout(
     layout: WorkspaceLayout,
     index: usize,
     count: usize,
-    content_size: Option<[f32; 2]>,
+    panel_size: [f32; 2],
 ) -> ([f32; 2], [f32; 2]) {
-    let panel_size = DEFAULT_PANEL_SIZE;
-
     match layout {
         WorkspaceLayout::Rows => {
             let x = origin[0] + WS_INNER_PAD;
@@ -291,35 +330,43 @@ fn arranged_panel_layout(
         }
         WorkspaceLayout::Grid => {
             let cols = ceil_sqrt_usize(count);
-            let rows = count.div_ceil(cols);
             let col = index % cols;
             let row = index / cols;
 
-            let grid_size = grid_panel_size(content_size, cols, rows);
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (grid_size[0] + TILE_GAP);
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (grid_size[1] + TILE_GAP);
-            ([x, y], grid_size)
-        }
-        WorkspaceLayout::Stack => {
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_X;
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * STACK_OFFSET_Y;
-            ([x, y], panel_size)
-        }
-        WorkspaceLayout::Cascade => {
-            let x = origin[0] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_X;
-            let y = origin[1] + WS_INNER_PAD + usize_to_f32(index) * CASCADE_OFFSET_Y;
+            let x = origin[0] + WS_INNER_PAD + usize_to_f32(col) * (panel_size[0] + TILE_GAP);
+            let y = origin[1] + WS_INNER_PAD + usize_to_f32(row) * (panel_size[1] + TILE_GAP);
             ([x, y], panel_size)
         }
     }
 }
 
-/// Compute per-panel size for Grid layout so panels fill the workspace content area.
-/// Falls back to `DEFAULT_PANEL_SIZE` when no prior content area is available.
-fn grid_panel_size(content_size: Option<[f32; 2]>, cols: usize, rows: usize) -> [f32; 2] {
-    let Some(content) = content_size else {
-        return DEFAULT_PANEL_SIZE;
-    };
+fn layout_panel_size_from_content(
+    layout: WorkspaceLayout,
+    count: usize,
+    content_size: Option<[f32; 2]>,
+) -> Option<[f32; 2]> {
+    let content = content_size?;
+    let count_f = usize_to_f32(count);
 
+    Some(match layout {
+        WorkspaceLayout::Rows => {
+            let h = ((content[1] - (count_f - 1.0) * TILE_GAP) / count_f).max(DEFAULT_PANEL_SIZE[1]);
+            [content[0].max(DEFAULT_PANEL_SIZE[0]), h]
+        }
+        WorkspaceLayout::Columns => {
+            let w = ((content[0] - (count_f - 1.0) * TILE_GAP) / count_f).max(DEFAULT_PANEL_SIZE[0]);
+            [w, content[1].max(DEFAULT_PANEL_SIZE[1])]
+        }
+        WorkspaceLayout::Grid => {
+            let cols = ceil_sqrt_usize(count);
+            let rows = count.div_ceil(cols);
+            grid_panel_size_from_content(content, cols, rows)
+        }
+    })
+}
+
+/// Compute per-panel size for Grid layout so panels fill the workspace content area.
+fn grid_panel_size_from_content(content: [f32; 2], cols: usize, rows: usize) -> [f32; 2] {
     let cols_f = usize_to_f32(cols);
     let rows_f = usize_to_f32(rows);
 

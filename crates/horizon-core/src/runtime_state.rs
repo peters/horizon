@@ -3,7 +3,7 @@ mod agent_sessions;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::board::{Board, WorkspaceLayout};
@@ -277,9 +277,35 @@ pub struct WorkspaceState {
     pub cwd: Option<String>,
     pub position: Option<[f32; 2]>,
     pub template: Option<WorkspaceTemplateRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_workspace_layout"
+    )]
     pub layout: Option<WorkspaceLayout>,
     pub panels: Vec<PanelState>,
+}
+
+fn deserialize_workspace_layout<'de, D>(deserializer: D) -> std::result::Result<Option<WorkspaceLayout>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "rows" => Ok(Some(WorkspaceLayout::Rows)),
+        "columns" | "cols" => Ok(Some(WorkspaceLayout::Columns)),
+        "grid" => Ok(Some(WorkspaceLayout::Grid)),
+        "stack" | "cascade" => Ok(None),
+        _ => Err(serde::de::Error::unknown_variant(
+            &value,
+            &["Rows", "Columns", "Grid", "Stack", "Cascade"],
+        )),
+    }
 }
 
 impl WorkspaceState {
@@ -579,6 +605,34 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn load_maps_removed_layout_variants_to_manual_placement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("runtime.yaml");
+        std::fs::write(
+            &path,
+            r"version: 2
+workspaces:
+  - local_id: ws-stack
+    name: Stack Workspace
+    layout: Stack
+    panels: []
+  - local_id: ws-cascade
+    name: Cascade Workspace
+    layout: cascade
+    panels: []
+",
+        )
+        .expect("write runtime state");
+
+        let state = RuntimeState::load(&path)
+            .expect("load runtime state")
+            .expect("runtime state present");
+
+        assert_eq!(state.workspaces.len(), 2);
+        assert!(state.workspaces.iter().all(|workspace| workspace.layout.is_none()));
     }
 
     #[test]
