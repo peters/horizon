@@ -3,12 +3,14 @@ mode: ContinuousDeployment
 branches:
   main:
     regex: ^main$
+    mode: ContinuousDeployment
     increment: Minor
     label: alpha
     prevent-increment:
       when-current-commit-tagged: true
   release:
     regex: ^release/.*$
+    mode: ContinuousDeployment
     increment: Patch
     label: beta
     prevent-increment:
