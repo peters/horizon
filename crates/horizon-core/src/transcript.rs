@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+#[cfg(not(windows))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::Result;
@@ -312,13 +313,23 @@ fn probe_script_support(script_program: &Path, flavor: ScriptFlavor) -> std::res
         ),
     };
 
-    let output = Command::new(script_program)
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("failed to launch probe: {error}"))?;
+    let mut busy_retries = 0u8;
+    let output = loop {
+        match Command::new(script_program)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+        {
+            Ok(output) => break output,
+            Err(error) if error.raw_os_error() == Some(26) && busy_retries < 5 => {
+                busy_retries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("failed to launch probe: {error}")),
+        }
+    };
 
     let _ = fs::remove_file(&session_path);
 
@@ -341,6 +352,7 @@ fn probe_script_support(_script_program: &Path, _flavor: ScriptFlavor) -> std::r
     Err("`script` is unavailable on Windows".to_string())
 }
 
+#[cfg(not(windows))]
 fn probe_session_path() -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
