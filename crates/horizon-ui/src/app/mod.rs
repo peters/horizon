@@ -29,6 +29,7 @@ use horizon_core::{
 
 use crate::app::canvas::CanvasGridCache;
 use crate::dir_picker::DirPicker;
+use crate::editor_widget::MarkdownPreviewCache;
 use crate::quick_nav::QuickNav;
 use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
@@ -100,6 +101,7 @@ pub struct HorizonApp {
     is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
+    editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
@@ -185,6 +187,7 @@ impl HorizonApp {
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
             terminal_grid_cache: HashMap::new(),
+            editor_preview_cache: HashMap::new(),
             canvas_grid_cache: CanvasGridCache::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
