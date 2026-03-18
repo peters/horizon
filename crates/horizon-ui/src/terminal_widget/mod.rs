@@ -3,6 +3,7 @@ mod layout;
 mod render;
 mod scrollbar;
 
+use alacritty_terminal::term::TermMode;
 use egui::FontId;
 use horizon_core::Panel;
 
@@ -83,6 +84,13 @@ impl<'a> TerminalView<'a> {
             && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
             && !interaction.body.dragged()
             && !interaction.scrollbar.dragged();
+        let allow_sparse_frame_reuse = self.panel.had_recent_output()
+            && self
+                .panel
+                .terminal()
+                .is_some_and(|terminal| !terminal.has_selection() && terminal.mode().contains(TermMode::ALT_SCREEN))
+            && !interaction.body.dragged()
+            && !interaction.scrollbar.dragged();
 
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
@@ -100,6 +108,7 @@ impl<'a> TerminalView<'a> {
                     &metrics,
                     grid_cache.as_deref_mut(),
                     allow_grid_cache,
+                    allow_sparse_frame_reuse,
                 );
                 render_cursor(
                     ui,
