@@ -156,7 +156,7 @@ fn render_body(
     panel: &mut Panel,
     body_rect: Rect,
     mode: PreviewMode,
-    mut preview_cache: Option<&mut MarkdownPreviewCache>,
+    preview_cache: Option<&mut MarkdownPreviewCache>,
 ) {
     match mode {
         PreviewMode::Edit => {
@@ -172,7 +172,7 @@ fn render_body(
                 egui::UiBuilder::new()
                     .max_rect(body_rect)
                     .layout(Layout::top_down(Align::Min)),
-                |ui| render_preview_pane(ui, panel, preview_cache.as_deref_mut()),
+                |ui| render_preview_pane(ui, panel, preview_cache),
             );
         }
         PreviewMode::Split => {
@@ -199,7 +199,7 @@ fn render_body(
                 egui::UiBuilder::new()
                     .max_rect(right)
                     .layout(Layout::top_down(Align::Min)),
-                |ui| render_preview_pane(ui, panel, preview_cache.as_deref_mut()),
+                |ui| render_preview_pane(ui, panel, preview_cache),
             );
         }
     }
