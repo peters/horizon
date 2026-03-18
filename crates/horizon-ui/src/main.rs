@@ -17,7 +17,10 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use app::HorizonApp;
-use horizon_core::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
+use horizon_core::{
+    Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser, StartupDecision,
+    WindowConfig,
+};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
@@ -33,11 +36,7 @@ fn main() -> eframe::Result {
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);
 
-    let window = match &startup {
-        StartupDecision::Open { session, .. } => session.runtime_state.window_or(&config.window),
-        StartupDecision::Ephemeral { runtime_state } => runtime_state.window_or(&config.window),
-        StartupDecision::Choose(_) => &config.window,
-    };
+    let window = startup_window_config(&startup, &config.window);
     // Clamp to reasonable bounds so we don't open larger than the screen.
     let width = window.width.clamp(800.0, 7680.0);
     let height = window.height.clamp(600.0, 4320.0);
@@ -127,7 +126,37 @@ fn summarize_adapter(info: &wgpu::AdapterInfo) -> String {
     }
     summary
 }
+fn startup_window_config(startup: &StartupDecision, fallback: &WindowConfig) -> WindowConfig {
+    match startup {
+        StartupDecision::Open { session, .. } => session.runtime_state.window_or(fallback).clone(),
+        StartupDecision::Ephemeral { runtime_state } => runtime_state.window_or(fallback).clone(),
+        StartupDecision::Choose(chooser) => startup_chooser_window_config(chooser),
+    }
+}
 
+fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
+    const STARTUP_CHOOSER_WIDTH: f32 = 880.0;
+    const STARTUP_CHOOSER_MIN_HEIGHT: f32 = 420.0;
+    const STARTUP_CHOOSER_MAX_HEIGHT: f32 = 680.0;
+    const STARTUP_CHOOSER_BASE_HEIGHT: f32 = 290.0;
+    const STARTUP_CHOOSER_CARD_HEIGHT: f32 = 82.0;
+
+    let visible_sessions = match chooser.sessions.len() {
+        0 | 1 => 1.0,
+        2 => 2.0,
+        3 => 3.0,
+        _ => 4.0,
+    };
+    let height = (STARTUP_CHOOSER_BASE_HEIGHT + visible_sessions * STARTUP_CHOOSER_CARD_HEIGHT)
+        .clamp(STARTUP_CHOOSER_MIN_HEIGHT, STARTUP_CHOOSER_MAX_HEIGHT);
+
+    WindowConfig {
+        width: STARTUP_CHOOSER_WIDTH,
+        height,
+        x: None,
+        y: None,
+    }
+}
 fn load_config_or_default(config_path: &std::path::Path) -> Config {
     if !config_path.exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());
@@ -237,7 +266,44 @@ fn parse_cli_args() -> CliArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_adapter;
+    use horizon_core::{SessionSummary, StartupChooser, StartupPromptReason};
+
+    use super::{startup_chooser_window_config, summarize_adapter};
+
+    fn chooser_with_sessions(session_count: usize) -> StartupChooser {
+        StartupChooser {
+            reason: StartupPromptReason::LiveConflict,
+            config_path: "/tmp/horizon.yaml".to_string(),
+            sessions: (0..session_count)
+                .map(|index| SessionSummary {
+                    session_id: format!("session-{index}"),
+                    label: format!("Session {index}"),
+                    workspace_count: 1,
+                    panel_count: 1,
+                    last_active_at: 0,
+                    config_path: "/tmp/horizon.yaml".to_string(),
+                    is_live: index == 0,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn startup_chooser_window_is_compact_and_centered() {
+        let window = startup_chooser_window_config(&chooser_with_sessions(1));
+
+        assert!((window.width - 880.0).abs() < f32::EPSILON);
+        assert!((window.height - 420.0).abs() < f32::EPSILON);
+        assert_eq!(window.x, None);
+        assert_eq!(window.y, None);
+    }
+
+    #[test]
+    fn startup_chooser_window_caps_visible_session_growth() {
+        let window = startup_chooser_window_config(&chooser_with_sessions(8));
+
+        assert!((window.height - 618.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn summarize_adapter_includes_backend_and_device_type() {

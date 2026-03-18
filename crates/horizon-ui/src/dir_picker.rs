@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -64,14 +64,19 @@ struct PickerLayout {
 
 impl DirPicker {
     pub fn new(purpose: DirPickerPurpose) -> Self {
-        let rx = dir_search::spawn_lookup(String::new());
+        Self::with_seed(purpose, None)
+    }
+
+    pub fn with_seed(purpose: DirPickerPurpose, path: Option<&Path>) -> Self {
+        let query = seed_query(path);
+        let rx = dir_search::spawn_lookup(query.clone());
         Self {
-            query: String::new(),
+            query: query.clone(),
             results: Vec::new(),
             selected: 0,
             purpose: Some(purpose),
             search_rx: Some(rx),
-            last_query_sent: String::new(),
+            last_query_sent: query,
             last_query_time: Instant::now(),
             opened_at: Instant::now(),
             initial_results_loaded: false,
@@ -215,15 +220,12 @@ impl DirPicker {
                 .max_rect(text_rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        child.label(egui::RichText::new("~").monospace().size(16.0).color(theme::ACCENT));
-        child.add_space(4.0);
-
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::monospace(14.0))
                 .text_color(theme::FG)
                 .frame(false)
-                .desired_width(text_rect.width() - 30.0)
+                .desired_width(text_rect.width())
                 .hint_text(
                     egui::RichText::new("Type a path or search...")
                         .color(theme::FG_DIM)
@@ -511,7 +513,34 @@ fn expand_tilde_simple(input: &str) -> PathBuf {
     }
 }
 
+fn seed_query(path: Option<&Path>) -> String {
+    let Some(path) = path else {
+        return String::new();
+    };
+
+    let mut query = dir_search::abbreviate_home(path);
+    if !query.ends_with('/') {
+        query.push('/');
+    }
+    query
+}
+
 fn usize_to_f32(v: usize) -> f32 {
     let clamped = u16::try_from(v).unwrap_or(u16::MAX);
     f32::from(clamped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seed_query;
+
+    #[test]
+    fn seed_query_appends_trailing_separator() {
+        assert_eq!(seed_query(Some(std::path::Path::new("/repo"))), "/repo/");
+    }
+
+    #[test]
+    fn seed_query_is_empty_without_workspace_directory() {
+        assert!(seed_query(None).is_empty());
+    }
 }
