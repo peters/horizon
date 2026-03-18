@@ -8,6 +8,8 @@ use crate::theme;
 
 use super::layout::{GridMetrics, usize_to_f32};
 
+const MAX_SPARSE_FRAME_REUSE: u8 = 2;
+
 struct TextRun {
     line: usize,
     next_column: usize,
@@ -42,10 +44,32 @@ impl GridCacheKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GridContentStats {
+    occupied_cells: usize,
+    non_empty_rows: usize,
+}
+
+impl GridContentStats {
+    fn should_reuse_for_sparse_frame(self, previous: Self) -> bool {
+        previous.non_empty_rows >= 8
+            && previous.occupied_cells >= 160
+            && self.non_empty_rows.saturating_mul(2) < previous.non_empty_rows
+            && self.occupied_cells.saturating_mul(3) < previous.occupied_cells
+    }
+}
+
+struct BuiltGrid {
+    shapes: Vec<Shape>,
+    stats: GridContentStats,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct TerminalGridCache {
     key: Option<GridCacheKey>,
     shapes: Vec<Shape>,
+    stats: GridContentStats,
+    suppressed_sparse_frames: u8,
 }
 
 #[profiling::function]
@@ -56,6 +80,7 @@ pub(super) fn render_grid(
     metrics: &GridMetrics,
     grid_cache: Option<&mut TerminalGridCache>,
     allow_grid_cache: bool,
+    allow_sparse_frame_reuse: bool,
 ) {
     let painter = ui.painter_at(rect);
     let key = GridCacheKey::new(rect, content.display_offset, metrics);
@@ -63,21 +88,37 @@ pub(super) fn render_grid(
     if let Some(grid_cache) = grid_cache {
         if allow_grid_cache && grid_cache.key == Some(key) {
             painter.extend(grid_cache.shapes.iter().cloned());
+            grid_cache.suppressed_sparse_frames = 0;
             return;
         }
 
-        let shapes = build_grid_shapes(ui, rect, content, metrics);
-        painter.extend(shapes.iter().cloned());
+        let built_grid = build_grid_shapes(ui, rect, content, metrics);
+        if allow_sparse_frame_reuse
+            && grid_cache.key == Some(key)
+            && grid_cache.suppressed_sparse_frames < MAX_SPARSE_FRAME_REUSE
+            && built_grid.stats.should_reuse_for_sparse_frame(grid_cache.stats)
+        {
+            painter.extend(grid_cache.shapes.iter().cloned());
+            grid_cache.suppressed_sparse_frames += 1;
+            return;
+        }
+
+        painter.extend(built_grid.shapes.iter().cloned());
         grid_cache.key = Some(key);
-        grid_cache.shapes = shapes;
+        grid_cache.shapes = built_grid.shapes;
+        grid_cache.stats = built_grid.stats;
+        grid_cache.suppressed_sparse_frames = 0;
         return;
     }
 
-    painter.extend(build_grid_shapes(ui, rect, content, metrics));
+    painter.extend(build_grid_shapes(ui, rect, content, metrics).shapes);
 }
 
-fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
+fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> BuiltGrid {
     let mut shapes = Vec::new();
+    let mut occupied_cells = 0usize;
+    let mut non_empty_rows = 0usize;
+    let mut last_non_empty_row = None;
 
     ui.fonts_mut(|fonts| {
         let mut text_run: Option<TextRun> = None;
@@ -100,6 +141,14 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
             let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
             let batchable_char = batchable_cell_char(indexed.cell, selected)
                 .filter(|_| bg == theme::PANEL_BG && !has_cell_decoration(indexed.cell));
+            let visible_cell = cell_has_visible_content(indexed.cell, bg, selected);
+            if visible_cell {
+                occupied_cells += 1;
+                if last_non_empty_row != Some(point.line) {
+                    non_empty_rows += 1;
+                    last_non_empty_row = Some(point.line);
+                }
+            }
 
             if let Some(ch) = batchable_char {
                 let can_continue = text_run
@@ -155,7 +204,13 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
         flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
     });
 
-    shapes
+    BuiltGrid {
+        shapes,
+        stats: GridContentStats {
+            occupied_cells,
+            non_empty_rows,
+        },
+    }
 }
 
 #[profiling::function]
@@ -271,6 +326,13 @@ fn cell_text(cell: &Cell) -> Option<String> {
     Some(text)
 }
 
+fn cell_has_text(cell: &Cell) -> bool {
+    !cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
+        && (cell.c != ' ' || cell.zerowidth().is_some())
+}
+
 fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
     if selected
         || cell
@@ -282,6 +344,14 @@ fn batchable_cell_char(cell: &Cell, selected: bool) -> Option<char> {
     }
 
     Some(cell.c)
+}
+
+fn cell_has_visible_content(cell: &Cell, bg: Color32, selected: bool) -> bool {
+    if selected || bg != theme::PANEL_BG || has_cell_decoration(cell) {
+        return true;
+    }
+
+    cell_has_text(cell)
 }
 
 fn flush_text_run(
@@ -348,5 +418,38 @@ fn append_cell_decoration(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
             egui::Stroke::new(1.0, color),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GridContentStats;
+
+    #[test]
+    fn sparse_frame_detection_prefers_previous_dense_grid() {
+        let previous = GridContentStats {
+            occupied_cells: 420,
+            non_empty_rows: 18,
+        };
+        let current = GridContentStats {
+            occupied_cells: 72,
+            non_empty_rows: 4,
+        };
+
+        assert!(current.should_reuse_for_sparse_frame(previous));
+    }
+
+    #[test]
+    fn sparse_frame_detection_ignores_similar_density_updates() {
+        let previous = GridContentStats {
+            occupied_cells: 420,
+            non_empty_rows: 18,
+        };
+        let current = GridContentStats {
+            occupied_cells: 360,
+            non_empty_rows: 16,
+        };
+
+        assert!(!current.should_reuse_for_sparse_frame(previous));
     }
 }
