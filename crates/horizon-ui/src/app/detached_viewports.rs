@@ -6,6 +6,7 @@ use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
+use super::util::viewport_local_rect;
 use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
 
 const DETACHED_WINDOW_OFFSET: f32 = 48.0;
@@ -183,7 +184,7 @@ impl HorizonApp {
             return;
         };
 
-        let canvas_rect = Self::canvas_rect(ctx, false);
+        let canvas_rect = detached_canvas_rect(ctx);
         let (r, g, b) = workspace.accent();
         let color = Color32::from_rgb(r, g, b);
         let screen_rect = if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
@@ -230,7 +231,7 @@ impl HorizonApp {
         let focused = self.board.focused;
         panel_ids.sort_by_key(|panel_id| Some(*panel_id) == focused);
 
-        let canvas_rect = Self::canvas_rect(ctx, false);
+        let canvas_rect = detached_canvas_rect(ctx);
         self.panels_to_close.clear();
         for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
             if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
@@ -243,7 +244,7 @@ impl HorizonApp {
     }
 
     fn detached_canvas_view(&self, ctx: &Context, workspace_id: WorkspaceId) -> CanvasViewState {
-        let canvas_rect = Self::canvas_rect(ctx, false);
+        let canvas_rect = detached_canvas_rect(ctx);
         if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
             let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
             let size = Vec2::new(
@@ -347,6 +348,11 @@ impl HorizonApp {
 
 fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
     ViewportId(egui::Id::new(("detached_workspace", workspace_local_id)))
+}
+
+fn detached_canvas_rect(ctx: &Context) -> Rect {
+    let viewport = viewport_local_rect(ctx);
+    Rect::from_min_max(Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT), viewport.max)
 }
 
 fn detached_viewport_builder(window_config: &WindowConfig, workspace_name: &str) -> ViewportBuilder {

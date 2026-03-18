@@ -311,7 +311,7 @@ impl HorizonApp {
             if ui
                 .add(
                     Button::new(
-                        egui::RichText::new("Close All Terminals")
+                        egui::RichText::new("Close All Panels")
                             .size(12.0)
                             .color(theme::PALETTE_RED),
                     )
@@ -510,15 +510,7 @@ impl HorizonApp {
             self.panel_screen_rects.remove(&panel_id);
         }
         if let Some(workspace_id) = actions.close_all_in_workspace {
-            let panel_ids: Vec<_> = self
-                .board
-                .workspace(workspace_id)
-                .map(|workspace| workspace.panels.clone())
-                .unwrap_or_default();
-            for panel_id in panel_ids {
-                self.close_panel(panel_id);
-                self.panel_screen_rects.remove(&panel_id);
-            }
+            self.close_workspace_panels(workspace_id);
         }
         if let Some(workspace_id) = actions.clear_layout
             && self.board.clear_workspace_layout(workspace_id)

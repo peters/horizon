@@ -64,11 +64,11 @@ impl HorizonApp {
         ctx: &Context,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     ) -> f32 {
-        if !self.minimap_visible || self.board.workspaces.is_empty() {
+        if !self.fixed_overlays_visible() || !self.minimap_visible || self.board.workspaces.is_empty() {
             return 0.0;
         }
 
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let Some(model) = self.minimap_model(canvas_rect, workspace_bounds) else {
             return 0.0;
         };
@@ -226,7 +226,7 @@ impl HorizonApp {
             return;
         }
 
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let view_origin = self.screen_to_canvas(canvas_rect, canvas_rect.min);
         let focused_status = self
             .board

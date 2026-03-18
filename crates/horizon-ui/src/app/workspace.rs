@@ -33,13 +33,13 @@ struct WorkspaceInteraction {
     start_rename: bool,
     rename_action: RenameEditAction,
     show_layout_toolbar: bool,
-    layout_action: Option<WorkspaceLayoutAction>,
+    action: Option<WorkspaceAction>,
 }
 
-#[derive(Clone, Copy)]
-enum WorkspaceLayoutAction {
-    Clear,
-    Arrange(WorkspaceLayout),
+enum WorkspaceAction {
+    ClearLayout,
+    ArrangeLayout(WorkspaceLayout),
+    CloseAllPanels,
     Detach,
 }
 
@@ -58,7 +58,7 @@ impl HorizonApp {
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
     ) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
         let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones);
@@ -70,6 +70,7 @@ impl HorizonApp {
         let mut rename_action = RenameEditAction::None;
         let mut clear_workspace_layout = None;
         let mut arrange_workspace = None;
+        let mut close_workspace_panels = None;
 
         for workspace in &visuals {
             self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
@@ -100,18 +101,22 @@ impl HorizonApp {
             if interaction.rename_action != RenameEditAction::None {
                 rename_action = interaction.rename_action;
             }
-            match interaction.layout_action {
-                Some(WorkspaceLayoutAction::Clear) => {
+            match interaction.action {
+                Some(WorkspaceAction::ClearLayout) => {
                     focus_workspace = Some(workspace.id);
                     clear_workspace_layout = Some(workspace.id);
                 }
-                Some(WorkspaceLayoutAction::Arrange(layout)) => {
+                Some(WorkspaceAction::ArrangeLayout(layout)) => {
                     focus_workspace = Some(workspace.id);
                     arrange_workspace = Some((workspace.id, layout));
                 }
-                Some(WorkspaceLayoutAction::Detach) => {
+                Some(WorkspaceAction::Detach) => {
                     focus_workspace = Some(workspace.id);
                     self.detach_workspace(workspace.id);
+                }
+                Some(WorkspaceAction::CloseAllPanels) => {
+                    focus_workspace = Some(workspace.id);
+                    close_workspace_panels = Some(workspace.id);
                 }
                 None => {}
             }
@@ -148,6 +153,9 @@ impl HorizonApp {
         if let Some((workspace_id, layout)) = arrange_workspace {
             self.board.arrange_workspace(workspace_id, layout);
             self.mark_runtime_dirty();
+        }
+        if let Some(workspace_id) = close_workspace_panels {
+            self.close_workspace_panels(workspace_id);
         }
 
         if !self.is_panning {
@@ -274,7 +282,7 @@ fn render_workspace_visual(
             start_rename: false,
             rename_action: RenameEditAction::None,
             show_layout_toolbar: false,
-            layout_action: None,
+            action: None,
         };
     }
 
@@ -308,7 +316,7 @@ fn render_workspace_visual(
                         egui::FontId::proportional(12.5),
                     ),
                     show_layout_toolbar: false,
-                    layout_action: None,
+                    action: None,
                 }
             } else {
                 if label_response.hovered() || label_response.dragged() {
@@ -329,23 +337,26 @@ fn render_workspace_visual(
                     label_response.dragged(),
                 );
 
-                WorkspaceInteraction {
+                let mut interaction = WorkspaceInteraction {
                     activate_workspace: label_response.clicked() || label_response.drag_started(),
                     drag_delta: label_response.drag_delta(),
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
                     show_layout_toolbar: label_response.hovered(),
-                    layout_action: None,
-                }
+                    action: None,
+                };
+                show_workspace_context_menu(&label_response, workspace, &mut interaction);
+                interaction
             }
         })
         .inner;
 
     if !is_renaming
+        && interaction.action.is_none()
         && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar)
         && !overlay_zones.intersects(workspace.toolbar_screen_rect)
     {
-        interaction.layout_action = render_workspace_layout_toolbar(ctx, workspace, canvas_transform, canvas_clip_rect);
+        interaction.action = render_workspace_layout_toolbar(ctx, workspace, canvas_transform, canvas_clip_rect);
     }
 
     interaction
@@ -462,7 +473,7 @@ fn render_workspace_layout_toolbar(
     workspace: &WorkspaceVisual,
     canvas_transform: TSTransform,
     canvas_clip_rect: Rect,
-) -> Option<WorkspaceLayoutAction> {
+) -> Option<WorkspaceAction> {
     let mut action = None;
 
     egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
@@ -515,7 +526,7 @@ fn render_workspace_layout_toolbar(
                             )
                             .on_hover_text("Manual placement");
                         if response.clicked() {
-                            action = Some(WorkspaceLayoutAction::Clear);
+                            action = Some(WorkspaceAction::ClearLayout);
                         }
 
                         for layout in WorkspaceLayout::ALL {
@@ -548,18 +559,58 @@ fn render_workspace_layout_toolbar(
                                 )
                                 .on_hover_text(layout.label());
                             if response.clicked() {
-                                action = Some(WorkspaceLayoutAction::Arrange(layout));
+                                action = Some(WorkspaceAction::ArrangeLayout(layout));
                             }
                         }
 
                         if render_detach_button(ui, workspace) {
-                            action = Some(WorkspaceLayoutAction::Detach);
+                            action = Some(WorkspaceAction::Detach);
                         }
                     });
                 });
         });
 
     action
+}
+
+fn show_workspace_context_menu(
+    response: &egui::Response,
+    workspace: &WorkspaceVisual,
+    interaction: &mut WorkspaceInteraction,
+) {
+    response.context_menu(|ui| {
+        ui.set_min_width(160.0);
+        ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
+        if ui
+            .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .clicked()
+        {
+            interaction.action = Some(WorkspaceAction::ClearLayout);
+            ui.close();
+        }
+        for layout in WorkspaceLayout::ALL {
+            let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT);
+            if ui.add(Button::new(text).frame(false)).clicked() {
+                interaction.action = Some(WorkspaceAction::ArrangeLayout(layout));
+                ui.close();
+            }
+        }
+
+        ui.separator();
+        let close_all = ui.add_enabled(
+            workspace.panel_count > 0,
+            Button::new(
+                egui::RichText::new("Close All Panels")
+                    .size(12.0)
+                    .color(theme::PALETTE_RED),
+            )
+            .frame(false),
+        );
+        if close_all.clicked() {
+            interaction.action = Some(WorkspaceAction::CloseAllPanels);
+            ui.close();
+        }
+    });
 }
 
 fn apply_canvas_transform(ui: &mut egui::Ui, canvas_transform: TSTransform, canvas_clip_rect: Rect) {
@@ -572,16 +623,12 @@ fn workspace_layout_label(layout: WorkspaceLayout) -> &'static str {
         WorkspaceLayout::Rows => "Rows",
         WorkspaceLayout::Columns => "Cols",
         WorkspaceLayout::Grid => "Grid",
-        WorkspaceLayout::Stack => "Stack",
-        WorkspaceLayout::Cascade => "Cascade",
     }
 }
 
 fn workspace_layout_button_width(layout: WorkspaceLayout) -> f32 {
     match layout {
         WorkspaceLayout::Rows | WorkspaceLayout::Columns | WorkspaceLayout::Grid => 44.0,
-        WorkspaceLayout::Stack => 52.0,
-        WorkspaceLayout::Cascade => 68.0,
     }
 }
 
@@ -591,7 +638,7 @@ fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()
-                + 6.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + 4.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
                 + 54.0
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
@@ -603,8 +650,6 @@ fn workspace_layout_preset_row_width() -> f32 {
     workspace_layout_button_width(WorkspaceLayout::Rows)
         + workspace_layout_button_width(WorkspaceLayout::Columns)
         + workspace_layout_button_width(WorkspaceLayout::Grid)
-        + workspace_layout_button_width(WorkspaceLayout::Stack)
-        + workspace_layout_button_width(WorkspaceLayout::Cascade)
 }
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {

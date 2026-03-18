@@ -200,10 +200,16 @@ impl Default for OverlaysConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self { attention_feed: true }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -365,7 +371,7 @@ fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
 mod tests {
     use std::path::PathBuf;
 
-    use super::config_candidates_with_env;
+    use super::{Config, FeaturesConfig, config_candidates_with_env};
 
     #[test]
     fn includes_horizon_config_candidates() {
@@ -382,5 +388,26 @@ mod tests {
                 .any(|path| path.ends_with(".config/horizon/config.yaml"))
         );
         assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
+    }
+
+    #[test]
+    fn features_default_enables_attention_feed() {
+        assert!(FeaturesConfig::default().attention_feed);
+        assert!(Config::default().features.attention_feed);
+    }
+
+    #[test]
+    fn missing_features_block_keeps_attention_feed_enabled() {
+        let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
+
+        assert!(config.features.attention_feed);
+    }
+
+    #[test]
+    fn explicit_attention_feed_false_is_preserved() {
+        let config: Config =
+            serde_yaml::from_str("features:\n  attention_feed: false\n").expect("config should deserialize");
+
+        assert!(!config.features.attention_feed);
     }
 }

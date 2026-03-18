@@ -3,7 +3,7 @@ use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
 
 use crate::editor_widget::MarkdownEditorView;
 use crate::git_changes_widget::GitChangesView;
-use crate::terminal_widget::{TerminalGridCache, TerminalView};
+use crate::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
 use crate::theme;
 use crate::usage_widget::UsageDashboardView;
 
@@ -34,6 +34,7 @@ struct PanelUiOutcome {
     focus_requested: bool,
     drag_delta: Vec2,
     resize_delta: Vec2,
+    commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
@@ -154,7 +155,7 @@ impl HorizonApp {
         let focused = self.board.focused;
         panel_order.sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let mut panels_to_close = Vec::new();
 
         for (panel_id, fallback_index) in panel_order {
@@ -179,7 +180,7 @@ impl HorizonApp {
             return false;
         };
         let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces);
-        self.apply_panel_outcome(panel_id, &snapshot, &outcome)
+        self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome)
     }
 
     #[profiling::function]
@@ -369,6 +370,9 @@ impl HorizonApp {
         if resize_response.dragged() {
             outcome.resize_delta = resize_response.drag_delta();
         }
+        if resize_response.drag_stopped() {
+            outcome.commit_terminal_resize = true;
+        }
         if close_response.clicked() {
             outcome.command = Some(PanelCommand::Close);
         }
@@ -440,7 +444,13 @@ impl HorizonApp {
         });
     }
 
-    fn apply_panel_outcome(&mut self, panel_id: PanelId, snapshot: &PanelSnapshot, outcome: &PanelUiOutcome) -> bool {
+    fn apply_panel_outcome(
+        &mut self,
+        ctx: &Context,
+        panel_id: PanelId,
+        snapshot: &PanelSnapshot,
+        outcome: &PanelUiOutcome,
+    ) -> bool {
         self.panel_screen_rects.insert(panel_id, snapshot.screen_rect);
 
         if matches!(outcome.command, Some(PanelCommand::StartRename)) {
@@ -476,6 +486,20 @@ impl HorizonApp {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
             let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
             self.mark_runtime_dirty();
+        }
+        if outcome.commit_terminal_resize {
+            let resized_panel_size = if outcome.resize_delta == Vec2::ZERO {
+                snapshot.canvas_size
+            } else {
+                clamp_panel_size(snapshot.canvas_size + outcome.resize_delta)
+            };
+            let panel_rect = Rect::from_min_size(Pos2::ZERO, resized_panel_size);
+            let body_size = PanelFrame::new(panel_rect).body.size();
+            let viewport = viewport_for_available_space(ctx, body_size);
+            if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.resize_immediately(viewport.rows, viewport.cols, viewport.cell_width, viewport.cell_height);
+            }
+            ctx.request_repaint();
         }
         if outcome.focus_requested {
             self.board.focus(panel_id);
