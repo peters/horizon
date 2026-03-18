@@ -10,6 +10,7 @@ mod git_changes_widget;
 mod input;
 mod loading_spinner;
 mod plugin_install;
+mod primary_clipboard;
 mod remote_hosts_overlay;
 mod search_overlay;
 mod terminal_widget;

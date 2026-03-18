@@ -59,18 +59,32 @@ impl HorizonApp {
             return;
         }
 
-        let drag_panning = pointer_in_canvas && (middle_down || (space_down && primary_down));
+        let ctrl_or_cmd = modifiers.ctrl || modifiers.command;
+
+        // Gesture lifecycle: active once middle-click starts a pan on empty
+        // canvas, cleared when the middle button is released.
+        // Ctrl+middle-click overrides and pans even over terminal panels.
+        if !middle_down {
+            self.middle_pan_active = false;
+        }
+        let pointer_over_panel_body =
+            pointer_position.is_some_and(|pos| self.panel_screen_rects.values().any(|rect| rect.contains(pos)));
+        if middle_down && !self.middle_pan_active && pointer_in_canvas {
+            if ctrl_or_cmd || !pointer_over_panel_body {
+                self.middle_pan_active = true;
+            }
+        }
+        let drag_panning = pointer_in_canvas && (self.middle_pan_active || (space_down && primary_down));
         let pointer_over_panel = pointer_position.is_some_and(|position| {
             pointer_in_canvas
                 && !drag_panning
                 && scroll != Vec2::ZERO
-                && !modifiers.ctrl
-                && !modifiers.command
+                && !ctrl_or_cmd
                 && self.panel_screen_rects.values().any(|rect| rect.contains(position))
         });
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if pointer_in_canvas && !pointer_over_panel && !modifiers.ctrl && !modifiers.command {
+        } else if pointer_in_canvas && !pointer_over_panel && !ctrl_or_cmd {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
             } else {

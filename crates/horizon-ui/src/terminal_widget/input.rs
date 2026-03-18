@@ -6,6 +6,7 @@ use egui::{Key, Pos2, Rect, Vec2};
 use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use crate::input;
+use crate::primary_clipboard;
 
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
@@ -80,6 +81,15 @@ pub(super) fn handle_terminal_pointer_input(
     };
 
     handle_pointer_events(&events, panel, &pointer_context);
+
+    // Copy selected text to primary selection buffer when a selection
+    // completes (drag release or double/triple click).
+    if (interaction.body.drag_stopped() || interaction.body.double_clicked() || interaction.body.triple_clicked())
+        && let Some(terminal) = panel.terminal()
+        && let Some(text) = terminal.selection_to_string()
+    {
+        primary_clipboard::copy_to_primary(&text);
+    }
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
 
@@ -210,6 +220,11 @@ fn handle_pointer_button(
         {
             panel.write_input(&bytes);
         }
+    } else if button == egui::PointerButton::Middle && pressed {
+        if let Some(text) = primary_clipboard::paste_from_primary() {
+            let bytes = input::paste_bytes(&text, pointer.terminal_mode, true);
+            panel.write_input(&bytes);
+        }
     } else if button == egui::PointerButton::Primary
         && pressed
         && let Some(point) = grid_point_from_position(
@@ -317,6 +332,7 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
             }
             egui::Event::Copy => {
                 if let Some(text) = terminal.selection_to_string() {
+                    primary_clipboard::copy_to_primary(&text);
                     ui.ctx().copy_text(text);
                     terminal.clear_selection();
                 } else {
@@ -325,6 +341,7 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
             }
             egui::Event::Cut => {
                 if let Some(text) = terminal.selection_to_string() {
+                    primary_clipboard::copy_to_primary(&text);
                     ui.ctx().copy_text(text);
                     terminal.clear_selection();
                 }
