@@ -95,7 +95,12 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
     const STARTUP_CHOOSER_BASE_HEIGHT: f32 = 290.0;
     const STARTUP_CHOOSER_CARD_HEIGHT: f32 = 82.0;
 
-    let visible_sessions = chooser.sessions.len().clamp(1, 4) as f32;
+    let visible_sessions = match chooser.sessions.len() {
+        0 | 1 => 1.0,
+        2 => 2.0,
+        3 => 3.0,
+        _ => 4.0,
+    };
     let height = (STARTUP_CHOOSER_BASE_HEIGHT + visible_sessions * STARTUP_CHOOSER_CARD_HEIGHT)
         .clamp(STARTUP_CHOOSER_MIN_HEIGHT, STARTUP_CHOOSER_MAX_HEIGHT);
 
@@ -242,8 +247,8 @@ mod tests {
     fn startup_chooser_window_is_compact_and_centered() {
         let window = startup_chooser_window_config(&chooser_with_sessions(1));
 
-        assert_eq!(window.width, 880.0);
-        assert_eq!(window.height, 420.0);
+        assert!((window.width - 880.0).abs() < f32::EPSILON);
+        assert!((window.height - 420.0).abs() < f32::EPSILON);
         assert_eq!(window.x, None);
         assert_eq!(window.y, None);
     }
@@ -252,6 +257,6 @@ mod tests {
     fn startup_chooser_window_caps_visible_session_growth() {
         let window = startup_chooser_window_config(&chooser_with_sessions(8));
 
-        assert_eq!(window.height, 618.0);
+        assert!((window.height - 618.0).abs() < f32::EPSILON);
     }
 }
