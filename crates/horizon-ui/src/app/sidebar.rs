@@ -305,7 +305,7 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return;
         };
-        let title = panel.title.clone();
+        let title = panel.display_title().into_owned();
         let kind = panel.kind;
         let is_focused = self.board.focused == Some(panel_id);
         let attention = if self.template_config.features.attention_feed {

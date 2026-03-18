@@ -68,6 +68,7 @@ impl StaticPanelSeed {
             id: self.id,
             local_id: self.local_id,
             title,
+            terminal_title: String::new(),
             kind,
             resume: PanelResume::Fresh,
             layout: PanelLayout {
@@ -224,6 +225,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         launched_at_millis: current_unix_millis(),
         has_custom_name,
         had_recent_output: false,
+        terminal_title: String::new(),
         launch_command: saved_command,
         launch_args: saved_args,
         launch_cwd: saved_cwd,

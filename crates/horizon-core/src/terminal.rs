@@ -51,10 +51,18 @@ pub struct TerminalSpawnOptions {
 }
 
 /// A structured notification parsed from an OSC title sequence.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentNotification {
     pub severity: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HorizonOscTitle {
+    Notification(AgentNotification),
+    SetTitle(String),
+    ClearTitle,
+    Ignore,
 }
 
 #[derive(Clone)]
@@ -453,16 +461,31 @@ impl Terminal {
         self.pending_notification.take()
     }
 
-    fn parse_horizon_notification(title: &str) -> Option<AgentNotification> {
-        let payload = title.strip_prefix("HORIZON_NOTIFY:")?;
-        let (severity, message) = payload.split_once(':')?;
-        if message.is_empty() {
-            return None;
+    fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
+        if let Some(payload) = title.strip_prefix("HORIZON_NOTIFY:") {
+            let Some((severity, message)) = payload.split_once(':') else {
+                return Some(HorizonOscTitle::Ignore);
+            };
+            if severity.is_empty() || message.is_empty() {
+                return Some(HorizonOscTitle::Ignore);
+            }
+            return Some(HorizonOscTitle::Notification(AgentNotification {
+                severity: severity.to_string(),
+                message: message.to_string(),
+            }));
         }
-        Some(AgentNotification {
-            severity: severity.to_string(),
-            message: message.to_string(),
-        })
+
+        let payload = title.strip_prefix("HORIZON_TITLE:")?;
+
+        if payload == "clear" {
+            return Some(HorizonOscTitle::ClearTitle);
+        }
+
+        if let Some(next_title) = payload.strip_prefix("set:") {
+            return Some(HorizonOscTitle::SetTitle(next_title.to_string()));
+        }
+
+        Some(HorizonOscTitle::Ignore)
     }
 
     #[must_use]
@@ -570,13 +593,21 @@ impl Terminal {
 
     fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Title(title) => {
-                if let Some(notification) = Self::parse_horizon_notification(&title) {
+            Event::Title(title) => match Self::parse_horizon_title(&title) {
+                Some(HorizonOscTitle::Notification(notification)) => {
                     self.pending_notification = Some(notification);
-                } else {
+                }
+                Some(HorizonOscTitle::SetTitle(next_title)) => {
+                    self.title = next_title;
+                }
+                Some(HorizonOscTitle::ClearTitle) => {
+                    self.title.clear();
+                }
+                Some(HorizonOscTitle::Ignore) => {}
+                None => {
                     self.title = title;
                 }
-            }
+            },
             Event::ResetTitle => {
                 self.title.clear();
             }
@@ -645,9 +676,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
     use super::{
-        Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb,
-        find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
+        AgentNotification, HorizonOscTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
+        default_terminal_rgb, find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
     };
+    use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::sync::FairMutex;
     use alacritty_terminal::term::{self, Term, TermMode};
@@ -708,6 +740,164 @@ mod tests {
 
         let mode = *term.lock().mode();
         assert_eq!(mode, TermMode::default());
+    }
+
+    #[test]
+    fn parse_horizon_notify_title() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_NOTIFY:attention:Need review"),
+            Some(HorizonOscTitle::Notification(AgentNotification {
+                severity: "attention".to_string(),
+                message: "Need review".to_string(),
+            })),
+        );
+    }
+
+    #[test]
+    fn parse_horizon_title_set_command() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:set:Fix issue #42"),
+            Some(HorizonOscTitle::SetTitle("Fix issue #42".to_string())),
+        );
+    }
+
+    #[test]
+    fn parse_horizon_title_clear_command() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:clear"),
+            Some(HorizonOscTitle::ClearTitle),
+        );
+    }
+
+    #[test]
+    fn parse_invalid_horizon_title_command_is_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_TITLE:rename:Fix issue #42"),
+            Some(HorizonOscTitle::Ignore),
+        );
+    }
+
+    #[test]
+    fn parse_notify_without_message_separator_is_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_NOTIFY:attention"),
+            Some(HorizonOscTitle::Ignore),
+        );
+    }
+
+    #[test]
+    fn parse_notify_without_severity_is_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_NOTIFY::Saved"),
+            Some(HorizonOscTitle::Ignore),
+        );
+    }
+
+    fn spawn_test_terminal() -> Terminal {
+        Terminal::spawn(TerminalSpawnOptions {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
+            args: Vec::new(),
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 41,
+            replay_bytes: Vec::new(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn")
+    }
+
+    #[test]
+    fn horizon_notify_event_sets_notification_without_overwriting_title() {
+        let mut terminal = spawn_test_terminal();
+        terminal.title = "Existing title".to_string();
+
+        terminal.handle_event(Event::Title("HORIZON_NOTIFY:info:Saved".to_string()));
+
+        assert_eq!(terminal.title(), "Existing title");
+        assert_eq!(
+            terminal.take_notification(),
+            Some(AgentNotification {
+                severity: "info".to_string(),
+                message: "Saved".to_string(),
+            })
+        );
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_title_set_event_updates_title_without_notification() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+
+        assert_eq!(terminal.title(), "Build running");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_title_clear_event_clears_existing_title() {
+        let mut terminal = spawn_test_terminal();
+        terminal.title = "Build running".to_string();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
+
+        assert!(terminal.title().is_empty());
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn invalid_horizon_title_event_does_not_clobber_existing_title() {
+        let mut terminal = spawn_test_terminal();
+        terminal.title = "Build running".to_string();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:rename:other".to_string()));
+
+        assert_eq!(terminal.title(), "Build running");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn malformed_horizon_notify_event_does_not_leak_into_visible_title() {
+        let mut terminal = spawn_test_terminal();
+        terminal.title = "Existing title".to_string();
+
+        terminal.handle_event(Event::Title("HORIZON_NOTIFY:attention".to_string()));
+
+        assert_eq!(terminal.title(), "Existing title");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn ordinary_terminal_title_replaces_horizon_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+        terminal.handle_event(Event::Title("cargo test".to_string()));
+
+        assert_eq!(terminal.title(), "cargo test");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_title_replaces_ordinary_terminal_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("vim src/main.rs".to_string()));
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+
+        assert_eq!(terminal.title(), "Build running");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
     fn test_term() -> Arc<FairMutex<Term<TerminalEventProxy>>> {
