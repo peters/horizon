@@ -1,16 +1,16 @@
 next-version: 0.1.0
-mode: ContinuousDeployment
+mode: ContinuousDelivery
 branches:
   main:
     regex: ^main$
-    mode: ContinuousDeployment
+    mode: ContinuousDelivery
     increment: Minor
     label: alpha
     prevent-increment:
       when-current-commit-tagged: true
   release:
     regex: ^release/.*$
-    mode: ContinuousDeployment
+    mode: ContinuousDelivery
     increment: Patch
     label: beta
     prevent-increment:
