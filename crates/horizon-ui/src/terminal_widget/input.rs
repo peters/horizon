@@ -220,7 +220,7 @@ fn handle_pointer_button(
         {
             panel.write_input(&bytes);
         }
-    } else if button == egui::PointerButton::Middle && pressed {
+    } else if button == egui::PointerButton::Middle && pressed && !modifiers.ctrl && !modifiers.command {
         if let Some(text) = primary_clipboard::paste_from_primary() {
             let bytes = input::paste_bytes(&text, pointer.terminal_mode, true);
             panel.write_input(&bytes);
