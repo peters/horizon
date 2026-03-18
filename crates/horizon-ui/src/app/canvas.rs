@@ -13,6 +13,7 @@ use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, WS_BG_PAD, W
 
 const GRID_SPACING: f32 = 22.0;
 const GRID_DOT_DIAMETER: f32 = 2.3;
+const MIN_GRID_SCREEN_SPACING: f32 = 14.0;
 
 struct MinimapModel {
     content_min: [f32; 2],
@@ -29,22 +30,24 @@ struct CanvasGridCacheKey {
     rect_min_y: u32,
     rect_width: u32,
     rect_height: u32,
-    zoom: u32,
+    spacing: u32,
+    dot_diameter: u32,
     offset_x: u32,
     offset_y: u32,
 }
 
 impl CanvasGridCacheKey {
     fn new(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Self {
-        let scaled_spacing = GRID_SPACING * canvas_view.zoom;
+        let layout = dot_grid_layout(canvas_view);
         Self {
             rect_min_x: rect.min.x.to_bits(),
             rect_min_y: rect.min.y.to_bits(),
             rect_width: rect.width().to_bits(),
             rect_height: rect.height().to_bits(),
-            zoom: canvas_view.zoom.to_bits(),
-            offset_x: canvas_view.pan_offset[0].rem_euclid(scaled_spacing).to_bits(),
-            offset_y: canvas_view.pan_offset[1].rem_euclid(scaled_spacing).to_bits(),
+            spacing: layout.spacing.to_bits(),
+            dot_diameter: layout.dot_diameter.to_bits(),
+            offset_x: canvas_view.pan_offset[0].rem_euclid(layout.spacing).to_bits(),
+            offset_y: canvas_view.pan_offset[1].rem_euclid(layout.spacing).to_bits(),
         }
     }
 }
@@ -351,13 +354,30 @@ fn paint_dot_grid(ui: &mut egui::Ui, canvas_view: horizon_core::CanvasViewState,
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DotGridLayout {
+    spacing: f32,
+    dot_diameter: f32,
+}
+
+fn dot_grid_layout(canvas_view: horizon_core::CanvasViewState) -> DotGridLayout {
+    let mut spacing = GRID_SPACING * canvas_view.zoom;
+    while spacing < MIN_GRID_SCREEN_SPACING {
+        spacing *= 2.0;
+    }
+
+    DotGridLayout {
+        spacing,
+        dot_diameter: (GRID_DOT_DIAMETER * canvas_view.zoom).clamp(1.0, 5.0),
+    }
+}
+
 fn build_dot_grid_shape(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Shape {
-    let spacing = GRID_SPACING * canvas_view.zoom;
-    let dot_diameter = (GRID_DOT_DIAMETER * canvas_view.zoom).clamp(1.0, 5.0);
-    let offset_x = canvas_view.pan_offset[0].rem_euclid(spacing);
-    let offset_y = canvas_view.pan_offset[1].rem_euclid(spacing);
-    let columns = dot_grid_axis_count(rect.width(), spacing);
-    let rows = dot_grid_axis_count(rect.height(), spacing);
+    let layout = dot_grid_layout(canvas_view);
+    let offset_x = canvas_view.pan_offset[0].rem_euclid(layout.spacing);
+    let offset_y = canvas_view.pan_offset[1].rem_euclid(layout.spacing);
+    let columns = dot_grid_axis_count(rect.width(), layout.spacing);
+    let rows = dot_grid_axis_count(rect.height(), layout.spacing);
     let dot_count = columns.saturating_mul(rows);
 
     let mut mesh = Mesh::default();
@@ -368,11 +388,11 @@ fn build_dot_grid_shape(rect: Rect, canvas_view: horizon_core::CanvasViewState) 
     while x <= rect.max.x {
         let mut y = rect.min.y + offset_y;
         while y <= rect.max.y {
-            let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(dot_diameter));
+            let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(layout.dot_diameter));
             mesh.add_colored_rect(dot_rect, theme::GRID_DOT);
-            y += spacing;
+            y += layout.spacing;
         }
-        x += spacing;
+        x += layout.spacing;
     }
 
     Shape::mesh(mesh)
@@ -415,7 +435,7 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::CanvasViewState;
 
-    use super::{CanvasGridCacheKey, GRID_SPACING, dot_grid_axis_count};
+    use super::{CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, dot_grid_axis_count, dot_grid_layout};
 
     #[test]
     fn dot_grid_axis_count_handles_invalid_spacing() {
@@ -430,6 +450,31 @@ mod tests {
         let zoomed_out = dot_grid_axis_count(880.0, GRID_SPACING * 0.5);
 
         assert!(zoomed_out > zoomed_in);
+    }
+
+    #[test]
+    fn dot_grid_layout_bounds_zoomed_out_spacing() {
+        let layout = dot_grid_layout(CanvasViewState::new([0.0, 0.0], 0.25));
+
+        assert!(layout.spacing >= MIN_GRID_SCREEN_SPACING);
+        assert!((layout.spacing - GRID_SPACING * 0.25 * 4.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn dot_grid_layout_preserves_base_spacing_when_already_sparse_enough() {
+        let layout = dot_grid_layout(CanvasViewState::new([0.0, 0.0], 1.0));
+
+        assert!((layout.spacing - GRID_SPACING).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn dot_grid_layout_caps_zoomed_out_density() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1600.0, 1000.0));
+        let layout = dot_grid_layout(CanvasViewState::new([0.0, 0.0], 0.25));
+        let dot_count =
+            dot_grid_axis_count(rect.width(), layout.spacing) * dot_grid_axis_count(rect.height(), layout.spacing);
+
+        assert!(dot_count < 10_000);
     }
 
     #[test]
