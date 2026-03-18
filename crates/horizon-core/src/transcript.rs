@@ -1,6 +1,11 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::Result;
 use crate::panel::PanelKind;
@@ -23,6 +28,21 @@ const USES_BSD_SCRIPT: bool = true;
     target_os = "dragonfly"
 )))]
 const USES_BSD_SCRIPT: bool = false;
+
+static SCRIPT_SUPPORT: OnceLock<ScriptSupport> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScriptFlavor {
+    Bsd,
+    UtilLinux,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ScriptSupport {
+    Missing,
+    Unsupported { reason: String },
+    Supported { program: String, flavor: ScriptFlavor },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PanelTranscript {
@@ -55,16 +75,7 @@ impl PanelTranscript {
 
     #[must_use]
     pub fn wrap_launch_command(&self, program: String, args: Vec<String>) -> (String, Vec<String>) {
-        let Some(script_program) = script_program() else {
-            return (program, args);
-        };
-        let session_path = self.session_path();
-
-        if USES_BSD_SCRIPT {
-            build_bsd_script_command(script_program, &session_path, program, args)
-        } else {
-            build_util_linux_script_command(script_program, &session_path, program, args)
-        }
+        wrap_launch_command_with_support(script_support(), &self.session_path(), program, args)
     }
 
     /// Finalize any previous in-flight capture and return the retained replay bytes.
@@ -192,20 +203,153 @@ fn ensure_clean_prompt_boundary(bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(b"\r\n");
 }
 
-fn script_program() -> Option<String> {
+fn wrap_launch_command_with_support(
+    support: &ScriptSupport,
+    session_path: &Path,
+    program: String,
+    args: Vec<String>,
+) -> (String, Vec<String>) {
+    match support {
+        ScriptSupport::Missing | ScriptSupport::Unsupported { .. } => (program, args),
+        ScriptSupport::Supported {
+            program: script_program,
+            flavor: ScriptFlavor::Bsd,
+        } => build_bsd_script_command(script_program.clone(), session_path, program, args),
+        ScriptSupport::Supported {
+            program: script_program,
+            flavor: ScriptFlavor::UtilLinux,
+        } => build_util_linux_script_command(script_program.clone(), session_path, program, args),
+    }
+}
+
+fn script_support() -> &'static ScriptSupport {
+    SCRIPT_SUPPORT.get_or_init(|| {
+        let support = ScriptSupport::detect(std::env::var_os("PATH").as_deref(), current_script_flavor());
+        match &support {
+            ScriptSupport::Missing => tracing::warn!("transcript capture disabled: `script` was not found in PATH"),
+            ScriptSupport::Unsupported { reason } => {
+                tracing::warn!("transcript capture disabled: {reason}");
+            }
+            ScriptSupport::Supported { .. } => {}
+        }
+        support
+    })
+}
+
+impl ScriptSupport {
+    fn detect(path_env: Option<&OsStr>, flavor: ScriptFlavor) -> Self {
+        let mut first_error = None;
+
+        for candidate in script_program_candidates(path_env) {
+            match probe_script_support(&candidate, flavor) {
+                Ok(()) => {
+                    return Self::Supported {
+                        program: candidate.display().to_string(),
+                        flavor,
+                    };
+                }
+                Err(reason) => {
+                    if first_error.is_none() {
+                        first_error = Some(format!(
+                            "`{}` rejected the Horizon transcript probe: {reason}",
+                            candidate.display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        first_error.map_or(Self::Missing, |reason| Self::Unsupported { reason })
+    }
+}
+
+fn current_script_flavor() -> ScriptFlavor {
+    if USES_BSD_SCRIPT {
+        ScriptFlavor::Bsd
+    } else {
+        ScriptFlavor::UtilLinux
+    }
+}
+
+fn script_program_candidates(path_env: Option<&OsStr>) -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        None
+        let _ = path_env;
+        Vec::new()
     }
 
     #[cfg(not(windows))]
     {
-        let path = std::env::var_os("PATH")?;
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("script"))
-            .find(|candidate| candidate.is_file())
-            .map(|candidate| candidate.display().to_string())
+        let Some(path) = path_env else {
+            return Vec::new();
+        };
+
+        let mut candidates = Vec::new();
+        for candidate in std::env::split_paths(path).map(|dir| dir.join("script")) {
+            if candidate.is_file() && !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+        candidates
     }
+}
+
+#[cfg(not(windows))]
+fn probe_script_support(script_program: &Path, flavor: ScriptFlavor) -> std::result::Result<(), String> {
+    let session_path = probe_session_path();
+    let (_, args) = match flavor {
+        ScriptFlavor::Bsd => build_bsd_script_command(
+            script_program.display().to_string(),
+            &session_path,
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "exit 0".to_string()],
+        ),
+        ScriptFlavor::UtilLinux => build_util_linux_script_command(
+            script_program.display().to_string(),
+            &session_path,
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "exit 0".to_string()],
+        ),
+    };
+
+    let output = Command::new(script_program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("failed to launch probe: {error}"))?;
+
+    let _ = fs::remove_file(&session_path);
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = if stderr.is_empty() {
+        format!("probe exited with {}", output.status)
+    } else {
+        stderr
+    };
+
+    Err(detail)
+}
+
+#[cfg(windows)]
+fn probe_script_support(_script_program: &Path, _flavor: ScriptFlavor) -> std::result::Result<(), String> {
+    Err("`script` is unavailable on Windows".to_string())
+}
+
+fn probe_session_path() -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "horizon-script-probe-{}-{timestamp}.session",
+        std::process::id()
+    ))
 }
 
 fn build_bsd_script_command(
@@ -265,11 +409,16 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(not(windows))]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    #[cfg(not(windows))]
+    use std::path::PathBuf;
 
     use super::{
-        PanelKind, PanelTranscript, build_bsd_script_command, build_util_linux_script_command,
-        ensure_clean_prompt_boundary, strip_script_banners,
+        PanelKind, PanelTranscript, ScriptFlavor, ScriptSupport, build_bsd_script_command,
+        build_util_linux_script_command, ensure_clean_prompt_boundary, strip_script_banners,
+        wrap_launch_command_with_support,
     };
     use uuid::Uuid;
 
@@ -389,5 +538,150 @@ mod tests {
                 "/bin/sh -c 'echo hi'".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn wrap_launch_command_skips_transcript_capture_when_script_is_unavailable() {
+        let session_path = Path::new("/tmp/panel.session");
+        let original_args = vec!["-c".to_string(), "echo hi".to_string()];
+        let original = ("/bin/sh".to_string(), original_args.clone());
+
+        let wrapped = wrap_launch_command_with_support(
+            &ScriptSupport::Missing,
+            session_path,
+            original.0.clone(),
+            original.1.clone(),
+        );
+
+        assert_eq!(wrapped, original);
+    }
+
+    #[test]
+    fn detect_script_support_reports_missing_script() {
+        let support = ScriptSupport::detect(None, ScriptFlavor::UtilLinux);
+
+        assert_eq!(support, ScriptSupport::Missing);
+    }
+
+    #[test]
+    fn wrap_launch_command_skips_transcript_capture_when_script_is_incompatible() {
+        let session_path = Path::new("/tmp/panel.session");
+        let original_args = vec!["-c".to_string(), "echo hi".to_string()];
+        let original = ("/bin/sh".to_string(), original_args.clone());
+
+        let wrapped = wrap_launch_command_with_support(
+            &ScriptSupport::Unsupported {
+                reason: "unsupported flags".to_string(),
+            },
+            session_path,
+            original.0.clone(),
+            original.1.clone(),
+        );
+
+        assert_eq!(wrapped, original);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn detect_script_support_reports_incompatible_script() {
+        let root = temp_script_root("incompatible");
+        let script_path = root.join("script");
+        write_executable_script(
+            &script_path,
+            r"#!/bin/sh
+echo unsupported flags >&2
+exit 64
+",
+        );
+
+        let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::UtilLinux);
+
+        match support {
+            ScriptSupport::Unsupported { reason } => {
+                assert!(reason.contains("unsupported flags"), "{reason}");
+            }
+            other => panic!("expected unsupported script support, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn detect_script_support_accepts_util_linux_probe_shape() {
+        let root = temp_script_root("util-linux");
+        let script_path = root.join("script");
+        write_executable_script(
+            &script_path,
+            r#"#!/bin/sh
+[ "$1" = "-qef" ] || exit 11
+[ "$2" = "--log-out" ] || exit 12
+[ "$4" = "--command" ] || exit 13
+[ "$5" = "/bin/sh -c 'exit 0'" ] || exit 14
+: > "$3"
+exit 0
+"#,
+        );
+
+        let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::UtilLinux);
+
+        assert_eq!(
+            support,
+            ScriptSupport::Supported {
+                program: script_path.display().to_string(),
+                flavor: ScriptFlavor::UtilLinux,
+            }
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn detect_script_support_accepts_bsd_probe_shape() {
+        let root = temp_script_root("bsd");
+        let script_path = root.join("script");
+        write_executable_script(
+            &script_path,
+            r#"#!/bin/sh
+[ "$1" = "-q" ] || exit 21
+[ "$2" = "-e" ] || exit 22
+[ "$3" = "-F" ] || exit 23
+[ "$5" = "/bin/sh" ] || exit 24
+[ "$6" = "-c" ] || exit 25
+[ "$7" = "exit 0" ] || exit 26
+: > "$4"
+exit 0
+"#,
+        );
+
+        let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::Bsd);
+
+        assert_eq!(
+            support,
+            ScriptSupport::Supported {
+                program: script_path.display().to_string(),
+                flavor: ScriptFlavor::Bsd,
+            }
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(windows))]
+    fn temp_script_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("horizon-transcript-script-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("temp script root");
+        root
+    }
+
+    #[cfg(not(windows))]
+    fn write_executable_script(path: &Path, contents: &str) {
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, contents).expect("script body");
+        let mut permissions = fs::metadata(&temp_path).expect("script metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&temp_path, permissions).expect("script permissions");
+        fs::rename(&temp_path, path).expect("script rename");
     }
 }
