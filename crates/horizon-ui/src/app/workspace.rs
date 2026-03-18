@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use egui::emath::TSTransform;
 use egui::{
     Button, Color32, Context, CornerRadius, CursorIcon, Id, Margin, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
@@ -14,8 +15,11 @@ struct WorkspaceVisual {
     id: WorkspaceId,
     name: String,
     color: Color32,
+    canvas_rect: Rect,
     screen_rect: Rect,
-    label_rect: Rect,
+    label_canvas_rect: Rect,
+    toolbar_canvas_rect: Rect,
+    toolbar_screen_rect: Rect,
     is_active: bool,
     is_empty: bool,
     label_hidden: bool,
@@ -54,6 +58,8 @@ impl HorizonApp {
         overlay_zones: &OverlayExclusion,
     ) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
+        let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
         let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones);
 
         self.workspace_screen_rects.clear();
@@ -69,9 +75,16 @@ impl HorizonApp {
 
             let is_renaming = self.renaming_workspace == Some(workspace.id);
             let interaction = if is_renaming {
-                render_workspace_visual(ctx, workspace, Some(&mut self.rename_buffer), overlay_zones)
+                render_workspace_visual(
+                    ctx,
+                    workspace,
+                    Some(&mut self.rename_buffer),
+                    overlay_zones,
+                    canvas_transform,
+                    canvas_clip_rect,
+                )
             } else {
-                render_workspace_visual(ctx, workspace, None, overlay_zones)
+                render_workspace_visual(ctx, workspace, None, overlay_zones, canvas_transform, canvas_clip_rect)
             };
 
             if interaction.activate_workspace {
@@ -156,51 +169,61 @@ impl HorizonApp {
                 let (r, g, b) = workspace.accent();
                 let color = Color32::from_rgb(r, g, b);
                 let is_active = self.board.active_workspace == Some(workspace.id);
-                let (screen_rect, is_empty) = if let Some((min, max)) = workspace_bounds.get(&workspace.id).copied() {
-                    let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                    let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
-                    let screen_min = self.canvas_to_screen(canvas_rect, top_left);
-                    let screen_max = self.canvas_to_screen(canvas_rect, bottom_right);
-                    let clamped_min_y = screen_min.y.max(canvas_rect.min.y);
-                    let clamped_max_y = screen_max.y.max(clamped_min_y);
-                    (
-                        Rect::from_min_max(
-                            Pos2::new(screen_min.x, clamped_min_y),
-                            Pos2::new(screen_max.x, clamped_max_y),
-                        ),
-                        false,
-                    )
-                } else {
-                    let screen_min =
-                        self.canvas_to_screen(canvas_rect, Pos2::new(workspace.position[0], workspace.position[1]));
-                    (
-                        Rect::from_min_size(
-                            Pos2::new(screen_min.x, screen_min.y.max(canvas_rect.min.y)),
+                let (workspace_canvas_rect, screen_rect, is_empty) =
+                    if let Some((min, max)) = workspace_bounds.get(&workspace.id).copied() {
+                        let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
+                        let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
+                        let canvas_rect_local = Rect::from_min_max(top_left, bottom_right);
+                        let screen_rect = Rect::from_min_size(
+                            self.canvas_to_screen(canvas_rect, canvas_rect_local.min),
+                            self.canvas_size_to_screen(canvas_rect_local.size()),
+                        )
+                        .intersect(canvas_rect);
+                        (canvas_rect_local, screen_rect, false)
+                    } else {
+                        let canvas_rect_local = Rect::from_min_size(
+                            Pos2::new(workspace.position[0], workspace.position[1]),
                             Vec2::new(WS_EMPTY_SIZE[0], WS_EMPTY_SIZE[1]),
-                        ),
-                        true,
-                    )
-                };
+                        );
+                        let screen_rect = Rect::from_min_size(
+                            self.canvas_to_screen(canvas_rect, canvas_rect_local.min),
+                            self.canvas_size_to_screen(canvas_rect_local.size()),
+                        )
+                        .intersect(canvas_rect);
+                        (canvas_rect_local, screen_rect, true)
+                    };
 
                 // Cull off-screen workspaces to avoid painting backgrounds and
                 // labels for workspaces the user cannot see.
-                if !canvas_rect.intersects(screen_rect) {
+                if !screen_rect.is_positive() || !canvas_rect.intersects(screen_rect) {
                     return None;
                 }
 
-                let label_rect = Rect::from_min_size(
-                    screen_rect.min + Vec2::new(14.0, 12.0),
+                let label_canvas_rect = Rect::from_min_size(
+                    workspace_canvas_rect.min + Vec2::new(14.0, 12.0),
                     Vec2::new(workspace_label_width(&workspace.name), WS_LABEL_HEIGHT),
+                );
+                let label_screen_rect = Rect::from_min_size(
+                    self.canvas_to_screen(canvas_rect, label_canvas_rect.min),
+                    self.canvas_size_to_screen(label_canvas_rect.size()),
+                );
+                let toolbar_canvas_rect = workspace_layout_toolbar_rect(label_canvas_rect);
+                let toolbar_screen_rect = Rect::from_min_size(
+                    self.canvas_to_screen(canvas_rect, toolbar_canvas_rect.min),
+                    self.canvas_size_to_screen(toolbar_canvas_rect.size()),
                 );
                 Some(WorkspaceVisual {
                     id: workspace.id,
                     name: workspace.name.clone(),
                     color,
+                    canvas_rect: workspace_canvas_rect,
                     screen_rect,
-                    label_rect,
+                    label_canvas_rect,
+                    toolbar_canvas_rect,
+                    toolbar_screen_rect,
                     is_active,
                     is_empty,
-                    label_hidden: overlay_zones.intersects(label_rect),
+                    label_hidden: overlay_zones.intersects(label_screen_rect),
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
                 })
@@ -214,19 +237,23 @@ fn render_workspace_visual(
     workspace: &WorkspaceVisual,
     rename_buffer: Option<&mut String>,
     overlay_zones: &OverlayExclusion,
+    canvas_transform: TSTransform,
+    canvas_clip_rect: Rect,
 ) -> WorkspaceInteraction {
     let is_renaming = rename_buffer.is_some();
 
     egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
-        .fixed_pos(workspace.screen_rect.min)
+        .fixed_pos(workspace.canvas_rect.min)
         .constrain(false)
+        .interactable(false)
         .order(egui::Order::Background)
         .show(ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(workspace.screen_rect.size(), Sense::hover());
+            apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);
+            let (rect, _) = ui.allocate_exact_size(workspace.canvas_rect.size(), Sense::hover());
             paint_workspace_frame(ui, rect, workspace.color, workspace.is_active);
 
             if workspace.is_empty {
-                paint_empty_workspace_hint(ui, rect, workspace.label_rect, workspace.color);
+                paint_empty_workspace_hint(ui, rect, workspace.label_canvas_rect, workspace.color);
             }
         });
 
@@ -243,11 +270,13 @@ fn render_workspace_visual(
     }
 
     let mut interaction = egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
-        .fixed_pos(workspace.label_rect.min)
+        .fixed_pos(workspace.label_canvas_rect.min)
         .constrain(false)
+        .interactable(false)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(workspace.label_rect.size(), Sense::hover());
+            apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);
+            let (rect, _) = ui.allocate_exact_size(workspace.label_canvas_rect.size(), Sense::hover());
             let label_response = ui.interact(
                 rect,
                 ui.make_persistent_id(("workspace_drag", workspace.id.0)),
@@ -293,11 +322,7 @@ fn render_workspace_visual(
 
                 WorkspaceInteraction {
                     activate_workspace: label_response.clicked() || label_response.drag_started(),
-                    drag_delta: if label_response.dragged() {
-                        ctx.input(|input| input.pointer.delta())
-                    } else {
-                        Vec2::ZERO
-                    },
+                    drag_delta: label_response.drag_delta(),
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
                     show_layout_toolbar: label_response.hovered(),
@@ -309,9 +334,9 @@ fn render_workspace_visual(
 
     if !is_renaming
         && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar)
-        && !overlay_zones.intersects(workspace_layout_toolbar_rect(workspace))
+        && !overlay_zones.intersects(workspace.toolbar_screen_rect)
     {
-        interaction.layout_action = render_workspace_layout_toolbar(ctx, workspace);
+        interaction.layout_action = render_workspace_layout_toolbar(ctx, workspace, canvas_transform, canvas_clip_rect);
     }
 
     interaction
@@ -420,18 +445,24 @@ fn should_show_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisu
     }
 
     ctx.input(|input| input.pointer.hover_pos())
-        .is_some_and(|pointer| workspace_layout_toolbar_rect(workspace).contains(pointer))
+        .is_some_and(|pointer| workspace.toolbar_screen_rect.contains(pointer))
 }
 
-fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -> Option<WorkspaceLayoutAction> {
-    let toolbar_rect = workspace_layout_toolbar_rect(workspace);
+fn render_workspace_layout_toolbar(
+    ctx: &Context,
+    workspace: &WorkspaceVisual,
+    canvas_transform: TSTransform,
+    canvas_clip_rect: Rect,
+) -> Option<WorkspaceLayoutAction> {
     let mut action = None;
 
     egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
-        .fixed_pos(toolbar_rect.min)
+        .fixed_pos(workspace.toolbar_canvas_rect.min)
         .constrain(false)
+        .interactable(false)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
+            apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);
             egui::Frame::new()
                 .fill(theme::alpha(
                     theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.08),
@@ -518,6 +549,11 @@ fn render_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual) -
     action
 }
 
+fn apply_canvas_transform(ui: &mut egui::Ui, canvas_transform: TSTransform, canvas_clip_rect: Rect) {
+    ui.ctx().set_transform_layer(ui.layer_id(), canvas_transform);
+    ui.set_clip_rect(canvas_clip_rect);
+}
+
 fn workspace_layout_label(layout: WorkspaceLayout) -> &'static str {
     match layout {
         WorkspaceLayout::Rows => "Rows",
@@ -536,12 +572,9 @@ fn workspace_layout_button_width(layout: WorkspaceLayout) -> f32 {
     }
 }
 
-fn workspace_layout_toolbar_rect(workspace: &WorkspaceVisual) -> Rect {
+fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
     Rect::from_min_size(
-        Pos2::new(
-            workspace.label_rect.max.x + WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X,
-            workspace.label_rect.min.y,
-        ),
+        Pos2::new(label_rect.max.x + WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X, label_rect.min.y),
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()

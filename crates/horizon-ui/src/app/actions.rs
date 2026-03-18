@@ -12,27 +12,6 @@ use super::util::{OverlayExclusion, editor_panel_size_for_file, primary_shortcut
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
-    #[profiling::function]
-    pub(super) fn reset_view(&mut self) {
-        self.pan_offset = Vec2::ZERO;
-        self.pan_target = None;
-        self.mark_runtime_dirty();
-    }
-
-    #[profiling::function]
-    pub(super) fn animate_pan(&mut self, ctx: &Context) {
-        if let Some(target) = self.pan_target {
-            let dt = ctx.input(|input| input.predicted_dt);
-            let t = (20.0 * dt).min(1.0);
-            self.pan_offset = self.pan_offset + (target - self.pan_offset) * t;
-            if (self.pan_offset - target).length_sq() < 1.0 {
-                self.pan_offset = target;
-                self.pan_target = None;
-            }
-            self.mark_runtime_dirty();
-        }
-    }
-
     pub(super) fn leftmost_workspace_id(&self) -> Option<WorkspaceId> {
         self.board
             .workspaces
@@ -43,36 +22,6 @@ impl HorizonApp {
                     .unwrap_or(Ordering::Equal)
             })
             .map(|workspace| workspace.id)
-    }
-
-    pub(super) fn pan_to_canvas_pos_aligned(
-        &mut self,
-        ctx: &Context,
-        canvas_pos: Pos2,
-        canvas_size: Vec2,
-        left_align: bool,
-    ) {
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let pan_margin = 40.0;
-        let x = if left_align {
-            pan_margin - canvas_pos.x
-        } else {
-            canvas_rect.width() * 0.5 - (canvas_pos.x + canvas_size.x * 0.5)
-        };
-        let y = canvas_rect.height() * 0.5 - (canvas_pos.y + canvas_size.y * 0.5);
-
-        self.pan_target = Some(Vec2::new(x, y));
-    }
-
-    pub(super) fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
-        canvas_rect.min + self.pan_offset + position.to_vec2()
-    }
-
-    pub(super) fn screen_to_canvas(&self, canvas_rect: Rect, screen_pos: Pos2) -> Pos2 {
-        Pos2::new(
-            screen_pos.x - canvas_rect.min.x - self.pan_offset.x,
-            screen_pos.y - canvas_rect.min.y - self.pan_offset.y,
-        )
     }
 
     pub(super) fn canvas_rect(ctx: &Context, sidebar_visible: bool) -> Rect {
@@ -326,6 +275,21 @@ impl HorizonApp {
             };
         }
 
+        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && primary_shortcut_modifier(input.modifiers)) {
+            self.reset_view();
+        }
+
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        if ctx.input(|input| {
+            primary_shortcut_modifier(input.modifiers)
+                && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals))
+        }) {
+            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::Minus) && primary_shortcut_modifier(input.modifiers)) {
+            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+        }
+
         if self.terminal_accepts_keyboard_input(ctx) {
             return;
         }
@@ -349,9 +313,6 @@ impl HorizonApp {
             } else {
                 self.create_panel();
             }
-        }
-        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && primary_shortcut_modifier(input.modifiers)) {
-            self.reset_view();
         }
     }
 
@@ -516,7 +477,7 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn handle_canvas_pan(&mut self, ctx: &Context) {
         let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-        let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta) =
+        let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta, zoom_delta) =
             ctx.input(|input| {
                 (
                     input.pointer.hover_pos(),
@@ -526,9 +487,19 @@ impl HorizonApp {
                     input.modifiers,
                     input.smooth_scroll_delta + input.raw_scroll_delta,
                     input.pointer.delta(),
+                    input.zoom_delta(),
                 )
             });
         let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
+        if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
+            let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
+            if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
+                self.clear_terminal_selections();
+            }
+            self.is_panning = false;
+            return;
+        }
+
         let drag_panning = pointer_in_canvas && (middle_down || (space_down && primary_down));
         let pointer_over_panel = pointer_position.is_some_and(|position| {
             pointer_in_canvas
@@ -553,14 +524,18 @@ impl HorizonApp {
         self.is_panning = pan_delta != Vec2::ZERO;
         if self.is_panning {
             self.pan_target = None;
-            self.pan_offset += pan_delta;
+            let mut pan_offset = Vec2::new(self.canvas_view.pan_offset[0], self.canvas_view.pan_offset[1]);
+            pan_offset += pan_delta;
+            self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
             self.mark_runtime_dirty();
-            // Clear any active terminal text selection so it doesn't
-            // continue extending while the canvas is being panned.
-            for panel in &self.board.panels {
-                if let Some(terminal) = panel.terminal() {
-                    terminal.clear_selection();
-                }
+            self.clear_terminal_selections();
+        }
+    }
+
+    fn clear_terminal_selections(&self) {
+        for panel in &self.board.panels {
+            if let Some(terminal) = panel.terminal() {
+                terminal.clear_selection();
             }
         }
     }

@@ -10,6 +10,7 @@ mod settings;
 mod sidebar;
 mod startup_session;
 mod util;
+mod view;
 mod workspace;
 mod yaml_highlight;
 
@@ -20,9 +21,9 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, Config, GitWatcher, PanelId, PresetConfig, ResolvedSession,
-    RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig,
-    WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, Board, CanvasViewState, Config, GitWatcher, PanelId, PresetConfig,
+    ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision,
+    WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -93,7 +94,7 @@ pub struct HorizonApp {
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
     workspace_creates: Vec<PanelId>,
     theme_applied: bool,
-    pan_offset: Vec2,
+    canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
@@ -212,7 +213,7 @@ impl HorizonApp {
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_pos: None,
-            pan_offset: Vec2::ZERO,
+            canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,
             git_watchers: HashMap::new(),

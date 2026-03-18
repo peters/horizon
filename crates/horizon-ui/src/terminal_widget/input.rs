@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use alacritty_terminal::term::TermMode;
+use egui::emath::TSTransform;
 use egui::{Key, Pos2, Rect, Vec2};
 use horizon_core::{Panel, SelectionType, TerminalSide};
 
@@ -18,6 +19,7 @@ struct PointerContext<'a> {
     pointer_buttons: input::PointerButtons,
     current_modifiers: egui::Modifiers,
     hovered_point: Option<input::GridPoint>,
+    from_global: Option<TSTransform>,
 }
 
 pub(super) fn handle_terminal_pointer_input(
@@ -56,9 +58,11 @@ pub(super) fn handle_terminal_pointer_input(
         middle: input.pointer.middle_down(),
         secondary: input.pointer.secondary_down(),
     });
+    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
     let current_modifiers = ui.input(|input| input.modifiers);
     let hovered_point = ui
         .input(|input| input.pointer.hover_pos())
+        .map(|position| transform_pos(from_global, position))
         .filter(|position| interaction.layout.body.contains(*position))
         .and_then(|position| {
             grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
@@ -72,6 +76,7 @@ pub(super) fn handle_terminal_pointer_input(
         pointer_buttons,
         current_modifiers,
         hovered_point,
+        from_global,
     };
 
     handle_pointer_events(&events, panel, &pointer_context);
@@ -100,18 +105,23 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 button,
                 pressed,
                 modifiers,
-            } if pointer.interaction.layout.body.contains(*pos) => {
+            } => {
+                let pos = transform_pos(pointer.from_global, *pos);
+                if !pointer.interaction.layout.body.contains(pos) {
+                    continue;
+                }
                 if *pressed {
                     pointer.interaction.body.request_focus();
                 }
-                handle_pointer_button(panel, pointer, *pos, *button, *pressed, *modifiers);
+                handle_pointer_button(panel, pointer, pos, *button, *pressed, *modifiers);
             }
             egui::Event::PointerMoved(pos) => {
-                let inside = pointer.interaction.layout.body.contains(*pos);
+                let pos = transform_pos(pointer.from_global, *pos);
+                let inside = pointer.interaction.layout.body.contains(pos);
                 if inside && mouse_mode_active(pointer.terminal_mode, pointer.current_modifiers) {
                     if let Some(point) = grid_point_from_position(
                         pointer.interaction.layout.body,
-                        *pos,
+                        pos,
                         pointer.metrics,
                         pointer.visible_rows,
                         pointer.visible_cols,
@@ -128,7 +138,7 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 {
                     handle_pointer_selection_drag(
                         panel,
-                        *pos,
+                        pos,
                         pointer.interaction.layout.body,
                         pointer.metrics,
                         pointer.visible_rows,
@@ -137,6 +147,9 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 }
             }
             egui::Event::MouseWheel { delta, unit, modifiers } => {
+                if modifiers.ctrl || modifiers.command {
+                    continue;
+                }
                 if let Some(point) = pointer.hovered_point
                     && let Some(action) = input::wheel_action(
                         *delta,
@@ -221,8 +234,11 @@ fn handle_pointer_button(
 }
 
 fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &TerminalInteraction, visible_rows: u16) {
+    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
     if (interaction.scrollbar.dragged() || interaction.scrollbar.clicked())
-        && let Some(pointer_position) = ui.input(|input| input.pointer.interact_pos())
+        && let Some(pointer_position) = ui
+            .input(|input| input.pointer.interact_pos())
+            .map(|position| transform_pos(from_global, position))
     {
         let history_size = panel.terminal().map_or(0, horizon_core::Terminal::history_size);
         let target_scrollback = scrollbar_pointer_to_scrollback(
@@ -233,6 +249,10 @@ fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &Ter
         );
         panel.set_scrollback(target_scrollback);
     }
+}
+
+fn transform_pos(from_global: Option<TSTransform>, pos: Pos2) -> Pos2 {
+    from_global.map_or(pos, |transform| transform * pos)
 }
 
 fn handle_pointer_selection_drag(

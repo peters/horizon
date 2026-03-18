@@ -29,19 +29,22 @@ struct CanvasGridCacheKey {
     rect_min_y: u32,
     rect_width: u32,
     rect_height: u32,
+    zoom: u32,
     offset_x: u32,
     offset_y: u32,
 }
 
 impl CanvasGridCacheKey {
-    fn new(rect: Rect, pan_offset: Vec2) -> Self {
+    fn new(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Self {
+        let scaled_spacing = GRID_SPACING * canvas_view.zoom;
         Self {
             rect_min_x: rect.min.x.to_bits(),
             rect_min_y: rect.min.y.to_bits(),
             rect_width: rect.width().to_bits(),
             rect_height: rect.height().to_bits(),
-            offset_x: pan_offset.x.rem_euclid(GRID_SPACING).to_bits(),
-            offset_y: pan_offset.y.rem_euclid(GRID_SPACING).to_bits(),
+            zoom: canvas_view.zoom.to_bits(),
+            offset_x: canvas_view.pan_offset[0].rem_euclid(scaled_spacing).to_bits(),
+            offset_y: canvas_view.pan_offset[1].rem_euclid(scaled_spacing).to_bits(),
         }
     }
 }
@@ -86,9 +89,10 @@ impl HorizonApp {
             let canvas_y = model.content_min[1] + (local.y - MINIMAP_PAD) / model.scale_y;
 
             self.pan_target = None;
-            self.pan_offset = Vec2::new(
-                canvas_rect.width() * 0.5 - canvas_x,
-                canvas_rect.height() * 0.5 - canvas_y,
+            self.canvas_view.align_canvas_point_to_screen(
+                [canvas_rect.min.x, canvas_rect.min.y],
+                [canvas_x, canvas_y],
+                [canvas_rect.center().x, canvas_rect.center().y],
             );
             self.mark_runtime_dirty();
         }
@@ -213,7 +217,8 @@ impl HorizonApp {
             return;
         }
 
-        let view_origin = Pos2::new(-self.pan_offset.x, -self.pan_offset.y);
+        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let view_origin = self.screen_to_canvas(canvas_rect, canvas_rect.min);
         let focused_status = self
             .board
             .focused
@@ -254,6 +259,12 @@ impl HorizonApp {
                                 .size(11.0),
                         );
                         ui.label(
+                            egui::RichText::new(format!("zoom  {:.0}%", self.canvas_view.zoom * 100.0))
+                                .monospace()
+                                .color(theme::FG_SOFT)
+                                .size(11.0),
+                        );
+                        ui.label(
                             egui::RichText::new(format!("focused term {focused_status}"))
                                 .monospace()
                                 .color(theme::FG_SOFT)
@@ -269,7 +280,7 @@ impl HorizonApp {
             .frame(egui::Frame::default().fill(theme::BG))
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
-                paint_dot_grid(ui, self.pan_offset, &mut self.canvas_grid_cache);
+                paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
                 if self.board.panels.is_empty() {
                     paint_empty_state(ui);
                 }
@@ -326,13 +337,13 @@ fn minimap_point(model: &MinimapModel, canvas_x: f32, canvas_y: f32) -> Pos2 {
     )
 }
 
-fn paint_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, cache: &mut CanvasGridCache) {
+fn paint_dot_grid(ui: &mut egui::Ui, canvas_view: horizon_core::CanvasViewState, cache: &mut CanvasGridCache) {
     let rect = ui.max_rect();
-    let key = CanvasGridCacheKey::new(rect, pan_offset);
+    let key = CanvasGridCacheKey::new(rect, canvas_view);
 
     if cache.key != Some(key) {
         cache.key = Some(key);
-        cache.shape = Some(build_dot_grid_shape(rect, pan_offset));
+        cache.shape = Some(build_dot_grid_shape(rect, canvas_view));
     }
 
     if let Some(shape) = &cache.shape {
@@ -340,11 +351,13 @@ fn paint_dot_grid(ui: &mut egui::Ui, pan_offset: Vec2, cache: &mut CanvasGridCac
     }
 }
 
-fn build_dot_grid_shape(rect: Rect, pan_offset: Vec2) -> Shape {
-    let offset_x = pan_offset.x.rem_euclid(GRID_SPACING);
-    let offset_y = pan_offset.y.rem_euclid(GRID_SPACING);
-    let columns = dot_grid_axis_count(rect.width());
-    let rows = dot_grid_axis_count(rect.height());
+fn build_dot_grid_shape(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Shape {
+    let spacing = GRID_SPACING * canvas_view.zoom;
+    let dot_diameter = (GRID_DOT_DIAMETER * canvas_view.zoom).clamp(1.0, 5.0);
+    let offset_x = canvas_view.pan_offset[0].rem_euclid(spacing);
+    let offset_y = canvas_view.pan_offset[1].rem_euclid(spacing);
+    let columns = dot_grid_axis_count(rect.width(), spacing);
+    let rows = dot_grid_axis_count(rect.height(), spacing);
     let dot_count = columns.saturating_mul(rows);
 
     let mut mesh = Mesh::default();
@@ -355,23 +368,23 @@ fn build_dot_grid_shape(rect: Rect, pan_offset: Vec2) -> Shape {
     while x <= rect.max.x {
         let mut y = rect.min.y + offset_y;
         while y <= rect.max.y {
-            let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(GRID_DOT_DIAMETER));
+            let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(dot_diameter));
             mesh.add_colored_rect(dot_rect, theme::GRID_DOT);
-            y += GRID_SPACING;
+            y += spacing;
         }
-        x += GRID_SPACING;
+        x += spacing;
     }
 
     Shape::mesh(mesh)
 }
 
-fn dot_grid_axis_count(length: f32) -> usize {
-    if !length.is_finite() || length < 0.0 {
+fn dot_grid_axis_count(length: f32, spacing: f32) -> usize {
+    if !length.is_finite() || length < 0.0 || !spacing.is_finite() || spacing <= 0.0 {
         return 1;
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let steps = ((length + GRID_SPACING) / GRID_SPACING).ceil() as usize;
+    let steps = ((length + spacing) / spacing).ceil() as usize;
     steps.saturating_add(1)
 }
 
@@ -395,4 +408,36 @@ fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel)
         Stroke::new(1.0, theme::alpha(theme::FG, 90)),
         StrokeKind::Inside,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Pos2, Rect, Vec2};
+    use horizon_core::CanvasViewState;
+
+    use super::{CanvasGridCacheKey, GRID_SPACING, dot_grid_axis_count};
+
+    #[test]
+    fn dot_grid_axis_count_handles_invalid_spacing() {
+        assert_eq!(dot_grid_axis_count(640.0, 0.0), 1);
+        assert_eq!(dot_grid_axis_count(640.0, f32::NAN), 1);
+        assert_eq!(dot_grid_axis_count(f32::NAN, GRID_SPACING), 1);
+    }
+
+    #[test]
+    fn dot_grid_axis_count_grows_when_zooming_out() {
+        let zoomed_in = dot_grid_axis_count(880.0, GRID_SPACING * 2.0);
+        let zoomed_out = dot_grid_axis_count(880.0, GRID_SPACING * 0.5);
+
+        assert!(zoomed_out > zoomed_in);
+    }
+
+    #[test]
+    fn canvas_grid_cache_key_tracks_zoom_changes() {
+        let rect = Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1200.0, 800.0));
+        let base = CanvasGridCacheKey::new(rect, CanvasViewState::new([24.0, -12.0], 1.0));
+        let zoomed = CanvasGridCacheKey::new(rect, CanvasViewState::new([24.0, -12.0], 1.5));
+
+        assert_ne!(base, zoomed);
+    }
 }
