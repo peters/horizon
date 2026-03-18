@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use egui::{Context, Vec2};
+use egui::Context;
 use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelOptions, PanelResume};
 
 use crate::{loading_spinner, theme};
@@ -45,11 +45,9 @@ impl HorizonApp {
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();
-        self.pan_offset = runtime_state
-            .pan_offset
-            .map_or(Vec2::ZERO, |offset| Vec2::new(offset[0], offset[1]));
+        self.canvas_view = runtime_state.canvas_view_or_default();
         self.pan_target = None;
-        self.initial_pan_done = false;
+        self.initial_pan_done = runtime_state.has_persisted_canvas_view();
         self.runtime_dirty_since = None;
         self.git_watchers.clear();
         self.startup_receiver = Self::runtime_state_needs_session_bootstrap(runtime_state)

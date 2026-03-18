@@ -20,3 +20,12 @@ Use this when you:
 - Complete significant work (done)
 - Find something the user should know about (info)
 - Need the user to review or decide something (attention)
+
+Related OSC API for terminal titles:
+
+- Set title:
+  `printf '\033]0;HORIZON_TITLE:set:%s\007' "<title>" > "/dev/$(ps -o tty= -p $PPID | tr -d ' ')"`
+- Clear title:
+  `printf '\033]0;HORIZON_TITLE:clear\007' > "/dev/$(ps -o tty= -p $PPID | tr -d ' ')"`
+
+Keep titles under 80 chars and avoid newlines.

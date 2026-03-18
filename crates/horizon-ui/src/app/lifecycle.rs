@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use egui::{Context, Pos2, Vec2};
+use egui::Context;
 use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
 
 use crate::{loading_spinner, theme};
@@ -110,14 +110,13 @@ impl HorizonApp {
         self.initial_pan_done = true;
         if let Some(workspace_id) = self.leftmost_workspace_id() {
             self.board.focus_workspace(workspace_id);
-            if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-                let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                let size = Vec2::new(
-                    max[0] - min[0] + 2.0 * WS_BG_PAD,
-                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                );
+            if let Some((min, _max)) = self.board.workspace_bounds(workspace_id) {
                 let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
-                self.pan_offset = Vec2::new(40.0 - pos.x, canvas_rect.height() * 0.5 - (pos.y + size.y * 0.5));
+                self.canvas_view.align_canvas_point_to_screen(
+                    [canvas_rect.min.x, canvas_rect.min.y],
+                    [min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT],
+                    [canvas_rect.min.x + 40.0, canvas_rect.center().y],
+                );
             }
         }
     }
@@ -254,12 +253,7 @@ impl HorizonApp {
             let workspace_id = self.board.workspaces[0].id;
             self.board.focus_workspace(workspace_id);
             if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-                let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                let size = Vec2::new(
-                    max[0] - min[0] + 2.0 * WS_BG_PAD,
-                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                );
-                self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+                self.focus_workspace_bounds(ctx, min, max, true);
             }
         }
         if self
@@ -324,12 +318,7 @@ impl HorizonApp {
                 if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(ws_id)
                 {
-                    let pos = egui::Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                    let size = Vec2::new(
-                        max[0] - min[0] + 2.0 * WS_BG_PAD,
-                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                    );
-                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+                    self.focus_workspace_bounds(ctx, min, max, true);
                 }
             }
         }

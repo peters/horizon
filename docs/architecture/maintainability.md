@@ -34,6 +34,7 @@ back into large multi-purpose modules.
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows
   - `persistence`: runtime/config save glue
+  - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
   - `workspace`: workspace frame rendering and rename/drag UI
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules

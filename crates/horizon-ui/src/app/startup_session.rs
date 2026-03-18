@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use egui::{Align, Color32, Context, Layout, Margin, RichText, Stroke};
+use egui::{Align, Color32, Context, CursorIcon, Layout, Margin, RichText, Sense, Stroke};
 use horizon_core::StartupPromptReason;
 
 use crate::theme;
@@ -29,20 +29,20 @@ impl HorizonApp {
             StartupChooserAction::None => {}
             StartupChooserAction::OpenNewSession => {
                 match self.session_store.create_new_session(&self.template_config) {
-                    Ok(session) => self.activate_persistent_session(&session),
+                    Ok(session) => self.activate_startup_session(ctx, &session),
                     Err(error) => self.set_startup_error(format!("Failed to create session: {error}")),
                 }
             }
             StartupChooserAction::OpenCopy(session_id) => match self.session_store.duplicate_session(&session_id) {
-                Ok(session) => self.activate_persistent_session(&session),
+                Ok(session) => self.activate_startup_session(ctx, &session),
                 Err(error) => self.set_startup_error(format!("Failed to copy session: {error}")),
             },
             StartupChooserAction::TakeOver(session_id) => match self.session_store.take_over_session(&session_id) {
-                Ok(session) => self.activate_persistent_session(&session),
+                Ok(session) => self.activate_startup_session(ctx, &session),
                 Err(error) => self.set_startup_error(format!("Failed to take over session: {error}")),
             },
             StartupChooserAction::Resume(session_id) => match self.session_store.resume_session(&session_id) {
-                Ok(session) => self.activate_persistent_session(&session),
+                Ok(session) => self.activate_startup_session(ctx, &session),
                 Err(error) => self.set_startup_error(format!("Failed to resume session: {error}")),
             },
         }
@@ -51,6 +51,20 @@ impl HorizonApp {
     fn set_startup_error(&mut self, error: String) {
         if let Some(state) = self.startup_chooser.as_mut() {
             state.error = Some(error);
+        }
+    }
+
+    fn activate_startup_session(&mut self, ctx: &Context, session: &horizon_core::ResolvedSession) {
+        self.activate_persistent_session(session);
+        self.restore_window_viewport(ctx);
+    }
+
+    fn restore_window_viewport(&self, ctx: &Context) {
+        let width = self.window_config.width.clamp(800.0, 7680.0);
+        let height = self.window_config.height.clamp(600.0, 4320.0);
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
+        if let (Some(x), Some(y)) = (self.window_config.x, self.window_config.y) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
         }
     }
 }
@@ -74,7 +88,10 @@ fn render_startup_chooser_panel(ctx: &Context, state: &mut StartupChooserState) 
                         ui.vertical(|ui| {
                             render_config_path(ui, &state.chooser.config_path);
                             ui.add_space(18.0);
-                            render_session_cards(ui, state);
+                            egui::ScrollArea::vertical()
+                                .max_height(360.0)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| render_session_cards(ui, state));
 
                             if let Some(error) = &state.error {
                                 ui.add_space(6.0);
@@ -118,16 +135,16 @@ fn render_config_path(ui: &mut egui::Ui, config_path: &str) {
 fn render_session_cards(ui: &mut egui::Ui, state: &mut StartupChooserState) {
     for session in &state.chooser.sessions {
         let selected = state.selected_session_id.as_deref() == Some(session.session_id.as_str());
-        let response = render_session_card(ui, session, selected);
-        if response.clicked() {
+        if render_session_card(ui, session, selected) {
             state.selected_session_id = Some(session.session_id.clone());
         }
         ui.add_space(10.0);
     }
 }
 
-fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary, selected: bool) -> egui::Response {
-    egui::Frame::default()
+fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary, selected: bool) -> bool {
+    let mut radio_clicked = false;
+    let frame_response = egui::Frame::default()
         .fill(if selected {
             theme::blend(theme::PANEL_BG, theme::ACCENT, 0.16)
         } else {
@@ -144,9 +161,9 @@ fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary
         .corner_radius(14)
         .inner_margin(Margin::same(14))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let mut is_selected = selected;
-                ui.radio_value(&mut is_selected, true, "");
+                radio_clicked = ui.radio(selected, "").clicked();
 
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -169,7 +186,17 @@ fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary
                 });
             });
         })
-        .response
+        .response;
+
+    let card_response = ui
+        .interact(
+            frame_response.rect,
+            ui.make_persistent_id(("startup_session_card", &session.session_id)),
+            Sense::click(),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand);
+
+    radio_clicked || card_response.clicked()
 }
 
 fn render_action_row(ui: &mut egui::Ui, state: &StartupChooserState, action: &mut StartupChooserAction) {

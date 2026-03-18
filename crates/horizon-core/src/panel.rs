@@ -1,5 +1,6 @@
 mod spawn;
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -129,6 +130,7 @@ pub struct Panel {
     pub id: PanelId,
     pub local_id: String,
     pub title: String,
+    pub terminal_title: String,
     pub kind: PanelKind,
     pub resume: PanelResume,
     pub layout: PanelLayout,
@@ -209,13 +211,25 @@ impl Panel {
         let had_output = terminal.process_events();
         self.had_recent_output = had_output;
 
-        if had_output && !self.has_custom_name {
-            let title = terminal.title();
-            if !title.is_empty() {
-                self.title = title.to_string();
-            }
+        if had_output {
+            self.terminal_title = terminal.title().to_string();
         }
         had_output
+    }
+
+    #[must_use]
+    pub fn display_title(&self) -> Cow<'_, str> {
+        if self.has_custom_name {
+            if self.terminal_title.is_empty() || self.terminal_title == self.title {
+                Cow::Borrowed(&self.title)
+            } else {
+                Cow::Owned(format!("{} — {}", self.title, self.terminal_title))
+            }
+        } else if self.terminal_title.is_empty() {
+            Cow::Borrowed(&self.title)
+        } else {
+            Cow::Borrowed(&self.terminal_title)
+        }
     }
 
     #[must_use]
@@ -447,9 +461,53 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, PanelKind, PanelResume,
-        kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent,
+        PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind,
+        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
+
+    fn test_panel(title: &str, terminal_title: &str, has_custom_name: bool) -> Panel {
+        Panel {
+            id: PanelId(1),
+            local_id: "panel-1".to_string(),
+            title: title.to_string(),
+            terminal_title: terminal_title.to_string(),
+            kind: PanelKind::Usage,
+            resume: PanelResume::Fresh,
+            layout: PanelLayout::default(),
+            workspace_id: WorkspaceId(1),
+            content: PanelContent::Usage(UsageDashboard::new()),
+            session_binding: None,
+            template: None,
+            launched_at_millis: 0,
+            has_custom_name,
+            had_recent_output: false,
+            launch_command: None,
+            launch_args: Vec::new(),
+            launch_cwd: None,
+        }
+    }
+
+    #[test]
+    fn display_title_uses_runtime_title_for_unnamed_panels() {
+        let panel = test_panel("Terminal 1", "Build running", false);
+
+        assert_eq!(panel.display_title(), "Build running");
+    }
+
+    #[test]
+    fn display_title_appends_runtime_title_for_custom_named_panels() {
+        let panel = test_panel("Backend", "Build running", true);
+
+        assert_eq!(panel.display_title(), "Backend — Build running");
+    }
+
+    #[test]
+    fn display_title_omits_duplicate_runtime_title_for_custom_named_panels() {
+        let panel = test_panel("Backend", "Backend", true);
+
+        assert_eq!(panel.display_title(), "Backend");
+    }
 
     #[test]
     fn codex_without_exact_binding_starts_fresh() {

@@ -24,11 +24,7 @@ impl HorizonApp {
             return;
         };
 
-        let runtime_state = RuntimeState::from_board(
-            &self.board,
-            self.window_config.clone(),
-            [self.pan_offset.x, self.pan_offset.y],
-        );
+        let runtime_state = RuntimeState::from_board(&self.board, self.window_config.clone(), self.canvas_view);
         if let Err(error) = self
             .session_store
             .save_runtime_state(&active_session.session_id, &runtime_state)

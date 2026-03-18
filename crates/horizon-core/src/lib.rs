@@ -18,6 +18,7 @@ mod terminal;
 mod transcript;
 mod usage_dashboard;
 mod usage_stats;
+mod view;
 mod workspace;
 
 pub use alacritty_terminal::index::Side as TerminalSide;
@@ -47,4 +48,5 @@ pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_tokens};
+pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
