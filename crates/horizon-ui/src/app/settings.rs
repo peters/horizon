@@ -7,6 +7,10 @@ use super::util::{atomic_write, chrome_button, primary_button};
 use super::yaml_highlight::highlight_yaml;
 use super::{HorizonApp, SettingsEditor, SettingsStatus};
 
+pub(super) const SETTINGS_BAR_ID: &str = "settings_bar";
+pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
+pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
+
 #[derive(Clone, Copy)]
 enum SettingsAction {
     None,
@@ -92,8 +96,8 @@ impl HorizonApp {
     ) -> SettingsAction {
         let mut action = SettingsAction::None;
 
-        egui::TopBottomPanel::bottom("settings_bar")
-            .exact_height(48.0)
+        egui::TopBottomPanel::bottom(SETTINGS_BAR_ID)
+            .exact_height(SETTINGS_BAR_HEIGHT)
             .frame(
                 egui::Frame::default()
                     .fill(theme::BG_ELEVATED)
@@ -198,6 +202,10 @@ impl HorizonApp {
     }
 }
 
+pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
+    (viewport_width * 0.3).clamp(340.0, 900.0)
+}
+
 fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
         SettingsStatus::None => (String::new(), theme::FG_DIM),
@@ -215,9 +223,9 @@ fn render_settings_editor(ctx: &Context, config_path: &str, buffer: &mut String)
     };
 
     let viewport_width = super::util::viewport_local_rect(ctx).width();
-    let default_width = (viewport_width * 0.3).clamp(340.0, 900.0);
+    let default_width = settings_panel_default_width(viewport_width);
 
-    egui::SidePanel::right("settings_panel")
+    egui::SidePanel::right(SETTINGS_PANEL_ID)
         .default_width(default_width)
         .min_width(viewport_width * 0.15)
         .max_width(viewport_width * 0.5)

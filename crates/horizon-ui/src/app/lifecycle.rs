@@ -111,7 +111,7 @@ impl HorizonApp {
         if let Some(workspace_id) = self.leftmost_workspace_id() {
             self.board.focus_workspace(workspace_id);
             if let Some((min, _max)) = self.board.workspace_bounds(workspace_id) {
-                let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+                let canvas_rect = self.canvas_rect(ctx);
                 self.canvas_view.align_canvas_point_to_screen(
                     [canvas_rect.min.x, canvas_rect.min.y],
                     [min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT],
@@ -307,7 +307,7 @@ impl HorizonApp {
         self.render_panels(ctx);
         self.render_preset_picker(ctx);
         let minimap_height = self.render_minimap(ctx, &workspace_bounds);
-        if self.template_config.features.attention_feed {
+        if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
             let feed_result =
                 attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
             for attention_id in feed_result.dismissed_ids {

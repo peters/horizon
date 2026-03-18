@@ -153,7 +153,7 @@ impl HorizonApp {
         let focused = self.board.focused;
         panel_order.sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
-        let canvas_rect = Self::canvas_rect(ctx, self.sidebar_visible);
+        let canvas_rect = self.canvas_rect(ctx);
         let mut panels_to_close = Vec::new();
 
         for (panel_id, fallback_index) in panel_order {
