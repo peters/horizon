@@ -37,8 +37,8 @@ pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use runtime_state::{
-    AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, PanelState, PanelTemplateRef, RuntimeState,
-    WorkspaceState, WorkspaceTemplateRef, new_local_id,
+    AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState, PanelState, PanelTemplateRef,
+    RuntimeState, WorkspaceState, WorkspaceTemplateRef, new_local_id,
 };
 pub use session_store::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary, StartupChooser,

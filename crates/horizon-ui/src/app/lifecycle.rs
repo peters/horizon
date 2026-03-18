@@ -247,6 +247,12 @@ impl HorizonApp {
         let count_before = self.board.workspaces.len();
         self.board.remove_empty_workspaces();
         let count_after = self.board.workspaces.len();
+        let detached_before = self.detached_workspaces.len();
+        self.detached_workspaces
+            .retain(|local_id, _| self.board.workspace_id_by_local_id(local_id).is_some());
+        if self.detached_workspaces.len() != detached_before {
+            self.mark_runtime_dirty();
+        }
         if self.board.workspaces.is_empty() {
             self.reset_view();
         } else if count_after < count_before && count_after == 1 {
@@ -323,6 +329,7 @@ impl HorizonApp {
             }
         }
         self.render_canvas_hud(ctx);
+        self.render_detached_viewports(ctx);
     }
 
     #[profiling::function]

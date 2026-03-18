@@ -16,6 +16,7 @@ impl HorizonApp {
         self.board
             .workspaces
             .iter()
+            .filter(|workspace| !self.workspace_is_detached(workspace.id))
             .min_by(|left, right| {
                 left.position[0]
                     .partial_cmp(&right.position[0])

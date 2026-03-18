@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use horizon_core::RuntimeState;
+use horizon_core::{DetachedWorkspaceState, RuntimeState};
 
 use super::HorizonApp;
 
@@ -24,7 +24,22 @@ impl HorizonApp {
             return;
         };
 
-        let runtime_state = RuntimeState::from_board(&self.board, self.window_config.clone(), self.canvas_view);
+        let detached_workspaces = self
+            .detached_workspaces
+            .iter()
+            .filter(|(workspace_local_id, _)| !self.pending_detached_reattach.contains(*workspace_local_id))
+            .map(|(workspace_local_id, window)| DetachedWorkspaceState {
+                workspace_local_id: workspace_local_id.clone(),
+                window: window.clone(),
+            })
+            .collect();
+
+        let runtime_state = RuntimeState::from_board_with_detached_workspaces(
+            &self.board,
+            self.window_config.clone(),
+            self.canvas_view,
+            detached_workspaces,
+        );
         if let Err(error) = self
             .session_store
             .save_runtime_state(&active_session.session_id, &runtime_state)
@@ -49,6 +64,7 @@ impl HorizonApp {
                 let new_y = pos.min.y;
                 let changed = self.window_config.x.is_none()
                     || self.window_config.x.is_some_and(|x| (x - new_x).abs() > 1.0)
+                    || self.window_config.y.is_none()
                     || self.window_config.y.is_some_and(|y| (y - new_y).abs() > 1.0);
                 if changed {
                     self.window_config.x = Some(new_x);

@@ -45,6 +45,13 @@ impl HorizonApp {
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();
+        self.detached_workspaces = runtime_state
+            .detached_workspaces
+            .iter()
+            .filter(|workspace| !workspace.workspace_local_id.is_empty())
+            .map(|workspace| (workspace.workspace_local_id.clone(), workspace.window.clone()))
+            .collect();
+        self.pending_detached_reattach.clear();
         self.canvas_view = runtime_state.canvas_view_or_default();
         self.pan_target = None;
         self.initial_pan_done = runtime_state.has_persisted_canvas_view();

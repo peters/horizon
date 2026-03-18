@@ -14,6 +14,7 @@ struct WorkspaceSidebarEntry {
     name: String,
     color: Color32,
     is_active: bool,
+    detached: bool,
     panel_ids: Vec<PanelId>,
     attention_count: usize,
 }
@@ -23,6 +24,8 @@ struct SidebarActions {
     focus_panel: Option<PanelId>,
     pan_to_panel: Option<PanelId>,
     pan_to_workspace: Option<WorkspaceId>,
+    detach_workspace: Option<WorkspaceId>,
+    reattach_workspace: Option<WorkspaceId>,
     close_panel: Option<PanelId>,
     close_all_in_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
@@ -130,6 +133,7 @@ impl HorizonApp {
                     name: workspace.name.clone(),
                     color: Color32::from_rgb(r, g, b),
                     is_active: self.board.active_workspace == Some(workspace.id),
+                    detached: self.workspace_is_detached(workspace.id),
                     panel_ids,
                     attention_count,
                 }
@@ -216,6 +220,15 @@ impl HorizonApp {
                     .size(13.0)
                     .strong(),
             );
+            if workspace.detached {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("NEW WINDOW")
+                        .color(theme::FG_DIM)
+                        .size(8.5)
+                        .strong(),
+                );
+            }
         });
 
         Self::handle_workspace_click(ui, workspace, &workspace_response.response, actions);
@@ -274,6 +287,24 @@ impl HorizonApp {
                     actions.arrange_layout = Some((workspace.id, layout));
                     ui.close();
                 }
+            }
+
+            ui.separator();
+            let detach_label = if workspace.detached {
+                "Move to Main Window"
+            } else {
+                "Open in New Window"
+            };
+            if ui
+                .add(Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT)).frame(false))
+                .clicked()
+            {
+                if workspace.detached {
+                    actions.reattach_workspace = Some(workspace.id);
+                } else {
+                    actions.detach_workspace = Some(workspace.id);
+                }
+                ui.close();
             }
 
             ui.separator();
@@ -453,7 +484,11 @@ impl HorizonApp {
             if actions.pan_to_panel.is_none() {
                 self.board.focus_workspace(workspace_id);
             }
-            if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+            if self.focus_workspace_window(ctx, workspace_id) {
+                if let Some(panel_id) = actions.focus_panel {
+                    self.board.focus(panel_id);
+                }
+            } else if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
                 let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
                 let size = Vec2::new(
                     max[0] - min[0] + 2.0 * WS_BG_PAD,
@@ -461,6 +496,13 @@ impl HorizonApp {
                 );
                 self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
             }
+        }
+
+        if let Some(workspace_id) = actions.detach_workspace {
+            self.detach_workspace(workspace_id);
+        }
+        if let Some(workspace_id) = actions.reattach_workspace {
+            self.reattach_workspace(workspace_id);
         }
 
         if let Some(panel_id) = actions.close_panel {
