@@ -296,13 +296,25 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
+        self.resize_with_policy(rows, cols, cell_width, cell_height, false);
+    }
+
+    pub fn resize_immediately(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
+        self.resize_with_policy(rows, cols, cell_width, cell_height, true);
+    }
+
+    fn resize_with_policy(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16, immediate: bool) {
         let rows = rows.max(1);
         let cols = cols.max(2);
         let cell_width = cell_width.max(1);
         let cell_height = cell_height.max(1);
 
         if rows == self.rows && cols == self.cols && cell_width == self.cell_width && cell_height == self.cell_height {
-            self.flush_pending_pty_resize();
+            if immediate {
+                self.send_pty_resize();
+            } else {
+                self.flush_pending_pty_resize();
+            }
             return;
         }
 
@@ -314,18 +326,17 @@ impl Terminal {
         // Resize the terminal grid immediately for smooth visual feedback.
         self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
 
+        if immediate {
+            self.send_pty_resize();
+            return;
+        }
+
         if self.pty_resized {
             // Debounce subsequent PTY resizes to avoid flooding the child
             // process during drag-resize.
             self.pending_pty_resize = Some(std::time::Instant::now());
         } else {
-            // First resize after spawn — send immediately so the child
-            // starts with the correct terminal dimensions.
-            self.pty_resized = true;
-            let _ = self
-                .event_sender
-                .send(Msg::Resize(self.window_size()))
-                .map_err(|error| tracing::debug!("failed to resize terminal PTY: {error}"));
+            self.send_pty_resize();
         }
     }
 
@@ -338,7 +349,12 @@ impl Terminal {
         if requested_at.elapsed() < PTY_RESIZE_DEBOUNCE {
             return;
         }
+        self.send_pty_resize();
+    }
+
+    fn send_pty_resize(&mut self) {
         self.pending_pty_resize = None;
+        self.pty_resized = true;
         let _ = self
             .event_sender
             .send(Msg::Resize(self.window_size()))
