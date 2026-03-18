@@ -13,6 +13,7 @@ mod terminal_widget;
 mod theme;
 mod usage_widget;
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use app::HorizonApp;
@@ -69,6 +70,7 @@ fn main() -> eframe::Result {
         branding::APP_NAME,
         options,
         Box::new(move |cc| {
+            log_graphics_adapter(cc);
             Ok(Box::new(HorizonApp::new(
                 cc,
                 &config,
@@ -80,6 +82,50 @@ fn main() -> eframe::Result {
     )
 }
 
+fn log_graphics_adapter(cc: &eframe::CreationContext<'_>) {
+    let Some(render_state) = cc.wgpu_render_state.as_ref() else {
+        tracing::warn!("wgpu render state unavailable during startup");
+        return;
+    };
+
+    let adapter_info = render_state.adapter.get_info();
+    let vendor_id = format!("{:#06x}", adapter_info.vendor);
+    let device_id = format!("{:#06x}", adapter_info.device);
+
+    tracing::info!(
+        backend = ?adapter_info.backend,
+        device_type = ?adapter_info.device_type,
+        adapter_name = %adapter_info.name,
+        vendor_id = %vendor_id,
+        device_id = %device_id,
+        driver = %adapter_info.driver,
+        driver_info = %adapter_info.driver_info,
+        target_format = ?render_state.target_format,
+        "graphics adapter selected"
+    );
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if render_state.available_adapters.len() > 1 {
+        let available = render_state
+            .available_adapters
+            .iter()
+            .map(|adapter| summarize_adapter(&adapter.get_info()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        tracing::info!(adapters = %available, "graphics adapters available");
+    }
+}
+
+fn summarize_adapter(info: &wgpu::AdapterInfo) -> String {
+    let mut summary = format!("{} [{:?}/{:?}]", info.name, info.backend, info.device_type);
+    if !info.driver.is_empty() {
+        let _ = write!(summary, " driver={}", info.driver);
+    }
+    if !info.driver_info.is_empty() && info.driver_info != info.driver {
+        let _ = write!(summary, " ({})", info.driver_info);
+    }
+    summary
+}
 fn startup_window_config(startup: &StartupDecision, fallback: &WindowConfig) -> WindowConfig {
     match startup {
         StartupDecision::Open { session, .. } => session.runtime_state.window_or(fallback).clone(),
@@ -111,7 +157,6 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
         y: None,
     }
 }
-
 fn load_config_or_default(config_path: &std::path::Path) -> Config {
     if !config_path.exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());
@@ -223,7 +268,7 @@ fn parse_cli_args() -> CliArgs {
 mod tests {
     use horizon_core::{SessionSummary, StartupChooser, StartupPromptReason};
 
-    use super::startup_chooser_window_config;
+    use super::{startup_chooser_window_config, summarize_adapter};
 
     fn chooser_with_sessions(session_count: usize) -> StartupChooser {
         StartupChooser {
@@ -258,5 +303,39 @@ mod tests {
         let window = startup_chooser_window_config(&chooser_with_sessions(8));
 
         assert!((window.height - 618.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn summarize_adapter_includes_backend_and_device_type() {
+        let summary = summarize_adapter(&wgpu::AdapterInfo {
+            name: "Apple M3 Max".to_string(),
+            vendor: 0x106b,
+            device: 0x0001,
+            device_type: wgpu::DeviceType::IntegratedGpu,
+            driver: "metal".to_string(),
+            driver_info: "Apple GPU".to_string(),
+            backend: wgpu::Backend::Metal,
+        });
+
+        assert!(summary.contains("Apple M3 Max"));
+        assert!(summary.contains("Metal"));
+        assert!(summary.contains("IntegratedGpu"));
+        assert!(summary.contains("driver=metal"));
+        assert!(summary.contains("(Apple GPU)"));
+    }
+
+    #[test]
+    fn summarize_adapter_omits_duplicate_driver_info() {
+        let summary = summarize_adapter(&wgpu::AdapterInfo {
+            name: "Adapter".to_string(),
+            vendor: 0,
+            device: 0,
+            device_type: wgpu::DeviceType::Other,
+            driver: "same".to_string(),
+            driver_info: "same".to_string(),
+            backend: wgpu::Backend::Metal,
+        });
+
+        assert_eq!(summary.matches("same").count(), 1);
     }
 }

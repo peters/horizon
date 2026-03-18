@@ -12,10 +12,11 @@ use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::terminal::Terminal;
+use crate::view::CanvasViewState;
 
 pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
 
-const RUNTIME_STATE_VERSION: u32 = 1;
+const RUNTIME_STATE_VERSION: u32 = 2;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_CLAUDE_SESSION_FILES: usize = 64;
@@ -28,6 +29,9 @@ const CLAUDE_SESSION_TAIL_BYTES: u64 = 32 * 1024;
 pub struct RuntimeState {
     pub version: u32,
     pub window: Option<WindowConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_view: Option<CanvasViewState>,
+    #[serde(default, skip_serializing)]
     pub pan_offset: Option<[f32; 2]>,
     pub active_workspace_local_id: Option<String>,
     pub focused_panel_local_id: Option<String>,
@@ -52,6 +56,7 @@ impl RuntimeState {
         Self {
             version: RUNTIME_STATE_VERSION,
             window: None,
+            canvas_view: None,
             pan_offset: None,
             active_workspace_local_id: None,
             focused_panel_local_id: None,
@@ -72,6 +77,7 @@ impl RuntimeState {
         let content = std::fs::read_to_string(path)?;
         let mut state = serde_yaml::from_str::<Self>(&content).map_err(|error| Error::State(error.to_string()))?;
         state.ensure_local_ids();
+        state.migrate_canvas_view();
         state.version = RUNTIME_STATE_VERSION;
         Ok(Some(state))
     }
@@ -90,6 +96,19 @@ impl RuntimeState {
         self.window.as_ref().unwrap_or(fallback)
     }
 
+    #[must_use]
+    pub fn canvas_view_or_default(&self) -> CanvasViewState {
+        self.canvas_view
+            .or_else(|| self.pan_offset.map(CanvasViewState::from_legacy_pan_offset))
+            .unwrap_or_default()
+            .clamped()
+    }
+
+    #[must_use]
+    pub fn has_persisted_canvas_view(&self) -> bool {
+        self.canvas_view.is_some() || self.pan_offset.is_some()
+    }
+
     pub fn ensure_local_ids(&mut self) {
         if self.version == 0 {
             self.version = RUNTIME_STATE_VERSION;
@@ -105,6 +124,11 @@ impl RuntimeState {
                 }
             }
         }
+    }
+
+    pub fn migrate_canvas_view(&mut self) {
+        self.canvas_view = Some(self.canvas_view_or_default());
+        self.pan_offset = None;
     }
 
     pub fn bootstrap_missing_agent_bindings(&mut self, catalog: &AgentSessionCatalog) {
@@ -160,7 +184,7 @@ impl RuntimeState {
     }
 
     #[must_use]
-    pub fn from_board(board: &Board, window: WindowConfig, pan_offset: [f32; 2]) -> Self {
+    pub fn from_board(board: &Board, window: WindowConfig, canvas_view: CanvasViewState) -> Self {
         let workspaces = board
             .workspaces
             .iter()
@@ -216,7 +240,8 @@ impl RuntimeState {
         Self {
             version: RUNTIME_STATE_VERSION,
             window: Some(window),
-            pan_offset: Some(pan_offset),
+            canvas_view: Some(canvas_view.clamped()),
+            pan_offset: None,
             active_workspace_local_id: board
                 .active_workspace
                 .and_then(|workspace_id| board.workspace(workspace_id))
@@ -235,6 +260,7 @@ impl Default for RuntimeState {
         Self {
             version: RUNTIME_STATE_VERSION,
             window: None,
+            canvas_view: None,
             pan_offset: None,
             active_workspace_local_id: None,
             focused_panel_local_id: None,
@@ -464,7 +490,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_board_preserves_window_pan_focus_and_bindings() {
+    fn from_board_preserves_window_view_focus_and_bindings() {
         let mut board = Board::new();
         let alpha = board.create_workspace_at("alpha", [120.0, 64.0]);
         let beta = board.create_workspace_at("beta", [860.0, 64.0]);
@@ -495,14 +521,15 @@ mod tests {
             x: Some(32.0),
             y: Some(48.0),
         };
-        let state = RuntimeState::from_board(&board, window.clone(), [24.0, -18.0]);
+        let state = RuntimeState::from_board(&board, window.clone(), CanvasViewState::new([24.0, -18.0], 1.6));
 
         let saved_window = state.window.expect("window config");
         assert!((saved_window.width - window.width).abs() <= f32::EPSILON);
         assert!((saved_window.height - window.height).abs() <= f32::EPSILON);
         assert_eq!(saved_window.x, window.x);
         assert_eq!(saved_window.y, window.y);
-        assert_eq!(state.pan_offset, Some([24.0, -18.0]));
+        assert_eq!(state.canvas_view, Some(CanvasViewState::new([24.0, -18.0], 1.6)));
+        assert_eq!(state.pan_offset, None);
         assert_eq!(
             state.active_workspace_local_id.as_deref(),
             Some(board.workspace(beta).expect("workspace").local_id.as_str())
@@ -544,7 +571,7 @@ mod tests {
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
 
-        let state = RuntimeState::from_board(&board, WindowConfig::default(), [0.0, 0.0]);
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
         let saved_workspace = state
             .workspaces
             .iter()
@@ -552,5 +579,40 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn load_migrates_legacy_pan_offset_into_canvas_view() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("runtime.yaml");
+        std::fs::write(
+            &path,
+            r"version: 1
+pan_offset:
+  - 48.0
+  - -12.0
+workspaces: []
+",
+        )
+        .expect("write runtime state");
+
+        let state = RuntimeState::load(&path)
+            .expect("load runtime state")
+            .expect("runtime state present");
+
+        assert_eq!(
+            state.canvas_view,
+            Some(CanvasViewState::from_legacy_pan_offset([48.0, -12.0]))
+        );
+        assert_eq!(state.pan_offset, None);
+        assert!(state.has_persisted_canvas_view());
+    }
+
+    #[test]
+    fn canvas_view_defaults_when_runtime_state_has_no_persisted_view() {
+        let state = RuntimeState::default();
+
+        assert_eq!(state.canvas_view_or_default(), CanvasViewState::default());
+        assert!(!state.has_persisted_canvas_view());
     }
 }

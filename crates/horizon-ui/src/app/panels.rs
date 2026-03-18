@@ -177,7 +177,7 @@ impl HorizonApp {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, panel_id, &snapshot, workspaces);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces);
         self.apply_panel_outcome(panel_id, &snapshot, &outcome)
     }
 
@@ -192,7 +192,10 @@ impl HorizonApp {
             let terminal = panel.terminal();
             let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
             let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
-            let screen_rect = Rect::from_min_size(self.canvas_to_screen(canvas_rect, canvas_position), canvas_size);
+            let screen_rect = Rect::from_min_size(
+                self.canvas_to_screen(canvas_rect, canvas_position),
+                self.canvas_size_to_screen(canvas_size),
+            );
 
             // Cull off-screen panels — skip chrome, snapshot, and rendering.
             if !canvas_rect.intersects(screen_rect) {
@@ -234,6 +237,7 @@ impl HorizonApp {
     fn show_panel_area(
         &mut self,
         ctx: &Context,
+        canvas_rect: Rect,
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
         workspaces: &[(WorkspaceId, String, Color32)],
@@ -241,15 +245,17 @@ impl HorizonApp {
         let mut outcome = PanelUiOutcome::default();
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
-            .fixed_pos(snapshot.screen_rect.min)
+            .fixed_pos(snapshot.canvas_position)
             .constrain(false)
+            .interactable(false)
             .order(if snapshot.is_focused {
                 Order::Foreground
             } else {
                 Order::Middle
             })
             .show(ctx, |ui| {
-                let (panel_rect, _) = ui.allocate_exact_size(snapshot.screen_rect.size(), Sense::hover());
+                self.apply_canvas_layer_transform(ui, canvas_rect);
+                let (panel_rect, _) = ui.allocate_exact_size(snapshot.canvas_size, Sense::hover());
                 let rects = PanelFrame::new(panel_rect);
                 let drag_response = ui.interact(
                     rects.titlebar,
@@ -272,7 +278,6 @@ impl HorizonApp {
                 );
 
                 Self::update_panel_interactions(
-                    ctx,
                     snapshot.is_renaming,
                     &drag_response,
                     &close_response,
@@ -345,7 +350,6 @@ impl HorizonApp {
     }
 
     fn update_panel_interactions(
-        ctx: &Context,
         is_renaming: bool,
         drag_response: &egui::Response,
         close_response: &egui::Response,
@@ -359,10 +363,10 @@ impl HorizonApp {
             outcome.focus_requested = true;
         }
         if !is_renaming && drag_response.dragged() {
-            outcome.drag_delta = ctx.input(|input| input.pointer.delta());
+            outcome.drag_delta = drag_response.drag_delta();
         }
         if resize_response.dragged() {
-            outcome.resize_delta = ctx.input(|input| input.pointer.delta());
+            outcome.resize_delta = resize_response.drag_delta();
         }
         if close_response.clicked() {
             outcome.command = Some(PanelCommand::Close);

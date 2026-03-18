@@ -129,6 +129,8 @@ cargo run --release
 | **Ctrl+N** | New terminal panel |
 | **Ctrl+K** | Quick-navigate to any workspace |
 | **Ctrl+,** | Open settings editor |
+| **Ctrl+Plus / Ctrl+Minus** | Zoom canvas in or out |
+| **Ctrl+Scroll** | Zoom around the cursor |
 | **Ctrl+B** | Toggle sidebar |
 | **Ctrl+M** | Toggle minimap |
 | **Ctrl+0** | Reset canvas view |
