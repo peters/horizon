@@ -22,10 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       semver: ${{ steps.gitversion.outputs.semVer }}
+      fullsemver: ${{ steps.gitversion.outputs.fullSemVer }}
       major: ${{ steps.gitversion.outputs.major }}
       minor: ${{ steps.gitversion.outputs.minor }}
       patch: ${{ steps.gitversion.outputs.patch }}
       prerelease: ${{ steps.gitversion.outputs.preReleaseLabel }}
+      commits_since_version_source: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -206,6 +208,21 @@ jobs:
         run: |
           if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
             echo "CARGO_REGISTRY_TOKEN secret is required for crates.io publish."
+            exit 1
+          fi
+      - name: Validate prerelease version
+        run: |
+          VERSION="${{ needs.version.outputs.semver }}"
+          echo "semVer: $VERSION"
+          echo "fullSemVer: ${{ needs.version.outputs.fullsemver }}"
+          echo "preReleaseLabel: ${{ needs.version.outputs.prerelease }}"
+          echo "commitsSinceVersionSource: ${{ needs.version.outputs.commits_since_version_source }}"
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]] && [[ "$VERSION" != *-alpha.* ]]; then
+            echo "::error::Expected alpha prerelease version for main branch, got: $VERSION"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/heads/release/* ]] && [[ "$VERSION" != *-beta.* ]]; then
+            echo "::error::Expected beta prerelease version for release branch, got: $VERSION"
             exit 1
           fi
       - name: Set version
