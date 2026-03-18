@@ -89,9 +89,11 @@ cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 RUSTFLAGS="-D warnings" cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
-cargo clippy --workspace --lib --bins -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
 ```
+
+- Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
 
 ### Configuration Changes
 
@@ -138,7 +140,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Concise imperative messages, optionally scoped: `feat(board):`, `fix(render):`, `ci:`
 - One logical change per commit
 - PRs include: purpose, behavior impact, test evidence
-- Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green
+- Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
 
 ### Versioning
 
