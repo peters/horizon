@@ -145,6 +145,53 @@ impl HorizonApp {
         }
     }
 
+    pub(super) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        let panels_to_close: Vec<_> = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| {
+                workspace
+                    .panels
+                    .iter()
+                    .filter_map(|panel_id| {
+                        self.board.panel(*panel_id).map(|panel| {
+                            (
+                                *panel_id,
+                                PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if panels_to_close.is_empty() {
+            self.board.close_panels_in_workspace(workspace_id);
+            return;
+        }
+
+        let closed_panel_ids = self.board.close_panels_in_workspace(workspace_id);
+        for panel_id in &closed_panel_ids {
+            self.panel_screen_rects.remove(panel_id);
+            self.terminal_grid_cache.remove(panel_id);
+        }
+
+        if self
+            .renaming_panel
+            .is_some_and(|panel_id| closed_panel_ids.contains(&panel_id))
+        {
+            self.clear_panel_rename();
+        }
+
+        for (panel_id, transcript) in panels_to_close {
+            if let Some(transcript) = transcript
+                && let Err(error) = transcript.delete_all()
+            {
+                tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+            }
+        }
+    }
+
     pub(super) fn clear_workspace_rename(&mut self) {
         self.renaming_workspace = None;
         self.rename_buffer.clear();
