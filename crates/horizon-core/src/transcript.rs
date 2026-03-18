@@ -58,11 +58,12 @@ impl PanelTranscript {
         let Some(script_program) = script_program() else {
             return (program, args);
         };
+        let session_path = self.session_path();
 
         if USES_BSD_SCRIPT {
-            build_bsd_script_command(script_program, self.session_path(), program, args)
+            build_bsd_script_command(script_program, &session_path, program, args)
         } else {
-            build_util_linux_script_command(script_program, self.session_path(), program, args)
+            build_util_linux_script_command(script_program, &session_path, program, args)
         }
     }
 
@@ -209,7 +210,7 @@ fn script_program() -> Option<String> {
 
 fn build_bsd_script_command(
     script_program: String,
-    session_path: PathBuf,
+    session_path: &Path,
     program: String,
     args: Vec<String>,
 ) -> (String, Vec<String>) {
@@ -226,7 +227,7 @@ fn build_bsd_script_command(
 
 fn build_util_linux_script_command(
     script_program: String,
-    session_path: PathBuf,
+    session_path: &Path,
     program: String,
     args: Vec<String>,
 ) -> (String, Vec<String>) {
@@ -264,7 +265,7 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use super::{
         PanelKind, PanelTranscript, build_bsd_script_command, build_util_linux_script_command,
@@ -348,7 +349,7 @@ mod tests {
     fn build_script_command_uses_bsd_syntax() {
         let (program, args) = build_bsd_script_command(
             "/usr/bin/script".to_string(),
-            PathBuf::from("/tmp/panel.session"),
+            Path::new("/tmp/panel.session"),
             "/bin/sh".to_string(),
             vec!["-c".to_string(), "echo hi".to_string()],
         );
@@ -372,7 +373,7 @@ mod tests {
     fn build_script_command_uses_util_linux_syntax() {
         let (program, args) = build_util_linux_script_command(
             "/usr/bin/script".to_string(),
-            PathBuf::from("/tmp/panel.session"),
+            Path::new("/tmp/panel.session"),
             "/bin/sh".to_string(),
             vec!["-c".to_string(), "echo hi".to_string()],
         );
