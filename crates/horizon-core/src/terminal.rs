@@ -876,6 +876,30 @@ mod tests {
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
+    #[test]
+    fn ordinary_terminal_title_replaces_horizon_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+        terminal.handle_event(Event::Title("cargo test".to_string()));
+
+        assert_eq!(terminal.title(), "cargo test");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_title_replaces_ordinary_terminal_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("vim src/main.rs".to_string()));
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+
+        assert_eq!(terminal.title(), "Build running");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
     fn test_term() -> Arc<FairMutex<Term<TerminalEventProxy>>> {
         let (event_tx, _event_rx) = mpsc::channel();
         let dimensions = TerminalDimensions::new(24, 80);

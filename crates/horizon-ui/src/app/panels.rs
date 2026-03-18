@@ -19,6 +19,7 @@ struct PanelSnapshot {
     canvas_size: Vec2,
     current_workspace_id: WorkspaceId,
     title: String,
+    display_title: String,
     kind: PanelKind,
     history_size: usize,
     scrollback_limit: usize,
@@ -217,6 +218,7 @@ impl HorizonApp {
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
                 title: panel.title.clone(),
+                display_title: panel.display_title().into_owned(),
                 kind: panel.kind,
                 history_size: terminal.map_or(0, horizon_core::Terminal::history_size),
                 scrollback_limit: terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
@@ -299,7 +301,7 @@ impl HorizonApp {
                         title: if snapshot.is_renaming {
                             None
                         } else {
-                            Some(snapshot.title.as_str())
+                            Some(snapshot.display_title.as_str())
                         },
                         history_size: snapshot.history_size,
                         scrollback_limit: snapshot.scrollback_limit,
