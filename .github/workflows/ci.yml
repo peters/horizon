@@ -2,10 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, 'release/*']
-    tags: ['v*']
+    branches: [main]
   pull_request:
-    branches: [main, 'release/*']
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -17,29 +16,15 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  version:
-    name: Version
+  version-sync:
+    name: Version Sync
     runs-on: ubuntu-latest
-    outputs:
-      semver: ${{ steps.gitversion.outputs.semVer }}
-      fullsemver: ${{ steps.gitversion.outputs.fullSemVer }}
-      major: ${{ steps.gitversion.outputs.major }}
-      minor: ${{ steps.gitversion.outputs.minor }}
-      patch: ${{ steps.gitversion.outputs.patch }}
-      prerelease: ${{ steps.gitversion.outputs.preReleaseLabel }}
-      commits_since_version_source: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
           lfs: true
-      - name: Verify GitVersion and Cargo baseline versions are aligned
+      - name: Verify workspace versions are aligned
         run: ./scripts/check-version-sync.sh
-      - uses: gittools/actions/gitversion/setup@v4.4.2
-        with:
-          versionSpec: '6.x'
-      - id: gitversion
-        uses: gittools/actions/gitversion/execute@v4.4.2
 
   fmt:
     name: Format
@@ -192,112 +177,3 @@ jobs:
         with:
           name: ${{ matrix.release_asset }}
           path: ${{ matrix.release_asset }}
-
-  cargo-publish:
-    name: Publish Cargo (crates.io)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [version, clippy, clippy-strict, rust-test, rust-artifacts]
-    if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (
-        github.ref == 'refs/heads/main' ||
-        startsWith(github.ref, 'refs/heads/release/') ||
-        startsWith(github.ref, 'refs/tags/v')
-      )
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          lfs: true
-      - uses: Swatinem/rust-cache@v2
-      - name: Validate crates.io API token
-        run: |
-          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
-            echo "CARGO_REGISTRY_TOKEN secret is required for crates.io publish."
-            exit 1
-          fi
-      - name: Validate prerelease version
-        run: |
-          VERSION="${{ needs.version.outputs.semver }}"
-          echo "semVer: $VERSION"
-          echo "fullSemVer: ${{ needs.version.outputs.fullsemver }}"
-          echo "preReleaseLabel: ${{ needs.version.outputs.prerelease }}"
-          echo "commitsSinceVersionSource: ${{ needs.version.outputs.commits_since_version_source }}"
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]] && [[ "$VERSION" != *-alpha.* ]]; then
-            echo "::error::Expected alpha prerelease version for main branch, got: $VERSION"
-            exit 1
-          fi
-          if [[ "$GITHUB_REF" == refs/heads/release/* ]] && [[ "$VERSION" != *-beta.* ]]; then
-            echo "::error::Expected beta prerelease version for release branch, got: $VERSION"
-            exit 1
-          fi
-      - name: Set version
-        run: |
-          VERSION="${{ needs.version.outputs.semver }}"
-          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          sed -i -E 's|horizon-core = \{ path = "\.\./horizon-core", version = ".*" \}|horizon-core = { path = "../horizon-core", version = "'"${VERSION}"'" }|' crates/horizon-ui/Cargo.toml
-          cargo generate-lockfile
-      - name: Stage assets for publish
-        run: |
-          mkdir -p crates/horizon-ui/publish-assets
-          cp -r assets/icons assets/plugins crates/horizon-ui/publish-assets/
-          git add -f crates/horizon-ui/publish-assets
-      - name: Publish horizon-core to crates.io
-        run: cargo publish -p horizon-core --allow-dirty
-      - name: Publish horizon-ui to crates.io
-        run: |
-          for attempt in $(seq 1 10); do
-            if cargo publish -p horizon-ui --allow-dirty --no-verify; then
-              exit 0
-            fi
-            if [ "${attempt}" -eq 10 ]; then
-              echo "Failed to publish horizon-ui after waiting for horizon-core to sync on crates.io."
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-
-  release:
-    name: Release
-    runs-on: ubuntu-latest
-    needs:
-      - version
-      - maintainability
-      - clippy
-      - clippy-strict
-      - rust-test
-      - windows-smoke
-      - rust-artifacts
-    if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (
-        github.ref == 'refs/heads/main' ||
-        startsWith(github.ref, 'refs/heads/release/') ||
-        startsWith(github.ref, 'refs/tags/v')
-      )
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-
-      - name: Collect release assets
-        run: |
-          mkdir -p release-assets
-          find artifacts -maxdepth 2 -type f -exec cp {} release-assets/ \;
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.version.outputs.semver }}
-          name: v${{ needs.version.outputs.semver }}
-          draft: ${{ needs.version.outputs.prerelease == '' }}
-          prerelease: ${{ needs.version.outputs.prerelease != '' }}
-          generate_release_notes: true
-          files: |
-            release-assets/horizon-linux-x64.tar.gz
-            release-assets/horizon-osx-x64.tar.gz
-            release-assets/horizon-osx-arm64.tar.gz
-            release-assets/horizon-windows-x64.exe

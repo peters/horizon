@@ -144,50 +144,19 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 ### Versioning
 
-- The authoritative version lives in `GitVersion.yml` (`next-version`); `[workspace.package].version` in `Cargo.toml` and the internal `horizon-core` dependency version in `crates/horizon-ui/Cargo.toml` must always match
-- CI validates this with `scripts/check-version-sync.sh` — update all three files together when bumping the version
+- The authoritative base version lives in `Cargo.toml` under `[workspace.package].version`
+- The `horizon-core` workspace dependency version in `Cargo.toml` must match the workspace package version
+- CI validates this with `scripts/check-version-sync.sh`
 
 ### Release Flow
 
-Alpha → Beta → Stable, managed via CI and the **Release** workflow dispatch.
+Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-flow.md).
 
-#### Alpha (automatic — no agent action needed)
-
-Every push to `main` publishes an alpha prerelease to crates.io and GitHub Releases (e.g. `0.1.0-alpha.3`). No manual steps required.
-
-#### Promote to Beta
-
-When `main` is ready for stabilization:
-
-1. Go to **Actions → Release → Run workflow**
-2. Select branch: `main`
-3. Choose action: **promote-beta**
-
-This creates a `release/X.Y.Z` branch from main. Subsequent pushes to that branch auto-publish beta prereleases (e.g. `0.1.0-beta.1`). Cherry-pick bug fixes to the release branch for additional betas. Meanwhile, `main` continues the next alpha cycle (`0.2.0-alpha.1`).
-
-#### Cut Stable Release
-
-When the release branch is ready:
-
-1. Go to **Actions → Release → Run workflow**
-2. Select branch: `release/X.Y.Z`
-3. Choose action: **cut-stable**
-
-This tags `vX.Y.Z` on the release branch. CI publishes the stable version to crates.io and creates a **draft** GitHub release for you to review and publish.
-
-#### CLI equivalents (if not using the GitHub UI)
-
-```bash
-# promote to beta
-git checkout main && git pull
-git checkout -b release/0.1.0
-git push origin release/0.1.0
-
-# cut stable
-git checkout release/0.1.0 && git pull
-git tag v0.1.0
-git push origin v0.1.0
-```
+- Use `./scripts/next-version.sh alpha`, `./scripts/next-version.sh beta`, or `./scripts/next-version.sh stable` to suggest the next tag for the current release line
+- Publish from **GitHub → Releases** using tags like `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, or `vX.Y.Z`
+- Mark alpha and beta tags as prereleases in GitHub; leave stable tags as normal releases
+- Publishing the GitHub Release triggers CI to publish the crates and upload the release binaries
+- After a stable release, bump `Cargo.toml` to the next release line in a normal PR before cutting more prereleases
 
 ### Dependencies
 
