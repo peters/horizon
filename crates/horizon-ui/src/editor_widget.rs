@@ -1,3 +1,4 @@
+use egui::containers::scroll_area::ScrollBarVisibility;
 use egui::{Align, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use horizon_core::{MarkdownEditor, Panel, PreviewMode};
@@ -135,6 +136,7 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) {
     };
 
     ScrollArea::vertical()
+        .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
         .id_salt(("editor_edit", panel.id.0))
         .show(ui, |ui| {
             let response = ui.add(
@@ -162,6 +164,7 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
     let cache = preview_cache.unwrap_or(&mut fallback_cache);
 
     ScrollArea::vertical()
+        .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
         .id_salt(("editor_preview", panel_id))
         .show(ui, |ui| {
             ui.add_space(4.0);
