@@ -37,6 +37,10 @@ type TerminalPty = tty::Pty;
 type TerminalEventLoop = EventLoop<TerminalPty, TerminalEventProxy>;
 type TerminalEventLoopState = State;
 
+fn queue_debounced_pty_resize(pending_pty_resize: &mut Option<std::time::Instant>, requested_at: std::time::Instant) {
+    pending_pty_resize.get_or_insert(requested_at);
+}
+
 pub struct TerminalSpawnOptions {
     pub program: String,
     pub args: Vec<String>,
@@ -337,9 +341,10 @@ impl Terminal {
         }
 
         if self.pty_resized {
-            // Debounce subsequent PTY resizes to avoid flooding the child
-            // process during drag-resize.
-            self.pending_pty_resize = Some(std::time::Instant::now());
+            // Keep the first deferred resize request timestamp so repeated
+            // drag-resize events still flush through to the child process at
+            // a bounded cadence instead of being postponed indefinitely.
+            queue_debounced_pty_resize(&mut self.pending_pty_resize, std::time::Instant::now());
         } else {
             self.send_pty_resize();
         }
@@ -698,7 +703,8 @@ mod tests {
     use super::current_cwd_for_pid;
     use super::{
         AgentNotification, HorizonOscTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-        default_terminal_rgb, find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
+        default_terminal_rgb, find_file_path_at_column, find_url_at_column, queue_debounced_pty_resize,
+        replay_terminal_bytes,
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
@@ -935,6 +941,18 @@ mod tests {
             &dimensions,
             TerminalEventProxy { event_tx },
         )))
+    }
+
+    #[test]
+    fn queue_debounced_pty_resize_preserves_first_request_time() {
+        let first = std::time::Instant::now();
+        let second = first + Duration::from_millis(40);
+        let mut pending = None;
+
+        queue_debounced_pty_resize(&mut pending, first);
+        queue_debounced_pty_resize(&mut pending, second);
+
+        assert_eq!(pending, Some(first));
     }
 
     #[test]
