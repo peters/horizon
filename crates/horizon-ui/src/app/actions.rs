@@ -373,9 +373,7 @@ impl HorizonApp {
             let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
         }
 
-        if ctx.input(|input| {
-            input.key_pressed(egui::Key::A) && primary_shortcut_modifier(input.modifiers) && input.modifiers.shift
-        }) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
             let workspace_ids: Vec<_> = self
                 .board
                 .workspaces

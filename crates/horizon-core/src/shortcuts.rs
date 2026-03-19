@@ -164,6 +164,7 @@ pub struct AppShortcuts {
     pub toggle_sidebar: ShortcutBinding,
     pub toggle_hud: ShortcutBinding,
     pub toggle_minimap: ShortcutBinding,
+    pub align_workspaces_horizontally: ShortcutBinding,
     pub toggle_settings: ShortcutBinding,
     pub reset_view: ShortcutBinding,
     pub zoom_in: ShortcutBinding,
@@ -183,6 +184,10 @@ impl Default for AppShortcuts {
             toggle_sidebar: ShortcutBinding::new(primary, ShortcutKey::Letter('B')),
             toggle_hud: ShortcutBinding::new(primary, ShortcutKey::Letter('H')),
             toggle_minimap: ShortcutBinding::new(primary, ShortcutKey::Letter('M')),
+            align_workspaces_horizontally: ShortcutBinding::new(
+                primary.plus(ShortcutModifiers::SHIFT),
+                ShortcutKey::Letter('A'),
+            ),
             toggle_settings: ShortcutBinding::new(primary, ShortcutKey::Comma),
             reset_view: ShortcutBinding::new(primary, ShortcutKey::Digit(0)),
             zoom_in: ShortcutBinding::new(primary, ShortcutKey::Plus),

@@ -21,6 +21,7 @@ Verify that every documented app-level keyboard shortcut is editable through the
    - `toggle_sidebar`
    - `toggle_hud`
    - `toggle_minimap`
+   - `align_workspaces_horizontally`
    - `toggle_settings`
    - `reset_view`
    - `zoom_in`
@@ -37,6 +38,7 @@ Verify that every documented app-level keyboard shortcut is editable through the
    - quick nav opens with the configured `quick_nav`
    - reset view works with the configured `reset_view`
    - zoom in and zoom out work with the configured `zoom_in` and `zoom_out`
+   - workspace alignment runs with the configured `align_workspaces_horizontally`
    - fullscreen panel enters with `fullscreen_panel`
    - fullscreen panel exits with `exit_fullscreen_panel`
    - window fullscreen toggles with `fullscreen_window`

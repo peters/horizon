@@ -135,6 +135,7 @@ All app shortcuts are configurable through the `shortcuts:` block in your config
 | **Ctrl+B** | Toggle sidebar |
 | **Ctrl+H** | Toggle HUD |
 | **Ctrl+M** | Toggle minimap |
+| **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
 | **Ctrl+,** | Open settings editor |
 | **Ctrl+0** | Reset canvas view |
 | **Ctrl+Plus** | Zoom canvas in |
@@ -168,6 +169,7 @@ shortcuts:
   toggle_sidebar: Ctrl+B
   toggle_hud: Ctrl+H
   toggle_minimap: Ctrl+M
+  align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+,
   reset_view: Ctrl+0
   zoom_in: Ctrl+Plus
