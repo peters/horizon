@@ -20,6 +20,8 @@ workspace = true
 horizon-core = { path = "../horizon-core", version = "0.1.0" }
 eframe.workspace = true
 egui.workspace = true
+# Pulls the backend feature set into eframe's transitive wgpu dependency.
+wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 profiling.workspace = true
