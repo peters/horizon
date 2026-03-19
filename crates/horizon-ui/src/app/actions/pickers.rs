@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
 use egui::{Context, Id, Margin, Order, Pos2, Rect, Stroke};
-use horizon_core::{PanelKind, PanelOptions, WorkspaceId};
+use horizon_core::WorkspaceId;
 
 use crate::app::HorizonApp;
-use crate::app::util::editor_panel_size_for_file;
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::theme;
 
@@ -22,16 +21,16 @@ impl HorizonApp {
             DirPickerAction::Cancelled => self.dir_picker = None,
             DirPickerAction::Selected(path, purpose) => {
                 self.dir_picker = None;
-                self.execute_dir_picker_result(path.as_ref(), *purpose);
+                self.execute_dir_picker_result(ctx, path.as_ref(), *purpose);
             }
         }
     }
 
-    fn execute_dir_picker_result(&mut self, path: Option<&PathBuf>, purpose: DirPickerPurpose) {
+    fn execute_dir_picker_result(&mut self, ctx: &Context, path: Option<&PathBuf>, purpose: DirPickerPurpose) {
         match purpose {
             DirPickerPurpose::NewWorkspace { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
+                let workspace_id = self.create_workspace_at_visible(ctx, &name, canvas_pos);
                 super::update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
                 let mut options = preset.to_panel_options();
                 options.position = Some(canvas_pos);
@@ -53,56 +52,6 @@ impl HorizonApp {
             }
         }
         self.mark_runtime_dirty();
-    }
-
-    pub(in crate::app) fn handle_file_drop(&mut self, ctx: &Context) {
-        let (hovered, dropped, pointer_pos) = ctx.input(|input| {
-            (
-                !input.raw.hovered_files.is_empty(),
-                input.raw.dropped_files.clone(),
-                input.pointer.hover_pos().or(input.pointer.latest_pos()),
-            )
-        });
-
-        if hovered && let Some(pos) = pointer_pos {
-            self.file_hover_pos = Some(pos);
-        }
-
-        if dropped.is_empty() {
-            return;
-        }
-
-        let screen_pos = self.file_hover_pos.or(pointer_pos);
-        self.file_hover_pos = None;
-        let canvas_rect = self.canvas_rect(ctx);
-        let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
-
-        for file in dropped {
-            let Some(path) = file.path else {
-                continue;
-            };
-            let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-            if !matches!(ext, "md" | "markdown" | "txt" | "mdx") {
-                continue;
-            }
-
-            let workspace_id = self
-                .board
-                .active_workspace
-                .unwrap_or_else(|| self.board.ensure_workspace());
-            let options = PanelOptions {
-                name: path.file_name().map(|name| name.to_string_lossy().to_string()),
-                command: Some(path.display().to_string()),
-                kind: PanelKind::Editor,
-                position: canvas_pos.map(|pos| [pos.x, pos.y]),
-                size: Some(editor_panel_size_for_file(&path)),
-                ..PanelOptions::default()
-            };
-            if let Err(error) = self.create_panel_with_options(options, workspace_id) {
-                tracing::error!("failed to create editor panel from dropped file: {error}");
-            }
-            self.mark_runtime_dirty();
-        }
     }
 
     pub(in crate::app) fn handle_canvas_double_click(&mut self, ctx: &Context) {
@@ -144,7 +93,7 @@ impl HorizonApp {
 
         if let Some(action) = selected_action {
             self.pending_preset_pick = None;
-            self.apply_preset_picker_action(action);
+            self.apply_preset_picker_action(ctx, action);
         } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
             let clicked_outside = ctx.input(|input| {
                 input.pointer.any_click()
@@ -199,7 +148,7 @@ impl HorizonApp {
         (area_response.response.rect, selected_action)
     }
 
-    fn apply_preset_picker_action(&mut self, action: PresetPickerAction) {
+    fn apply_preset_picker_action(&mut self, ctx: &Context, action: PresetPickerAction) {
         match action {
             PresetPickerAction::CreatePanel {
                 workspace_id,
@@ -220,7 +169,7 @@ impl HorizonApp {
             }
             PresetPickerAction::CreateWorkspaceDirect { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
+                let workspace_id = self.create_workspace_at_visible(ctx, &name, canvas_pos);
                 let mut options = preset.to_panel_options();
                 options.position = Some(canvas_pos);
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {

@@ -5,8 +5,8 @@ use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, Workspa
 use super::{inherit_workspace_cwd, workspace_cwd};
 
 impl HorizonApp {
-    pub(in crate::app) fn create_panel(&mut self) {
-        let workspace_id = self.board.ensure_workspace();
+    pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
+        let workspace_id = self.ensure_workspace_visible(ctx);
         if let Err(error) = self.create_panel_with_options(PanelOptions::default(), workspace_id) {
             tracing::error!("failed to create panel: {error}");
         }

@@ -1,8 +1,30 @@
 use egui::{Context, Pos2, Rect, Ui, Vec2, emath::TSTransform};
+use horizon_core::WorkspaceId;
 
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
+    pub(super) fn ensure_workspace_visible(&mut self, ctx: &Context) -> WorkspaceId {
+        let workspace_count_before = self.board.workspaces.len();
+        let workspace_id = self.board.ensure_workspace();
+        self.reveal_initial_workspace(ctx, workspace_id, workspace_count_before);
+        workspace_id
+    }
+
+    pub(super) fn create_workspace_visible(&mut self, ctx: &Context, name: &str) -> WorkspaceId {
+        let workspace_count_before = self.board.workspaces.len();
+        let workspace_id = self.board.create_workspace(name);
+        self.reveal_initial_workspace(ctx, workspace_id, workspace_count_before);
+        workspace_id
+    }
+
+    pub(super) fn create_workspace_at_visible(&mut self, ctx: &Context, name: &str, position: [f32; 2]) -> WorkspaceId {
+        let workspace_count_before = self.board.workspaces.len();
+        let workspace_id = self.board.create_workspace_at(name, position);
+        self.reveal_initial_workspace(ctx, workspace_id, workspace_count_before);
+        workspace_id
+    }
+
     #[profiling::function]
     pub(super) fn reset_view(&mut self, ctx: &Context) {
         self.canvas_view.set_zoom(horizon_core::DEFAULT_CANVAS_ZOOM);
@@ -110,7 +132,18 @@ impl HorizonApp {
         self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
     }
 
-    fn workspace_focus_frame(&self, workspace_id: horizon_core::WorkspaceId) -> Option<(Pos2, Vec2)> {
+    fn reveal_initial_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId, workspace_count_before: usize) {
+        if workspace_count_before != 0 {
+            return;
+        }
+
+        self.board.focus_workspace(workspace_id);
+        if let Some((pos, size)) = self.workspace_focus_frame(workspace_id) {
+            self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
+        }
+    }
+
+    fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
         if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
             return Some((
                 Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT),

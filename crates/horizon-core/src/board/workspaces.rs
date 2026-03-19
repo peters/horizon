@@ -320,6 +320,7 @@ impl Board {
             workspace.template.clone_from(&workspace_state.template);
             workspace.layout = workspace_state.layout;
         }
+        self.retained_empty_workspaces.remove(&id);
         id
     }
 }

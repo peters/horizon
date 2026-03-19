@@ -93,11 +93,11 @@ impl HorizonApp {
                 }
             }
             CommandId::NewPanel => {
-                let workspace_id = self.board.ensure_workspace();
+                let workspace_id = self.ensure_workspace_visible(ctx);
                 if let Some(preset) = self.presets.first().cloned() {
                     self.add_panel_to_workspace(workspace_id, preset, None);
                 } else {
-                    self.create_panel();
+                    self.create_panel(ctx);
                 }
             }
             CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(),
@@ -106,7 +106,7 @@ impl HorizonApp {
                     let workspace_id = self
                         .board
                         .active_workspace
-                        .unwrap_or_else(|| self.board.ensure_workspace());
+                        .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
                     self.add_panel_to_workspace(workspace_id, preset, None);
                 }
             }
