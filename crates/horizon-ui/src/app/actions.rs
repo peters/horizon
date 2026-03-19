@@ -22,7 +22,6 @@ use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIG
 
 mod support;
 
-
 fn panel_focus_target_at_pointer_press(
     panel_order: &[PanelId],
     panel_rects: &HashMap<PanelId, Rect>,
@@ -467,44 +466,37 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette)) {
+        let shortcut_bindings: &[(_, CommandId)] = &[
+            (self.shortcuts.reset_view, CommandId::ResetView),
+            (self.shortcuts.zoom_in, CommandId::ZoomIn),
+            (self.shortcuts.zoom_out, CommandId::ZoomOut),
+            (self.shortcuts.align_workspaces_horizontally, CommandId::AlignWorkspacesHorizontally),
+            (self.shortcuts.toggle_settings, CommandId::ToggleSettings),
+            (self.shortcuts.toggle_sidebar, CommandId::ToggleSidebar),
+            (self.shortcuts.toggle_hud, CommandId::ToggleHud),
+            (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
+            (self.shortcuts.open_remote_hosts, CommandId::OpenRemoteHosts),
+            (self.shortcuts.new_terminal, CommandId::NewPanel),
+        ];
+
+        let (toggle_palette, triggered_command) = ctx.input(|input| {
+            let palette = shortcut_pressed(input, self.shortcuts.command_palette);
+            let command = shortcut_bindings
+                .iter()
+                .find(|(binding, _)| shortcut_pressed(input, *binding))
+                .map(|(_, id)| id.clone());
+            (palette, command)
+        });
+
+        if toggle_palette {
             self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
                 Some(CommandPalette::new())
             };
         }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
-            self.execute_command(ctx, &CommandId::ResetView);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
-            self.execute_command(ctx, &CommandId::ZoomIn);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
-            self.execute_command(ctx, &CommandId::ZoomOut);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
-            self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
-        }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
-            self.execute_command(ctx, &CommandId::ToggleSettings);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
-            self.execute_command(ctx, &CommandId::ToggleSidebar);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
-            self.execute_command(ctx, &CommandId::ToggleHud);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
-            self.execute_command(ctx, &CommandId::ToggleMinimap);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.open_remote_hosts)) {
-            self.execute_command(ctx, &CommandId::OpenRemoteHosts);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
-            self.execute_command(ctx, &CommandId::NewPanel);
+        if let Some(command_id) = triggered_command {
+            self.execute_command(ctx, &command_id);
         }
     }
 
