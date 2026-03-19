@@ -3,6 +3,7 @@ mod interaction;
 mod layout;
 mod panels;
 mod pickers;
+mod search;
 mod support;
 
 use std::collections::BTreeMap;

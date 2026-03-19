@@ -230,6 +230,7 @@ pub struct AppShortcuts {
     pub exit_fullscreen_panel: ShortcutBinding,
     pub fullscreen_window: ShortcutBinding,
     pub save_editor: ShortcutBinding,
+    pub search: ShortcutBinding,
 }
 
 impl Default for AppShortcuts {
@@ -251,6 +252,7 @@ impl Default for AppShortcuts {
             exit_fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape),
             fullscreen_window: ShortcutBinding::new(ps, ShortcutKey::Function(11)),
             save_editor: ShortcutBinding::new(ps, ShortcutKey::Letter('S')),
+            search: ShortcutBinding::new(ps, ShortcutKey::Letter('F')),
         }
     }
 }

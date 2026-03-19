@@ -11,6 +11,7 @@ mod input;
 mod loading_spinner;
 mod plugin_install;
 mod remote_hosts_overlay;
+mod search_overlay;
 mod terminal_widget;
 mod theme;
 mod usage_widget;
