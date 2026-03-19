@@ -68,14 +68,15 @@ crates/
 ### horizon-core
 
 - `error.rs` — Typed error enum via thiserror
-- `terminal.rs` — alacritty_terminal wrapper (VT parsing, PTY spawn, event loop, resize)
+- `terminal.rs` + `terminal/` — alacritty_terminal wrapper split by lifecycle, event handling, resize policy, selection, replay, and support helpers
 - `panel.rs` — Panel = terminal + PTY session + identity
-- `board.rs` — Board = collection of panels + focus management
+- `board.rs` + `board/tests/` — Board orchestration and colocated behavior-focused tests
 
 ### horizon-ui
 
 - `main.rs` — Entry point, tracing init, eframe launch
-- `app/` — `eframe::App` orchestration split by canvas, panels, sidebar, settings, session, persistence
+- `app/` — `eframe::App` orchestration split by canvas, panels, sidebar, settings, session, persistence, workspace helpers, and focused action submodules
+- `remote_hosts_overlay.rs` + `remote_hosts_overlay/` — remote SSH chooser state/input shell with dedicated query, layout, and paint helpers
 - `terminal_widget/` — Terminal widget split by layout, input, render, scrollbar logic
 - `input/` — Keyboard translation, mouse reporting, escape-sequence building
 - `theme.rs` — Color palette (Catppuccin Mocha), styling constants
@@ -125,6 +126,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Prefer small module trees over large flat files: `mod.rs` should orchestrate, leaf modules should do one job
 - UI modules render or collect UI actions; domain state mutation belongs in `horizon-core` unless it is purely presentational state
 - When editing a file that is already large, split it as part of the change instead of adding another responsibility
+- When an inline test block starts dominating a source file, move it into a colocated `module/tests/` tree split by behavior instead of letting the parent file keep growing
 - Keep architecture notes current in [`docs/architecture/maintainability.md`](docs/architecture/maintainability.md) when module boundaries or guardrails change
 
 ### CI Tiers (`.github/workflows/ci.yml`)
