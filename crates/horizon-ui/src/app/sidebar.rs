@@ -89,7 +89,7 @@ impl HorizonApp {
                                     .display_label(util::primary_shortcut_label()),
                             );
                             if remote_hosts_button.clicked() {
-                                self.open_remote_hosts_panel();
+                                self.toggle_remote_hosts_overlay();
                             }
                         });
                     },

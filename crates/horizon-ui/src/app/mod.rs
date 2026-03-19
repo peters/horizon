@@ -34,6 +34,7 @@ use crate::command_palette::CommandPalette;
 use crate::command_registry::CommandEntry;
 use crate::dir_picker::DirPicker;
 use crate::editor_widget::MarkdownPreviewCache;
+use crate::remote_hosts_overlay::RemoteHostsOverlay;
 use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
 
@@ -130,7 +131,11 @@ pub struct HorizonApp {
     session_catalog: AgentSessionCatalog,
     startup_receiver: Option<Receiver<StartupBootstrap>>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
-    remote_host_catalog_refreshes: HashMap<PanelId, Receiver<horizon_core::Result<RemoteHostCatalog>>>,
+    remote_hosts_overlay: Option<RemoteHostsOverlay>,
+    remote_hosts_catalog: RemoteHostCatalog,
+    remote_hosts_refresh_rx: Option<Receiver<horizon_core::Result<RemoteHostCatalog>>>,
+    remote_hosts_refresh_in_flight: bool,
+    remote_hosts_last_refresh: Option<Instant>,
     last_session_catalog_refresh: Option<Instant>,
     last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
@@ -223,7 +228,11 @@ impl HorizonApp {
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
             session_catalog_refresh: None,
-            remote_host_catalog_refreshes: HashMap::new(),
+            remote_hosts_overlay: None,
+            remote_hosts_catalog: RemoteHostCatalog::default(),
+            remote_hosts_refresh_rx: None,
+            remote_hosts_refresh_in_flight: false,
+            remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),

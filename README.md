@@ -80,14 +80,28 @@ A built-in **git status panel** watches your repo in the background. See changed
 <tr>
 <td>
 
-### Live Settings Editor
-Open the config with **Ctrl+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
+### Remote Hosts
+**Ctrl+Shift+H** opens a fast overlay that discovers hosts from SSH config and Tailscale. Search, filter, and connect instantly. Type **user@filter** to override the SSH user. Connected sessions are grouped into a **Remote Sessions** grid workspace.
 
 </td>
 <td>
 
+### Live Settings Editor
+Open the config with **Ctrl+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
+
+</td>
+</tr>
+<tr>
+<td>
+
 ### Session Persistence
 Close Horizon, come back tomorrow. Your workspaces, panel positions, scroll positions, and terminal history are **restored exactly as you left them**.
+
+</td>
+<td>
+
+### Markdown Editor
+Drop a `.md` file onto the canvas or create one from the command palette. **Split view** with syntax highlighting and live preview, saved with **Ctrl+S**.
 
 </td>
 </tr>
@@ -133,8 +147,9 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 |:---------|:-------------|
 | **Ctrl+K** | Quick-navigate to any workspace |
 | **Ctrl+N** | New terminal panel |
+| **Ctrl+Shift+H** | Open Remote Hosts overlay |
 | **Ctrl+B** | Toggle sidebar |
-| **Ctrl+H** | Toggle HUD |
+| **Ctrl+Shift+U** | Toggle HUD |
 | **Ctrl+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
 | **Ctrl+,** | Open settings editor |
@@ -168,7 +183,8 @@ shortcuts:
   command_palette: Ctrl+K
   new_terminal: Ctrl+N
   toggle_sidebar: Ctrl+B
-  toggle_hud: Ctrl+Shift+H
+  open_remote_hosts: Ctrl+Shift+H
+  toggle_hud: Ctrl+Shift+U
   toggle_minimap: Ctrl+Shift+M
   align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+,

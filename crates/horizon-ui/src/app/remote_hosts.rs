@@ -1,42 +1,93 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
-use horizon_core::{PanelKind, PanelOptions, RemoteHostCatalog, RemoteHostsAction, WorkspaceId};
+use horizon_core::{PanelKind, PanelOptions, RemoteHostCatalog, WorkspaceId, WorkspaceLayout};
+
+use crate::remote_hosts_overlay::{RemoteHostsOverlay, RemoteHostsOverlayAction};
 
 use super::HorizonApp;
 
-const REMOTE_HOSTS_PANEL_SIZE: [f32; 2] = [880.0, 560.0];
+const DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 impl HorizonApp {
-    pub(super) fn open_remote_hosts_panel(&mut self) {
-        let workspace_id = self
-            .board
-            .active_workspace
-            .unwrap_or_else(|| self.board.ensure_workspace());
-        if let Some(panel_id) = self.board.workspace(workspace_id).and_then(|workspace| {
-            workspace.panels.iter().copied().find(|panel_id| {
-                self.board
-                    .panel(*panel_id)
-                    .is_some_and(|panel| panel.kind == PanelKind::RemoteHosts)
-            })
-        }) {
-            self.board.focus(panel_id);
+    pub(super) fn toggle_remote_hosts_overlay(&mut self) {
+        if self.remote_hosts_overlay.is_some() {
+            self.remote_hosts_overlay = None;
+        } else {
+            self.remote_hosts_overlay = Some(RemoteHostsOverlay::new());
+            self.maybe_start_remote_hosts_refresh();
+        }
+    }
+
+    pub(super) fn render_remote_hosts_overlay(&mut self, ctx: &egui::Context) {
+        let Some(overlay) = self.remote_hosts_overlay.as_mut() else {
+            return;
+        };
+
+        let action = overlay.show(ctx, &self.remote_hosts_catalog, self.remote_hosts_refresh_in_flight);
+        match action {
+            RemoteHostsOverlayAction::None => {}
+            RemoteHostsOverlayAction::Cancelled => {
+                self.remote_hosts_overlay = None;
+            }
+            RemoteHostsOverlayAction::OpenSsh { label, connection } => {
+                self.remote_hosts_overlay = None;
+                let workspace_id = self.remote_sessions_workspace();
+                self.open_ssh_panel(workspace_id, label, connection);
+            }
+        }
+    }
+
+    pub(super) fn poll_remote_hosts_refresh(&mut self) {
+        self.poll_inflight_refresh();
+
+        // Auto-refresh while the overlay is open.
+        if self.remote_hosts_overlay.is_some() {
+            self.maybe_start_remote_hosts_refresh();
+        }
+    }
+
+    fn poll_inflight_refresh(&mut self) {
+        let Some(rx) = self.remote_hosts_refresh_rx.take() else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                self.remote_hosts_refresh_in_flight = false;
+                self.remote_hosts_last_refresh = Some(Instant::now());
+                match result {
+                    Ok(catalog) => {
+                        self.remote_hosts_catalog = catalog;
+                    }
+                    Err(error) => {
+                        tracing::warn!("remote host discovery failed: {error}");
+                    }
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.remote_hosts_refresh_rx = Some(rx);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.remote_hosts_refresh_in_flight = false;
+                self.remote_hosts_last_refresh = Some(Instant::now());
+                tracing::warn!("remote host refresh worker disconnected");
+            }
+        }
+    }
+
+    fn maybe_start_remote_hosts_refresh(&mut self) {
+        if self.remote_hosts_refresh_in_flight {
             return;
         }
 
-        let options = PanelOptions {
-            kind: PanelKind::RemoteHosts,
-            size: Some(REMOTE_HOSTS_PANEL_SIZE),
-            ..PanelOptions::default()
-        };
+        let should_refresh = self
+            .remote_hosts_last_refresh
+            .is_none_or(|t| t.elapsed() >= DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL);
 
-        match self.create_panel_with_options(options, workspace_id) {
-            Ok(panel_id) => {
-                self.board.focus(panel_id);
-                self.mark_runtime_dirty();
-            }
-            Err(error) => {
-                tracing::error!("failed to create remote hosts panel: {error}");
-            }
+        if should_refresh {
+            self.remote_hosts_refresh_rx = Some(Self::spawn_remote_host_catalog_refresh());
+            self.remote_hosts_refresh_in_flight = true;
         }
     }
 
@@ -48,93 +99,29 @@ impl HorizonApp {
         rx
     }
 
-    pub(super) fn poll_remote_hosts_panels(&mut self) {
-        self.poll_remote_host_catalog_refreshes();
-        self.remote_host_catalog_refreshes.retain(|panel_id, _| {
-            self.board
-                .panel(*panel_id)
-                .is_some_and(|panel| panel.kind == PanelKind::RemoteHosts)
-        });
-
-        let mut panels_to_refresh = Vec::new();
-        let mut pending_actions = Vec::new();
-
-        for panel in &mut self.board.panels {
-            let panel_id = panel.id;
-            let workspace_id = panel.workspace_id;
-            let Some(remote_hosts) = panel.remote_hosts_mut() else {
-                continue;
-            };
-
-            remote_hosts.maybe_request_auto_refresh();
-            if remote_hosts.should_start_refresh() && !self.remote_host_catalog_refreshes.contains_key(&panel_id) {
-                remote_hosts.mark_refresh_started();
-                panels_to_refresh.push(panel_id);
-            }
-
-            if let Some(action) = remote_hosts.take_pending_action() {
-                pending_actions.push((workspace_id, action));
-            }
+    fn remote_sessions_workspace(&mut self) -> WorkspaceId {
+        const WORKSPACE_NAME: &str = "Remote Sessions";
+        if let Some(ws) = self.board.workspaces.iter().find(|ws| ws.name == WORKSPACE_NAME) {
+            return ws.id;
         }
-
-        for panel_id in panels_to_refresh {
-            self.remote_host_catalog_refreshes
-                .insert(panel_id, Self::spawn_remote_host_catalog_refresh());
-        }
-
-        for (workspace_id, action) in pending_actions {
-            self.apply_remote_hosts_action(workspace_id, action);
-        }
+        let ws_id = self.board.create_workspace(WORKSPACE_NAME);
+        self.board.arrange_workspace(ws_id, WorkspaceLayout::Grid);
+        self.mark_runtime_dirty();
+        ws_id
     }
 
-    fn poll_remote_host_catalog_refreshes(&mut self) {
-        let panel_ids: Vec<_> = self.remote_host_catalog_refreshes.keys().copied().collect();
+    fn open_ssh_panel(&mut self, workspace_id: WorkspaceId, label: String, connection: horizon_core::SshConnection) {
+        let options = PanelOptions {
+            name: Some(label),
+            kind: PanelKind::Ssh,
+            ssh_connection: Some(connection),
+            ..PanelOptions::default()
+        };
 
-        for panel_id in panel_ids {
-            let Some(receiver) = self.remote_host_catalog_refreshes.remove(&panel_id) else {
-                continue;
-            };
-
-            match receiver.try_recv() {
-                Ok(result) => {
-                    if let Some(panel) = self.board.panel_mut(panel_id)
-                        && let Some(remote_hosts) = panel.remote_hosts_mut()
-                    {
-                        remote_hosts.apply_refresh_result(result);
-                    }
-                }
-                Err(TryRecvError::Empty) => {
-                    self.remote_host_catalog_refreshes.insert(panel_id, receiver);
-                }
-                Err(TryRecvError::Disconnected) => {
-                    if let Some(panel) = self.board.panel_mut(panel_id)
-                        && let Some(remote_hosts) = panel.remote_hosts_mut()
-                    {
-                        remote_hosts.apply_refresh_result(Err(horizon_core::Error::State(
-                            "remote host refresh worker disconnected".to_string(),
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    fn apply_remote_hosts_action(&mut self, workspace_id: WorkspaceId, action: RemoteHostsAction) {
-        match action {
-            RemoteHostsAction::OpenSsh { label, connection } => {
-                let options = PanelOptions {
-                    name: Some(label),
-                    kind: PanelKind::Ssh,
-                    ssh_connection: Some(connection),
-                    ..PanelOptions::default()
-                };
-
-                if let Err(error) = self.create_panel_with_options(options, workspace_id) {
-                    tracing::error!("failed to create ssh panel from remote hosts panel: {error}");
-                } else {
-                    self.mark_runtime_dirty();
-                }
-            }
+        if let Err(error) = self.create_panel_with_options(options, workspace_id) {
+            tracing::error!("failed to create ssh panel from remote hosts: {error}");
+        } else {
+            self.mark_runtime_dirty();
         }
     }
 }

@@ -8,7 +8,6 @@ use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::horizon_home::HorizonHome;
-use crate::remote_hosts::RemoteHostsPanel;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -140,17 +139,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
             } = opts;
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
             Ok(spawn_usage(seed))
-        }
-        PanelKind::RemoteHosts => {
-            let PanelOptions {
-                name,
-                position,
-                size,
-                template,
-                ..
-            } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
-            Ok(spawn_remote_hosts(seed))
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -351,20 +339,6 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     )
 }
 
-fn spawn_remote_hosts(mut seed: StaticPanelSeed) -> Panel {
-    let (title, has_custom_name) = seed.take_title(|| "Remote Hosts".to_string());
-    tracing::info!("created remote hosts panel '{}' (id={})", title, seed.id.0);
-
-    seed.into_panel(
-        title,
-        PanelKind::RemoteHosts,
-        PanelContent::RemoteHosts(RemoteHostsPanel::new()),
-        None,
-        None,
-        has_custom_name,
-    )
-}
-
 pub(super) fn resolve_launch_command(
     command: Option<String>,
     args: Vec<String>,
@@ -375,9 +349,7 @@ pub(super) fn resolve_launch_command(
     should_resume_binding: bool,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::RemoteHosts | PanelKind::Usage => {
-            (String::new(), Vec::new())
-        }
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -500,7 +472,6 @@ fn resolve_session_binding(
         | PanelKind::Command
         | PanelKind::Editor
         | PanelKind::GitChanges
-        | PanelKind::RemoteHosts
         | PanelKind::Usage => session_binding.is_some() || matches!(resume, PanelResume::Session { .. }),
     };
 
@@ -576,7 +547,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     match kind {
         PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::RemoteHosts | PanelKind::Usage => 0,
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
     }
 }
 
