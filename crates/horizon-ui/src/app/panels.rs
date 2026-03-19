@@ -1,7 +1,7 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
 
-use crate::editor_widget::MarkdownEditorView;
+use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
 use crate::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
 use crate::theme;
@@ -91,10 +91,11 @@ fn show_panel_body_contents(
     ui: &mut egui::Ui,
     panel: &mut Panel,
     is_focused: bool,
+    editor_preview_cache: Option<&mut MarkdownPreviewCache>,
     terminal_grid_cache: Option<&mut TerminalGridCache>,
 ) -> bool {
     match panel.kind {
-        PanelKind::Editor => MarkdownEditorView::new(panel).show(ui, is_focused),
+        PanelKind::Editor => MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
@@ -123,7 +124,12 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         if let Some(panel) = self.board.panel_mut(panel_id) {
-                            show_panel_body_contents(ui, panel, true, None);
+                            let preview_cache = if panel.kind == PanelKind::Editor {
+                                Some(self.editor_preview_cache.entry(panel_id).or_default())
+                            } else {
+                                None
+                            };
+                            show_panel_body_contents(ui, panel, true, preview_cache, None);
                         }
                     },
                 );
@@ -334,15 +340,21 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let board = &mut self.board;
+                        let editor_preview_cache = &mut self.editor_preview_cache;
                         let terminal_grid_cache = &mut self.terminal_grid_cache;
                         if let Some(panel) = board.panel_mut(panel_id) {
+                            let preview_cache = if panel.kind == PanelKind::Editor {
+                                Some(editor_preview_cache.entry(panel_id).or_default())
+                            } else {
+                                None
+                            };
                             let grid_cache = if panel.terminal().is_some() {
                                 Some(terminal_grid_cache.entry(panel_id).or_default())
                             } else {
                                 None
                             };
                             outcome.focus_requested |=
-                                show_panel_body_contents(ui, panel, snapshot.is_focused, grid_cache);
+                                show_panel_body_contents(ui, panel, snapshot.is_focused, preview_cache, grid_cache);
                         }
                     },
                 );

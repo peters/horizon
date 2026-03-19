@@ -228,6 +228,7 @@ impl HorizonApp {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
             self.terminal_grid_cache.remove(&panel_id);
+            self.editor_preview_cache.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -238,6 +239,7 @@ impl HorizonApp {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
             } else {
                 self.terminal_grid_cache.remove(&panel_id);
+                self.editor_preview_cache.remove(&panel_id);
             }
         }
     }
