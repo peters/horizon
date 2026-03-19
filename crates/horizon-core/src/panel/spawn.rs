@@ -307,7 +307,11 @@ pub(super) fn resolve_launch_command(
 ) -> (String, Vec<String>) {
     match kind {
         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
-        PanelKind::Shell => (command.unwrap_or_else(default_shell), args),
+        PanelKind::Shell => {
+            let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
+            let program = command.unwrap_or_else(default_shell);
+            (program, shell_launch_args(args, use_login_shell))
+        }
         PanelKind::Command => {
             if let Some(program) = command {
                 (program, args)
@@ -450,6 +454,22 @@ fn shell_escape(argument: &str) -> String {
     }
 }
 
+fn shell_launch_args(args: Vec<String>, use_login_shell: bool) -> Vec<String> {
+    if use_login_shell && args.is_empty() {
+        vec!["-l".to_string()]
+    } else {
+        args
+    }
+}
+
+const PLATFORM_USES_LOGIN_SHELL: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+));
+
 pub(super) const fn platform_default_shell() -> &'static str {
     if cfg!(target_os = "macos") {
         "/bin/zsh"
@@ -485,4 +505,42 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
 
 pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
     !matches!(kind, PanelKind::Codex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_launch_args_adds_login_flag_when_requested() {
+        assert_eq!(shell_launch_args(Vec::new(), true), vec!["-l".to_string()]);
+    }
+
+    #[test]
+    fn resolve_launch_command_preserves_custom_shell_without_args() {
+        let (program, args) = resolve_launch_command(
+            Some("/usr/local/bin/custom-shell".to_string()),
+            Vec::new(),
+            PanelKind::Shell,
+            &PanelResume::Fresh,
+            None,
+            false,
+        );
+
+        assert_eq!(program, "/usr/local/bin/custom-shell");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn resolve_launch_command_adds_login_flag_only_for_default_shell() {
+        let (program, args) =
+            resolve_launch_command(None, Vec::new(), PanelKind::Shell, &PanelResume::Fresh, None, false);
+
+        assert_eq!(program, default_shell());
+        if PLATFORM_USES_LOGIN_SHELL {
+            assert_eq!(args, vec!["-l".to_string()]);
+        } else {
+            assert!(args.is_empty());
+        }
+    }
 }

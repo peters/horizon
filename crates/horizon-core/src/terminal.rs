@@ -1,3 +1,4 @@
+mod replay;
 mod support;
 
 use std::borrow::Cow;
@@ -20,6 +21,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
+use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
@@ -177,9 +179,12 @@ impl Terminal {
         };
 
         let term = Arc::new(FairMutex::new(Term::new(terminal_config, &dimensions, term_proxy)));
-        if !replay_bytes.is_empty() {
+        let replay_restore = if replay_bytes.is_empty() {
+            ReplayRestoreState::default()
+        } else {
             replay_terminal_bytes(&term, &replay_bytes);
-        }
+            drain_replay_events(&event_rx)
+        };
         let pty =
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
         #[cfg(not(windows))]
@@ -202,7 +207,7 @@ impl Terminal {
             cell_width,
             cell_height,
             scrollback_limit,
-            title: String::new(),
+            title: replay_restore.title,
             clipboard_contents: String::new(),
             selection_contents: String::new(),
             pending_pty_resize: None,
