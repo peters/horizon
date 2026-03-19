@@ -51,6 +51,7 @@ impl HorizonApp {
             .filter(|workspace| !workspace.workspace_local_id.is_empty())
             .map(|workspace| (workspace.workspace_local_id.clone(), workspace.window.clone()))
             .collect();
+        self.pending_detached_window_position_restore = self.detached_workspaces.keys().cloned().collect();
         self.pending_detached_reattach.clear();
         self.canvas_view = runtime_state.canvas_view_or_default();
         self.pan_target = None;
