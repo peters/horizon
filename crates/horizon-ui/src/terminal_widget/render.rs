@@ -84,7 +84,10 @@ pub(super) fn render_grid(
 }
 
 fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
-    let mut shapes = Vec::new();
+    // Text runs can legitimately span cells whose background changes later in the line.
+    // Keep backgrounds in a separate layer so those later fills never paint over glyphs.
+    let mut background_shapes = Vec::new();
+    let mut foreground_shapes = Vec::new();
 
     ui.fonts_mut(|fonts| {
         let mut text_run: Option<TextRun> = None;
@@ -109,10 +112,10 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
             let batchable_char = batchable_cell_char(indexed.cell).filter(|_| !has_cell_decoration(indexed.cell));
 
             if cell_is_spacer(indexed.cell) {
-                flush_background_run(&mut shapes, &mut background_run);
+                flush_background_run(&mut background_shapes, &mut background_run);
             } else {
                 append_background_rect(
-                    &mut shapes,
+                    &mut background_shapes,
                     &mut background_run,
                     point.line,
                     point.column.0,
@@ -135,7 +138,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                     continue;
                 }
 
-                flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+                flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
                 if ch != ' ' {
                     let mut text = String::with_capacity(64);
                     text.push(ch);
@@ -151,12 +154,12 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                 continue;
             }
 
-            flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
+            flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
 
             if let Some(text) = cell_text(indexed.cell)
                 && !text.is_empty()
             {
-                shapes.push(Shape::text(
+                foreground_shapes.push(Shape::text(
                     fonts,
                     Pos2::new(x, y),
                     egui::Align2::LEFT_TOP,
@@ -166,14 +169,14 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                 ));
             }
 
-            append_cell_decoration(&mut shapes, cell_rect, indexed.cell, content.colors, fg);
+            append_cell_decoration(&mut foreground_shapes, cell_rect, indexed.cell, content.colors, fg);
         }
 
-        flush_text_run(fonts, &mut shapes, metrics, &mut text_run);
-        flush_background_run(&mut shapes, &mut background_run);
+        flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
+        flush_background_run(&mut background_shapes, &mut background_run);
     });
 
-    shapes
+    merge_shape_layers(background_shapes, foreground_shapes)
 }
 
 #[profiling::function]
@@ -369,6 +372,11 @@ fn flush_background_run(shapes: &mut Vec<Shape>, run: &mut Option<BackgroundRun>
     shapes.push(Shape::rect_filled(run.rect, CornerRadius::ZERO, run.bg));
 }
 
+fn merge_shape_layers(mut background_shapes: Vec<Shape>, foreground_shapes: Vec<Shape>) -> Vec<Shape> {
+    background_shapes.extend(foreground_shapes);
+    background_shapes
+}
+
 fn has_cell_decoration(cell: &Cell) -> bool {
     cell.flags.intersects(
         Flags::UNDERLINE
@@ -410,5 +418,34 @@ fn append_cell_decoration(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
             egui::Stroke::new(1.0, color),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_shape_layers;
+    use egui::{Color32, Pos2, Rect, Shape};
+
+    #[test]
+    fn merge_shape_layers_keeps_layer_order() {
+        let background_a = Shape::rect_filled(
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(8.0, 16.0)),
+            0,
+            Color32::RED,
+        );
+        let background_b = Shape::rect_filled(
+            Rect::from_min_max(Pos2::new(8.0, 0.0), Pos2::new(16.0, 16.0)),
+            0,
+            Color32::BLUE,
+        );
+        let foreground_a = Shape::circle_filled(Pos2::new(4.0, 8.0), 2.0, Color32::WHITE);
+        let foreground_b = Shape::line_segment([Pos2::new(0.0, 15.0), Pos2::new(8.0, 15.0)], (1.0, Color32::WHITE));
+
+        let merged = merge_shape_layers(
+            vec![background_a.clone(), background_b.clone()],
+            vec![foreground_a.clone(), foreground_b.clone()],
+        );
+
+        assert_eq!(merged, vec![background_a, background_b, foreground_a, foreground_b]);
     }
 }
