@@ -217,7 +217,7 @@ pub(super) fn chrome_button(text: &str) -> Button<'_> {
         .corner_radius(10)
 }
 
-pub(super) fn usize_to_f32(value: usize) -> f32 {
+pub(crate) fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 

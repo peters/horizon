@@ -10,7 +10,7 @@ mod session;
 mod settings;
 mod sidebar;
 mod startup_session;
-mod util;
+pub(crate) mod util;
 mod view;
 mod workspace;
 mod yaml_highlight;
@@ -28,9 +28,10 @@ use horizon_core::{
 };
 
 use crate::app::canvas::CanvasGridCache;
+use crate::command_palette::CommandPalette;
+use crate::command_registry::CommandEntry;
 use crate::dir_picker::DirPicker;
 use crate::editor_widget::MarkdownPreviewCache;
-use crate::quick_nav::QuickNav;
 use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
 
@@ -132,7 +133,8 @@ pub struct HorizonApp {
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
-    quick_nav: Option<QuickNav>,
+    command_palette: Option<CommandPalette>,
+    action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_pos: Option<Pos2>,
@@ -219,7 +221,8 @@ impl HorizonApp {
             settings: None,
             pending_preset_pick: None,
             dir_picker: None,
-            quick_nav: None,
+            command_palette: None,
+            action_commands_cache: crate::command_registry::action_commands(crate::app::util::primary_shortcut_label()),
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_pos: None,
