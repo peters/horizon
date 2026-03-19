@@ -204,6 +204,16 @@ git push origin v0.1.0
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
 - Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
 
+### Smoke Test Reliability
+
+- Treat motion-sensitive UI bugs as motion-sensitive validation problems: detached-window drag, resize feedback, hover jitter, and oscillation bugs are not reliably caught by still screenshots alone
+- When a bug depends on live movement, capture either a short video (`screencapture -V <seconds>` on macOS) or a high-frequency native window position trace during an automated drag; use screenshots only as supporting evidence
+- If multiple Horizon processes may be running, scope automation and inspection to the exact PID under test. Do not target windows by application name alone; mixed-process sampling can produce false passes and false failures
+- For detached-window smoke tests, verify the exact path being fixed. If the bug is in restore/relaunch behavior, seed or inspect the persisted runtime state and relaunch into that state instead of only testing fresh detach flows
+- Prefer repeatable native-window assertions over visual guesswork: sample outer window position before, during, and after drag/resize to confirm the window moves monotonically and does not snap back, alternate between coordinates, or keep replaying a saved restore position
+- Validate the exact branch or commit that will be pushed. If you use a merge-test worktree or disposable checkout for diagnosis, rerun the decisive smoke pass in the final branch/worktree before concluding the PR is fixed
+- Window titles may lag behind state changes or differ across restore paths. When automating detached-window tests, identify the root and detached windows by PID plus non-root window membership rather than by title string alone when possible
+
 ### Performance Profiling
 
 - Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket
