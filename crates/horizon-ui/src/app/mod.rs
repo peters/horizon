@@ -8,9 +8,10 @@ mod panels;
 mod persistence;
 mod session;
 mod settings;
+pub(crate) mod shortcuts;
 mod sidebar;
 mod startup_session;
-mod util;
+pub(crate) mod util;
 mod view;
 mod workspace;
 mod yaml_highlight;
@@ -22,15 +23,16 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, CanvasViewState, Config, GitWatcher, PanelId, PresetConfig,
-    ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision,
-    WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
+    PresetConfig, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser,
+    StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
+use crate::command_palette::CommandPalette;
+use crate::command_registry::CommandEntry;
 use crate::dir_picker::DirPicker;
 use crate::editor_widget::MarkdownPreviewCache;
-use crate::quick_nav::QuickNav;
 use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
 
@@ -118,6 +120,7 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
+    shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
     detached_workspaces: BTreeMap<String, WindowConfig>,
@@ -132,7 +135,8 @@ pub struct HorizonApp {
     settings: Option<SettingsEditor>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
-    quick_nav: Option<QuickNav>,
+    command_palette: Option<CommandPalette>,
+    action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_pos: Option<Pos2>,
@@ -151,6 +155,9 @@ impl HorizonApp {
         session_store: SessionStore,
         startup: StartupDecision,
     ) -> Self {
+        let shortcuts = resolve_shortcuts(config);
+        let action_commands_cache =
+            crate::command_registry::action_commands(&shortcuts, crate::app::util::primary_shortcut_label());
         let mut fonts = egui::FontDefinitions::default();
 
         fonts.font_data.insert(
@@ -205,6 +212,7 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
+            shortcuts,
             presets: config.presets.clone(),
             window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
@@ -219,7 +227,8 @@ impl HorizonApp {
             settings: None,
             pending_preset_pick: None,
             dir_picker: None,
-            quick_nav: None,
+            command_palette: None,
+            action_commands_cache,
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_pos: None,
@@ -240,6 +249,16 @@ impl HorizonApp {
         }
 
         app
+    }
+}
+
+fn resolve_shortcuts(config: &Config) -> AppShortcuts {
+    match config.shortcuts.resolve() {
+        Ok(shortcuts) => shortcuts,
+        Err(error) => {
+            tracing::error!("invalid shortcut config loaded at runtime: {error}");
+            AppShortcuts::default()
+        }
     }
 }
 

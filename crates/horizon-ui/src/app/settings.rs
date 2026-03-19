@@ -5,7 +5,7 @@ use crate::theme;
 
 use super::util::{atomic_write, chrome_button, primary_button};
 use super::yaml_highlight::highlight_yaml;
-use super::{HorizonApp, SettingsEditor, SettingsStatus};
+use super::{HorizonApp, SettingsEditor, SettingsStatus, resolve_shortcuts};
 
 pub(super) const SETTINGS_BAR_ID: &str = "settings_bar";
 pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
@@ -23,8 +23,8 @@ enum SettingsAction {
 impl HorizonApp {
     pub(super) fn toggle_settings(&mut self) {
         if let Some(editor) = self.settings.take() {
-            if let Ok(config) = serde_yaml::from_str::<Config>(&editor.original) {
-                self.board.sync_workspace_metadata(&config);
+            if let Ok(config) = Config::from_yaml(&editor.original) {
+                self.apply_live_preview(&config);
             }
         } else {
             let content = self.load_or_generate_config_yaml();
@@ -38,7 +38,7 @@ impl HorizonApp {
 
     fn load_or_generate_config_yaml(&self) -> String {
         if let Ok(content) = std::fs::read_to_string(&self.config_path)
-            && serde_yaml::from_str::<Config>(&content).is_ok()
+            && Config::from_yaml(&content).is_ok()
         {
             return content;
         }
@@ -62,14 +62,20 @@ impl HorizonApp {
             return;
         };
 
-        let parsed = serde_yaml::from_str::<Config>(&buffer);
+        let parsed = Config::from_yaml(&buffer);
         let is_valid = parsed.is_ok();
         if let Ok(config) = &parsed {
             self.apply_live_preview(config);
-            if let Some(editor) = self.settings.as_mut()
-                && !matches!(editor.status, SettingsStatus::Saved)
-            {
-                editor.status = SettingsStatus::LivePreview;
+        }
+        if let Some(editor) = self.settings.as_mut() {
+            match &parsed {
+                Ok(_) if !matches!(editor.status, SettingsStatus::Saved) => {
+                    editor.status = SettingsStatus::LivePreview;
+                }
+                Err(error) => {
+                    editor.status = SettingsStatus::Error(error.to_string());
+                }
+                Ok(_) => {}
             }
         }
 
@@ -110,7 +116,11 @@ impl HorizonApp {
                         ui.label(egui::RichText::new(status_text).color(status_color).size(12.0));
                     }
                     if !is_valid {
-                        ui.label(egui::RichText::new("Invalid YAML").color(theme::PALETTE_RED).size(12.0));
+                        ui.label(
+                            egui::RichText::new("Invalid config")
+                                .color(theme::PALETTE_RED)
+                                .size(12.0),
+                        );
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -140,9 +150,7 @@ impl HorizonApp {
 
     fn apply_live_preview(&mut self, config: &Config) {
         self.board.sync_workspace_metadata(config);
-        self.template_config = config.clone();
-        self.presets.clone_from(&config.presets);
-        self.board.attention_enabled = config.features.attention_feed;
+        self.apply_runtime_config(config);
     }
 
     fn apply_settings_action(&mut self, action: SettingsAction) {
@@ -150,7 +158,7 @@ impl HorizonApp {
             SettingsAction::None => {}
             SettingsAction::Close => {
                 if let Some(editor) = self.settings.take()
-                    && let Ok(config) = serde_yaml::from_str::<Config>(&editor.original)
+                    && let Ok(config) = Config::from_yaml(&editor.original)
                 {
                     self.apply_live_preview(&config);
                 }
@@ -158,7 +166,7 @@ impl HorizonApp {
             SettingsAction::Revert => {
                 let original = self.settings.as_ref().map(|e| e.original.clone());
                 if let Some(original) = original {
-                    if let Ok(config) = serde_yaml::from_str::<Config>(&original) {
+                    if let Ok(config) = Config::from_yaml(&original) {
                         self.apply_live_preview(&config);
                     }
                     if let Some(editor) = self.settings.as_mut() {
@@ -180,25 +188,44 @@ impl HorizonApp {
                 if let Some(parent) = self.config_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                if let Some(editor) = self.settings.as_mut() {
-                    match atomic_write(&self.config_path, &editor.buffer) {
+                let Some(buffer) = self.settings.as_ref().map(|editor| editor.buffer.clone()) else {
+                    return;
+                };
+                match Config::from_yaml(&buffer) {
+                    Ok(config) => match atomic_write(&self.config_path, &buffer) {
                         Ok(()) => {
-                            if let Ok(config) = serde_yaml::from_str::<Config>(&editor.buffer) {
-                                self.template_config = config.clone();
-                                self.presets.clone_from(&config.presets);
+                            self.apply_runtime_config(&config);
+                            if let Some(editor) = self.settings.as_mut() {
+                                editor.original = buffer;
+                                editor.status = SettingsStatus::Saved;
                             }
-                            editor.original = editor.buffer.clone();
-                            editor.status = SettingsStatus::Saved;
                             tracing::info!("config saved to {}", self.config_path.display());
                         }
                         Err(error) => {
-                            editor.status = SettingsStatus::Error(format!("Write error: {error}"));
+                            if let Some(editor) = self.settings.as_mut() {
+                                editor.status = SettingsStatus::Error(format!("Write error: {error}"));
+                            }
                             tracing::error!("failed to write config: {error}");
                         }
+                    },
+                    Err(error) => {
+                        if let Some(editor) = self.settings.as_mut() {
+                            editor.status = SettingsStatus::Error(error.to_string());
+                        }
+                        tracing::error!("failed to validate config before save: {error}");
                     }
                 }
             }
         }
+    }
+
+    pub(super) fn apply_runtime_config(&mut self, config: &Config) {
+        self.template_config = config.clone();
+        self.shortcuts = resolve_shortcuts(config);
+        self.action_commands_cache =
+            crate::command_registry::action_commands(&self.shortcuts, super::util::primary_shortcut_label());
+        self.presets.clone_from(&config.presets);
+        self.board.attention_enabled = config.features.attention_feed;
     }
 }
 

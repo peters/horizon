@@ -304,6 +304,13 @@ mod tests {
     use crate::runtime_state::WorkspaceTemplateRef;
     use std::path::PathBuf;
 
+    fn editor_panel_options() -> PanelOptions {
+        PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        }
+    }
+
     #[test]
     fn rename_workspace_updates_matching_workspace() {
         let mut board = Board::new();
@@ -327,7 +334,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
 
         assert!(board.rename_panel(panel_id, "backend shell"));
@@ -342,7 +349,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
         let original_title = board.panel(panel_id).expect("panel should exist").title.clone();
 
@@ -437,7 +444,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
 
         board.focus(panel_id);
@@ -452,7 +459,7 @@ mod tests {
         let ws_pos = board.workspace(workspace_id).unwrap().position;
 
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
         let panel = board.panel(panel_id).expect("panel should exist");
 
@@ -466,7 +473,7 @@ mod tests {
         let mut board = Board::new();
         let ws1 = board.create_workspace("first");
         board
-            .create_panel(PanelOptions::default(), ws1)
+            .create_panel(editor_panel_options(), ws1)
             .expect("panel should spawn");
         let ws2 = board.create_workspace("second");
 
@@ -484,7 +491,7 @@ mod tests {
         let ws2 = board.create_workspace("target");
 
         let panel_id = board
-            .create_panel(PanelOptions::default(), ws1)
+            .create_panel(editor_panel_options(), ws1)
             .expect("panel should spawn");
 
         let ws2_pos = board.workspace(ws2).unwrap().position;
@@ -501,7 +508,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("frontend");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
 
         let original_workspace_pos = board.workspace(workspace_id).expect("workspace").position;
@@ -568,7 +575,7 @@ mod tests {
 
         // Create a first panel so the workspace is non-empty.
         board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
 
         // Add a second panel with an explicit canvas position far from the
@@ -578,7 +585,7 @@ mod tests {
             .create_panel(
                 PanelOptions {
                     position: Some(click_pos),
-                    ..PanelOptions::default()
+                    ..editor_panel_options()
                 },
                 workspace_id,
             )
@@ -599,7 +606,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("rows");
         board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
 
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
@@ -617,11 +624,11 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
 
         assert!(vec2_eq(
@@ -644,10 +651,10 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -670,13 +677,13 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         let third = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("third panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -706,10 +713,10 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -736,10 +743,10 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Columns);
 
@@ -766,10 +773,10 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
 
@@ -796,16 +803,16 @@ mod tests {
         let origin = board.workspace(workspace_id).expect("workspace").position;
 
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
         assert!(board.resize_panel(first, [600.0, 400.0]));
 
         let third = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("third panel should spawn");
 
         let second_panel = board.panel(second).expect("second panel");
@@ -827,13 +834,13 @@ mod tests {
         let workspace_id = board.create_workspace("alpha");
         let other_workspace_id = board.create_workspace("beta");
         let first = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("first panel should spawn");
         let second = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
         let other_panel = board
-            .create_panel(PanelOptions::default(), other_workspace_id)
+            .create_panel(editor_panel_options(), other_workspace_id)
             .expect("other panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -891,7 +898,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("rows");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -905,7 +912,7 @@ mod tests {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("rows");
         let panel_id = board
-            .create_panel(PanelOptions::default(), workspace_id)
+            .create_panel(editor_panel_options(), workspace_id)
             .expect("panel should spawn");
         board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
 
@@ -934,16 +941,12 @@ mod tests {
 
         board.align_workspaces_horizontally(&[ws1, ws2, ws3]);
 
-        // After alignment, sorted by original x: ws1 (100), ws3 (300), ws2 (500)
         let p1 = board.workspace(ws1).expect("ws1").position;
         let p3 = board.workspace(ws3).expect("ws3").position;
         let p2 = board.workspace(ws2).expect("ws2").position;
 
-        // All y positions should match (aligned to leftmost workspace frame top).
         assert!((p1[1] - p3[1]).abs() <= f32::EPSILON);
         assert!((p3[1] - p2[1]).abs() <= f32::EPSILON);
-
-        // X positions should be in sorted order with gaps.
         assert!(p3[0] > p1[0], "ws3 should be right of ws1");
         assert!(p2[0] > p3[0], "ws2 should be right of ws3");
     }
@@ -983,7 +986,7 @@ mod tests {
                 PanelOptions {
                     position: Some([0.0, 0.0]),
                     size: Some([200.0, 200.0]),
-                    ..PanelOptions::default()
+                    ..editor_panel_options()
                 },
                 ws_id,
             )
@@ -995,7 +998,7 @@ mod tests {
                 PanelOptions {
                     position: Some([220.0, 0.0]),
                     size: Some([200.0, 200.0]),
-                    ..PanelOptions::default()
+                    ..editor_panel_options()
                 },
                 ws_id,
             )

@@ -1,5 +1,5 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, WorkspaceId};
 
 use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
@@ -91,11 +91,14 @@ fn show_panel_body_contents(
     ui: &mut egui::Ui,
     panel: &mut Panel,
     is_focused: bool,
+    editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&mut MarkdownPreviewCache>,
     terminal_grid_cache: Option<&mut TerminalGridCache>,
 ) -> bool {
     match panel.kind {
-        PanelKind::Editor => MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused),
+        PanelKind::Editor => {
+            MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused, editor_save_shortcut)
+        }
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
@@ -129,7 +132,7 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            show_panel_body_contents(ui, panel, true, preview_cache, None);
+                            show_panel_body_contents(ui, panel, true, self.shortcuts.save_editor, preview_cache, None);
                         }
                     },
                 );
@@ -353,8 +356,14 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            outcome.focus_requested |=
-                                show_panel_body_contents(ui, panel, snapshot.is_focused, preview_cache, grid_cache);
+                            outcome.focus_requested |= show_panel_body_contents(
+                                ui,
+                                panel,
+                                snapshot.is_focused,
+                                self.shortcuts.save_editor,
+                                preview_cache,
+                                grid_cache,
+                            );
                         }
                     },
                 );
