@@ -1,5 +1,5 @@
 use super::{
-    Dimensions, PathBuf, RenderableContent, Scroll, TermDamage, Terminal, current_cwd_for_pid,
+    Column, Dimensions, PathBuf, RenderableContent, Scroll, TermDamage, Terminal, current_cwd_for_pid,
     find_file_path_at_column, find_url_at_column,
 };
 
@@ -77,6 +77,62 @@ impl Terminal {
         }
         let start = lines.len().saturating_sub(max_lines);
         lines[start..].join("\n")
+    }
+
+    /// Extract all text from the terminal grid including scrollback history.
+    ///
+    /// Returns lines from oldest (top of scrollback) to newest (bottom of
+    /// screen). Each line is trimmed of trailing whitespace. The extraction
+    /// locks the terminal mutex once and copies text in a single pass.
+    #[must_use]
+    pub fn full_text_lines(&self, max_lines: usize) -> Vec<String> {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        let total = grid.total_lines().min(max_lines);
+        let screen_lines = grid.screen_lines();
+
+        let mut lines: Vec<String> = Vec::with_capacity(total);
+
+        for raw_line_idx in 0..total {
+            // Grid line indexing: 0 is top of screen, negative indices
+            // are scrollback history. We iterate from oldest to newest.
+            let history_offset = total.saturating_sub(screen_lines);
+            let line_idx = if raw_line_idx < history_offset {
+                // Scrollback region: negative line indices.
+                // Line -(history_offset - raw_line_idx) in grid coords.
+                #[allow(clippy::cast_possible_wrap)]
+                let idx = -(i32::try_from(history_offset - raw_line_idx).unwrap_or(i32::MAX));
+                alacritty_terminal::index::Line(idx)
+            } else {
+                // Screen region: 0..screen_lines.
+                #[allow(clippy::cast_possible_wrap)]
+                let idx = i32::try_from(raw_line_idx - history_offset).unwrap_or(i32::MAX);
+                alacritty_terminal::index::Line(idx)
+            };
+
+            let mut line = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[line_idx][Column(col)];
+                let ch = cell.c;
+                if ch != ' ' {
+                    // Pad with spaces up to this column if needed.
+                    while line.len() < col {
+                        line.push(' ');
+                    }
+                    line.push(ch);
+                }
+            }
+            let trimmed = line.trim_end().to_string();
+            lines.push(trimmed);
+        }
+
+        // Drop empty trailing lines.
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+
+        lines
     }
 
     #[must_use]
