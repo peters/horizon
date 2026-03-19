@@ -12,6 +12,11 @@ back into large multi-purpose modules.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
   attention flows, workspace and panel membership changes, arrangement/collision
   logic, geometry queries, and shutdown state.
+- Large board test surfaces should live in `board/tests/` topic files so
+  `board.rs` can stay focused on production orchestration.
+- `terminal.rs` should keep the terminal types and shared imports; lifecycle,
+  event handling, resize policy, selection logic, and content helpers belong in
+  `terminal/` leaf modules.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   session discovery and external-store parsing belong in `runtime_state/`
   helper modules.
@@ -26,6 +31,8 @@ back into large multi-purpose modules.
   actions.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
+  - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
+    dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
