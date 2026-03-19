@@ -222,6 +222,8 @@ impl HorizonApp {
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
+        self.action_commands_cache =
+            crate::command_registry::action_commands(&self.shortcuts, super::util::primary_shortcut_label());
         self.presets.clone_from(&config.presets);
         self.board.attention_enabled = config.features.attention_feed;
     }

@@ -2,13 +2,14 @@
 
 mod app;
 mod branding;
+mod command_palette;
+mod command_registry;
 mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;
 mod input;
 mod loading_spinner;
 mod plugin_install;
-mod quick_nav;
 mod terminal_widget;
 mod theme;
 mod usage_widget;

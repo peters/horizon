@@ -344,7 +344,7 @@ impl HorizonApp {
         panel_count_before: usize,
     ) {
         self.render_dir_picker(ctx);
-        self.render_quick_nav(ctx);
+        self.render_command_palette(ctx);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 

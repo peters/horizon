@@ -158,7 +158,8 @@ fn default_presets() -> Vec<PresetConfig> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShortcutsConfig {
-    pub quick_nav: String,
+    #[serde(alias = "quick_nav")]
+    pub command_palette: String,
     pub new_terminal: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
@@ -177,11 +178,11 @@ pub struct ShortcutsConfig {
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
-            quick_nav: "Ctrl+K".to_string(),
+            command_palette: "Ctrl+K".to_string(),
             new_terminal: "Ctrl+N".to_string(),
             toggle_sidebar: "Ctrl+B".to_string(),
-            toggle_hud: "Ctrl+H".to_string(),
-            toggle_minimap: "Ctrl+M".to_string(),
+            toggle_hud: "Ctrl+Shift+H".to_string(),
+            toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+,".to_string(),
             reset_view: "Ctrl+0".to_string(),
@@ -203,7 +204,7 @@ impl ShortcutsConfig {
     /// Returns an error if any shortcut string is invalid or duplicated.
     pub fn resolve(&self) -> Result<AppShortcuts> {
         let shortcuts = AppShortcuts {
-            quick_nav: parse_shortcut("quick_nav", &self.quick_nav)?,
+            command_palette: parse_shortcut("command_palette", &self.command_palette)?,
             new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
@@ -223,7 +224,7 @@ impl ShortcutsConfig {
         };
 
         validate_distinct_shortcuts([
-            ("quick_nav", shortcuts.quick_nav),
+            ("command_palette", shortcuts.command_palette),
             ("new_terminal", shortcuts.new_terminal),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
@@ -529,10 +530,25 @@ mod tests {
 
     #[test]
     fn duplicate_shortcuts_are_rejected() {
-        let error = Config::from_yaml("shortcuts:\n  quick_nav: Ctrl+K\n  new_terminal: Ctrl+K\n")
+        let error = Config::from_yaml("shortcuts:\n  command_palette: Ctrl+K\n  new_terminal: Ctrl+K\n")
             .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
+    }
+
+    #[test]
+    fn legacy_quick_nav_alias_is_accepted() {
+        let config = Config::from_yaml("shortcuts:\n  quick_nav: Alt+K\n").expect("config should deserialize");
+
+        assert_eq!(config.shortcuts.command_palette, "Alt+K");
+        assert_eq!(
+            config
+                .shortcuts
+                .resolve()
+                .expect("shortcuts should resolve")
+                .command_palette,
+            crate::shortcuts::ShortcutBinding::parse("Alt+K").expect("shortcut should parse")
+        );
     }
 
     #[test]

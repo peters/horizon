@@ -165,11 +165,11 @@ The settings editor writes back to the same config file Horizon loaded. By defau
 
 ```yaml
 shortcuts:
-  quick_nav: Ctrl+K
+  command_palette: Ctrl+K
   new_terminal: Ctrl+N
   toggle_sidebar: Ctrl+B
-  toggle_hud: Ctrl+H
-  toggle_minimap: Ctrl+M
+  toggle_hud: Ctrl+Shift+H
+  toggle_minimap: Ctrl+Shift+M
   align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+,
   reset_view: Ctrl+0

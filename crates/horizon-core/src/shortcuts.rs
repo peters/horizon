@@ -133,6 +133,29 @@ impl ShortcutBinding {
     }
 
     #[must_use]
+    pub fn display_label(self, primary_label: &str) -> String {
+        let mut parts = Vec::new();
+        if self.modifiers.command() {
+            parts.push(primary_label.to_string());
+        }
+        if self.modifiers.ctrl() {
+            parts.push("Control".to_string());
+        }
+        if self.modifiers.alt() {
+            parts.push("Alt".to_string());
+        }
+        if self.modifiers.shift() {
+            parts.push("Shift".to_string());
+        }
+        if self.modifiers.mac_cmd() {
+            parts.push("Cmd".to_string());
+        }
+        parts.push(key_name(self.key).unwrap_or("Unknown").to_string());
+
+        parts.join("+")
+    }
+
+    #[must_use]
     pub(crate) fn overlaps(self, other: Self) -> bool {
         self.key == other.key
             && (self
@@ -191,7 +214,7 @@ impl fmt::Display for ShortcutBinding {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppShortcuts {
-    pub quick_nav: ShortcutBinding,
+    pub command_palette: ShortcutBinding,
     pub new_terminal: ShortcutBinding,
     pub toggle_sidebar: ShortcutBinding,
     pub toggle_hud: ShortcutBinding,
@@ -211,11 +234,11 @@ impl Default for AppShortcuts {
     fn default() -> Self {
         let primary = ShortcutModifiers::PRIMARY;
         Self {
-            quick_nav: ShortcutBinding::new(primary, ShortcutKey::Letter('K')),
+            command_palette: ShortcutBinding::new(primary, ShortcutKey::Letter('K')),
             new_terminal: ShortcutBinding::new(primary, ShortcutKey::Letter('N')),
             toggle_sidebar: ShortcutBinding::new(primary, ShortcutKey::Letter('B')),
-            toggle_hud: ShortcutBinding::new(primary, ShortcutKey::Letter('H')),
-            toggle_minimap: ShortcutBinding::new(primary, ShortcutKey::Letter('M')),
+            toggle_hud: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('H')),
+            toggle_minimap: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('M')),
             align_workspaces_horizontally: ShortcutBinding::new(
                 primary.plus(ShortcutModifiers::SHIFT),
                 ShortcutKey::Letter('A'),
@@ -448,6 +471,24 @@ mod tests {
         let shortcuts = AppShortcuts::default();
 
         assert_eq!(
+            shortcuts.command_palette,
+            ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('K'))
+        );
+        assert_eq!(
+            shortcuts.toggle_hud,
+            ShortcutBinding::new(
+                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
+                ShortcutKey::Letter('H'),
+            )
+        );
+        assert_eq!(
+            shortcuts.toggle_minimap,
+            ShortcutBinding::new(
+                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
+                ShortcutKey::Letter('M'),
+            )
+        );
+        assert_eq!(
             shortcuts.fullscreen_window,
             ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Function(11))
         );
@@ -475,5 +516,15 @@ mod tests {
         let right = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('B'));
 
         assert!(!left.overlaps(right));
+    }
+
+    #[test]
+    fn display_label_uses_platform_primary_label() {
+        let binding = ShortcutBinding::new(
+            ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
+            ShortcutKey::Letter('A'),
+        );
+
+        assert_eq!(binding.display_label("Cmd"), "Cmd+Shift+A");
     }
 }

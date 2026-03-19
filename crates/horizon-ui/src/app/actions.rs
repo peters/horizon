@@ -1,12 +1,14 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
 use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
 use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
+use crate::command_palette::{CommandPalette, PaletteAction, PanelEntry, WorkspaceEntry};
+use crate::command_registry::CommandId;
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
-use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
@@ -111,7 +113,10 @@ impl HorizonApp {
             .focused
             .and_then(|panel_id| self.board.panel(panel_id))
             .is_some_and(|panel| panel.content.terminal().is_some());
-        focused_has_terminal && !ctx.wants_keyboard_input() && self.dir_picker.is_none()
+        focused_has_terminal
+            && !ctx.wants_keyboard_input()
+            && self.dir_picker.is_none()
+            && self.command_palette.is_none()
     }
 
     pub(super) fn create_panel(&mut self) {
@@ -241,32 +246,30 @@ impl HorizonApp {
         ));
     }
 
-    pub(super) fn render_quick_nav(&mut self, ctx: &Context) {
-        let Some(nav) = self.quick_nav.as_mut() else {
+    pub(super) fn render_command_palette(&mut self, ctx: &Context) {
+        let Some(palette) = self.command_palette.as_mut() else {
             return;
         };
 
-        let entries: Vec<WorkspaceEntry> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
-                let (r, g, b) = workspace.accent();
-                WorkspaceEntry {
-                    id: workspace.id,
-                    name: workspace.name.clone(),
-                    color: Color32::from_rgb(r, g, b),
-                    panel_count: workspace.panels.len(),
-                    is_active: self.board.active_workspace == Some(workspace.id),
-                }
-            })
-            .collect();
+        let detached_workspace_ids = detached_workspace_ids(&self.board, &self.detached_workspaces);
+        let workspace_entries =
+            command_palette_workspace_entries(&self.board, &detached_workspace_ids, self.board.active_workspace);
+        let panel_entries = command_palette_panel_entries(&self.board, &detached_workspace_ids);
 
-        match nav.show(ctx, &entries) {
-            QuickNavAction::None => {}
-            QuickNavAction::Cancelled => self.quick_nav = None,
-            QuickNavAction::Selected(workspace_id) => {
-                self.quick_nav = None;
+        let action = palette.show(ctx, &workspace_entries, &panel_entries, &self.action_commands_cache);
+        match action {
+            PaletteAction::None => {}
+            PaletteAction::Cancelled => self.command_palette = None,
+            PaletteAction::Execute(cmd) => {
+                self.command_palette = None;
+                self.execute_command(ctx, &cmd);
+            }
+        }
+    }
+
+    fn execute_command(&mut self, ctx: &Context, cmd: &CommandId) {
+        match *cmd {
+            CommandId::SwitchWorkspace(workspace_id) => {
                 self.board.focus_workspace(workspace_id);
                 if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
                     let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
@@ -277,6 +280,54 @@ impl HorizonApp {
                     self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
                 }
             }
+            CommandId::FocusPanel(panel_id) => {
+                self.board.focus(panel_id);
+                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
+                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+                {
+                    self.focus_workspace_bounds(ctx, min, max, true);
+                }
+            }
+            CommandId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
+            CommandId::ToggleHud => self.hud_visible = !self.hud_visible,
+            CommandId::ToggleMinimap => self.minimap_visible = !self.minimap_visible,
+            CommandId::ToggleFullscreenWindow => {
+                let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+            }
+            CommandId::ToggleFullscreenPanel => {
+                self.fullscreen_panel = if self.fullscreen_panel.is_some() {
+                    None
+                } else {
+                    self.board.focused
+                };
+            }
+            CommandId::ResetView => self.reset_view(ctx),
+            CommandId::ZoomIn => {
+                let canvas_rect = self.canvas_rect(ctx);
+                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+            }
+            CommandId::ZoomOut => {
+                let canvas_rect = self.canvas_rect(ctx);
+                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+            }
+            CommandId::AlignWorkspacesHorizontally => {
+                if let Some(workspace_id) = align_attached_workspaces(&mut self.board, &self.detached_workspaces)
+                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
+                {
+                    self.focus_workspace_bounds(ctx, min, max, true);
+                    self.mark_runtime_dirty();
+                }
+            }
+            CommandId::NewPanel => {
+                let workspace_id = self.board.ensure_workspace();
+                if let Some(preset) = self.presets.first().cloned() {
+                    self.add_panel_to_workspace(workspace_id, preset, None);
+                } else {
+                    self.create_panel();
+                }
+            }
+            CommandId::ToggleSettings => self.toggle_settings(),
         }
     }
 
@@ -353,40 +404,25 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.quick_nav)) {
-            self.quick_nav = if self.quick_nav.is_some() {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette)) {
+            self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
-                Some(QuickNav::new())
+                Some(CommandPalette::new())
             };
         }
 
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
-            self.reset_view(ctx);
+            self.execute_command(ctx, &CommandId::ResetView);
         }
-
-        let canvas_rect = self.canvas_rect(ctx);
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
-            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+            self.execute_command(ctx, &CommandId::ZoomIn);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
-            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+            self.execute_command(ctx, &CommandId::ZoomOut);
         }
-
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
-            let workspace_ids: Vec<_> = self
-                .board
-                .workspaces
-                .iter()
-                .filter(|workspace| !self.workspace_is_detached(workspace.id))
-                .map(|workspace| workspace.id)
-                .collect();
-            if let Some(ws_id) = self.board.align_workspaces_horizontally(&workspace_ids)
-                && let Some((min, max)) = self.board.workspace_bounds(ws_id)
-            {
-                self.focus_workspace_bounds(ctx, min, max, true);
-            }
-            self.mark_runtime_dirty();
+            self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
         }
 
         if self.terminal_accepts_keyboard_input(ctx) {
@@ -394,24 +430,19 @@ impl HorizonApp {
         }
 
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
-            self.toggle_settings();
+            self.execute_command(ctx, &CommandId::ToggleSettings);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
-            self.sidebar_visible = !self.sidebar_visible;
+            self.execute_command(ctx, &CommandId::ToggleSidebar);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
-            self.hud_visible = !self.hud_visible;
+            self.execute_command(ctx, &CommandId::ToggleHud);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
-            self.minimap_visible = !self.minimap_visible;
+            self.execute_command(ctx, &CommandId::ToggleMinimap);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
-            let workspace_id = self.board.ensure_workspace();
-            if let Some(preset) = self.presets.first().cloned() {
-                self.add_panel_to_workspace(workspace_id, preset, None);
-            } else {
-                self.create_panel();
-            }
+            self.execute_command(ctx, &CommandId::NewPanel);
         }
     }
 
@@ -748,16 +779,87 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
+fn detached_workspace_ids(
+    board: &horizon_core::Board,
+    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+) -> HashSet<WorkspaceId> {
+    detached_workspaces
+        .keys()
+        .filter_map(|local_id| board.workspace_id_by_local_id(local_id))
+        .collect()
+}
+
+fn command_palette_workspace_entries(
+    board: &horizon_core::Board,
+    detached_workspace_ids: &HashSet<WorkspaceId>,
+    active_workspace: Option<WorkspaceId>,
+) -> Vec<WorkspaceEntry> {
+    board
+        .workspaces
+        .iter()
+        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
+        .map(|workspace| {
+            let (r, g, b) = workspace.accent();
+            WorkspaceEntry {
+                id: workspace.id,
+                name: workspace.name.clone(),
+                color: Color32::from_rgb(r, g, b),
+                panel_count: workspace.panels.len(),
+                is_active: active_workspace == Some(workspace.id),
+            }
+        })
+        .collect()
+}
+
+fn command_palette_panel_entries(
+    board: &horizon_core::Board,
+    detached_workspace_ids: &HashSet<WorkspaceId>,
+) -> Vec<PanelEntry> {
+    board
+        .panels
+        .iter()
+        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id))
+        .map(|panel| {
+            let workspace_name = board
+                .workspace(panel.workspace_id)
+                .map_or_else(String::new, |workspace| workspace.name.clone());
+            PanelEntry {
+                id: panel.id,
+                title: panel.title.clone(),
+                workspace_name,
+                cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
+            }
+        })
+        .collect()
+}
+
+fn align_attached_workspaces(
+    board: &mut horizon_core::Board,
+    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+) -> Option<WorkspaceId> {
+    let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
+    let workspace_ids: Vec<_> = board
+        .workspaces
+        .iter()
+        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
+        .map(|workspace| workspace.id)
+        .collect();
+    board.align_workspaces_horizontally(&workspace_ids)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashSet};
     use std::path::PathBuf;
 
-    use egui::{Pos2, Rect};
-    use horizon_core::{Board, PanelOptions, Workspace, WorkspaceId};
+    use egui::{Color32, Pos2, Rect};
+    use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, canvas_rect_for_layout, estimated_settings_bar_rect,
-        estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd,
+        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
+        command_palette_panel_entries, command_palette_workspace_entries, detached_workspace_ids,
+        estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd,
+        workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -864,5 +966,95 @@ mod tests {
 
         assert_eq!(rect.min, Pos2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT));
         assert_eq!(rect.max, Pos2::new(840.0, 800.0 - SETTINGS_BAR_HEIGHT));
+    }
+
+    #[test]
+    fn detached_workspace_ids_resolve_from_local_ids() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+        let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
+
+        let mut detached_workspaces = BTreeMap::new();
+        detached_workspaces.insert(detached_local_id, WindowConfig::default());
+
+        let ids = detached_workspace_ids(&board, &detached_workspaces);
+
+        assert!(ids.contains(&detached));
+        assert!(!ids.contains(&attached));
+    }
+
+    #[test]
+    fn command_palette_workspace_entries_skip_detached_workspaces() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+
+        let entries = command_palette_workspace_entries(&board, &HashSet::from([detached]), Some(attached));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, attached);
+        assert_eq!(entries[0].name, "attached");
+        assert_eq!(entries[0].color, Color32::from_rgb(137, 180, 250));
+        assert!(entries[0].is_active);
+    }
+
+    #[test]
+    fn command_palette_panel_entries_skip_panels_in_detached_workspaces() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+        let attached_panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    command: Some("attached.md".to_string()),
+                    ..PanelOptions::default()
+                },
+                attached,
+            )
+            .expect("attached panel");
+        board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    command: Some("detached.md".to_string()),
+                    ..PanelOptions::default()
+                },
+                detached,
+            )
+            .expect("detached panel");
+
+        let entries = command_palette_panel_entries(&board, &HashSet::from([detached]));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, attached_panel);
+        assert_eq!(entries[0].workspace_name, "attached");
+    }
+
+    #[test]
+    fn align_attached_workspaces_ignores_detached_workspaces() {
+        let mut board = Board::new();
+        let left = board.create_workspace("left");
+        let detached = board.create_workspace("detached");
+        let right = board.create_workspace("right");
+        board.move_workspace(left, [100.0, 200.0]);
+        board.move_workspace(detached, [300.0, 50.0]);
+        board.move_workspace(right, [500.0, 400.0]);
+
+        let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
+        let detached_position = board.workspace(detached).expect("detached workspace").position;
+        let detached_workspaces = BTreeMap::from([(detached_local_id, WindowConfig::default())]);
+
+        let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
+
+        assert_eq!(leftmost, Some(left));
+        assert!(board.workspace(detached).is_some_and(|workspace| {
+            workspace
+                .position
+                .iter()
+                .zip(detached_position)
+                .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
+        }));
     }
 }
