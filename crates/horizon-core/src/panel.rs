@@ -10,6 +10,7 @@ use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
+use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
@@ -34,6 +35,7 @@ pub struct PanelId(pub u64);
 pub enum PanelKind {
     #[default]
     Shell,
+    Ssh,
     Codex,
     Claude,
     Command,
@@ -52,6 +54,7 @@ impl PanelKind {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Shell => "Shell",
+            Self::Ssh => "SSH",
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Command => "Command",
@@ -93,6 +96,7 @@ pub struct PanelOptions {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    pub ssh_connection: Option<SshConnection>,
     pub rows: u16,
     pub cols: u16,
     pub kind: PanelKind,
@@ -112,6 +116,7 @@ impl Default for PanelOptions {
             command: None,
             args: Vec::new(),
             cwd: None,
+            ssh_connection: None,
             rows: 24,
             cols: 80,
             kind: PanelKind::default(),
@@ -149,6 +154,10 @@ pub struct Panel {
     pub launch_args: Vec<String>,
     /// Working directory (for persistence).
     pub launch_cwd: Option<PathBuf>,
+    /// Structured SSH connection metadata, when this is an SSH panel.
+    pub ssh_connection: Option<SshConnection>,
+    /// UI-facing SSH connection status for panels that remain visible after exit.
+    pub ssh_status: Option<SshConnectionStatus>,
 }
 
 impl Panel {
@@ -161,6 +170,11 @@ impl Panel {
     /// Mutable accessor for the terminal content.
     pub fn terminal_mut(&mut self) -> Option<&mut Terminal> {
         self.content.terminal_mut()
+    }
+
+    #[must_use]
+    pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
+        self.ssh_status
     }
 
     #[must_use]
@@ -214,11 +228,40 @@ impl Panel {
         if had_output {
             self.terminal_title = terminal.title().to_string();
         }
+        if self.kind == PanelKind::Ssh {
+            if terminal.child_exited() {
+                self.ssh_status = Some(SshConnectionStatus::Disconnected);
+            } else if had_output && matches!(self.ssh_status, Some(SshConnectionStatus::Connecting)) {
+                self.ssh_status = Some(SshConnectionStatus::Connected);
+            }
+        }
         had_output
     }
 
     #[must_use]
     pub fn display_title(&self) -> Cow<'_, str> {
+        if self.kind == PanelKind::Ssh {
+            let base_title = if self.has_custom_name {
+                self.ssh_connection
+                    .as_ref()
+                    .map(SshConnection::display_label)
+                    .filter(|host_label| !self.title.contains(host_label))
+                    .map_or_else(
+                        || self.title.clone(),
+                        |host_label| format!("{} ({host_label})", self.title),
+                    )
+            } else {
+                self.title.clone()
+            };
+
+            if self.terminal_title.is_empty() || self.terminal_title == self.title || self.terminal_title == base_title
+            {
+                return Cow::Owned(base_title);
+            }
+
+            return Cow::Owned(format!("{base_title} — {}", self.terminal_title));
+        }
+
         if self.has_custom_name {
             if self.terminal_title.is_empty() || self.terminal_title == self.title {
                 Cow::Borrowed(&self.title)
@@ -235,6 +278,11 @@ impl Panel {
     #[must_use]
     pub fn child_exited(&self) -> bool {
         self.content.terminal().is_some_and(Terminal::child_exited)
+    }
+
+    #[must_use]
+    pub fn should_close_after_exit(&self) -> bool {
+        !matches!(self.kind, PanelKind::Ssh)
     }
 
     /// Returns `true` if the terminal bell has fired since the last call.
@@ -342,6 +390,7 @@ impl Panel {
         let (program, launch_args) = resolve_launch_command(
             self.launch_command.clone(),
             self.launch_args.clone(),
+            self.ssh_connection.clone(),
             self.kind,
             &self.resume,
             self.session_binding.as_ref(),
@@ -378,6 +427,11 @@ impl Panel {
         })?);
 
         self.launched_at_millis = current_unix_millis();
+        self.ssh_status = if self.kind == PanelKind::Ssh {
+            Some(SshConnectionStatus::Connecting)
+        } else {
+            None
+        };
         tracing::info!("restarted panel '{}' (id={})", self.title, self.id.0);
         Ok(())
     }
@@ -465,6 +519,7 @@ mod tests {
         PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind,
         platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
+    use crate::ssh::SshConnection;
 
     fn test_panel(title: &str, terminal_title: &str, has_custom_name: bool) -> Panel {
         Panel {
@@ -485,6 +540,8 @@ mod tests {
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: None,
+            ssh_connection: None,
+            ssh_status: None,
         }
     }
 
@@ -510,9 +567,37 @@ mod tests {
     }
 
     #[test]
+    fn display_title_keeps_ssh_host_visible_for_custom_named_panels() {
+        let mut panel = test_panel("Prod API", "Connected", true);
+        panel.kind = PanelKind::Ssh;
+        panel.ssh_connection = Some(SshConnection {
+            host: "prod-api".to_string(),
+            user: Some("deploy".to_string()),
+            ..SshConnection::default()
+        });
+
+        assert_eq!(panel.display_title(), "Prod API (deploy@prod-api) — Connected");
+    }
+
+    #[test]
+    fn ssh_panels_do_not_auto_close_after_exit() {
+        let mut panel = test_panel("SSH: prod", "", false);
+        panel.kind = PanelKind::Ssh;
+
+        assert!(!panel.should_close_after_exit());
+    }
+
+    #[test]
     fn codex_without_exact_binding_starts_fresh() {
-        let (_program, args) =
-            resolve_launch_command(None, Vec::new(), PanelKind::Codex, &PanelResume::Last, None, false);
+        let (_program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Codex,
+            &PanelResume::Last,
+            None,
+            false,
+        );
 
         // Codex is launched via login shell without resume when no exact session is bound.
         assert_eq!(args.len(), 2);
@@ -527,6 +612,7 @@ mod tests {
         let (_program, args) = resolve_launch_command(
             None,
             Vec::new(),
+            None,
             PanelKind::Claude,
             &PanelResume::Session {
                 session_id: "session-42".to_string(),
@@ -547,6 +633,7 @@ mod tests {
         let (_program, args) = resolve_launch_command(
             None,
             vec!["--dangerously-skip-permissions".to_string()],
+            None,
             PanelKind::Claude,
             &PanelResume::Fresh,
             None,
@@ -570,6 +657,7 @@ mod tests {
         let (_program, args) = resolve_launch_command(
             None,
             vec!["--dangerously-skip-permissions".to_string()],
+            None,
             PanelKind::Claude,
             &PanelResume::Fresh,
             Some(&binding),
@@ -589,6 +677,7 @@ mod tests {
         let (_program, args) = resolve_launch_command(
             None,
             vec!["--no-alt-screen".to_string()],
+            None,
             PanelKind::Codex,
             &PanelResume::Last,
             Some(&binding),
@@ -609,6 +698,7 @@ mod tests {
         let (_program, args) = resolve_launch_command(
             Some("python".to_string()),
             vec!["-m".to_string(), "http.server".to_string()],
+            None,
             PanelKind::Codex,
             &PanelResume::Last,
             None,
@@ -629,6 +719,10 @@ mod tests {
             DEFAULT_PANEL_SCROLLBACK_LIMIT
         );
         assert_eq!(
+            scrollback_limit_for_kind(PanelKind::Ssh),
+            DEFAULT_PANEL_SCROLLBACK_LIMIT
+        );
+        assert_eq!(
             scrollback_limit_for_kind(PanelKind::Codex),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
@@ -643,6 +737,7 @@ mod tests {
         assert!(!kitty_keyboard_for_kind(PanelKind::Codex));
         assert!(kitty_keyboard_for_kind(PanelKind::Claude));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
+        assert!(kitty_keyboard_for_kind(PanelKind::Ssh));
     }
 
     #[test]

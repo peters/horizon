@@ -54,7 +54,7 @@ pub struct PanelTranscript {
 impl PanelTranscript {
     #[must_use]
     pub fn for_panel(kind: PanelKind, root: Option<PathBuf>, local_id: &str) -> Option<Self> {
-        if !matches!(kind, PanelKind::Shell | PanelKind::Command) {
+        if !matches!(kind, PanelKind::Shell | PanelKind::Ssh | PanelKind::Command) {
             return None;
         }
 
@@ -462,6 +462,7 @@ mod tests {
     #[test]
     fn transcript_is_only_created_for_non_agent_panels() {
         assert!(PanelTranscript::for_panel(PanelKind::Shell, Some("/tmp".into()), "panel-1").is_some());
+        assert!(PanelTranscript::for_panel(PanelKind::Ssh, Some("/tmp".into()), "panel-1").is_some());
         assert!(PanelTranscript::for_panel(PanelKind::Command, Some("/tmp".into()), "panel-1").is_some());
         assert!(PanelTranscript::for_panel(PanelKind::Codex, Some("/tmp".into()), "panel-1").is_none());
         assert!(PanelTranscript::for_panel(PanelKind::Claude, Some("/tmp".into()), "panel-1").is_none());

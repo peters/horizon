@@ -213,7 +213,7 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             shortcuts,
-            presets: config.presets.clone(),
+            presets: config.resolved_presets(),
             window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
             pending_detached_reattach: BTreeSet::new(),

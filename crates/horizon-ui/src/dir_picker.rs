@@ -49,7 +49,7 @@ pub enum DirPickerAction {
     /// Picker is still open, nothing to do.
     None,
     /// User selected a directory (or skipped). Second field is the purpose.
-    Selected(Option<PathBuf>, DirPickerPurpose),
+    Selected(Option<PathBuf>, Box<DirPickerPurpose>),
     /// User cancelled.
     Cancelled,
 }
@@ -116,7 +116,7 @@ impl DirPicker {
     /// Try to produce a `Selected` action, consuming the purpose.
     fn select(&mut self, path: Option<PathBuf>) -> DirPickerAction {
         match self.take_purpose() {
-            Some(purpose) => DirPickerAction::Selected(path, purpose),
+            Some(purpose) => DirPickerAction::Selected(path, Box::new(purpose)),
             None => DirPickerAction::Cancelled, // purpose already consumed — treat as cancel
         }
     }
