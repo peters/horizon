@@ -9,6 +9,12 @@ use crate::input;
 use super::HorizonApp;
 use super::util::editor_panel_size_for_file;
 
+#[derive(Clone, Copy)]
+enum FileDropScope {
+    Root,
+    Workspace(WorkspaceId),
+}
+
 impl HorizonApp {
     pub(super) fn handle_root_file_drop(&mut self, ctx: &Context) {
         let workspace_id = self
@@ -18,14 +24,26 @@ impl HorizonApp {
         let fullscreen_panel = self
             .fullscreen_panel
             .filter(|panel_id| self.panel_is_in_root_viewport(*panel_id));
-        self.handle_file_drop_for_viewport(ctx, self.canvas_rect(ctx), workspace_id, fullscreen_panel);
+        self.handle_file_drop_for_viewport(
+            ctx,
+            self.canvas_rect(ctx),
+            workspace_id,
+            fullscreen_panel,
+            FileDropScope::Root,
+        );
     }
 
     pub(super) fn handle_workspace_file_drop(&mut self, ctx: &Context, workspace_id: WorkspaceId, canvas_rect: Rect) {
         let fullscreen_panel = self
             .fullscreen_panel
             .filter(|panel_id| self.panel_is_in_workspace(*panel_id, workspace_id));
-        self.handle_file_drop_for_viewport(ctx, canvas_rect, workspace_id, fullscreen_panel);
+        self.handle_file_drop_for_viewport(
+            ctx,
+            canvas_rect,
+            workspace_id,
+            fullscreen_panel,
+            FileDropScope::Workspace(workspace_id),
+        );
     }
 
     fn handle_file_drop_for_viewport(
@@ -34,6 +52,7 @@ impl HorizonApp {
         canvas_rect: Rect,
         workspace_id: WorkspaceId,
         fullscreen_panel: Option<PanelId>,
+        scope: FileDropScope,
     ) {
         let viewport_id = ctx.viewport_id();
         let (hovered, dropped, pointer_pos) = ctx.input(|input| {
@@ -54,7 +73,7 @@ impl HorizonApp {
 
         let screen_pos = self.file_hover_positions.remove(&viewport_id).or(pointer_pos);
 
-        if let Some(panel_id) = self.terminal_drop_target(fullscreen_panel, screen_pos)
+        if let Some(panel_id) = self.terminal_drop_target(fullscreen_panel, screen_pos, scope)
             && self.paste_dropped_paths_into_terminal(panel_id, &dropped)
         {
             return;
@@ -75,16 +94,39 @@ impl HorizonApp {
             .is_some_and(|panel| panel.workspace_id == workspace_id)
     }
 
-    fn terminal_drop_target(&self, fullscreen_panel: Option<PanelId>, screen_pos: Option<Pos2>) -> Option<PanelId> {
+    fn panel_is_in_scope(&self, panel_id: PanelId, scope: FileDropScope) -> bool {
+        match scope {
+            FileDropScope::Root => self.panel_is_in_root_viewport(panel_id),
+            FileDropScope::Workspace(workspace_id) => self.panel_is_in_workspace(panel_id, workspace_id),
+        }
+    }
+
+    fn terminal_drop_target(
+        &self,
+        fullscreen_panel: Option<PanelId>,
+        screen_pos: Option<Pos2>,
+        scope: FileDropScope,
+    ) -> Option<PanelId> {
+        let focused_terminal = self.board.focused.filter(|panel_id| {
+            self.panel_is_in_scope(*panel_id, scope)
+                && self
+                    .board
+                    .panel(*panel_id)
+                    .is_some_and(|panel| panel.terminal().is_some())
+        });
+
         select_terminal_drop_target(
             fullscreen_panel,
             screen_pos,
+            focused_terminal,
             &self.panel_screen_order,
             &self.panel_screen_rects,
             |panel_id| {
-                self.board
-                    .panel(panel_id)
-                    .is_some_and(|panel| panel.terminal().is_some())
+                self.panel_is_in_scope(panel_id, scope)
+                    && self
+                        .board
+                        .panel(panel_id)
+                        .is_some_and(|panel| panel.terminal().is_some())
             },
         )
     }
@@ -150,6 +192,7 @@ impl HorizonApp {
 fn select_terminal_drop_target(
     fullscreen_panel: Option<PanelId>,
     screen_pos: Option<Pos2>,
+    focused_terminal: Option<PanelId>,
     panel_screen_order: &[PanelId],
     panel_screen_rects: &HashMap<PanelId, Rect>,
     mut is_terminal_panel: impl FnMut(PanelId) -> bool,
@@ -158,12 +201,27 @@ fn select_terminal_drop_target(
         return is_terminal_panel(panel_id).then_some(panel_id);
     }
 
-    let screen_pos = screen_pos?;
-    panel_screen_order.iter().rev().copied().find(|panel_id| {
-        panel_screen_rects
-            .get(panel_id)
-            .is_some_and(|rect| rect.contains(screen_pos) && is_terminal_panel(*panel_id))
-    })
+    if let Some(screen_pos) = screen_pos
+        && let Some(panel_id) = panel_screen_order.iter().rev().copied().find(|panel_id| {
+            panel_screen_rects
+                .get(panel_id)
+                .is_some_and(|rect| rect.contains(screen_pos) && is_terminal_panel(*panel_id))
+        })
+    {
+        return Some(panel_id);
+    }
+
+    if let Some(panel_id) = focused_terminal
+        && is_terminal_panel(panel_id)
+    {
+        return Some(panel_id);
+    }
+
+    panel_screen_order
+        .iter()
+        .rev()
+        .copied()
+        .find(|panel_id| is_terminal_panel(*panel_id))
 }
 
 fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFile]) -> Option<String> {
@@ -269,7 +327,7 @@ mod tests {
         let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(200.0, 200.0));
         let rects = HashMap::from([(bottom, rect), (middle, rect), (top, rect)]);
 
-        let target = select_terminal_drop_target(None, Some(Pos2::new(50.0, 50.0)), &order, &rects, |panel_id| {
+        let target = select_terminal_drop_target(None, Some(Pos2::new(50.0, 50.0)), None, &order, &rects, |panel_id| {
             panel_id == middle || panel_id == top
         });
 
@@ -280,7 +338,7 @@ mod tests {
     fn target_selection_prefers_fullscreen_terminal_without_rects() {
         let fullscreen = PanelId(7);
 
-        let target = select_terminal_drop_target(Some(fullscreen), None, &[], &HashMap::new(), |panel_id| {
+        let target = select_terminal_drop_target(Some(fullscreen), None, None, &[], &HashMap::new(), |panel_id| {
             panel_id == fullscreen
         });
 
@@ -297,11 +355,38 @@ mod tests {
         let target = select_terminal_drop_target(
             Some(fullscreen),
             Some(Pos2::new(20.0, 20.0)),
+            None,
             &order,
             &rects,
             |panel_id| panel_id == stale,
         );
 
         assert_eq!(target, None);
+    }
+
+    #[test]
+    fn target_selection_falls_back_to_focused_terminal_when_drop_position_is_missing() {
+        let focused = PanelId(4);
+        let other = PanelId(5);
+        let order = vec![other, focused];
+
+        let target = select_terminal_drop_target(None, None, Some(focused), &order, &HashMap::new(), |panel_id| {
+            panel_id == focused || panel_id == other
+        });
+
+        assert_eq!(target, Some(focused));
+    }
+
+    #[test]
+    fn target_selection_falls_back_to_topmost_terminal_when_no_position_or_focus_exists() {
+        let bottom = PanelId(1);
+        let top = PanelId(2);
+        let order = vec![bottom, top];
+
+        let target = select_terminal_drop_target(None, None, None, &order, &HashMap::new(), |panel_id| {
+            panel_id == bottom || panel_id == top
+        });
+
+        assert_eq!(target, Some(top));
     }
 }
