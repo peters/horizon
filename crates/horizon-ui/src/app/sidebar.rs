@@ -107,7 +107,7 @@ impl HorizonApp {
         egui::Area::new(Id::new("toolbar_search"))
             .fixed_pos(Pos2::new(search_x, search_y))
             .constrain(false)
-            .order(Order::Tooltip)
+            .order(Order::Foreground)
             .interactable(true)
             .show(ctx, |ui| {
                 ui.set_min_width(search_width);

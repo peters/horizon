@@ -1,8 +1,6 @@
 mod render;
 
-use egui::{
-    Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
-};
+use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
@@ -88,41 +86,28 @@ impl SearchOverlay {
         self.maybe_refresh_results(board);
 
         let input_width = ui.available_width();
-        let input_height = 32.0_f32;
 
-        // Reserve the full rect and paint background + accent border.
-        let (input_rect, _) = ui.allocate_exact_size(Vec2::new(input_width, input_height), Sense::hover());
-        ui.painter().rect_filled(
-            input_rect,
-            CornerRadius::same(10),
-            theme::alpha(theme::BG_ELEVATED, 220),
-        );
-        ui.painter().rect_stroke(
-            input_rect,
-            CornerRadius::same(10),
-            Stroke::new(1.5, theme::alpha(theme::ACCENT, 130)),
-            StrokeKind::Inside,
-        );
-
-        // Place the frameless TextEdit inside the painted rect.
-        let text_rect = input_rect.shrink2(Vec2::new(2.0, 0.0));
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(text_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        let response = child.add(
+        let response = ui.add_sized(
+            Vec2::new(input_width, 32.0),
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::monospace(13.0))
                 .text_color(theme::FG)
-                .desired_width(text_rect.width() - 24.0)
-                .frame(false)
                 .hint_text(
                     egui::RichText::new("Search across all terminals...")
                         .color(theme::FG_DIM)
                         .size(12.5),
                 )
                 .margin(Margin::symmetric(12, 0)),
+        );
+
+        // Paint the accent border on top of the default frame so it's
+        // always visible regardless of focus state.
+        let input_rect = response.rect;
+        ui.painter().rect_stroke(
+            input_rect,
+            CornerRadius::same(6),
+            Stroke::new(1.5, theme::alpha(theme::ACCENT, 130)),
+            StrokeKind::Inside,
         );
 
         if self.request_focus {
