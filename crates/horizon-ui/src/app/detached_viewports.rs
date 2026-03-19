@@ -377,12 +377,15 @@ fn detached_viewport_builder(
         .with_icon(branding::app_icon())
         .with_decorations(true)
         .with_transparent(false)
-        .with_inner_size([window_config.width, window_config.height])
         .with_min_inner_size([800.0, 600.0])
         .with_resizable(true);
 
-    if restore_window_position && let (Some(x), Some(y)) = (window_config.x, window_config.y) {
-        builder = builder.with_position([x, y]);
+    if restore_window_position {
+        builder = builder.with_inner_size([window_config.width, window_config.height]);
+
+        if let (Some(x), Some(y)) = (window_config.x, window_config.y) {
+            builder = builder.with_position([x, y]);
+        }
     }
 
     if cfg!(target_os = "linux") {
@@ -425,7 +428,7 @@ mod tests {
     use horizon_core::WindowConfig;
 
     #[test]
-    fn detached_viewport_builder_only_restores_position_when_requested() {
+    fn detached_viewport_builder_only_restores_window_state_when_requested() {
         let window = WindowConfig {
             width: 1280.0,
             height: 720.0,
@@ -439,6 +442,6 @@ mod tests {
         assert_eq!(restored.position, Some(egui::pos2(240.0, 120.0)));
         assert_eq!(live.position, None);
         assert_eq!(restored.inner_size, Some(egui::vec2(1280.0, 720.0)));
-        assert_eq!(live.inner_size, Some(egui::vec2(1280.0, 720.0)));
+        assert_eq!(live.inner_size, None);
     }
 }
