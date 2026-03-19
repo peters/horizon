@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use egui::{
     Align, Button, Color32, Context, CornerRadius, Layout, Pos2, Rect, Stroke, StrokeKind, TopBottomPanel, Vec2,
     ViewportBuilder, ViewportCommand, ViewportId,
@@ -78,11 +80,11 @@ impl HorizonApp {
             };
 
             let viewport_id = detached_viewport_id(&local_id);
-            let builder = detached_viewport_builder(
-                &window_config,
-                &workspace.name,
-                self.pending_detached_window_position_restore.contains(&local_id),
-            );
+            // Consume the restore hint before rebuilding the child viewport so
+            // native drags do not fight a stale saved outer position.
+            let restore_window_position =
+                consume_detached_position_restore(&mut self.pending_detached_window_position_restore, &local_id);
+            let builder = detached_viewport_builder(&window_config, &workspace.name, restore_window_position);
             let local_id_for_viewport = local_id.clone();
 
             ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _class| {
@@ -109,8 +111,6 @@ impl HorizonApp {
             ctx.request_repaint_of(ViewportId::ROOT);
             return;
         }
-
-        self.pending_detached_window_position_restore.remove(workspace_local_id);
         self.sync_detached_window_config(ctx, workspace_local_id);
 
         let Some(workspace_name) = self
@@ -362,6 +362,13 @@ fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
     ViewportId(egui::Id::new(("detached_workspace", workspace_local_id)))
 }
 
+fn consume_detached_position_restore(
+    pending_detached_window_position_restore: &mut BTreeSet<String>,
+    workspace_local_id: &str,
+) -> bool {
+    pending_detached_window_position_restore.remove(workspace_local_id)
+}
+
 fn detached_canvas_rect(ctx: &Context) -> Rect {
     let viewport = viewport_local_rect(ctx);
     Rect::from_min_max(Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT), viewport.max)
@@ -424,7 +431,9 @@ fn paint_detached_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32,
 
 #[cfg(test)]
 mod tests {
-    use super::detached_viewport_builder;
+    use std::collections::BTreeSet;
+
+    use super::{consume_detached_position_restore, detached_viewport_builder};
     use horizon_core::WindowConfig;
 
     #[test]
@@ -443,5 +452,15 @@ mod tests {
         assert_eq!(live.position, None);
         assert_eq!(restored.inner_size, Some(egui::vec2(1280.0, 720.0)));
         assert_eq!(live.inner_size, None);
+    }
+
+    #[test]
+    fn detached_position_restore_is_consumed_once() {
+        let workspace_local_id = "ws-alpha".to_string();
+        let mut pending = BTreeSet::from([workspace_local_id.clone()]);
+
+        assert!(consume_detached_position_restore(&mut pending, &workspace_local_id));
+        assert!(!consume_detached_position_restore(&mut pending, &workspace_local_id));
+        assert!(!consume_detached_position_restore(&mut pending, "ws-beta"));
     }
 }
