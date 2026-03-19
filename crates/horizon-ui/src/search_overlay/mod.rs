@@ -1,28 +1,23 @@
 mod render;
 
-use std::time::Instant;
-
-use egui::{
-    Align, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
-};
+use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
 
 use render::{
-    MatchRowData, SearchLayout, paint_card, paint_empty_results, render_match_row, render_section_header,
-    render_status_line, render_toggle_button, search_layout,
+    MatchRowData, paint_dropdown_frame, paint_empty_results, render_match_row, render_section_header,
+    render_status_line, render_toggle_button,
 };
 
-const SEARCH_WIDTH: f32 = 600.0;
-const INPUT_HEIGHT: f32 = 44.0;
-const ROW_HEIGHT: f32 = 36.0;
-const SECTION_HEADER_HEIGHT: f32 = 28.0;
-const MAX_VISIBLE_ROWS: usize = 14;
+const DROPDOWN_WIDTH: f32 = 520.0;
+const ROW_HEIGHT: f32 = 32.0;
+const SECTION_HEADER_HEIGHT: f32 = 24.0;
+const MAX_VISIBLE_ROWS: usize = 12;
 
-const LABEL_FONT: egui::FontId = egui::FontId::new(13.0, egui::FontFamily::Proportional);
-const DETAIL_FONT: egui::FontId = egui::FontId::new(11.0, egui::FontFamily::Monospace);
-const BADGE_FONT: egui::FontId = egui::FontId::new(10.0, egui::FontFamily::Monospace);
+const LABEL_FONT: egui::FontId = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+const DETAIL_FONT: egui::FontId = egui::FontId::new(10.5, egui::FontFamily::Monospace);
+const BADGE_FONT: egui::FontId = egui::FontId::new(9.5, egui::FontFamily::Monospace);
 
 /// Flattened result row for display.
 struct DisplayRow {
@@ -38,9 +33,9 @@ pub(crate) struct SearchOverlay {
     case_sensitive: bool,
     regex_mode: bool,
     selected: usize,
-    opened_at: Instant,
     cached_results: SearchResults,
     display_rows: Vec<DisplayRow>,
+    request_focus: bool,
 }
 
 pub(crate) enum SearchAction {
@@ -57,27 +52,149 @@ impl SearchOverlay {
             case_sensitive: false,
             regex_mode: false,
             selected: 0,
-            opened_at: Instant::now(),
             cached_results: SearchResults::default(),
             display_rows: Vec::new(),
+            request_focus: true,
         }
     }
 
-    pub(crate) fn show(&mut self, ctx: &Context, board: &Board) -> SearchAction {
-        self.maybe_refresh_results(board);
-        let layout = search_layout(ctx.input(egui::InputState::viewport_rect));
+    /// Request focus on the search input next frame.
+    pub(crate) fn focus(&mut self) {
+        self.request_focus = true;
+    }
 
-        if self.show_backdrop(ctx, layout.screen) {
-            return SearchAction::Cancelled;
+    /// Create a search overlay without auto-focusing the input. Used for
+    /// the always-present toolbar search bar.
+    pub(crate) fn new_inactive() -> Self {
+        Self {
+            request_focus: false,
+            ..Self::new()
+        }
+    }
+
+    /// Render the search input inline in the toolbar. Returns an action
+    /// if the user selects a result or cancels.
+    pub(crate) fn show_toolbar_input(&mut self, ui: &mut egui::Ui, board: &Board) -> SearchAction {
+        self.maybe_refresh_results(board);
+
+        let input_width = 200.0_f32;
+        let input_height = 28.0_f32;
+        let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(input_width, input_height));
+
+        ui.painter()
+            .rect_filled(input_rect, CornerRadius::same(8), theme::BG_ELEVATED);
+        ui.painter().rect_stroke(
+            input_rect,
+            CornerRadius::same(8),
+            Stroke::new(1.0, theme::alpha(theme::ACCENT, 60)),
+            StrokeKind::Inside,
+        );
+
+        let text_rect = input_rect.shrink2(Vec2::new(10.0, 4.0));
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(text_rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+
+        let response = child.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .font(egui::FontId::monospace(12.0))
+                .text_color(theme::FG)
+                .frame(false)
+                .desired_width(text_rect.width())
+                .hint_text(egui::RichText::new("Search...").color(theme::FG_DIM).size(11.5))
+                .margin(Margin::ZERO),
+        );
+
+        if self.request_focus {
+            response.request_focus();
+            self.request_focus = false;
         }
 
+        if response.changed() {
+            self.selected = 0;
+        }
+
+        // Reserve space for the input in the toolbar layout.
+        ui.allocate_space(Vec2::new(input_width, input_height));
+
+        // Handle keyboard while the input has focus.
+        let action = if response.has_focus() {
+            self.handle_keyboard(ui.ctx())
+        } else if !self.query.is_empty() {
+            // Input lost focus with non-empty query -- check if user clicked
+            // outside, which means they want to dismiss.
+            None
+        } else {
+            Some(SearchAction::Cancelled)
+        };
+
+        if let Some(action) = action {
+            return action;
+        }
+
+        // Show dropdown results below the input if we have a query.
+        if self.query.is_empty() {
+            SearchAction::None
+        } else {
+            self.show_results_dropdown(ui.ctx(), input_rect)
+        }
+    }
+
+    fn show_results_dropdown(&mut self, ctx: &Context, anchor_rect: Rect) -> SearchAction {
         self.clamp_selection();
-        self.show_modal(ctx, &layout)
+
+        let dropdown_x = (anchor_rect.max.x - DROPDOWN_WIDTH).max(anchor_rect.min.x);
+        let dropdown_top = anchor_rect.max.y + 6.0;
+        let max_results_height = self.dropdown_content_height();
+        let dropdown_height = max_results_height + 56.0;
+
+        let dropdown_rect = Rect::from_min_size(
+            Pos2::new(dropdown_x, dropdown_top),
+            Vec2::new(DROPDOWN_WIDTH, dropdown_height),
+        );
+
+        let mut action = SearchAction::None;
+
+        egui::Area::new(Id::new("search_dropdown"))
+            .fixed_pos(dropdown_rect.min)
+            .constrain(true)
+            .order(Order::Tooltip)
+            .show(ctx, |ui| {
+                paint_dropdown_frame(ui, dropdown_rect);
+
+                let inner = dropdown_rect.shrink2(Vec2::new(12.0, 10.0));
+                ui.scope_builder(
+                    UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            if render_toggle_button(ui, "Aa", self.case_sensitive, "case") {
+                                self.case_sensitive = !self.case_sensitive;
+                                self.last_query = String::from("\x00_invalidate");
+                            }
+                            ui.add_space(2.0);
+                            if render_toggle_button(ui, ".*", self.regex_mode, "regex") {
+                                self.regex_mode = !self.regex_mode;
+                                self.last_query = String::from("\x00_invalidate");
+                            }
+                            ui.add_space(8.0);
+                            render_status_line(ui, self.cached_results.total_matches, self.cached_results.panels.len());
+                        });
+                        ui.add_space(4.0);
+
+                        if let Some(idx) = self.render_results(ui, inner.width()) {
+                            action = SearchAction::FocusPanel(self.display_rows[idx].panel_id);
+                        }
+                    },
+                );
+            });
+
+        action
     }
 
     fn maybe_refresh_results(&mut self, board: &Board) {
-        let options_changed = self.query != self.last_query;
-        if !options_changed {
+        if self.query == self.last_query {
             return;
         }
 
@@ -100,9 +217,6 @@ impl SearchOverlay {
                 None
             };
 
-            // Show first match per panel as the primary row, with the panel
-            // title visible. Group additional matches underneath without
-            // repeating the title, to keep the list scannable.
             for (i, m) in panel_result.matches.iter().enumerate() {
                 self.display_rows.push(DisplayRow {
                     panel_id: panel_result.panel_id,
@@ -126,128 +240,10 @@ impl SearchOverlay {
         }
     }
 
-    fn show_backdrop(&self, ctx: &Context, screen_rect: Rect) -> bool {
-        let mut cancelled = false;
-        egui::Area::new(Id::new("search_backdrop"))
-            .fixed_pos(screen_rect.min)
-            .constrain(false)
-            .order(Order::Foreground)
-            .interactable(true)
-            .show(ctx, |ui| {
-                let (rect, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
-                ui.painter_at(rect)
-                    .rect_filled(rect, CornerRadius::ZERO, Color32::from_black_alpha(140));
-                if response.clicked() && self.opened_at.elapsed().as_millis() > 200 {
-                    cancelled = true;
-                }
-            });
-        cancelled
-    }
-
-    fn show_modal(&mut self, ctx: &Context, layout: &SearchLayout) -> SearchAction {
-        let mut action = SearchAction::None;
-
-        egui::Area::new(Id::new("search_modal"))
-            .fixed_pos(layout.card.min)
-            .constrain(true)
-            .order(Order::Debug)
-            .show(ctx, |ui| {
-                paint_card(ui, layout.card);
-
-                ui.scope_builder(
-                    UiBuilder::new()
-                        .max_rect(layout.inner)
-                        .layout(Layout::top_down(Align::Min)),
-                    |ui| {
-                        action = self.show_contents(ui, ctx, layout);
-                    },
-                );
-            });
-
-        action
-    }
-
-    fn show_contents(&mut self, ui: &mut egui::Ui, ctx: &Context, layout: &SearchLayout) -> SearchAction {
-        ui.label(
-            egui::RichText::new("Search Terminals")
-                .color(theme::FG)
-                .size(15.0)
-                .strong(),
-        );
-        ui.add_space(10.0);
-
-        self.render_query_input(ui, layout.inner);
-        if let Some(action) = self.handle_keyboard(ctx) {
-            return action;
-        }
-
-        ui.allocate_space(Vec2::new(layout.inner.width(), INPUT_HEIGHT));
-        ui.add_space(4.0);
-
-        self.render_options_row(ui, layout.inner.width());
-        ui.add_space(4.0);
-
-        render_status_line(ui, self.cached_results.total_matches, self.cached_results.panels.len());
-        ui.add_space(4.0);
-
-        match self.render_results(ui, layout) {
-            Some(index) => SearchAction::FocusPanel(self.display_rows[index].panel_id),
-            None => SearchAction::None,
-        }
-    }
-
-    fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect) {
-        let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
-        ui.painter()
-            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED);
-        ui.painter().rect_stroke(
-            input_rect,
-            CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT, 70)),
-            StrokeKind::Inside,
-        );
-
-        let text_rect = input_rect.shrink2(Vec2::new(14.0, 6.0));
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(text_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-
-        let response = child.add(
-            egui::TextEdit::singleline(&mut self.query)
-                .font(egui::FontId::monospace(14.0))
-                .text_color(theme::FG)
-                .frame(false)
-                .desired_width(text_rect.width())
-                .hint_text(
-                    egui::RichText::new("Search across all terminals...")
-                        .color(theme::FG_DIM)
-                        .size(13.0),
-                )
-                .margin(Margin::ZERO),
-        );
-        if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
-            response.request_focus();
-        }
-        if response.changed() {
-            self.selected = 0;
-        }
-    }
-
-    fn render_options_row(&mut self, ui: &mut egui::Ui, _width: f32) {
-        ui.horizontal(|ui| {
-            if render_toggle_button(ui, "Aa", self.case_sensitive, "case") {
-                self.case_sensitive = !self.case_sensitive;
-                // Force a re-query on next frame by invalidating the cache.
-                self.last_query = String::from("\x00_invalidate");
-            }
-            ui.add_space(4.0);
-            if render_toggle_button(ui, ".*", self.regex_mode, "regex") {
-                self.regex_mode = !self.regex_mode;
-                self.last_query = String::from("\x00_invalidate");
-            }
-        });
+    fn dropdown_content_height(&self) -> f32 {
+        use crate::app::util::usize_to_f32;
+        let visible = self.display_rows.len().min(MAX_VISIBLE_ROWS);
+        usize_to_f32(visible) * ROW_HEIGHT + 2.0 * SECTION_HEADER_HEIGHT + 8.0
     }
 
     fn handle_keyboard(&mut self, ctx: &Context) -> Option<SearchAction> {
@@ -276,20 +272,15 @@ impl SearchOverlay {
         None
     }
 
-    fn render_results(&mut self, ui: &mut egui::Ui, layout: &SearchLayout) -> Option<usize> {
+    fn render_results(&mut self, ui: &mut egui::Ui, width: f32) -> Option<usize> {
         let mut clicked_idx = None;
-        let scroll_height = layout.results_height.min(layout.inner.max.y - ui.cursor().min.y - 8.0);
+        let max_height = self.dropdown_content_height();
 
         egui::ScrollArea::vertical()
-            .max_height(scroll_height)
+            .max_height(max_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(layout.inner.width());
-
-                if self.query.is_empty() {
-                    paint_empty_results(ui, "Type to search across all terminal panels");
-                    return;
-                }
+                ui.set_min_width(width);
 
                 if self.display_rows.is_empty() {
                     paint_empty_results(ui, "No matches found");
@@ -300,7 +291,7 @@ impl SearchOverlay {
                 for (i, row) in self.display_rows.iter().enumerate() {
                     if current_panel != Some(row.panel_id) && !row.panel_title.is_empty() {
                         current_panel = Some(row.panel_id);
-                        render_section_header(ui, layout.inner.width(), &row.panel_title);
+                        render_section_header(ui, width, &row.panel_title);
                     }
 
                     let data = MatchRowData {
@@ -313,7 +304,7 @@ impl SearchOverlay {
                         match_count_label: row.match_count_label.clone(),
                     };
 
-                    if render_match_row(ui, layout.inner.width(), i, &data, self.selected == i) {
+                    if render_match_row(ui, width, i, &data, self.selected == i) {
                         clicked_idx = Some(i);
                     }
                 }

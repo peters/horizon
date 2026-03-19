@@ -91,6 +91,8 @@ impl HorizonApp {
                             if remote_hosts_button.clicked() {
                                 self.toggle_remote_hosts_overlay();
                             }
+                            ui.add_space(8.0);
+                            self.render_toolbar_search(ui);
                         });
                     },
                 );

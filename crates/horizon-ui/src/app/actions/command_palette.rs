@@ -113,11 +113,13 @@ impl HorizonApp {
             }
             CommandId::ToggleSettings => self.toggle_settings(),
             CommandId::ToggleSearch => {
-                self.search_overlay = if self.search_overlay.is_some() {
-                    None
+                // Focus the toolbar search input (or create it with focus
+                // if it doesn't exist yet).
+                if let Some(overlay) = &mut self.search_overlay {
+                    overlay.focus();
                 } else {
-                    Some(SearchOverlay::new())
-                };
+                    self.search_overlay = Some(SearchOverlay::new());
+                }
             }
         }
     }
