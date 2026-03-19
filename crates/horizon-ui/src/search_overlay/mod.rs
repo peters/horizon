@@ -1,6 +1,6 @@
 mod render;
 
-use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
+use egui::{Align, Context, Id, Layout, Margin, Order, Pos2, Rect, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
@@ -78,34 +78,21 @@ impl SearchOverlay {
         self.maybe_refresh_results(board);
 
         let input_width = 200.0_f32;
-        let input_height = 28.0_f32;
-        let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(input_width, input_height));
 
-        ui.painter()
-            .rect_filled(input_rect, CornerRadius::same(8), theme::BG_ELEVATED);
-        ui.painter().rect_stroke(
-            input_rect,
-            CornerRadius::same(8),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT, 60)),
-            StrokeKind::Inside,
-        );
-
-        let text_rect = input_rect.shrink2(Vec2::new(10.0, 4.0));
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(text_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-
-        let response = child.add(
+        let response = ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .font(egui::FontId::monospace(12.0))
+                .font(egui::FontId::monospace(11.0))
                 .text_color(theme::FG)
-                .frame(false)
-                .desired_width(text_rect.width())
-                .hint_text(egui::RichText::new("Search...").color(theme::FG_DIM).size(11.5))
-                .margin(Margin::ZERO),
+                .desired_width(input_width)
+                .hint_text(
+                    egui::RichText::new("Search terminals...")
+                        .color(theme::FG_DIM)
+                        .size(11.0),
+                )
+                .margin(Margin::symmetric(8, 4)),
         );
+
+        let input_rect = response.rect;
 
         if self.request_focus {
             response.request_focus();
@@ -116,18 +103,13 @@ impl SearchOverlay {
             self.selected = 0;
         }
 
-        // Reserve space for the input in the toolbar layout.
-        ui.allocate_space(Vec2::new(input_width, input_height));
-
         // Handle keyboard while the input has focus.
         let action = if response.has_focus() {
             self.handle_keyboard(ui.ctx())
-        } else if !self.query.is_empty() {
-            // Input lost focus with non-empty query -- check if user clicked
-            // outside, which means they want to dismiss.
-            None
-        } else {
+        } else if self.query.is_empty() {
             Some(SearchAction::Cancelled)
+        } else {
+            None
         };
 
         if let Some(action) = action {
