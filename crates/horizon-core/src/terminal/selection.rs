@@ -1,4 +1,4 @@
-use super::*;
+use super::{Column, Point, Selection, SelectionType, Side, Terminal, viewport_to_point};
 
 impl Terminal {
     /// Start a new text selection at the given viewport-relative row and column.

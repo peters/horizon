@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PtyOptions, ReplayRestoreState,
+    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, WindowSize,
+    drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
+};
 
 impl Terminal {
     /// Spawn a terminal session backed by `alacritty_terminal`.

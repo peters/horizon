@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Dimensions, PathBuf, RenderableContent, Scroll, TermDamage, Terminal, current_cwd_for_pid,
+    find_file_path_at_column, find_url_at_column,
+};
 
 impl Terminal {
     #[must_use]

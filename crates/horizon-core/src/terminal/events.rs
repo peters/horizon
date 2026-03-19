@@ -1,4 +1,4 @@
-use super::*;
+use super::{AgentNotification, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.

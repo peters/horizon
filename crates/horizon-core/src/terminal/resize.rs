@@ -1,4 +1,4 @@
-use super::*;
+use super::{Msg, TermMode, Terminal, TerminalDimensions, WindowSize};
 
 pub(super) fn queue_debounced_pty_resize(
     pending_pty_resize: &mut Option<std::time::Instant>,
