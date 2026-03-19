@@ -78,12 +78,14 @@ Validate the detached-workspace drag fix, confirm repeated detached-window resiz
 2. Drag both detached windows independently and verify neither affects the other.
 3. Close one detached window with the native window close control and verify it reattaches cleanly to the main window.
 4. Rename a workspace, then detach it, and verify the detached window title updates correctly.
-5. Confirm the toolbar does not render for workspaces hidden behind fixed overlays if the label itself is intentionally suppressed there.
+5. Run a full-screen terminal UI with a bottom status or input bar, resize the detached window repeatedly, and verify the UI reflows without leaving a large blank band between the conversation/output area and the bottom bar.
+6. Confirm the toolbar does not render for workspaces hidden behind fixed overlays if the label itself is intentionally suppressed there.
 
 ## Regression Watchlist
 
 - Detached window drag becomes unstable only after persistence restore.
 - Detached window resize leaves the PTY buffer visually desynchronized from the rendered grid.
+- Full-screen terminal UIs keep their bottom composer or status bar pinned but leave a large stale blank region above it after resize.
 - Detached window position resets every frame while dragging.
 - Layout toolbar disappears for single-panel workspaces after focus changes.
 - Empty workspaces incorrectly show layout controls.
