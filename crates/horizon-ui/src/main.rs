@@ -17,6 +17,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use app::HorizonApp;
+use eframe::wgpu;
 use horizon_core::{
     Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser, StartupDecision,
     WindowConfig,
@@ -268,7 +269,7 @@ fn parse_cli_args() -> CliArgs {
 mod tests {
     use horizon_core::{SessionSummary, StartupChooser, StartupPromptReason};
 
-    use super::{startup_chooser_window_config, summarize_adapter};
+    use super::{startup_chooser_window_config, summarize_adapter, wgpu};
 
     fn chooser_with_sessions(session_count: usize) -> StartupChooser {
         StartupChooser {

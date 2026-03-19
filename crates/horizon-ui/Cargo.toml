@@ -20,8 +20,6 @@ workspace = true
 horizon-core = { path = "../horizon-core", version = "0.1.0" }
 eframe.workspace = true
 egui.workspace = true
-# Ensure native renderer backends are enabled for eframe's wgpu stack.
-wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 profiling.workspace = true
