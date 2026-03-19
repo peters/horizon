@@ -79,7 +79,7 @@ impl SearchOverlay {
 
         let input_width = ui.available_width();
 
-        // Paint a visible border around the input so it's discoverable.
+        // Paint a visible accent border so the search bar is always discoverable.
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(input_width, 32.0));
         ui.painter().rect_filled(
             input_rect,
@@ -89,7 +89,7 @@ impl SearchOverlay {
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(10),
-            Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG, 140)),
+            Stroke::new(1.5, theme::alpha(theme::ACCENT, 130)),
             StrokeKind::Inside,
         );
 
