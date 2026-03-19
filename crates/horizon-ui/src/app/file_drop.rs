@@ -201,14 +201,12 @@ fn select_terminal_drop_target(
         return is_terminal_panel(panel_id).then_some(panel_id);
     }
 
-    if let Some(screen_pos) = screen_pos
-        && let Some(panel_id) = panel_screen_order.iter().rev().copied().find(|panel_id| {
+    if let Some(screen_pos) = screen_pos {
+        return panel_screen_order.iter().rev().copied().find(|panel_id| {
             panel_screen_rects
                 .get(panel_id)
                 .is_some_and(|rect| rect.contains(screen_pos) && is_terminal_panel(*panel_id))
-        })
-    {
-        return Some(panel_id);
+        });
     }
 
     if let Some(panel_id) = focused_terminal
@@ -388,5 +386,26 @@ mod tests {
         });
 
         assert_eq!(target, Some(top));
+    }
+
+    #[test]
+    fn target_selection_does_not_fall_back_when_drop_position_is_outside_terminals() {
+        let focused = PanelId(4);
+        let order = vec![focused];
+        let rects = HashMap::from([(
+            focused,
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0)),
+        )]);
+
+        let target = select_terminal_drop_target(
+            None,
+            Some(Pos2::new(180.0, 180.0)),
+            Some(focused),
+            &order,
+            &rects,
+            |panel_id| panel_id == focused,
+        );
+
+        assert_eq!(target, None);
     }
 }

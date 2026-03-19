@@ -12,6 +12,11 @@ back into large multi-purpose modules.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
   attention flows, workspace and panel membership changes, arrangement/collision
   logic, geometry queries, and shutdown state.
+- Large board test surfaces should live in `board/tests/` topic files so
+  `board.rs` can stay focused on production orchestration.
+- `terminal.rs` should keep the terminal types and shared imports; lifecycle,
+  event handling, resize policy, selection logic, and content helpers belong in
+  `terminal/` leaf modules.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   session discovery and external-store parsing belong in `runtime_state/`
   helper modules.
@@ -26,16 +31,21 @@ back into large multi-purpose modules.
   actions.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
+  - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
+    dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
+  - `remote_hosts_overlay`: overlay state/input shell with query/filter,
+    layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows
   - `persistence`: runtime/config save glue
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
-  - `workspace`: workspace frame rendering and rename/drag UI
+  - `workspace`: workspace frame orchestration and rename/drag UI, with
+    paint/render/toolbar helpers split into `workspace/`
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
   instead of extending a single file.
