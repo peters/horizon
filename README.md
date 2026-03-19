@@ -118,7 +118,7 @@ git lfs pull
 cargo run --release
 ```
 
-> Requires **Git LFS** for bundled assets and **Rust 1.85+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
+> Requires **Git LFS** for bundled assets and **Rust 1.88+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
 
 ---
 
@@ -271,6 +271,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 ## Contributing
 
 See [**AGENTS.md**](AGENTS.md) for development setup, architecture, coding standards, and CI requirements.
+Release instructions live in [**docs/release-flow.md**](docs/release-flow.md).
 Manual smoke-test plans live under [**docs/testing**](docs/testing), including the
 [**workspace close smoke test**](docs/testing/workspace-close-smoketest-plan.md).
 

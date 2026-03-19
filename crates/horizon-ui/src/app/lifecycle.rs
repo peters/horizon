@@ -123,6 +123,7 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        self.sync_panel_focus_from_pointer_press(ctx);
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_file_drop(ctx);
@@ -134,6 +135,7 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
+        self.poll_remote_hosts_panels();
         self.poll_git_watchers();
         self.poll_config_reload();
 

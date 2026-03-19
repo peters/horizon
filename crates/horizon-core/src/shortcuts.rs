@@ -216,6 +216,7 @@ impl fmt::Display for ShortcutBinding {
 pub struct AppShortcuts {
     pub command_palette: ShortcutBinding,
     pub new_terminal: ShortcutBinding,
+    pub open_remote_hosts: ShortcutBinding,
     pub toggle_sidebar: ShortcutBinding,
     pub toggle_hud: ShortcutBinding,
     pub toggle_minimap: ShortcutBinding,
@@ -240,6 +241,7 @@ impl Default for AppShortcuts {
         Self {
             command_palette: ShortcutBinding::new(primary, ShortcutKey::Letter('K')),
             new_terminal: ShortcutBinding::new(primary, ShortcutKey::Letter('N')),
+            open_remote_hosts: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('R')),
             toggle_sidebar: ShortcutBinding::new(primary, ShortcutKey::Letter('B')),
             toggle_hud: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('H')),
             toggle_minimap: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('M')),
@@ -482,6 +484,13 @@ mod tests {
         assert_eq!(
             shortcuts.toggle_hud,
             ShortcutBinding::new(primary_shift, ShortcutKey::Letter('H'))
+        );
+        assert_eq!(
+            shortcuts.open_remote_hosts,
+            ShortcutBinding::new(
+                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
+                ShortcutKey::Letter('R'),
+            )
         );
         assert_eq!(
             shortcuts.toggle_minimap,

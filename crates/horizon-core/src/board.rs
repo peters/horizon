@@ -223,7 +223,7 @@ impl Board {
     pub fn exited_panels(&self) -> Vec<PanelId> {
         self.panels
             .iter()
-            .filter(|panel| panel.child_exited())
+            .filter(|panel| panel.child_exited() && panel.should_close_after_exit())
             .map(|panel| panel.id)
             .collect()
     }

@@ -1,20 +1,100 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
-use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
+use egui::{Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
 use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
-use crate::command_palette::{CommandPalette, PaletteAction, PanelEntry, WorkspaceEntry};
+use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::theme;
 
+use self::support::{
+    command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
+    detached_workspace_ids, preset_picker_heading, render_preset_picker_row,
+};
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use super::shortcuts::shortcut_pressed;
 use super::util::{OverlayExclusion, editor_panel_size_for_file, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+
+mod support;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppShortcut {
+    CommandPalette,
+    ResetView,
+    ZoomIn,
+    ZoomOut,
+    AlignWorkspacesHorizontally,
+    ToggleSettings,
+    ToggleSidebar,
+    ToggleHud,
+    ToggleMinimap,
+    NewPanel,
+    OpenRemoteHosts,
+    FullscreenPanel,
+    ExitFullscreenPanel,
+    FullscreenWindow,
+}
+
+impl AppShortcut {
+    /// Only a small explicit fullscreen allowlist stays global when the
+    /// focused panel is a terminal and Horizon is not inside another text
+    /// entry surface.
+    const fn bypasses_terminal_focus_gate(self) -> bool {
+        matches!(
+            self,
+            Self::FullscreenPanel | Self::ExitFullscreenPanel | Self::FullscreenWindow
+        )
+    }
+}
+
+fn app_shortcut_enabled(terminal_owns_keyboard: bool, shortcut: AppShortcut) -> bool {
+    !terminal_owns_keyboard || shortcut.bypasses_terminal_focus_gate()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HorizonTextInputState {
+    settings_open: bool,
+    dir_picker_open: bool,
+    command_palette_open: bool,
+    renaming_panel: bool,
+    renaming_workspace: bool,
+}
+
+impl HorizonTextInputState {
+    const fn is_active(self) -> bool {
+        self.settings_open
+            || self.dir_picker_open
+            || self.command_palette_open
+            || self.renaming_panel
+            || self.renaming_workspace
+    }
+}
+
+fn panel_focus_target_at_pointer_press(
+    panel_order: &[PanelId],
+    panel_rects: &HashMap<PanelId, Rect>,
+    focused_panel: Option<PanelId>,
+    pointer_pos: Pos2,
+) -> Option<PanelId> {
+    if focused_panel.is_some_and(|panel_id| {
+        panel_rects
+            .get(&panel_id)
+            .is_some_and(|rect| rect.contains(pointer_pos))
+    }) {
+        return focused_panel;
+    }
+
+    panel_order
+        .iter()
+        .rev()
+        .copied()
+        .find(|panel_id| panel_rects.get(panel_id).is_some_and(|rect| rect.contains(pointer_pos)))
+}
 
 impl HorizonApp {
     pub(super) fn leftmost_workspace_id(&self) -> Option<WorkspaceId> {
@@ -139,16 +219,55 @@ impl HorizonApp {
         OverlayExclusion::new(zones)
     }
 
-    pub(super) fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
+    pub(super) fn terminal_accepts_keyboard_input(&self, _ctx: &Context) -> bool {
         let focused_has_terminal = self
             .board
             .focused
             .and_then(|panel_id| self.board.panel(panel_id))
             .is_some_and(|panel| panel.content.terminal().is_some());
-        focused_has_terminal
-            && !ctx.wants_keyboard_input()
-            && self.dir_picker.is_none()
-            && self.command_palette.is_none()
+        let horizon_text_input_active = HorizonTextInputState {
+            settings_open: self.settings.is_some(),
+            dir_picker_open: self.dir_picker.is_some(),
+            command_palette_open: self.command_palette.is_some(),
+            renaming_panel: self.renaming_panel.is_some(),
+            renaming_workspace: self.renaming_workspace.is_some(),
+        }
+        .is_active();
+
+        // Egui text focus can lag by a frame when the user clicks from an
+        // editor back into a terminal. Gate on Horizon-owned text surfaces
+        // explicitly so terminal focus reacquires shortcuts immediately.
+        focused_has_terminal && !horizon_text_input_active
+    }
+
+    pub(super) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {
+        let Some(pointer_pos) = ctx.input(|input| {
+            input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        }) else {
+            return;
+        };
+
+        let panel_order: Vec<_> = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
+            .map(|panel| panel.id)
+            .collect();
+
+        if let Some(panel_id) =
+            panel_focus_target_at_pointer_press(&panel_order, &self.panel_screen_rects, self.board.focused, pointer_pos)
+        {
+            self.board.focus(panel_id);
+        }
     }
 
     pub(super) fn create_panel(&mut self) {
@@ -249,7 +368,7 @@ impl HorizonApp {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     ) {
-        if workspace_cwd(&self.board, workspace_id).is_some() {
+        if workspace_cwd(&self.board, workspace_id).is_some() || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options();
             options.position = canvas_pos;
             if let Err(error) = self.create_panel_with_options(options, workspace_id) {
@@ -287,8 +406,15 @@ impl HorizonApp {
         let workspace_entries =
             command_palette_workspace_entries(&self.board, &detached_workspace_ids, self.board.active_workspace);
         let panel_entries = command_palette_panel_entries(&self.board, &detached_workspace_ids);
+        let preset_entries = command_palette_preset_entries(&self.presets);
 
-        let action = palette.show(ctx, &workspace_entries, &panel_entries, &self.action_commands_cache);
+        let action = palette.show(
+            ctx,
+            &workspace_entries,
+            &panel_entries,
+            &preset_entries,
+            &self.action_commands_cache,
+        );
         match action {
             PaletteAction::None => {}
             PaletteAction::Cancelled => self.command_palette = None,
@@ -371,6 +497,16 @@ impl HorizonApp {
                     self.create_panel();
                 }
             }
+            CommandId::OpenRemoteHosts => self.open_remote_hosts_panel(),
+            CommandId::CreatePanelFromPreset(index) => {
+                if let Some(preset) = self.presets.get(index).cloned() {
+                    let workspace_id = self
+                        .board
+                        .active_workspace
+                        .unwrap_or_else(|| self.board.ensure_workspace());
+                    self.add_panel_to_workspace(workspace_id, preset, None);
+                }
+            }
             CommandId::ToggleSettings => self.toggle_settings(),
         }
     }
@@ -385,7 +521,7 @@ impl HorizonApp {
             DirPickerAction::Cancelled => self.dir_picker = None,
             DirPickerAction::Selected(path, purpose) => {
                 self.dir_picker = None;
-                self.execute_dir_picker_result(path.as_ref(), purpose);
+                self.execute_dir_picker_result(path.as_ref(), *purpose);
             }
         }
     }
@@ -419,11 +555,15 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
+        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
         let (f11, ctrl_f11, escape) = ctx.input(|input| {
             (
-                shortcut_pressed(input, self.shortcuts.fullscreen_panel),
-                shortcut_pressed(input, self.shortcuts.fullscreen_window),
-                shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenPanel)
+                    && shortcut_pressed(input, self.shortcuts.fullscreen_panel),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenWindow)
+                    && shortcut_pressed(input, self.shortcuts.fullscreen_window),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ExitFullscreenPanel)
+                    && shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
             )
         });
 
@@ -448,7 +588,11 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette)) {
+        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
+
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::CommandPalette)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette))
+        {
             self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
@@ -456,16 +600,24 @@ impl HorizonApp {
             };
         }
 
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ResetView)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view))
+        {
             self.execute_command(ctx, &CommandId::ResetView);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomIn)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in))
+        {
             self.execute_command(ctx, &CommandId::ZoomIn);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomOut)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out))
+        {
             self.execute_command(ctx, &CommandId::ZoomOut);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::AlignWorkspacesHorizontally)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally))
+        {
             self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.focus_workspace)) {
@@ -478,23 +630,34 @@ impl HorizonApp {
             self.execute_command(ctx, &CommandId::PrevWorkspace);
         }
 
-        if self.terminal_accepts_keyboard_input(ctx) {
-            return;
-        }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSettings)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings))
+        {
             self.execute_command(ctx, &CommandId::ToggleSettings);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSidebar)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar))
+        {
             self.execute_command(ctx, &CommandId::ToggleSidebar);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleHud)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud))
+        {
             self.execute_command(ctx, &CommandId::ToggleHud);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleMinimap)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap))
+        {
             self.execute_command(ctx, &CommandId::ToggleMinimap);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::OpenRemoteHosts)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.open_remote_hosts))
+        {
+            self.execute_command(ctx, &CommandId::OpenRemoteHosts);
+        }
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::NewPanel)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal))
+        {
             self.execute_command(ctx, &CommandId::NewPanel);
         }
     }
@@ -581,8 +744,35 @@ impl HorizonApp {
         let popup_id = Id::new("canvas_preset_picker");
         let canvas_rect = self.canvas_rect(ctx);
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
-        let mut selected_action: Option<PresetPickerAction> = None;
+        let (popup_rect, selected_action) =
+            self.show_preset_picker_popup(ctx, popup_id, screen_pos, target_workspace, canvas_pos);
 
+        if let Some(action) = selected_action {
+            self.pending_preset_pick = None;
+            self.apply_preset_picker_action(action);
+        } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
+            let clicked_outside = ctx.input(|input| {
+                input.pointer.any_click()
+                    && input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|pos| !popup_rect.contains(pos))
+            });
+            if clicked_outside {
+                self.pending_preset_pick = None;
+            }
+        }
+    }
+
+    fn show_preset_picker_popup(
+        &self,
+        ctx: &Context,
+        popup_id: Id,
+        screen_pos: Pos2,
+        target_workspace: Option<WorkspaceId>,
+        canvas_pos: [f32; 2],
+    ) -> (Rect, Option<PresetPickerAction>) {
+        let mut selected_action = None;
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
             .constrain(true)
@@ -595,86 +785,53 @@ impl HorizonApp {
                     .inner_margin(Margin::symmetric(8, 6))
                     .show(ui, |ui| {
                         ui.set_min_width(160.0);
-                        let heading = if target_workspace.is_some() {
-                            "New Terminal"
-                        } else {
-                            "New Workspace"
-                        };
-                        ui.label(egui::RichText::new(heading).size(11.0).color(theme::FG_DIM).strong());
+                        ui.label(
+                            egui::RichText::new(preset_picker_heading(target_workspace))
+                                .size(11.0)
+                                .color(theme::FG_DIM)
+                                .strong(),
+                        );
                         ui.add_space(4.0);
 
                         for preset in &self.presets {
-                            let label = if let Some(alias) = &preset.alias {
-                                format!("{} ({})", preset.name, alias)
-                            } else {
-                                preset.name.clone()
-                            };
-                            if let Some(workspace_id) = target_workspace {
-                                ui.horizontal(|ui| {
-                                    let create_text =
-                                        egui::RichText::new(label.clone()).size(12.5).color(theme::FG_SOFT);
-                                    if ui.add(Button::new(create_text).frame(false)).clicked() {
-                                        selected_action = Some(PresetPickerAction::CreatePanel {
-                                            workspace_id,
-                                            preset: preset.clone(),
-                                            canvas_pos: Some(canvas_pos),
-                                        });
-                                    }
-
-                                    let dir_text = egui::RichText::new("Dir").size(11.0).color(theme::FG_DIM);
-                                    if ui.add(Button::new(dir_text).frame(false)).clicked() {
-                                        selected_action = Some(PresetPickerAction::ChooseDirectory {
-                                            workspace_id,
-                                            preset: preset.clone(),
-                                            canvas_pos: Some(canvas_pos),
-                                        });
-                                    }
-                                });
-                            } else {
-                                let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-                                if ui.add(Button::new(create_text).frame(false)).clicked() {
-                                    selected_action = Some(PresetPickerAction::CreateWorkspace {
-                                        canvas_pos,
-                                        preset: preset.clone(),
-                                    });
-                                }
+                            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset) {
+                                selected_action = Some(action);
                             }
                         }
                     });
             });
 
-        if let Some(action) = selected_action {
-            self.pending_preset_pick = None;
-            match action {
-                PresetPickerAction::CreatePanel {
-                    workspace_id,
-                    preset,
-                    canvas_pos,
-                } => {
-                    self.add_panel_to_workspace(workspace_id, preset, canvas_pos);
-                }
-                PresetPickerAction::ChooseDirectory {
-                    workspace_id,
-                    preset,
-                    canvas_pos,
-                } => {
-                    self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
-                }
-                PresetPickerAction::CreateWorkspace { canvas_pos, preset } => {
-                    self.dir_picker = Some(DirPicker::new(DirPickerPurpose::NewWorkspace { canvas_pos, preset }));
-                }
+        (area_response.response.rect, selected_action)
+    }
+
+    fn apply_preset_picker_action(&mut self, action: PresetPickerAction) {
+        match action {
+            PresetPickerAction::CreatePanel {
+                workspace_id,
+                preset,
+                canvas_pos,
+            } => {
+                self.add_panel_to_workspace(workspace_id, preset, canvas_pos);
             }
-        } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
-            let popup_rect = area_response.response.rect;
-            let clicked_outside = ctx.input(|input| {
-                input.pointer.any_click()
-                    && input
-                        .pointer
-                        .interact_pos()
-                        .is_some_and(|pos| !popup_rect.contains(pos))
-            });
-            if clicked_outside {
-                self.pending_preset_pick = None;
+            PresetPickerAction::ChooseDirectory {
+                workspace_id,
+                preset,
+                canvas_pos,
+            } => {
+                self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
+            }
+            PresetPickerAction::CreateWorkspace { canvas_pos, preset } => {
+                self.dir_picker = Some(DirPicker::new(DirPickerPurpose::NewWorkspace { canvas_pos, preset }));
+            }
+            PresetPickerAction::CreateWorkspaceDirect { canvas_pos, preset } => {
+                let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+                let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
+                let mut options = preset.to_panel_options();
+                options.position = Some(canvas_pos);
+                if let Err(error) = self.create_panel_with_options(options, workspace_id) {
+                    tracing::error!("failed to create panel: {error}");
+                }
+                self.mark_runtime_dirty();
             }
         }
     }
@@ -814,6 +971,10 @@ enum PresetPickerAction {
         canvas_pos: [f32; 2],
         preset: PresetConfig,
     },
+    CreateWorkspaceDirect {
+        canvas_pos: [f32; 2],
+        preset: PresetConfig,
+    },
 }
 
 fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&PathBuf>) {
@@ -832,60 +993,6 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
-fn detached_workspace_ids(
-    board: &horizon_core::Board,
-    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
-) -> HashSet<WorkspaceId> {
-    detached_workspaces
-        .keys()
-        .filter_map(|local_id| board.workspace_id_by_local_id(local_id))
-        .collect()
-}
-
-fn command_palette_workspace_entries(
-    board: &horizon_core::Board,
-    detached_workspace_ids: &HashSet<WorkspaceId>,
-    active_workspace: Option<WorkspaceId>,
-) -> Vec<WorkspaceEntry> {
-    board
-        .workspaces
-        .iter()
-        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
-        .map(|workspace| {
-            let (r, g, b) = workspace.accent();
-            WorkspaceEntry {
-                id: workspace.id,
-                name: workspace.name.clone(),
-                color: Color32::from_rgb(r, g, b),
-                panel_count: workspace.panels.len(),
-                is_active: active_workspace == Some(workspace.id),
-            }
-        })
-        .collect()
-}
-
-fn command_palette_panel_entries(
-    board: &horizon_core::Board,
-    detached_workspace_ids: &HashSet<WorkspaceId>,
-) -> Vec<PanelEntry> {
-    board
-        .panels
-        .iter()
-        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id))
-        .map(|panel| {
-            let workspace_name = board
-                .workspace(panel.workspace_id)
-                .map_or_else(String::new, |workspace| workspace.name.clone());
-            PanelEntry {
-                id: panel.id,
-                title: panel.title.clone(),
-                workspace_name,
-                cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
-            }
-        })
-        .collect()
-}
-
 fn align_attached_workspaces(
     board: &mut horizon_core::Board,
     detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
@@ -902,17 +1009,18 @@ fn align_attached_workspaces(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::PathBuf;
 
     use egui::{Color32, Pos2, Rect};
-    use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
+    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
-        command_palette_panel_entries, command_palette_workspace_entries, detached_workspace_ids,
-        estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd,
-        workspace_cwd,
+        AppShortcut, HorizonTextInputState, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces,
+        app_shortcut_enabled, canvas_rect_for_layout, command_palette_panel_entries, command_palette_preset_entries,
+        command_palette_workspace_entries, detached_workspace_ids, estimated_settings_bar_rect,
+        estimated_settings_panel_rect, inherit_workspace_cwd, panel_focus_target_at_pointer_press,
+        update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -969,6 +1077,29 @@ mod tests {
         board.workspace_mut(workspace_id).expect("workspace").cwd = Some(path.clone());
 
         assert_eq!(workspace_cwd(&board, workspace_id), Some(path));
+    }
+
+    #[test]
+    fn command_palette_preset_entries_include_ssh_keywords() {
+        let presets = vec![PresetConfig {
+            name: "SSH: prod-api".to_string(),
+            alias: Some("pa".to_string()),
+            kind: PanelKind::Ssh,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::Fresh,
+            ssh_connection: Some(horizon_core::SshConnection {
+                host: "prod-api".to_string(),
+                user: Some("deploy".to_string()),
+                ..horizon_core::SshConnection::default()
+            }),
+        }];
+
+        let entries = command_palette_preset_entries(&presets);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].detail, "deploy@prod-api");
+        assert!(entries[0].keywords.iter().any(|keyword| keyword == "deploy"));
     }
 
     #[test]
@@ -1109,5 +1240,138 @@ mod tests {
                 .zip(detached_position)
                 .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
         }));
+    }
+
+    #[test]
+    fn fullscreen_shortcuts_are_explicit_terminal_focus_exceptions() {
+        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenPanel));
+        assert!(app_shortcut_enabled(true, AppShortcut::ExitFullscreenPanel));
+        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenWindow));
+    }
+
+    #[test]
+    fn horizon_text_input_active_only_tracks_explicit_horizon_surfaces() {
+        let inactive = HorizonTextInputState {
+            settings_open: false,
+            dir_picker_open: false,
+            command_palette_open: false,
+            renaming_panel: false,
+            renaming_workspace: false,
+        };
+        let active_states = [
+            HorizonTextInputState {
+                settings_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                dir_picker_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                command_palette_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                renaming_panel: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                renaming_workspace: true,
+                ..inactive
+            },
+        ];
+
+        assert!(!inactive.is_active());
+        assert!(active_states.iter().all(|state| state.is_active()));
+    }
+
+    #[test]
+    fn panel_focus_target_prefers_existing_focused_panel_when_rects_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target = panel_focus_target_at_pointer_press(
+            &[panel_a, panel_b],
+            &panel_rects,
+            Some(panel_a),
+            Pos2::new(40.0, 40.0),
+        );
+
+        assert_eq!(target, Some(panel_a));
+    }
+
+    #[test]
+    fn panel_focus_target_uses_frontmost_panel_order_for_unfocused_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target =
+            panel_focus_target_at_pointer_press(&[panel_a, panel_b], &panel_rects, None, Pos2::new(40.0, 40.0));
+
+        assert_eq!(target, Some(panel_b));
+    }
+
+    #[test]
+    fn non_fullscreen_shortcuts_are_blocked_while_terminal_owns_keyboard() {
+        for shortcut in [
+            AppShortcut::CommandPalette,
+            AppShortcut::ResetView,
+            AppShortcut::ZoomIn,
+            AppShortcut::ZoomOut,
+            AppShortcut::AlignWorkspacesHorizontally,
+            AppShortcut::ToggleSettings,
+            AppShortcut::ToggleSidebar,
+            AppShortcut::ToggleHud,
+            AppShortcut::ToggleMinimap,
+            AppShortcut::NewPanel,
+            AppShortcut::OpenRemoteHosts,
+        ] {
+            assert!(
+                !app_shortcut_enabled(true, shortcut),
+                "{shortcut:?} unexpectedly bypassed the terminal focus gate"
+            );
+        }
+    }
+
+    #[test]
+    fn app_shortcuts_remain_available_when_terminal_does_not_own_keyboard() {
+        for shortcut in [
+            AppShortcut::CommandPalette,
+            AppShortcut::ResetView,
+            AppShortcut::ZoomIn,
+            AppShortcut::ZoomOut,
+            AppShortcut::AlignWorkspacesHorizontally,
+            AppShortcut::ToggleSettings,
+            AppShortcut::ToggleSidebar,
+            AppShortcut::ToggleHud,
+            AppShortcut::ToggleMinimap,
+            AppShortcut::NewPanel,
+            AppShortcut::OpenRemoteHosts,
+            AppShortcut::FullscreenPanel,
+            AppShortcut::ExitFullscreenPanel,
+            AppShortcut::FullscreenWindow,
+        ] {
+            assert!(app_shortcut_enabled(false, shortcut));
+        }
     }
 }

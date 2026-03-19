@@ -2,6 +2,7 @@
 name = "horizon-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
@@ -17,7 +18,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-horizon-core = { path = "../horizon-core", version = "0.1.0" }
+horizon-core.workspace = true
 eframe.workspace = true
 egui.workspace = true
 # Pulls the backend feature set into eframe's transitive wgpu dependency.
@@ -28,4 +29,4 @@ profiling.workspace = true
 serde_yaml.workspace = true
 tempfile.workspace = true
 alacritty_terminal.workspace = true
-comrak = { version = "0.51", default-features = false }
+egui_commonmark.workspace = true

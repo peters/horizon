@@ -1,77 +1,191 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: 'Release action'
-        required: true
-        type: choice
-        options:
-          - promote-beta
-          - cut-stable
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
 
 permissions:
   contents: write
 
 jobs:
-  promote-beta:
-    name: Promote to beta
-    if: inputs.action == 'promote-beta'
+  validate-release:
+    name: Validate Release
     runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.validate.outputs.release_version }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
           lfs: true
 
-      - uses: gittools/actions/gitversion/setup@v4.4.2
-        with:
-          versionSpec: '6.x'
+      - name: Verify workspace versions are aligned
+        run: ./scripts/check-version-sync.sh
 
-      - id: gitversion
-        uses: gittools/actions/gitversion/execute@v4.4.2
-
-      - name: Create release branch
+      - id: validate
+        name: Validate tag and release metadata
         run: |
-          BRANCH="release/${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${{ steps.gitversion.outputs.patch }}"
-          echo "Creating branch: ${BRANCH}"
-          git checkout -b "${BRANCH}"
-          git push origin "${BRANCH}"
-          echo "## Beta promotion" >> "$GITHUB_STEP_SUMMARY"
-          echo "Created \`${BRANCH}\` from main." >> "$GITHUB_STEP_SUMMARY"
-          echo "Subsequent pushes to this branch will publish **beta** prereleases." >> "$GITHUB_STEP_SUMMARY"
+          source ./scripts/version-lib.sh
 
-  cut-stable:
-    name: Cut stable release
-    if: inputs.action == 'cut-stable'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          lfs: true
+          tag_name="${{ github.event.release.tag_name }}"
+          release_prerelease="${{ github.event.release.prerelease }}"
 
-      - uses: gittools/actions/gitversion/setup@v4.4.2
-        with:
-          versionSpec: '6.x'
-
-      - id: gitversion
-        uses: gittools/actions/gitversion/execute@v4.4.2
-
-      - name: Verify on release branch
-        run: |
-          BRANCH="$(git branch --show-current)"
-          if [[ ! "${BRANCH}" =~ ^release/ ]]; then
-            echo "::error::Must be run from a release/* branch (current: ${BRANCH})."
+          if [[ "$tag_name" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            release_version="${BASH_REMATCH[1]}"
+            tag_prerelease="false"
+          elif [[ "$tag_name" =~ ^v([0-9]+\.[0-9]+\.[0-9]+-(alpha|beta)\.[0-9]+)$ ]]; then
+            release_version="${BASH_REMATCH[1]}"
+            tag_prerelease="true"
+          else
+            echo "::error::Unsupported release tag: ${tag_name}"
             exit 1
           fi
 
-      - name: Tag stable release
+          if [[ "$release_prerelease" != "$tag_prerelease" ]]; then
+            echo "::error::GitHub Release prerelease flag does not match tag ${tag_name}."
+            exit 1
+          fi
+
+          repo_base_version="$(workspace_base_version)"
+          tag_base_version="${release_version%%-*}"
+
+          if [[ "$repo_base_version" != "$tag_base_version" ]]; then
+            echo "::error::Cargo.toml base version ${repo_base_version} does not match release line ${tag_base_version}."
+            exit 1
+          fi
+
+          echo "Validated release: tag=${tag_name} version=${release_version} prerelease=${tag_prerelease}"
+
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+          echo "## Release validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \`${tag_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: \`${release_version}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  build-artifacts:
+    name: Artifacts (${{ matrix.name }})
+    needs: validate-release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux x64
+            cache_key: linux-release-artifacts
+            release_asset: horizon-linux-x64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
+          - os: macos-latest
+            name: macOS arm64
+            cache_key: macos-release-artifacts
+            release_asset: horizon-osx-arm64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
+          - os: macos-15-intel
+            name: macOS x64
+            cache_key: macos-intel-release-artifacts
+            release_asset: horizon-osx-x64.tar.gz
+            binary_path: target/release/horizon
+            asset_kind: tar
+          - os: windows-latest
+            name: Windows x64
+            cache_key: windows-release-artifacts
+            release_asset: horizon-windows-x64.exe
+            binary_path: target/release/horizon.exe
+            asset_kind: file
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          lfs: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cache_key }}
+      - name: Set release version
+        shell: bash
+        run: ./scripts/set-release-version.sh "${{ needs.validate-release.outputs.release_version }}"
+      - run: cargo build --release
+      - name: Package release asset
+        shell: bash
         run: |
-          TAG="v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${{ steps.gitversion.outputs.patch }}"
-          echo "Tagging: ${TAG}"
-          git tag "${TAG}"
-          git push origin "${TAG}"
-          echo "## Stable release" >> "$GITHUB_STEP_SUMMARY"
-          echo "Tagged \`${TAG}\` — CI will build and publish the stable release." >> "$GITHUB_STEP_SUMMARY"
+          ./scripts/package-release-asset.sh \
+            --binary "${{ matrix.binary_path }}" \
+            --kind "${{ matrix.asset_kind }}" \
+            --output "${{ matrix.release_asset }}"
+      - name: Upload release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.release_asset }}
+          path: ${{ matrix.release_asset }}
+
+  publish-cargo:
+    name: Publish Cargo (crates.io)
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          lfs: true
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate crates.io API token
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+            echo "CARGO_REGISTRY_TOKEN secret is required for crates.io publish."
+            exit 1
+          fi
+      - name: Set release version
+        run: ./scripts/set-release-version.sh "${{ needs.validate-release.outputs.release_version }}"
+      - name: Stage assets for publish
+        run: |
+          mkdir -p crates/horizon-ui/publish-assets
+          cp -r assets/icons assets/plugins crates/horizon-ui/publish-assets/
+          git add -f crates/horizon-ui/publish-assets
+      - name: Publish horizon-core to crates.io
+        run: cargo publish -p horizon-core --allow-dirty
+      - name: Publish horizon-ui to crates.io
+        run: |
+          for attempt in $(seq 1 10); do
+            if cargo publish -p horizon-ui --allow-dirty --no-verify; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 10 ]; then
+              echo "Failed to publish horizon-ui after waiting for horizon-core to sync on crates.io."
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  upload-release-assets:
+    name: Upload Release Assets
+    needs: [build-artifacts, publish-cargo]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -maxdepth 2 -type f -exec cp {} release-assets/ \;
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" release-assets/* --clobber

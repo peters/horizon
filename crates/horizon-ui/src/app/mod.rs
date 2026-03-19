@@ -6,6 +6,7 @@ mod lifecycle;
 mod panel_chrome;
 mod panels;
 mod persistence;
+mod remote_hosts;
 mod session;
 mod settings;
 pub(crate) mod shortcuts;
@@ -24,8 +25,8 @@ use std::time::Instant;
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser,
-    StartupDecision, WindowConfig, WorkspaceId,
+    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
+    StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -129,6 +130,7 @@ pub struct HorizonApp {
     session_catalog: AgentSessionCatalog,
     startup_receiver: Option<Receiver<StartupBootstrap>>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
+    remote_host_catalog_refreshes: HashMap<PanelId, Receiver<horizon_core::Result<RemoteHostCatalog>>>,
     last_session_catalog_refresh: Option<Instant>,
     last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
@@ -213,7 +215,7 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             shortcuts,
-            presets: config.presets.clone(),
+            presets: config.resolved_presets(),
             window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
             pending_detached_reattach: BTreeSet::new(),
@@ -221,6 +223,7 @@ impl HorizonApp {
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
             session_catalog_refresh: None,
+            remote_host_catalog_refreshes: HashMap::new(),
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),

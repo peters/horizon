@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
+use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -49,6 +50,8 @@ pub struct PresetConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub resume: PanelResume,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_connection: Option<SshConnection>,
 }
 
 impl PresetConfig {
@@ -59,10 +62,16 @@ impl PresetConfig {
             name: Some(self.name.clone()),
             command: self.command.clone(),
             args: self.args.clone(),
+            ssh_connection: self.ssh_connection.clone(),
             kind: self.kind,
             resume: self.resume.clone(),
             ..PanelOptions::default()
         }
+    }
+
+    #[must_use]
+    pub fn requires_workspace_cwd(&self) -> bool {
+        !matches!(self.kind, PanelKind::Ssh)
     }
 }
 
@@ -95,6 +104,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: Vec::new(),
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Codex".to_string(),
@@ -103,6 +113,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: vec!["--no-alt-screen".to_string()],
             resume: PanelResume::Last,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Codex (YOLO)".to_string(),
@@ -111,6 +122,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: vec!["--yolo".to_string(), "--no-alt-screen".to_string()],
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Claude Code".to_string(),
@@ -119,6 +131,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: Vec::new(),
             resume: PanelResume::Last,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Claude Code (Auto)".to_string(),
@@ -127,6 +140,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: vec!["--dangerously-skip-permissions".to_string()],
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Git Changes".to_string(),
@@ -135,6 +149,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: Vec::new(),
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Markdown".to_string(),
@@ -143,6 +158,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: Vec::new(),
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
         PresetConfig {
             name: "Usage".to_string(),
@@ -151,6 +167,7 @@ fn default_presets() -> Vec<PresetConfig> {
             command: None,
             args: Vec::new(),
             resume: PanelResume::Fresh,
+            ssh_connection: None,
         },
     ]
 }
@@ -161,6 +178,7 @@ pub struct ShortcutsConfig {
     #[serde(alias = "quick_nav")]
     pub command_palette: String,
     pub new_terminal: String,
+    pub open_remote_hosts: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
     pub toggle_minimap: String,
@@ -183,6 +201,7 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+K".to_string(),
             new_terminal: "Ctrl+N".to_string(),
+            open_remote_hosts: "Ctrl+Shift+R".to_string(),
             toggle_sidebar: "Ctrl+B".to_string(),
             toggle_hud: "Ctrl+Shift+H".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
@@ -212,6 +231,7 @@ impl ShortcutsConfig {
         let shortcuts = AppShortcuts {
             command_palette: parse_shortcut("command_palette", &self.command_palette)?,
             new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
+            open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
             toggle_minimap: parse_shortcut("toggle_minimap", &self.toggle_minimap)?,
@@ -235,6 +255,7 @@ impl ShortcutsConfig {
         validate_distinct_shortcuts([
             ("command_palette", shortcuts.command_palette),
             ("new_terminal", shortcuts.new_terminal),
+            ("open_remote_hosts", shortcuts.open_remote_hosts),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
             ("toggle_minimap", shortcuts.toggle_minimap),
@@ -322,6 +343,8 @@ pub struct TerminalConfig {
     pub position: Option<[f32; 2]>,
     #[serde(default)]
     pub size: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_connection: Option<SshConnection>,
 }
 
 impl Default for TerminalConfig {
@@ -337,6 +360,7 @@ impl Default for TerminalConfig {
             resume: PanelResume::default(),
             position: None,
             size: None,
+            ssh_connection: None,
         }
     }
 }
@@ -434,8 +458,80 @@ impl Config {
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
         self.shortcuts.resolve()?;
+        validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }
+
+    #[must_use]
+    pub fn resolved_presets(&self) -> Vec<PresetConfig> {
+        let mut presets = self.presets.clone();
+        let mut known_names: std::collections::HashSet<String> =
+            presets.iter().map(|preset| preset.name.to_ascii_lowercase()).collect();
+        let mut known_targets: std::collections::HashSet<String> = presets
+            .iter()
+            .filter_map(|preset| preset.ssh_connection.as_ref())
+            .map(normalized_ssh_target)
+            .collect();
+
+        match discover_ssh_hosts(None) {
+            Ok(discovered_hosts) => {
+                for host in discovered_hosts {
+                    let name = format!("SSH: {}", host.alias);
+                    if !known_names.insert(name.to_ascii_lowercase()) {
+                        continue;
+                    }
+
+                    let target = normalized_ssh_target(&host.connection);
+                    if !known_targets.insert(target) {
+                        continue;
+                    }
+
+                    presets.push(PresetConfig {
+                        name,
+                        alias: None,
+                        kind: PanelKind::Ssh,
+                        command: None,
+                        args: Vec::new(),
+                        resume: PanelResume::Fresh,
+                        ssh_connection: Some(host.connection),
+                    });
+                }
+            }
+            Err(error) => tracing::warn!(%error, "failed to discover ssh presets"),
+        }
+
+        presets
+    }
+}
+
+fn validate_ssh_connections(presets: &[PresetConfig], workspaces: &[WorkspaceConfig]) -> Result<()> {
+    for (index, preset) in presets.iter().enumerate() {
+        if let Some(connection) = &preset.ssh_connection
+            && !connection.is_valid()
+        {
+            return Err(Error::Config(format!(
+                "presets[{index}].ssh_connection.host cannot be empty"
+            )));
+        }
+    }
+
+    for (workspace_index, workspace) in workspaces.iter().enumerate() {
+        for (terminal_index, terminal) in workspace.terminals.iter().enumerate() {
+            if let Some(connection) = &terminal.ssh_connection
+                && !connection.is_valid()
+            {
+                return Err(Error::Config(format!(
+                    "workspaces[{workspace_index}].terminals[{terminal_index}].ssh_connection.host cannot be empty"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn normalized_ssh_target(connection: &SshConnection) -> String {
+    connection.display_label().to_ascii_lowercase()
 }
 
 fn config_candidates() -> Vec<PathBuf> {
@@ -499,7 +595,8 @@ fn validate_distinct_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Config, FeaturesConfig, config_candidates_with_env};
+    use super::{Config, FeaturesConfig, PresetConfig, config_candidates_with_env};
+    use crate::panel::PanelKind;
 
     #[test]
     fn includes_horizon_config_candidates() {
@@ -571,5 +668,48 @@ mod tests {
 
         assert!(error.to_string().contains("conflicts with"));
         assert!(error.to_string().contains("toggle_sidebar"));
+    }
+
+    #[test]
+    fn preset_ssh_connection_round_trips_from_yaml() {
+        let config = Config::from_yaml(
+            r"
+presets:
+  - name: prod-api
+    kind: ssh
+    ssh_connection:
+      host: prod-api
+      user: deploy
+      port: 2222
+",
+        )
+        .expect("config should deserialize");
+
+        let preset = config.presets.first().expect("ssh preset");
+        assert_eq!(preset.kind, PanelKind::Ssh);
+        assert_eq!(
+            preset.ssh_connection.as_ref().map(|conn| conn.host.as_str()),
+            Some("prod-api")
+        );
+        assert_eq!(
+            preset.ssh_connection.as_ref().and_then(|conn| conn.user.as_deref()),
+            Some("deploy")
+        );
+        assert_eq!(preset.ssh_connection.as_ref().and_then(|conn| conn.port), Some(2222));
+    }
+
+    #[test]
+    fn ssh_presets_skip_workspace_directory_prompt() {
+        let preset = PresetConfig {
+            name: "prod-api".to_string(),
+            alias: None,
+            kind: PanelKind::Ssh,
+            command: None,
+            args: Vec::new(),
+            resume: super::PanelResume::Fresh,
+            ssh_connection: None,
+        };
+
+        assert!(!preset.requires_workspace_cwd());
     }
 }
