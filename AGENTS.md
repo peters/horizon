@@ -75,7 +75,8 @@ crates/
 ### horizon-ui
 
 - `main.rs` — Entry point, tracing init, eframe launch
-- `app/` — `eframe::App` orchestration split by canvas, panels, sidebar, settings, session, persistence, and focused action submodules
+- `app/` — `eframe::App` orchestration split by canvas, panels, sidebar, settings, session, persistence, workspace helpers, and focused action submodules
+- `remote_hosts_overlay.rs` + `remote_hosts_overlay/` — remote SSH chooser state/input shell with dedicated query, layout, and paint helpers
 - `terminal_widget/` — Terminal widget split by layout, input, render, scrollbar logic
 - `input/` — Keyboard translation, mouse reporting, escape-sequence building
 - `theme.rs` — Color palette (Catppuccin Mocha), styling constants

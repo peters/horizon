@@ -37,12 +37,15 @@ back into large multi-purpose modules.
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
+  - `remote_hosts_overlay`: overlay state/input shell with query/filter,
+    layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows
   - `persistence`: runtime/config save glue
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
-  - `workspace`: workspace frame rendering and rename/drag UI
+  - `workspace`: workspace frame orchestration and rename/drag UI, with
+    paint/render/toolbar helpers split into `workspace/`
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
   instead of extending a single file.
