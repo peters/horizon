@@ -75,7 +75,10 @@ impl HorizonApp {
                                 .color(theme::FG_DIM)
                                 .size(10.5),
                         );
-                        ui.add_space(10.0);
+                        ui.add_space(16.0);
+
+                        // Search bar takes the center of the toolbar.
+                        self.render_toolbar_search(ui);
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
@@ -91,8 +94,6 @@ impl HorizonApp {
                             if remote_hosts_button.clicked() {
                                 self.toggle_remote_hosts_overlay();
                             }
-                            ui.add_space(8.0);
-                            self.render_toolbar_search(ui);
                         });
                     },
                 );

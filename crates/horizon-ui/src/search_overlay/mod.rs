@@ -10,7 +10,7 @@ use render::{
     render_status_line, render_toggle_button,
 };
 
-const DROPDOWN_WIDTH: f32 = 520.0;
+const DROPDOWN_WIDTH: f32 = 600.0;
 const ROW_HEIGHT: f32 = 32.0;
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
 const MAX_VISIBLE_ROWS: usize = 12;
@@ -77,19 +77,21 @@ impl SearchOverlay {
     pub(crate) fn show_toolbar_input(&mut self, ui: &mut egui::Ui, board: &Board) -> SearchAction {
         self.maybe_refresh_results(board);
 
-        let input_width = 200.0_f32;
+        // Fill available space between title and right-side buttons,
+        // clamped to a reasonable range.
+        let input_width = (ui.available_width() - 260.0).clamp(240.0, 600.0);
 
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .font(egui::FontId::monospace(11.0))
+                .font(egui::FontId::monospace(12.0))
                 .text_color(theme::FG)
                 .desired_width(input_width)
                 .hint_text(
-                    egui::RichText::new("Search terminals...")
+                    egui::RichText::new("Search across all terminals...")
                         .color(theme::FG_DIM)
-                        .size(11.0),
+                        .size(12.0),
                 )
-                .margin(Margin::symmetric(8, 4)),
+                .margin(Margin::symmetric(12, 6)),
         );
 
         let input_rect = response.rect;
