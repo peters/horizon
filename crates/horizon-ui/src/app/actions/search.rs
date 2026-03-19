@@ -1,7 +1,8 @@
 use egui::{Pos2, Vec2};
 
 use crate::app::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
-use crate::search_overlay::{SearchAction, SearchOverlay};
+use crate::search_overlay::SearchAction;
+use crate::search_overlay::SearchOverlay;
 
 impl HorizonApp {
     /// Render the inline search input in the toolbar. When active, a
@@ -12,11 +13,11 @@ impl HorizonApp {
         let action = overlay.show_toolbar_input(ui, &self.board);
         match action {
             SearchAction::None => {}
-            SearchAction::Cancelled => {
-                self.search_overlay = None;
-            }
             SearchAction::FocusPanel(panel_id) => {
-                self.search_overlay = None;
+                // Clear the query after navigating to a result.
+                if let Some(overlay) = &mut self.search_overlay {
+                    overlay.clear();
+                }
                 self.board.focus(panel_id);
                 if let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(workspace_id)

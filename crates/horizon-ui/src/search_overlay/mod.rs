@@ -42,7 +42,6 @@ pub(crate) struct SearchOverlay {
 
 pub(crate) enum SearchAction {
     None,
-    Cancelled,
     FocusPanel(PanelId),
 }
 
@@ -63,6 +62,15 @@ impl SearchOverlay {
     /// Request focus on the search input next frame.
     pub(crate) fn focus(&mut self) {
         self.request_focus = true;
+    }
+
+    /// Clear the query and results.
+    pub(crate) fn clear(&mut self) {
+        self.query.clear();
+        self.last_query.clear();
+        self.cached_results = SearchResults::default();
+        self.display_rows.clear();
+        self.selected = 0;
     }
 
     /// Create a search overlay without auto-focusing the input. Used for
@@ -127,23 +135,17 @@ impl SearchOverlay {
         }
 
         // Handle keyboard while the input has focus.
-        let action = if response.has_focus() {
-            self.handle_keyboard(ui.ctx())
-        } else if self.query.is_empty() {
-            Some(SearchAction::Cancelled)
-        } else {
-            None
-        };
-
-        if let Some(action) = action {
+        if response.has_focus()
+            && let Some(action) = self.handle_keyboard(ui.ctx())
+        {
             return action;
         }
 
-        // Show dropdown results below the input if we have a query.
-        if self.query.is_empty() {
-            SearchAction::None
-        } else {
+        // Show dropdown results below the input when focused with a query.
+        if !self.query.is_empty() && response.has_focus() {
             self.show_results_dropdown(ui.ctx(), input_rect)
+        } else {
+            SearchAction::None
         }
     }
 
@@ -262,7 +264,13 @@ impl SearchOverlay {
         });
 
         if escape {
-            return Some(SearchAction::Cancelled);
+            // Clear query and close dropdown; the search bar stays visible.
+            self.query.clear();
+            self.last_query.clear();
+            self.cached_results = SearchResults::default();
+            self.display_rows.clear();
+            self.selected = 0;
+            return Some(SearchAction::None);
         }
         if up && self.selected > 0 {
             self.selected -= 1;
