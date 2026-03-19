@@ -5,7 +5,7 @@ mod scrollbar;
 
 use alacritty_terminal::term::TermMode;
 use egui::{Context, FontId, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, PanelKind};
 
 use self::input::{handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
@@ -76,7 +76,8 @@ impl<'a> TerminalView<'a> {
             && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
             && !interaction.body.dragged()
             && !interaction.scrollbar.dragged();
-        let allow_sparse_frame_reuse = self.panel.had_recent_output()
+        let allow_sparse_frame_reuse = self.panel.kind != PanelKind::Codex
+            && self.panel.had_recent_output()
             && self
                 .panel
                 .terminal()
