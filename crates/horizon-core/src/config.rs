@@ -178,6 +178,7 @@ pub struct ShortcutsConfig {
     #[serde(alias = "quick_nav")]
     pub command_palette: String,
     pub new_terminal: String,
+    pub open_remote_hosts: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
     pub toggle_minimap: String,
@@ -197,6 +198,7 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+K".to_string(),
             new_terminal: "Ctrl+N".to_string(),
+            open_remote_hosts: "Ctrl+Shift+R".to_string(),
             toggle_sidebar: "Ctrl+B".to_string(),
             toggle_hud: "Ctrl+Shift+H".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
@@ -223,6 +225,7 @@ impl ShortcutsConfig {
         let shortcuts = AppShortcuts {
             command_palette: parse_shortcut("command_palette", &self.command_palette)?,
             new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
+            open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
             toggle_minimap: parse_shortcut("toggle_minimap", &self.toggle_minimap)?,
@@ -243,6 +246,7 @@ impl ShortcutsConfig {
         validate_distinct_shortcuts([
             ("command_palette", shortcuts.command_palette),
             ("new_terminal", shortcuts.new_terminal),
+            ("open_remote_hosts", shortcuts.open_remote_hosts),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
             ("toggle_minimap", shortcuts.toggle_minimap),

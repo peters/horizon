@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
+use crate::remote_hosts::RemoteHostsPanel;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
@@ -41,6 +42,7 @@ pub enum PanelKind {
     Command,
     Editor,
     GitChanges,
+    RemoteHosts,
     Usage,
 }
 
@@ -60,6 +62,7 @@ impl PanelKind {
             Self::Command => "Command",
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
+            Self::RemoteHosts => "Remote Hosts",
             Self::Usage => "Usage",
         }
     }
@@ -203,6 +206,17 @@ impl Panel {
     pub fn git_changes_mut(&mut self) -> Option<&mut DiffViewer> {
         self.content.git_changes_mut()
     }
+
+    /// Convenience accessor for the remote hosts content (if this panel holds it).
+    #[must_use]
+    pub fn remote_hosts(&self) -> Option<&RemoteHostsPanel> {
+        self.content.remote_hosts()
+    }
+
+    /// Mutable accessor for the remote hosts content.
+    pub fn remote_hosts_mut(&mut self) -> Option<&mut RemoteHostsPanel> {
+        self.content.remote_hosts_mut()
+    }
 }
 
 impl Panel {
@@ -316,7 +330,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
+            PanelContent::GitChanges(_) | PanelContent::RemoteHosts(_) | PanelContent::Usage(_) => {}
         }
     }
 
@@ -328,7 +342,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::RemoteHosts(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -340,7 +354,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::RemoteHosts(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -366,6 +380,11 @@ impl Panel {
 
         if let PanelContent::Usage(_) = &self.content {
             self.content = PanelContent::Usage(UsageDashboard::new());
+            return Ok(());
+        }
+
+        if let PanelContent::RemoteHosts(_) = &self.content {
+            self.content = PanelContent::RemoteHosts(RemoteHostsPanel::new());
             return Ok(());
         }
 

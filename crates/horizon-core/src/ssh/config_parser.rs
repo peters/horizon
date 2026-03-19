@@ -116,6 +116,7 @@ fn apply_directive(connection: &mut SshConnection, directive: &str, value: &str)
     }
 
     match directive {
+        "hostname" => connection.host = unquote(value),
         "user" => connection.user = Some(unquote(value)),
         "port" => connection.port = value.parse::<u16>().ok(),
         "identityfile" => connection.identity_file = Some(unquote(value)),
@@ -138,6 +139,7 @@ mod tests {
         let hosts = parse_ssh_config(
             r"
 Host prod-api
+  HostName api.prod.example.com
   User deploy
   Port 2222
   IdentityFile ~/.ssh/prod
@@ -155,6 +157,7 @@ Match host something
 
         assert_eq!(hosts.len(), 3);
         assert_eq!(hosts[0].alias, "prod-api");
+        assert_eq!(hosts[0].connection.host, "api.prod.example.com");
         assert_eq!(hosts[0].connection.user.as_deref(), Some("deploy"));
         assert_eq!(hosts[0].connection.port, Some(2222));
         assert_eq!(hosts[0].connection.identity_file.as_deref(), Some("~/.ssh/prod"));

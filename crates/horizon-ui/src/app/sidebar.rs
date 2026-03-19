@@ -82,6 +82,15 @@ impl HorizonApp {
                             if ui.add(util::chrome_button("Settings")).clicked() {
                                 self.toggle_settings();
                             }
+                            ui.add_space(8.0);
+                            let remote_hosts_button = ui.add(util::chrome_button("Remote Hosts")).on_hover_text(
+                                self.shortcuts
+                                    .open_remote_hosts
+                                    .display_label(util::primary_shortcut_label()),
+                            );
+                            if remote_hosts_button.clicked() {
+                                self.open_remote_hosts_panel();
+                            }
                         });
                     },
                 );

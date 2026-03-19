@@ -334,6 +334,7 @@ impl HorizonApp {
                     self.create_panel();
                 }
             }
+            CommandId::OpenRemoteHosts => self.open_remote_hosts_panel(),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
@@ -456,6 +457,9 @@ impl HorizonApp {
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
             self.execute_command(ctx, &CommandId::ToggleMinimap);
+        }
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.open_remote_hosts)) {
+            self.execute_command(ctx, &CommandId::OpenRemoteHosts);
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
             self.execute_command(ctx, &CommandId::NewPanel);
