@@ -173,6 +173,9 @@ pub struct ShortcutsConfig {
     pub exit_fullscreen_panel: String,
     pub fullscreen_window: String,
     pub save_editor: String,
+    pub focus_workspace: String,
+    pub next_workspace: String,
+    pub prev_workspace: String,
 }
 
 impl Default for ShortcutsConfig {
@@ -192,6 +195,9 @@ impl Default for ShortcutsConfig {
             exit_fullscreen_panel: "Escape".to_string(),
             fullscreen_window: "Ctrl+F11".to_string(),
             save_editor: "Ctrl+S".to_string(),
+            focus_workspace: "Ctrl+Shift+F".to_string(),
+            next_workspace: "Ctrl+Shift+ArrowRight".to_string(),
+            prev_workspace: "Ctrl+Shift+ArrowLeft".to_string(),
         }
     }
 }
@@ -221,6 +227,9 @@ impl ShortcutsConfig {
             exit_fullscreen_panel: parse_shortcut("exit_fullscreen_panel", &self.exit_fullscreen_panel)?,
             fullscreen_window: parse_shortcut("fullscreen_window", &self.fullscreen_window)?,
             save_editor: parse_shortcut("save_editor", &self.save_editor)?,
+            focus_workspace: parse_shortcut("focus_workspace", &self.focus_workspace)?,
+            next_workspace: parse_shortcut("next_workspace", &self.next_workspace)?,
+            prev_workspace: parse_shortcut("prev_workspace", &self.prev_workspace)?,
         };
 
         validate_distinct_shortcuts([
@@ -238,6 +247,9 @@ impl ShortcutsConfig {
             ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
             ("fullscreen_window", shortcuts.fullscreen_window),
             ("save_editor", shortcuts.save_editor),
+            ("focus_workspace", shortcuts.focus_workspace),
+            ("next_workspace", shortcuts.next_workspace),
+            ("prev_workspace", shortcuts.prev_workspace),
         ])?;
 
         Ok(shortcuts)

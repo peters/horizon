@@ -6,6 +6,9 @@ pub enum CommandId {
     // Navigation
     SwitchWorkspace(WorkspaceId),
     FocusPanel(PanelId),
+    FocusActiveWorkspace,
+    NextWorkspace,
+    PrevWorkspace,
 
     // View
     ToggleSidebar,
@@ -120,6 +123,30 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             label: "Settings".into(),
             shortcut: Some(shortcuts.toggle_settings.display_label(primary_label)),
             keywords: vec!["settings".into(), "config".into(), "preferences".into()],
+        },
+        CommandEntry {
+            id: CommandId::FocusActiveWorkspace,
+            label: "Focus Workspace".into(),
+            shortcut: Some(shortcuts.focus_workspace.display_label(primary_label)),
+            keywords: vec![
+                "fit".into(),
+                "focus".into(),
+                "workspace".into(),
+                "zoom".into(),
+                "center".into(),
+            ],
+        },
+        CommandEntry {
+            id: CommandId::NextWorkspace,
+            label: "Next Workspace".into(),
+            shortcut: Some(shortcuts.next_workspace.display_label(primary_label)),
+            keywords: vec!["next".into(), "workspace".into(), "switch".into(), "forward".into()],
+        },
+        CommandEntry {
+            id: CommandId::PrevWorkspace,
+            label: "Previous Workspace".into(),
+            shortcut: Some(shortcuts.prev_workspace.display_label(primary_label)),
+            keywords: vec!["previous".into(), "workspace".into(), "switch".into(), "back".into()],
         },
     ]
 }

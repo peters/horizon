@@ -122,6 +122,42 @@ cargo run --release
 
 ---
 
+## Structured Navigation
+
+Horizon is a canvas, but you do not have to pan and zoom to get around. Workspaces, the sidebar, and keyboard shortcuts give you a structured workflow that feels closer to tabs or tiling -- while the infinite canvas stays there for when you want it.
+
+**Workspaces** are color-coded groups of panels. They live on the canvas, but you interact with them through navigation shortcuts and the sidebar, not drag gestures.
+
+| What you want to do | How |
+|:---------------------|:----|
+| Jump to a workspace by name | **Ctrl+K** (command palette) and type the name |
+| Focus the current workspace | **Ctrl+Shift+F** -- pans and zooms to fit it on screen |
+| Cycle to the next workspace | **Ctrl+Shift+Right** |
+| Cycle to the previous workspace | **Ctrl+Shift+Left** |
+| Browse all workspaces and panels | **Ctrl+B** to toggle the sidebar |
+| Arrange panels in a layout | Right-click a workspace in the sidebar -- choose Rows, Columns, or Grid |
+| Align all workspaces in a row | **Ctrl+Shift+A** |
+| Reset the view | **Ctrl+0** -- returns to the active workspace at default zoom |
+
+You can define workspaces in your config file so Horizon boots directly into your project layout:
+
+```yaml
+workspaces:
+  - name: Backend
+    cwd: ~/projects/api
+    panels:
+      - kind: shell
+      - kind: claude
+      - kind: git_changes
+  - name: Frontend
+    cwd: ~/projects/web
+    panels:
+      - kind: shell
+      - kind: shell
+```
+
+---
+
 ## Quick Tour
 
 ### Keyboard Shortcuts
@@ -131,11 +167,14 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 
 | Shortcut | What it does |
 |:---------|:-------------|
-| **Ctrl+K** | Quick-navigate to any workspace |
+| **Ctrl+K** | Quick-navigate to any workspace or panel |
+| **Ctrl+Shift+F** | Focus the active workspace (pan + zoom to fit) |
+| **Ctrl+Shift+Right** | Switch to next workspace |
+| **Ctrl+Shift+Left** | Switch to previous workspace |
 | **Ctrl+N** | New terminal panel |
 | **Ctrl+B** | Toggle sidebar |
-| **Ctrl+H** | Toggle HUD |
-| **Ctrl+M** | Toggle minimap |
+| **Ctrl+Shift+H** | Toggle HUD |
+| **Ctrl+Shift+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
 | **Ctrl+,** | Open settings editor |
 | **Ctrl+0** | Reset canvas view |
@@ -179,6 +218,9 @@ shortcuts:
   exit_fullscreen_panel: Escape
   fullscreen_window: Ctrl+F11
   save_editor: Ctrl+S
+  focus_workspace: Ctrl+Shift+F
+  next_workspace: Ctrl+Shift+ArrowRight
+  prev_workspace: Ctrl+Shift+ArrowLeft
 
 workspaces:
   - name: Backend

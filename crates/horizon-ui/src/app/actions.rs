@@ -30,6 +30,38 @@ impl HorizonApp {
             .map(|workspace| workspace.id)
     }
 
+    pub(super) fn cycle_workspace(&mut self, ctx: &Context, forward: bool) {
+        let attached: Vec<_> = self
+            .board
+            .workspaces
+            .iter()
+            .filter(|ws| !self.workspace_is_detached(ws.id))
+            .map(|ws| ws.id)
+            .collect();
+        if attached.is_empty() {
+            return;
+        }
+        let current_index = self
+            .board
+            .active_workspace
+            .and_then(|active| attached.iter().position(|id| *id == active));
+        let next_index = match current_index {
+            Some(index) => {
+                if forward {
+                    (index + 1) % attached.len()
+                } else {
+                    (index + attached.len() - 1) % attached.len()
+                }
+            }
+            None => 0,
+        };
+        let workspace_id = attached[next_index];
+        self.board.focus_workspace(workspace_id);
+        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+            self.focus_workspace_bounds(ctx, min, max, true);
+        }
+    }
+
     pub(super) fn canvas_rect(&self, ctx: &Context) -> Rect {
         let viewport = viewport_local_rect(ctx);
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
@@ -319,6 +351,18 @@ impl HorizonApp {
                     self.mark_runtime_dirty();
                 }
             }
+            CommandId::FocusActiveWorkspace => {
+                if let Some(workspace_id) = self
+                    .board
+                    .active_workspace
+                    .filter(|ws_id| !self.workspace_is_detached(*ws_id))
+                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
+                {
+                    self.focus_workspace_bounds(ctx, min, max, false);
+                }
+            }
+            CommandId::NextWorkspace => self.cycle_workspace(ctx, true),
+            CommandId::PrevWorkspace => self.cycle_workspace(ctx, false),
             CommandId::NewPanel => {
                 let workspace_id = self.board.ensure_workspace();
                 if let Some(preset) = self.presets.first().cloned() {
@@ -423,6 +467,15 @@ impl HorizonApp {
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
             self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
+        }
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.focus_workspace)) {
+            self.execute_command(ctx, &CommandId::FocusActiveWorkspace);
+        }
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.next_workspace)) {
+            self.execute_command(ctx, &CommandId::NextWorkspace);
+        }
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.prev_workspace)) {
+            self.execute_command(ctx, &CommandId::PrevWorkspace);
         }
 
         if self.terminal_accepts_keyboard_input(ctx) {
