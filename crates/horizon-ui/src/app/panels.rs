@@ -3,6 +3,7 @@ use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding
 
 use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
+use crate::remote_hosts_widget::RemoteHostsView;
 use crate::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
 use crate::theme;
 use crate::usage_widget::UsageDashboardView;
@@ -101,6 +102,7 @@ fn show_panel_body_contents(
             MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused, editor_save_shortcut)
         }
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
+        PanelKind::RemoteHosts => RemoteHostsView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
     }

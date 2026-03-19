@@ -20,6 +20,7 @@ pub enum CommandId {
 
     // Workspace / panel
     NewPanel,
+    OpenRemoteHosts,
     CreatePanelFromPreset(usize),
 
     // Settings
@@ -63,6 +64,18 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             label: "New Panel".into(),
             shortcut: Some(shortcuts.new_terminal.display_label(primary_label)),
             keywords: vec!["create".into(), "terminal".into(), "add".into()],
+        },
+        CommandEntry {
+            id: CommandId::OpenRemoteHosts,
+            label: "Remote Hosts".into(),
+            shortcut: Some(shortcuts.open_remote_hosts.display_label(primary_label)),
+            keywords: vec![
+                "ssh".into(),
+                "tailscale".into(),
+                "remote".into(),
+                "hosts".into(),
+                "nodes".into(),
+            ],
         },
         CommandEntry {
             id: CommandId::ToggleSidebar,

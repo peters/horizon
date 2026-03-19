@@ -207,6 +207,7 @@ impl RuntimeState {
                     .panels
                     .iter()
                     .filter_map(|panel_id| board.panel(*panel_id))
+                    .filter(|panel| panel.kind != PanelKind::RemoteHosts)
                     .map(|panel| {
                         let terminal = panel.terminal();
                         let editor = panel.editor();

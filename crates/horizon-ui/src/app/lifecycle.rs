@@ -134,6 +134,7 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
+        self.poll_remote_hosts_panels();
         self.poll_git_watchers();
         self.poll_config_reload();
 

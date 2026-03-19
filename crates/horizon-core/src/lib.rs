@@ -12,6 +12,7 @@ pub mod git_watcher;
 mod horizon_home;
 mod layout;
 mod panel;
+mod remote_hosts;
 mod runtime_state;
 mod session_store;
 mod shortcuts;
@@ -38,6 +39,10 @@ pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, Fil
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
+pub use remote_hosts::{
+    RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, RemoteHostsAction, RemoteHostsPanel,
+    discover_remote_hosts,
+};
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState, PanelState, PanelTemplateRef,
     RuntimeState, WorkspaceState, WorkspaceTemplateRef, new_local_id,

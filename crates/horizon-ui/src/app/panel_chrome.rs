@@ -58,6 +58,10 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
             "GC",
             theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
         ),
+        PanelKind::RemoteHosts => (
+            "RH",
+            theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 130 }),
+        ),
         PanelKind::Usage => (
             "US",
             theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
@@ -161,6 +165,9 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
 fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focused: bool) -> Color32 {
     if kind == PanelKind::Ssh {
         return theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 170 });
+    }
+    if kind == PanelKind::RemoteHosts {
+        return theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 170 });
     }
 
     workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG })
