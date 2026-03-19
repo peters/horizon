@@ -95,23 +95,22 @@ impl HorizonApp {
                 );
             });
 
-        // Search bar rendered centered on top of the toolbar.
-        self.render_centered_search(ctx, viewport);
-    }
-
-    fn render_centered_search(&mut self, ctx: &Context, viewport: Rect) {
+        // Search bar rendered centered on the toolbar, same z-order.
         let search_width = (viewport.width() * 0.35).clamp(280.0, 600.0);
         let search_x = viewport.min.x + (viewport.width() - search_width) * 0.5;
         let search_y = viewport.min.y + 7.0;
-
+        let search_rect = Rect::from_min_size(
+            Pos2::new(search_x, search_y),
+            Vec2::new(search_width, TOOLBAR_HEIGHT - 14.0),
+        );
         egui::Area::new(Id::new("toolbar_search"))
-            .fixed_pos(Pos2::new(search_x, search_y))
+            .fixed_pos(search_rect.min)
             .constrain(false)
-            .order(Order::Foreground)
+            .order(Order::Tooltip)
             .interactable(true)
             .show(ctx, |ui| {
-                ui.set_min_width(search_width);
-                ui.set_max_width(search_width);
+                ui.set_min_size(search_rect.size());
+                ui.set_max_size(search_rect.size());
                 self.render_toolbar_search(ui);
             });
     }
