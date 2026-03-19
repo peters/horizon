@@ -49,14 +49,23 @@ fn app_shortcut_enabled(terminal_owns_keyboard: bool, shortcut: AppShortcut) -> 
     !terminal_owns_keyboard || shortcut.bypasses_terminal_focus_gate()
 }
 
-fn horizon_text_input_active(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HorizonTextInputState {
     settings_open: bool,
     dir_picker_open: bool,
     command_palette_open: bool,
     renaming_panel: bool,
     renaming_workspace: bool,
-) -> bool {
-    settings_open || dir_picker_open || command_palette_open || renaming_panel || renaming_workspace
+}
+
+impl HorizonTextInputState {
+    const fn is_active(self) -> bool {
+        self.settings_open
+            || self.dir_picker_open
+            || self.command_palette_open
+            || self.renaming_panel
+            || self.renaming_workspace
+    }
 }
 
 fn panel_focus_target_at_pointer_press(
@@ -177,13 +186,14 @@ impl HorizonApp {
             .focused
             .and_then(|panel_id| self.board.panel(panel_id))
             .is_some_and(|panel| panel.content.terminal().is_some());
-        let horizon_text_input_active = horizon_text_input_active(
-            self.settings.is_some(),
-            self.dir_picker.is_some(),
-            self.command_palette.is_some(),
-            self.renaming_panel.is_some(),
-            self.renaming_workspace.is_some(),
-        );
+        let horizon_text_input_active = HorizonTextInputState {
+            settings_open: self.settings.is_some(),
+            dir_picker_open: self.dir_picker.is_some(),
+            command_palette_open: self.command_palette.is_some(),
+            renaming_panel: self.renaming_panel.is_some(),
+            renaming_workspace: self.renaming_workspace.is_some(),
+        }
+        .is_active();
 
         // Egui text focus can lag by a frame when the user clicks from an
         // editor back into a terminal. Gate on Horizon-owned text surfaces
@@ -980,10 +990,10 @@ mod tests {
     use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        AppShortcut, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, app_shortcut_enabled,
-        canvas_rect_for_layout, command_palette_panel_entries, command_palette_workspace_entries,
-        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, horizon_text_input_active,
-        inherit_workspace_cwd, panel_focus_target_at_pointer_press, update_workspace_cwd, workspace_cwd,
+        AppShortcut, HorizonTextInputState, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces,
+        app_shortcut_enabled, canvas_rect_for_layout, command_palette_panel_entries, command_palette_workspace_entries,
+        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd,
+        panel_focus_target_at_pointer_press, update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1191,12 +1201,38 @@ mod tests {
 
     #[test]
     fn horizon_text_input_active_only_tracks_explicit_horizon_surfaces() {
-        assert!(!horizon_text_input_active(false, false, false, false, false));
-        assert!(horizon_text_input_active(true, false, false, false, false));
-        assert!(horizon_text_input_active(false, true, false, false, false));
-        assert!(horizon_text_input_active(false, false, true, false, false));
-        assert!(horizon_text_input_active(false, false, false, true, false));
-        assert!(horizon_text_input_active(false, false, false, false, true));
+        let inactive = HorizonTextInputState {
+            settings_open: false,
+            dir_picker_open: false,
+            command_palette_open: false,
+            renaming_panel: false,
+            renaming_workspace: false,
+        };
+        let active_states = [
+            HorizonTextInputState {
+                settings_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                dir_picker_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                command_palette_open: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                renaming_panel: true,
+                ..inactive
+            },
+            HorizonTextInputState {
+                renaming_workspace: true,
+                ..inactive
+            },
+        ];
+
+        assert!(!inactive.is_active());
+        assert!(active_states.iter().all(|state| state.is_active()));
     }
 
     #[test]
