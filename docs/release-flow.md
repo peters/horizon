@@ -78,4 +78,6 @@ gh release create "$TAG" \
   --prerelease
 ```
 
+`--target` accepts any branch, tag, or commit SHA. For beta or stable releases from a specific commit, replace `main` with the desired ref.
+
 For a stable release, omit `--prerelease`.

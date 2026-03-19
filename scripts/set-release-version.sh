@@ -17,4 +17,4 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
 fi
 
 rewrite_workspace_versions "$version"
-(cd "$repo_root" && cargo generate-lockfile)
+(cd "$repo_root" && cargo update --workspace)

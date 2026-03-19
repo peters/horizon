@@ -63,6 +63,8 @@ jobs:
             exit 1
           fi
 
+          echo "Validated release: tag=${tag_name} version=${release_version} prerelease=${tag_prerelease}"
+
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
           echo "## Release validation" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`${tag_name}\`" >> "$GITHUB_STEP_SUMMARY"
