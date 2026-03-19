@@ -62,18 +62,7 @@ enum RenameEditAction {
     Cancel,
 }
 
-enum SettingsStatus {
-    None,
-    LivePreview,
-    Saved,
-    Error(String),
-}
-
-struct SettingsEditor {
-    buffer: String,
-    original: String,
-    status: SettingsStatus,
-}
+use self::settings::SettingsEditor;
 
 struct StartupBootstrap {
     runtime_state: RuntimeState,
