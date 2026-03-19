@@ -24,7 +24,21 @@ impl HorizonApp {
             return;
         };
 
-        let action = overlay.show(ctx, &self.remote_hosts_catalog, self.remote_hosts_refresh_in_flight);
+        let next_refresh_secs = if self.remote_hosts_refresh_in_flight {
+            None
+        } else {
+            self.remote_hosts_last_refresh.map(|t| {
+                DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL
+                    .saturating_sub(t.elapsed())
+                    .as_secs()
+            })
+        };
+        let action = overlay.show(
+            ctx,
+            &self.remote_hosts_catalog,
+            self.remote_hosts_refresh_in_flight,
+            next_refresh_secs,
+        );
         match action {
             RemoteHostsOverlayAction::None => {}
             RemoteHostsOverlayAction::Cancelled => {

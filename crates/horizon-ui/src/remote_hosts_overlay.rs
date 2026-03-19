@@ -39,6 +39,8 @@ struct FrameContext<'a> {
     refresh_in_flight: bool,
     user_override: Option<&'a str>,
     now_secs: i64,
+    /// Seconds until next auto-refresh, or `None` if refreshing or no timer.
+    next_refresh_secs: Option<u64>,
 }
 
 struct Columns {
@@ -64,6 +66,7 @@ impl RemoteHostsOverlay {
         ctx: &Context,
         catalog: &RemoteHostCatalog,
         refresh_in_flight: bool,
+        next_refresh_secs: Option<u64>,
     ) -> RemoteHostsOverlayAction {
         let (user_override, filter_query) = parse_user_prefix(&self.query);
         let user_override = user_override.map(str::to_string);
@@ -73,7 +76,11 @@ impl RemoteHostsOverlay {
             refresh_in_flight,
             user_override: user_override.as_deref(),
             now_secs: current_epoch_secs(),
+            next_refresh_secs,
         };
+
+        // Keep the countdown ticking while overlay is visible.
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
         if self.show_backdrop(ctx, layout.screen) {
             return RemoteHostsOverlayAction::Cancelled;
@@ -149,7 +156,7 @@ impl RemoteHostsOverlay {
         fctx: &FrameContext<'_>,
     ) -> RemoteHostsOverlayAction {
         let total = catalog.hosts.len();
-        self.render_query_input(ui, layout.inner, filtered.len(), total, fctx.refresh_in_flight);
+        self.render_query_input(ui, layout.inner, filtered.len(), total, fctx);
         if let Some(action) = self.handle_keyboard(ctx, catalog, filtered, fctx.user_override) {
             return action;
         }
@@ -181,7 +188,7 @@ impl RemoteHostsOverlay {
         inner_rect: Rect,
         filtered_count: usize,
         total_count: usize,
-        refresh_in_flight: bool,
+        fctx: &FrameContext<'_>,
     ) {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
 
@@ -230,10 +237,17 @@ impl RemoteHostsOverlay {
         }
 
         child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let count_text = if refresh_in_flight {
-                format!("{filtered_count}/{total_count} refreshing...")
+            let status = if fctx.refresh_in_flight {
+                "refreshing...".to_string()
+            } else if let Some(secs) = fctx.next_refresh_secs {
+                format!("{secs}s")
             } else {
+                String::new()
+            };
+            let count_text = if status.is_empty() {
                 format!("{filtered_count}/{total_count}")
+            } else {
+                format!("{filtered_count}/{total_count}  {status}")
             };
             ui.label(
                 RichText::new(count_text)
