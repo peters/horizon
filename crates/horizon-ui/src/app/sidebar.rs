@@ -82,6 +82,15 @@ impl HorizonApp {
                             if ui.add(util::chrome_button("Settings")).clicked() {
                                 self.toggle_settings();
                             }
+                            ui.add_space(8.0);
+                            let remote_hosts_button = ui.add(util::chrome_button("Remote Hosts")).on_hover_text(
+                                self.shortcuts
+                                    .open_remote_hosts
+                                    .display_label(util::primary_shortcut_label()),
+                            );
+                            if remote_hosts_button.clicked() {
+                                self.open_remote_hosts_panel();
+                            }
                         });
                     },
                 );
@@ -452,9 +461,20 @@ impl HorizonApp {
             }
 
             ui.separator();
-            if kind.is_agent()
+            if (kind.is_agent() || kind == horizon_core::PanelKind::Ssh)
                 && ui
-                    .add(Button::new(egui::RichText::new("Restart").size(12.0).color(theme::FG_SOFT)).frame(false))
+                    .add(
+                        Button::new(
+                            egui::RichText::new(if kind == horizon_core::PanelKind::Ssh {
+                                "Reconnect"
+                            } else {
+                                "Restart"
+                            })
+                            .size(12.0)
+                            .color(theme::FG_SOFT),
+                        )
+                        .frame(false),
+                    )
                     .clicked()
             {
                 self.panels_to_restart.push(panel_id);

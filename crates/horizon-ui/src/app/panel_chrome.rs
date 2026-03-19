@@ -1,5 +1,5 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind};
+use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
 
 use crate::theme;
 
@@ -9,6 +9,7 @@ use super::util::{format_compact_count, usize_to_f32};
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
     pub panel_id: PanelId,
+    pub kind: PanelKind,
     pub panel_rect: Rect,
     pub titlebar_rect: Rect,
     pub close_rect: Rect,
@@ -20,6 +21,7 @@ pub(super) struct PanelChrome<'a> {
     pub close_hovered: bool,
     pub workspace_accent: Option<Color32>,
     pub attention_badge: Option<&'a (AttentionSeverity, String)>,
+    pub ssh_status: Option<SshConnectionStatus>,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +69,10 @@ fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
 pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused: bool) -> (&'static str, Color32) {
     match kind {
         PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(workspace_color, if focused { 200 } else { 80 })),
+        PanelKind::Ssh => (
+            "SSH",
+            theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 150 }),
+        ),
         PanelKind::Codex => (
             "CX",
             theme::alpha(Color32::from_rgb(116, 162, 247), if focused { 220 } else { 120 }),
@@ -83,6 +89,10 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
             "GC",
             theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
         ),
+        PanelKind::RemoteHosts => (
+            "RH",
+            theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 130 }),
+        ),
         PanelKind::Usage => (
             "US",
             theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
@@ -92,7 +102,7 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
 
 pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let painter = ui.painter_at(chrome.panel_rect);
-    let accent = panel_accent(chrome.workspace_accent, chrome.focused);
+    let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
 
     if let Some(stroke) = focus_ring_stroke(accent, chrome.focused) {
         painter.rect_stroke(
@@ -150,6 +160,15 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     if let Some((severity, summary)) = chrome.attention_badge {
         paint_attention_badge(&painter, chrome.titlebar_rect, chrome.close_rect, *severity, summary);
     }
+    if let Some(status) = chrome.ssh_status {
+        paint_ssh_status_badge(
+            &painter,
+            chrome.titlebar_rect,
+            chrome.close_rect,
+            chrome.scrollback_limit > 0,
+            status,
+        );
+    }
 
     if chrome.scrollback_limit > 0 {
         paint_history_meter(
@@ -167,10 +186,14 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    paint_close_and_resize_controls(&painter, chrome.close_rect, chrome.resize_rect, chrome.close_hovered);
+}
+
+fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, resize_rect: Rect, close_hovered: bool) {
     painter.circle_filled(
-        chrome.close_rect.center(),
+        close_rect.center(),
         5.0,
-        if chrome.close_hovered {
+        if close_hovered {
             theme::BTN_CLOSE
         } else {
             theme::alpha(theme::FG_DIM, 140)
@@ -180,18 +203,29 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM, 170));
     painter.line_segment(
         [
-            chrome.resize_rect.right_bottom(),
-            chrome.resize_rect.left_top() + Vec2::new(6.0, 12.0),
+            resize_rect.right_bottom(),
+            resize_rect.left_top() + Vec2::new(6.0, 12.0),
         ],
         handle_stroke,
     );
     painter.line_segment(
         [
-            chrome.resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
-            chrome.resize_rect.left_top() + Vec2::new(12.0, 12.0),
+            resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
+            resize_rect.left_top() + Vec2::new(12.0, 12.0),
         ],
         handle_stroke,
     );
+}
+
+fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focused: bool) -> Color32 {
+    if kind == PanelKind::Ssh {
+        return theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 170 });
+    }
+    if kind == PanelKind::RemoteHosts {
+        return theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 170 });
+    }
+
+    panel_accent(workspace_accent, focused)
 }
 
 fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMeter) {
@@ -302,6 +336,57 @@ fn paint_attention_badge(
     painter.text(
         Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
         egui::Align2::LEFT_CENTER,
+        badge_text,
+        font,
+        color,
+    );
+}
+
+fn paint_ssh_status_badge(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    has_history_meter: bool,
+    status: SshConnectionStatus,
+) {
+    let color = match status {
+        SshConnectionStatus::Connecting => Color32::from_rgb(249, 226, 175),
+        SshConnectionStatus::Connected => Color32::from_rgb(166, 227, 161),
+        SshConnectionStatus::Disconnected => theme::PALETTE_RED,
+    };
+    let badge_text = status.label();
+    let font = egui::FontId::proportional(10.0);
+    let badge_right = if has_history_meter {
+        panel_history_badge_rect(titlebar_rect, close_rect).min.x - 6.0
+    } else {
+        close_rect.min.x - 8.0
+    };
+    let text_width = painter
+        .layout_no_wrap(badge_text.to_string(), font.clone(), color)
+        .size()
+        .x;
+    let badge_width = text_width + 16.0;
+    let badge_height = 18.0;
+    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
+    let badge_rect = Rect::from_min_size(
+        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
+        Vec2::new(badge_right - badge_left, badge_height),
+    );
+
+    painter.rect_filled(
+        badge_rect,
+        CornerRadius::same(4),
+        Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 72),
+    );
+    painter.rect_stroke(
+        badge_rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0, theme::alpha(color, 140)),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        badge_rect.center(),
+        egui::Align2::CENTER_CENTER,
         badge_text,
         font,
         color,

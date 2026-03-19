@@ -224,7 +224,7 @@ impl HorizonApp {
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =
             crate::command_registry::action_commands(&self.shortcuts, super::util::primary_shortcut_label());
-        self.presets.clone_from(&config.presets);
+        self.presets = config.resolved_presets();
         self.board.attention_enabled = config.features.attention_feed;
     }
 }

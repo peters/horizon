@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::git_changes::DiffViewer;
+use crate::remote_hosts::RemoteHostsPanel;
 use crate::terminal::Terminal;
 use crate::usage_dashboard::UsageDashboard;
 
@@ -81,6 +82,7 @@ pub enum PanelContent {
     Terminal(Terminal),
     Editor(MarkdownEditor),
     GitChanges(DiffViewer),
+    RemoteHosts(RemoteHostsPanel),
     Usage(UsageDashboard),
 }
 
@@ -89,14 +91,14 @@ impl PanelContent {
     pub fn terminal(&self) -> Option<&Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn terminal_mut(&mut self) -> Option<&mut Terminal> {
         match self {
             Self::Terminal(t) => Some(t),
-            Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
+            Self::Editor(_) | Self::GitChanges(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
@@ -104,14 +106,14 @@ impl PanelContent {
     pub fn editor(&self) -> Option<&MarkdownEditor> {
         match self {
             Self::Editor(e) => Some(e),
-            Self::Terminal(_) | Self::GitChanges(_) | Self::Usage(_) => None,
+            Self::Terminal(_) | Self::GitChanges(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn editor_mut(&mut self) -> Option<&mut MarkdownEditor> {
         match self {
             Self::Editor(e) => Some(e),
-            Self::Terminal(_) | Self::GitChanges(_) | Self::Usage(_) => None,
+            Self::Terminal(_) | Self::GitChanges(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
@@ -119,14 +121,14 @@ impl PanelContent {
     pub fn git_changes(&self) -> Option<&DiffViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
-            Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
     pub fn git_changes_mut(&mut self) -> Option<&mut DiffViewer> {
         match self {
             Self::GitChanges(v) => Some(v),
-            Self::Terminal(_) | Self::Editor(_) | Self::Usage(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::RemoteHosts(_) | Self::Usage(_) => None,
         }
     }
 
@@ -134,14 +136,29 @@ impl PanelContent {
     pub fn usage(&self) -> Option<&UsageDashboard> {
         match self {
             Self::Usage(u) => Some(u),
-            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) | Self::RemoteHosts(_) => None,
         }
     }
 
     pub fn usage_mut(&mut self) -> Option<&mut UsageDashboard> {
         match self {
             Self::Usage(u) => Some(u),
-            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) => None,
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) | Self::RemoteHosts(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn remote_hosts(&self) -> Option<&RemoteHostsPanel> {
+        match self {
+            Self::RemoteHosts(panel) => Some(panel),
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
+        }
+    }
+
+    pub fn remote_hosts_mut(&mut self) -> Option<&mut RemoteHostsPanel> {
+        match self {
+            Self::RemoteHosts(panel) => Some(panel),
+            Self::Terminal(_) | Self::Editor(_) | Self::GitChanges(_) | Self::Usage(_) => None,
         }
     }
 }

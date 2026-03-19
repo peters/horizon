@@ -37,6 +37,13 @@ pub struct PanelEntry {
     pub cwd: Option<String>,
 }
 
+pub struct PresetEntry {
+    pub index: usize,
+    pub label: String,
+    pub detail: String,
+    pub keywords: Vec<String>,
+}
+
 // ── Palette state ───────────────────────────────────────────────────
 
 pub struct CommandPalette {
@@ -85,10 +92,11 @@ impl CommandPalette {
         ctx: &Context,
         workspaces: &[WorkspaceEntry],
         panels: &[PanelEntry],
+        presets: &[PresetEntry],
         actions: &[CommandEntry],
     ) -> PaletteAction {
         let (mode, search_query) = parse_mode(&self.query);
-        let items = build_results(mode, search_query, workspaces, panels, actions);
+        let items = build_results(mode, search_query, workspaces, panels, presets, actions);
         let layout = palette_layout(ctx.input(egui::InputState::viewport_rect));
 
         if self.show_backdrop(ctx, layout.screen) {
@@ -164,7 +172,7 @@ impl CommandPalette {
     ) -> PaletteAction {
         let title = match mode {
             PaletteMode::All => "Command Palette",
-            PaletteMode::ActionsOnly => "Actions",
+            PaletteMode::ActionsOnly => "Presets & Actions",
             PaletteMode::PanelsOnly => "Panels",
         };
         ui.label(egui::RichText::new(title).color(theme::FG).size(15.0).strong());
@@ -228,7 +236,7 @@ impl CommandPalette {
             return;
         }
 
-        let hint = "  >  actions    @  panels";
+        let hint = "  >  presets + actions    @  panels";
         let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width, 16.0));
         ui.painter().text(
             rect.left_center() + Vec2::new(4.0, 0.0),
@@ -317,6 +325,7 @@ fn build_results(
     query: &str,
     workspaces: &[WorkspaceEntry],
     panels: &[PanelEntry],
+    presets: &[PresetEntry],
     actions: &[CommandEntry],
 ) -> Vec<ResultItem> {
     let mut items = Vec::new();
@@ -365,6 +374,20 @@ fn build_results(
     }
 
     if mode == PaletteMode::All || mode == PaletteMode::ActionsOnly {
+        for preset in presets {
+            let keyword_refs: Vec<&str> = preset.keywords.iter().map(String::as_str).collect();
+            if matches_query(&query_lower, &preset.label, &keyword_refs) {
+                items.push(ResultItem {
+                    id: CommandId::CreatePanelFromPreset(preset.index),
+                    label: preset.label.clone(),
+                    detail: preset.detail.clone(),
+                    shortcut: None,
+                    category: Category::Preset,
+                    accent: None,
+                });
+            }
+        }
+
         for action in actions {
             let keyword_refs: Vec<&str> = action.keywords.iter().map(String::as_str).collect();
             if matches_query(&query_lower, &action.label, &keyword_refs) {
@@ -496,12 +519,22 @@ mod tests {
             workspace_name: "dev".into(),
             cwd: Some("/home".into()),
         }];
+        let presets = vec![PresetEntry {
+            index: 0,
+            label: "SSH: prod-api".into(),
+            detail: "ssh".into(),
+            keywords: vec!["prod".into(), "deploy".into()],
+        }];
         let actions = crate::command_registry::action_commands(&AppShortcuts::default(), "Ctrl");
 
-        let results = build_results(PaletteMode::ActionsOnly, "", &workspaces, &panels, &actions);
-        assert!(results.iter().all(|r| r.category == Category::Action));
+        let results = build_results(PaletteMode::ActionsOnly, "", &workspaces, &panels, &presets, &actions);
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r.category, Category::Preset | Category::Action))
+        );
 
-        let results = build_results(PaletteMode::PanelsOnly, "", &workspaces, &panels, &actions);
+        let results = build_results(PaletteMode::PanelsOnly, "", &workspaces, &panels, &presets, &actions);
         assert!(results.iter().all(|r| r.category == Category::Panel));
     }
 }

@@ -13,7 +13,7 @@ pub(super) struct PaletteLayout {
 }
 
 pub(super) fn palette_layout(screen: Rect) -> PaletteLayout {
-    let results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT + 3.0 * SECTION_HEADER_HEIGHT;
+    let results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT + 4.0 * SECTION_HEADER_HEIGHT;
     let card_height = INPUT_HEIGHT + 16.0 + results_height + 60.0;
     let card_min = Pos2::new(
         (screen.width() - PALETTE_WIDTH) * 0.5,
