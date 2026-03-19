@@ -2,7 +2,7 @@
 
 ## Goal
 
-Validate the detached-workspace drag fix and confirm workspace layout controls remain visible for any non-empty workspace, including single-panel workspaces.
+Validate the detached-workspace drag fix, confirm repeated detached-window resizing does not corrupt the terminal buffer, and confirm workspace layout controls remain visible for any non-empty workspace, including single-panel workspaces.
 
 ## Environment
 
@@ -40,7 +40,13 @@ Validate the detached-workspace drag fix and confirm workspace layout controls r
    - snap back to prior positions
    - oscillate after the mouse is released
 6. Resize the detached window from two different edges and verify the content keeps rendering correctly.
-7. Capture a screenshot of the detached window after dragging and after resizing.
+7. With visible shell output in the detached terminal, resize the detached window repeatedly for 5-10 seconds from alternating edges and corners.
+8. Verify the terminal buffer remains sane throughout the repeated resize sequence:
+   - no large blank bands appear between prompt and content
+   - no stale lines are duplicated far below the cursor
+   - the prompt stays anchored near the current input line instead of drifting vertically
+   - newly typed characters appear on the active prompt line
+9. Capture a screenshot of the detached window after dragging and after the repeated resize sequence.
 
 ## Persistence And Restore
 
@@ -77,6 +83,7 @@ Validate the detached-workspace drag fix and confirm workspace layout controls r
 ## Regression Watchlist
 
 - Detached window drag becomes unstable only after persistence restore.
+- Detached window resize leaves the PTY buffer visually desynchronized from the rendered grid.
 - Detached window position resets every frame while dragging.
 - Layout toolbar disappears for single-panel workspaces after focus changes.
 - Empty workspaces incorrectly show layout controls.
