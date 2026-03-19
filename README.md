@@ -127,6 +127,7 @@ cargo run --release
 ### Keyboard Shortcuts
 
 All app shortcuts are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
+Duplicate or overlapping bindings are rejected, including near-conflicts such as `Ctrl+B` and `Ctrl+Shift+B`.
 
 | Shortcut | What it does |
 |:---------|:-------------|

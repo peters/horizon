@@ -131,6 +131,38 @@ impl ShortcutBinding {
         let key = parse_key(key_token)?;
         Ok(Self::new(modifiers, key))
     }
+
+    #[must_use]
+    pub(crate) fn overlaps(self, other: Self) -> bool {
+        self.key == other.key
+            && (self
+                .matching_event_modifiers()
+                .into_iter()
+                .any(|event| modifiers_match_logically(event, other.modifiers))
+                || other
+                    .matching_event_modifiers()
+                    .into_iter()
+                    .any(|event| modifiers_match_logically(event, self.modifiers)))
+    }
+
+    fn matching_event_modifiers(self) -> Vec<ShortcutModifiers> {
+        let mut events = Vec::with_capacity(4);
+        let base = self.modifiers;
+        events.push(base);
+
+        if self.modifiers.command() {
+            push_unique_modifier(&mut events, base.plus(ShortcutModifiers::CTRL));
+            push_unique_modifier(&mut events, base.plus(ShortcutModifiers::MAC_CMD));
+        }
+        if self.modifiers.ctrl() && !self.modifiers.command() {
+            push_unique_modifier(&mut events, base.plus(ShortcutModifiers::PRIMARY));
+        }
+        if self.modifiers.mac_cmd() && !self.modifiers.command() {
+            push_unique_modifier(&mut events, base.plus(ShortcutModifiers::PRIMARY));
+        }
+
+        events
+    }
 }
 
 impl fmt::Display for ShortcutBinding {
@@ -198,6 +230,41 @@ impl Default for AppShortcuts {
             save_editor: ShortcutBinding::new(primary, ShortcutKey::Letter('S')),
         }
     }
+}
+
+fn push_unique_modifier(values: &mut Vec<ShortcutModifiers>, modifier: ShortcutModifiers) {
+    if !values.contains(&modifier) {
+        values.push(modifier);
+    }
+}
+
+fn modifiers_match_logically(pressed: ShortcutModifiers, pattern: ShortcutModifiers) -> bool {
+    if pattern.alt() && !pressed.alt() {
+        return false;
+    }
+    if pattern.shift() && !pressed.shift() {
+        return false;
+    }
+
+    if pattern.mac_cmd() {
+        if !pressed.mac_cmd() {
+            return false;
+        }
+        return pattern.ctrl() == pressed.ctrl();
+    }
+
+    if !pattern.ctrl() && !pattern.command() {
+        return !pressed.ctrl() && !pressed.command();
+    }
+
+    if pattern.ctrl() && !pressed.ctrl() {
+        return false;
+    }
+    if pattern.command() && !pressed.command() {
+        return false;
+    }
+
+    true
 }
 
 fn parse_key(token: &str) -> Result<ShortcutKey> {
@@ -388,5 +455,25 @@ mod tests {
             shortcuts.save_editor,
             ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('S'))
         );
+    }
+
+    #[test]
+    fn shifted_and_unshifted_same_key_overlap() {
+        let plain = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('B'));
+        let shifted = ShortcutBinding::new(
+            ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
+            ShortcutKey::Letter('B'),
+        );
+
+        assert!(plain.overlaps(shifted));
+        assert!(shifted.overlaps(plain));
+    }
+
+    #[test]
+    fn different_keys_do_not_overlap() {
+        let left = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('A'));
+        let right = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('B'));
+
+        assert!(!left.overlaps(right));
     }
 }

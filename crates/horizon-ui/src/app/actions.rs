@@ -362,7 +362,7 @@ impl HorizonApp {
         }
 
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
-            self.reset_view();
+            self.reset_view(ctx);
         }
 
         let canvas_rect = self.canvas_rect(ctx);

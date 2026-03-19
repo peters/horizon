@@ -222,7 +222,7 @@ impl ShortcutsConfig {
             save_editor: parse_shortcut("save_editor", &self.save_editor)?,
         };
 
-        validate_unique_shortcuts([
+        validate_distinct_shortcuts([
             ("quick_nav", shortcuts.quick_nav),
             ("new_terminal", shortcuts.new_terminal),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
@@ -463,13 +463,20 @@ fn parse_shortcut(name: &str, value: &str) -> Result<ShortcutBinding> {
     })
 }
 
-fn validate_unique_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding); N]) -> Result<()> {
-    let mut seen = std::collections::HashMap::with_capacity(N);
-    for (name, binding) in bindings {
-        if let Some(previous) = seen.insert(binding, name) {
-            return Err(Error::Config(format!(
-                "duplicate shortcut `{binding}` for shortcuts.{previous} and shortcuts.{name}"
-            )));
+fn validate_distinct_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding); N]) -> Result<()> {
+    for index in 0..N {
+        let (name, binding) = bindings[index];
+        for (previous, previous_binding) in bindings[..index].iter().copied() {
+            if binding == previous_binding {
+                return Err(Error::Config(format!(
+                    "duplicate shortcut `{binding}` for shortcuts.{previous} and shortcuts.{name}"
+                )));
+            }
+            if binding.overlaps(previous_binding) {
+                return Err(Error::Config(format!(
+                    "shortcut `{binding}` for shortcuts.{name} conflicts with shortcuts.{previous} (`{previous_binding}`)"
+                )));
+            }
         }
     }
     Ok(())
@@ -526,5 +533,15 @@ mod tests {
             .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
+    }
+
+    #[test]
+    fn overlapping_shortcuts_are_rejected() {
+        let error =
+            Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+B\n  align_workspaces_horizontally: Ctrl+Shift+B\n")
+                .expect_err("config should reject overlapping shortcuts");
+
+        assert!(error.to_string().contains("conflicts with"));
+        assert!(error.to_string().contains("toggle_sidebar"));
     }
 }
