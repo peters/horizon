@@ -16,6 +16,7 @@ pub enum CommandId {
     ResetView,
     ZoomIn,
     ZoomOut,
+    AlignWorkspacesHorizontally,
 
     // Workspace / panel
     NewPanel,
@@ -109,6 +110,12 @@ pub fn action_commands(shortcut_prefix: &str) -> Vec<CommandEntry> {
             keywords: vec!["zoom".into(), "smaller".into(), "shrink".into()],
         },
         CommandEntry {
+            id: CommandId::AlignWorkspacesHorizontally,
+            label: "Align Workspaces".into(),
+            shortcut: Some(format!("{shortcut_prefix}+Shift+A")),
+            keywords: vec!["arrange".into(), "horizontal".into(), "layout".into(), "row".into()],
+        },
+        CommandEntry {
             id: CommandId::ToggleSettings,
             label: "Settings".into(),
             shortcut: Some(format!("{shortcut_prefix}+,")),
@@ -119,7 +126,7 @@ pub fn action_commands(shortcut_prefix: &str) -> Vec<CommandEntry> {
 
 #[cfg(test)]
 mod tests {
-    use super::action_commands;
+    use super::{CommandId, action_commands};
 
     #[test]
     fn action_commands_have_unique_labels() {
@@ -136,5 +143,17 @@ mod tests {
         for entry in action_commands("Ctrl") {
             assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
         }
+    }
+
+    #[test]
+    fn action_commands_include_workspace_alignment() {
+        let entries = action_commands("Ctrl");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::AlignWorkspacesHorizontally)
+            .expect("workspace alignment command");
+
+        assert_eq!(entry.label, "Align Workspaces");
+        assert_eq!(entry.shortcut.as_deref(), Some("Ctrl+Shift+A"));
     }
 }

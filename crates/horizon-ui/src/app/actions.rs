@@ -310,6 +310,14 @@ impl HorizonApp {
                 let canvas_rect = self.canvas_rect(ctx);
                 let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
             }
+            CommandId::AlignWorkspacesHorizontally => {
+                if let Some(workspace_id) = align_attached_workspaces(&mut self.board, &self.detached_workspaces)
+                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
+                {
+                    self.focus_workspace_bounds(ctx, min, max, true);
+                    self.mark_runtime_dirty();
+                }
+            }
             CommandId::NewPanel => {
                 let workspace_id = self.board.ensure_workspace();
                 if let Some(preset) = self.presets.first().cloned() {
@@ -414,23 +422,10 @@ impl HorizonApp {
         if ctx.input(|input| input.key_pressed(egui::Key::Minus) && primary_shortcut_modifier(input.modifiers)) {
             self.execute_command(ctx, &CommandId::ZoomOut);
         }
-
         if ctx.input(|input| {
             input.key_pressed(egui::Key::A) && primary_shortcut_modifier(input.modifiers) && input.modifiers.shift
         }) {
-            let workspace_ids: Vec<_> = self
-                .board
-                .workspaces
-                .iter()
-                .filter(|workspace| !self.workspace_is_detached(workspace.id))
-                .map(|workspace| workspace.id)
-                .collect();
-            if let Some(ws_id) = self.board.align_workspaces_horizontally(&workspace_ids)
-                && let Some((min, max)) = self.board.workspace_bounds(ws_id)
-            {
-                self.focus_workspace_bounds(ctx, min, max, true);
-            }
-            self.mark_runtime_dirty();
+            self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
         }
 
         if self.terminal_accepts_keyboard_input(ctx) {
@@ -841,6 +836,20 @@ fn command_palette_panel_entries(
         .collect()
 }
 
+fn align_attached_workspaces(
+    board: &mut horizon_core::Board,
+    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+) -> Option<WorkspaceId> {
+    let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
+    let workspace_ids: Vec<_> = board
+        .workspaces
+        .iter()
+        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
+        .map(|workspace| workspace.id)
+        .collect();
+    board.align_workspaces_horizontally(&workspace_ids)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashSet};
@@ -850,9 +859,10 @@ mod tests {
     use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, canvas_rect_for_layout, command_palette_panel_entries,
-        command_palette_workspace_entries, detached_workspace_ids, estimated_settings_bar_rect,
-        estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd,
+        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
+        command_palette_panel_entries, command_palette_workspace_entries, detached_workspace_ids,
+        estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd,
+        workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1023,5 +1033,29 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, attached_panel);
         assert_eq!(entries[0].workspace_name, "attached");
+    }
+
+    #[test]
+    fn align_attached_workspaces_ignores_detached_workspaces() {
+        let mut board = Board::new();
+        let left = board.create_workspace("left");
+        let detached = board.create_workspace("detached");
+        let right = board.create_workspace("right");
+        board.move_workspace(left, [100.0, 200.0]);
+        board.move_workspace(detached, [300.0, 50.0]);
+        board.move_workspace(right, [500.0, 400.0]);
+
+        let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
+        let detached_position = board.workspace(detached).expect("detached workspace").position;
+        let detached_workspaces = BTreeMap::from([(detached_local_id, WindowConfig::default())]);
+
+        let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
+
+        assert_eq!(leftmost, Some(left));
+        assert!(
+            board
+                .workspace(detached)
+                .is_some_and(|workspace| workspace.position == detached_position)
+        );
     }
 }
