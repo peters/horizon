@@ -11,6 +11,7 @@ use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
+use crate::ssh::SshConnection;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
@@ -216,7 +217,7 @@ impl RuntimeState {
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
                             args: panel.launch_args.clone(),
-                            cwd: if panel.kind.is_agent() {
+                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
                                 panel.launch_cwd.clone()
                             } else {
                                 terminal
@@ -229,6 +230,7 @@ impl RuntimeState {
                             resume: panel.resume.clone(),
                             position: Some(panel.layout.position),
                             size: Some(panel.layout.size),
+                            ssh_connection: panel.ssh_connection.clone(),
                             session_binding: panel.session_binding.clone(),
                             template: panel.template.clone(),
                             editor_content: editor
@@ -374,6 +376,8 @@ pub struct PanelState {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_connection: Option<SshConnection>,
     pub rows: u16,
     pub cols: u16,
     pub resume: PanelResume,
@@ -402,6 +406,7 @@ impl PanelState {
         let cwd = normalize_cwd(panel.cwd.as_deref()).or_else(|| normalize_cwd(workspace.cwd.as_deref()));
         let command = panel.command.clone();
         let args = panel.args.clone();
+        let ssh_connection = panel.ssh_connection.clone();
 
         Self {
             local_id: new_local_id(),
@@ -410,6 +415,7 @@ impl PanelState {
             command: command.clone(),
             args: args.clone(),
             cwd: cwd.clone(),
+            ssh_connection: ssh_connection.clone(),
             rows: panel.rows,
             cols: panel.cols,
             resume: panel.resume.clone(),
@@ -424,6 +430,7 @@ impl PanelState {
                 command,
                 args,
                 cwd,
+                ssh_connection,
             }),
             editor_content: None,
         }
@@ -440,6 +447,7 @@ impl PanelState {
             command: self.command.clone(),
             args: self.args.clone(),
             cwd: self.cwd.as_deref().map(Config::expand_tilde),
+            ssh_connection: self.ssh_connection.clone(),
             rows: self.rows,
             cols: self.cols,
             kind: self.kind,
@@ -463,6 +471,7 @@ impl Default for PanelState {
             command: None,
             args: Vec::new(),
             cwd: None,
+            ssh_connection: None,
             rows: DEFAULT_ROWS,
             cols: DEFAULT_COLS,
             resume: PanelResume::default(),
@@ -490,6 +499,8 @@ pub struct PanelTemplateRef {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_connection: Option<SshConnection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

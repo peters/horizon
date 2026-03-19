@@ -15,6 +15,7 @@ mod panel;
 mod runtime_state;
 mod session_store;
 mod shortcuts;
+mod ssh;
 mod terminal;
 mod transcript;
 mod usage_dashboard;
@@ -46,6 +47,7 @@ pub use session_store::{
     StartupDecision, StartupPromptReason,
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
+pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;

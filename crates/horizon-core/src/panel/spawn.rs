@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
+use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::usage_dashboard::UsageDashboard;
@@ -27,6 +28,15 @@ struct StaticPanelSeed {
     position: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
     template: Option<PanelTemplateRef>,
+}
+
+struct TerminalLaunchTrace<'a> {
+    kind: PanelKind,
+    resume: &'a PanelResume,
+    session_binding: Option<&'a AgentSessionBinding>,
+    should_resume_binding: bool,
+    cwd: Option<&'a str>,
+    cmd: String,
 }
 
 impl StaticPanelSeed {
@@ -85,6 +95,8 @@ impl StaticPanelSeed {
             launch_command,
             launch_args: Vec::new(),
             launch_cwd,
+            ssh_connection: None,
+            ssh_status: None,
         }
     }
 }
@@ -138,6 +150,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         command,
         args,
         cwd,
+        ssh_connection,
         rows,
         cols,
         kind,
@@ -154,6 +167,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     let saved_command = command.clone();
     let saved_args = args.clone();
     let saved_cwd = cwd.clone();
+    let saved_ssh_connection = ssh_connection.clone();
     let saved_cwd_string = saved_cwd.as_ref().map(|path| path.display().to_string());
     let (session_binding, should_resume_binding) = resolve_session_binding(
         kind,
@@ -165,24 +179,22 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     let (program, launch_args) = resolve_launch_command(
         command,
         args,
+        ssh_connection.clone(),
         kind,
         &resume,
         session_binding.as_ref(),
         should_resume_binding,
     );
 
-    if kind.is_agent() {
-        tracing::info!(
-            panel_id = id.0,
-            kind = ?kind,
-            resume = ?resume,
-            session_id = session_binding.as_ref().map(|binding| binding.session_id.as_str()),
-            should_resume = should_resume_binding,
-            cwd = saved_cwd_string.as_deref(),
-            cmd = %format!("{program} {}", launch_args.join(" ")),
-            "launching agent panel"
-        );
-    }
+    let launch_trace = TerminalLaunchTrace {
+        kind,
+        resume: &resume,
+        session_binding: session_binding.as_ref(),
+        should_resume_binding,
+        cwd: saved_cwd_string.as_deref(),
+        cmd: format!("{program} {}", launch_args.join(" ")),
+    };
+    log_terminal_launch(id, &launch_trace);
 
     let (program, launch_args) = if let Some(transcript) = transcript.as_ref() {
         transcript.wrap_launch_command(program, launch_args)
@@ -190,7 +202,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         (program, launch_args)
     };
     let has_custom_name = name.is_some();
-    let title = name.unwrap_or_else(|| format!("Terminal {}", id.0));
+    let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
     let terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args: launch_args,
@@ -229,7 +241,37 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         launch_command: saved_command,
         launch_args: saved_args,
         launch_cwd: saved_cwd,
+        ssh_connection: saved_ssh_connection,
+        ssh_status: if kind == PanelKind::Ssh {
+            Some(SshConnectionStatus::Connecting)
+        } else {
+            None
+        },
     })
+}
+
+fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -> String {
+    ssh_connection.map_or_else(
+        || format!("Terminal {}", id.0),
+        |connection| format!("SSH: {}", connection.display_label()),
+    )
+}
+
+fn log_terminal_launch(id: PanelId, trace: &TerminalLaunchTrace<'_>) {
+    if !trace.kind.is_agent() {
+        return;
+    }
+
+    tracing::info!(
+        panel_id = id.0,
+        kind = ?trace.kind,
+        resume = ?trace.resume,
+        session_id = trace.session_binding.map(|binding| binding.session_id.as_str()),
+        should_resume = trace.should_resume_binding,
+        cwd = trace.cwd,
+        cmd = %trace.cmd,
+        "launching agent panel"
+    );
 }
 
 fn spawn_editor(mut seed: StaticPanelSeed, command: Option<String>) -> Result<Panel> {
@@ -300,6 +342,7 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
 pub(super) fn resolve_launch_command(
     command: Option<String>,
     args: Vec<String>,
+    ssh_connection: Option<SshConnection>,
     kind: PanelKind,
     resume: &PanelResume,
     session_binding: Option<&AgentSessionBinding>,
@@ -312,6 +355,10 @@ pub(super) fn resolve_launch_command(
             let program = command.unwrap_or_else(default_shell);
             (program, shell_launch_args(args, use_login_shell))
         }
+        PanelKind::Ssh => ssh_connection.map_or_else(
+            || (command.unwrap_or_else(|| "ssh".to_string()), args),
+            |connection| ("ssh".to_string(), connection.to_command_args()),
+        ),
         PanelKind::Command => {
             if let Some(program) = command {
                 (program, args)
@@ -420,6 +467,7 @@ fn resolve_session_binding(
                 && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
         }
         PanelKind::Codex
+        | PanelKind::Ssh
         | PanelKind::Shell
         | PanelKind::Command
         | PanelKind::Editor
@@ -498,7 +546,7 @@ fn horizon_claude_plugin_dir() -> Option<String> {
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     match kind {
         PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
-        PanelKind::Shell | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
+        PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
     }
 }
@@ -521,6 +569,7 @@ mod tests {
         let (program, args) = resolve_launch_command(
             Some("/usr/local/bin/custom-shell".to_string()),
             Vec::new(),
+            None,
             PanelKind::Shell,
             &PanelResume::Fresh,
             None,
@@ -533,8 +582,15 @@ mod tests {
 
     #[test]
     fn resolve_launch_command_adds_login_flag_only_for_default_shell() {
-        let (program, args) =
-            resolve_launch_command(None, Vec::new(), PanelKind::Shell, &PanelResume::Fresh, None, false);
+        let (program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Shell,
+            &PanelResume::Fresh,
+            None,
+            false,
+        );
 
         assert_eq!(program, default_shell());
         if PLATFORM_USES_LOGIN_SHELL {
@@ -542,5 +598,31 @@ mod tests {
         } else {
             assert!(args.is_empty());
         }
+    }
+
+    #[test]
+    fn resolve_launch_command_prefers_structured_ssh_connection() {
+        let connection = SshConnection {
+            host: "prod-api".to_string(),
+            user: Some("deploy".to_string()),
+            port: Some(2222),
+            ..SshConnection::default()
+        };
+
+        let (program, args) = resolve_launch_command(
+            Some("custom-ignored".to_string()),
+            vec!["--ignored".to_string()],
+            Some(connection),
+            PanelKind::Ssh,
+            &PanelResume::Fresh,
+            None,
+            false,
+        );
+
+        assert_eq!(program, "ssh");
+        assert_eq!(
+            args,
+            vec!["-p".to_string(), "2222".to_string(), "deploy@prod-api".to_string(),]
+        );
     }
 }

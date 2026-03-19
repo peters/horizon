@@ -20,6 +20,7 @@ pub enum CommandId {
 
     // Workspace / panel
     NewPanel,
+    CreatePanelFromPreset(usize),
 
     // Settings
     ToggleSettings,
@@ -29,6 +30,7 @@ pub enum CommandId {
 pub enum Category {
     Workspace,
     Panel,
+    Preset,
     Action,
 }
 
@@ -37,6 +39,7 @@ impl Category {
         match self {
             Self::Workspace => "WORKSPACES",
             Self::Panel => "PANELS",
+            Self::Preset => "PRESETS",
             Self::Action => "ACTIONS",
         }
     }

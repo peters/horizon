@@ -1,5 +1,5 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, WorkspaceId};
+use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
 
 use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
@@ -27,6 +27,7 @@ struct PanelSnapshot {
     is_focused: bool,
     is_renaming: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
+    ssh_status: Option<SshConnectionStatus>,
 }
 
 #[derive(Default)]
@@ -240,6 +241,7 @@ impl HorizonApp {
                 is_focused: self.board.focused == Some(panel_id),
                 is_renaming: self.renaming_panel == Some(panel_id),
                 attention_badge,
+                ssh_status: panel.ssh_status(),
             })
         })
     }
@@ -310,6 +312,7 @@ impl HorizonApp {
                     ui,
                     PanelChrome {
                         panel_id,
+                        kind: snapshot.kind,
                         panel_rect: rects.panel,
                         titlebar_rect: rects.titlebar,
                         close_rect: rects.close,
@@ -325,6 +328,7 @@ impl HorizonApp {
                         close_hovered: close_response.hovered(),
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
+                        ssh_status: snapshot.ssh_status,
                     },
                 );
 
@@ -455,9 +459,10 @@ impl HorizonApp {
                 outcome.command = Some(PanelCommand::CreateWorkspace);
                 ui.close();
             }
-            if kind.is_agent() {
+            if kind.is_agent() || kind == PanelKind::Ssh {
                 ui.separator();
-                if ui.button("Restart").clicked() {
+                let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };
+                if ui.button(restart_label).clicked() {
                     self.panels_to_restart.push(panel_id);
                     ui.close();
                 }
