@@ -46,7 +46,7 @@ impl HorizonApp {
             }
             RemoteHostsOverlayAction::OpenSsh { label, connection } => {
                 self.remote_hosts_overlay = None;
-                let workspace_id = self.remote_sessions_workspace();
+                let workspace_id = self.remote_sessions_workspace(ctx);
                 self.open_ssh_panel(workspace_id, label, connection);
             }
         }
@@ -113,12 +113,12 @@ impl HorizonApp {
         rx
     }
 
-    fn remote_sessions_workspace(&mut self) -> WorkspaceId {
+    fn remote_sessions_workspace(&mut self, ctx: &egui::Context) -> WorkspaceId {
         const WORKSPACE_NAME: &str = "Remote Sessions";
         if let Some(ws) = self.board.workspaces.iter().find(|ws| ws.name == WORKSPACE_NAME) {
             return ws.id;
         }
-        let ws_id = self.board.create_workspace(WORKSPACE_NAME);
+        let ws_id = self.create_workspace_visible(ctx, WORKSPACE_NAME);
         self.board.arrange_workspace(ws_id, WorkspaceLayout::Grid);
         self.mark_runtime_dirty();
         ws_id

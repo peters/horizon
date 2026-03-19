@@ -21,16 +21,16 @@ impl HorizonApp {
             DirPickerAction::Cancelled => self.dir_picker = None,
             DirPickerAction::Selected(path, purpose) => {
                 self.dir_picker = None;
-                self.execute_dir_picker_result(path.as_ref(), *purpose);
+                self.execute_dir_picker_result(ctx, path.as_ref(), *purpose);
             }
         }
     }
 
-    fn execute_dir_picker_result(&mut self, path: Option<&PathBuf>, purpose: DirPickerPurpose) {
+    fn execute_dir_picker_result(&mut self, ctx: &Context, path: Option<&PathBuf>, purpose: DirPickerPurpose) {
         match purpose {
             DirPickerPurpose::NewWorkspace { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
+                let workspace_id = self.create_workspace_at_visible(ctx, &name, canvas_pos);
                 super::update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
                 let mut options = preset.to_panel_options();
                 options.position = Some(canvas_pos);
@@ -93,7 +93,7 @@ impl HorizonApp {
 
         if let Some(action) = selected_action {
             self.pending_preset_pick = None;
-            self.apply_preset_picker_action(action);
+            self.apply_preset_picker_action(ctx, action);
         } else if opened_at.elapsed() > std::time::Duration::from_millis(150) {
             let clicked_outside = ctx.input(|input| {
                 input.pointer.any_click()
@@ -148,7 +148,7 @@ impl HorizonApp {
         (area_response.response.rect, selected_action)
     }
 
-    fn apply_preset_picker_action(&mut self, action: PresetPickerAction) {
+    fn apply_preset_picker_action(&mut self, ctx: &Context, action: PresetPickerAction) {
         match action {
             PresetPickerAction::CreatePanel {
                 workspace_id,
@@ -169,7 +169,7 @@ impl HorizonApp {
             }
             PresetPickerAction::CreateWorkspaceDirect { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                let workspace_id = self.board.create_workspace_at(&name, canvas_pos);
+                let workspace_id = self.create_workspace_at_visible(ctx, &name, canvas_pos);
                 let mut options = preset.to_panel_options();
                 options.position = Some(canvas_pos);
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {

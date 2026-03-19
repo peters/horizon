@@ -20,7 +20,7 @@ impl HorizonApp {
         let workspace_id = self
             .board
             .active_workspace
-            .unwrap_or_else(|| self.board.ensure_workspace());
+            .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
         let fullscreen_panel = self
             .fullscreen_panel
             .filter(|panel_id| self.panel_is_in_root_viewport(*panel_id));
