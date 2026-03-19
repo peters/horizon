@@ -922,6 +922,57 @@ mod tests {
     }
 
     #[test]
+    fn align_workspaces_horizontally_arranges_in_row() {
+        let mut board = Board::new();
+        let ws1 = board.create_workspace("first");
+        let ws2 = board.create_workspace("second");
+        let ws3 = board.create_workspace("third");
+
+        board.move_workspace(ws1, [100.0, 200.0]);
+        board.move_workspace(ws2, [500.0, 50.0]);
+        board.move_workspace(ws3, [300.0, 400.0]);
+
+        board.align_workspaces_horizontally(&[ws1, ws2, ws3]);
+
+        // After alignment, sorted by original x: ws1 (100), ws3 (300), ws2 (500)
+        let p1 = board.workspace(ws1).expect("ws1").position;
+        let p3 = board.workspace(ws3).expect("ws3").position;
+        let p2 = board.workspace(ws2).expect("ws2").position;
+
+        // All y positions should match (aligned to leftmost workspace frame top).
+        assert!((p1[1] - p3[1]).abs() <= f32::EPSILON);
+        assert!((p3[1] - p2[1]).abs() <= f32::EPSILON);
+
+        // X positions should be in sorted order with gaps.
+        assert!(p3[0] > p1[0], "ws3 should be right of ws1");
+        assert!(p2[0] > p3[0], "ws2 should be right of ws3");
+    }
+
+    #[test]
+    fn align_workspaces_horizontally_only_moves_selected_workspaces() {
+        let mut board = Board::new();
+        let ws1 = board.create_workspace("first");
+        let ws2 = board.create_workspace("second");
+        let ws3 = board.create_workspace("third");
+
+        board.move_workspace(ws1, [100.0, 200.0]);
+        board.move_workspace(ws2, [500.0, 50.0]);
+        board.move_workspace(ws3, [20.0, 20.0]);
+
+        let original_ws3 = board.workspace(ws3).expect("ws3").position;
+        let leftmost = board
+            .align_workspaces_horizontally(&[ws1, ws2])
+            .expect("aligned workspace");
+
+        assert_eq!(leftmost, ws1);
+        let current_ws3 = board.workspace(ws3).expect("ws3").position;
+        assert!(
+            vec2_eq(current_ws3, original_ws3),
+            "expected detached workspace position {original_ws3:?}, got {current_ws3:?}"
+        );
+    }
+
+    #[test]
     fn resize_panel_pushes_sibling() {
         let mut board = Board::new();
         let ws_id = board.create_workspace("test");

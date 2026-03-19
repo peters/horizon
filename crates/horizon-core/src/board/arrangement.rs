@@ -1,6 +1,6 @@
 use crate::layout::{
-    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
-    tiled_panel_position, usize_to_f32, workspace_slot_width,
+    TILE_GAP, WORKSPACE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD,
+    ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 use crate::workspace::{Workspace, WorkspaceId};
@@ -152,6 +152,55 @@ impl Board {
 
         self.set_workspace_layout(id, None);
         true
+    }
+
+    /// Align the selected workspaces side by side in a horizontal row,
+    /// sorted by their current x position, with consistent vertical
+    /// alignment and [`WORKSPACE_GAP`] spacing between frames. Returns the
+    /// leftmost workspace ID after alignment, or `None` when fewer than two
+    /// selected workspaces exist.
+    pub fn align_workspaces_horizontally(&mut self, workspace_ids: &[WorkspaceId]) -> Option<WorkspaceId> {
+        if workspace_ids.len() < 2 {
+            return None;
+        }
+
+        let bounds_map = self.workspace_bounds_map();
+        let mut entries: Vec<(WorkspaceId, [f32; 4])> = workspace_ids
+            .iter()
+            .filter_map(|workspace_id| {
+                let ws = self.workspace(*workspace_id)?;
+                let rect = if let Some((min, max)) = bounds_map.get(&ws.id) {
+                    [
+                        min[0] - WS_FRAME_PAD,
+                        min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
+                        max[0] + WS_FRAME_PAD,
+                        max[1] + WS_FRAME_PAD,
+                    ]
+                } else {
+                    let p = ws.position;
+                    [p[0], p[1], p[0] + WS_EMPTY_FRAME_SIZE[0], p[1] + WS_EMPTY_FRAME_SIZE[1]]
+                };
+                Some((ws.id, rect))
+            })
+            .collect();
+
+        if entries.len() < 2 {
+            return None;
+        }
+
+        entries.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
+
+        let leftmost_id = entries[0].0;
+        let anchor_y = entries[0].1[1];
+        let mut cursor_x = entries[0].1[0];
+
+        for (ws_id, frame) in &entries {
+            let frame_width = frame[2] - frame[0];
+            self.translate_workspace(*ws_id, [cursor_x - frame[0], anchor_y - frame[1]]);
+            cursor_x += frame_width + WORKSPACE_GAP;
+        }
+
+        Some(leftmost_id)
     }
 
     /// Compute the canvas position for the next workspace so it doesn't

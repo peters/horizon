@@ -443,6 +443,24 @@ impl HorizonApp {
             self.execute_command(ctx, &CommandId::ZoomOut);
         }
 
+        if ctx.input(|input| {
+            input.key_pressed(egui::Key::A) && primary_shortcut_modifier(input.modifiers) && input.modifiers.shift
+        }) {
+            let workspace_ids: Vec<_> = self
+                .board
+                .workspaces
+                .iter()
+                .filter(|workspace| !self.workspace_is_detached(workspace.id))
+                .map(|workspace| workspace.id)
+                .collect();
+            if let Some(ws_id) = self.board.align_workspaces_horizontally(&workspace_ids)
+                && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+            {
+                self.focus_workspace_bounds(ctx, min, max, true);
+            }
+            self.mark_runtime_dirty();
+        }
+
         if self.terminal_accepts_keyboard_input(ctx) {
             return;
         }
