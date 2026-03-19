@@ -1,6 +1,6 @@
 mod render;
 
-use egui::{Align, Context, Id, Layout, Margin, Order, Pos2, Rect, UiBuilder, Vec2};
+use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
@@ -77,21 +77,33 @@ impl SearchOverlay {
     pub(crate) fn show_toolbar_input(&mut self, ui: &mut egui::Ui, board: &Board) -> SearchAction {
         self.maybe_refresh_results(board);
 
-        // Fill available space between title and right-side buttons,
-        // clamped to a reasonable range.
-        let input_width = (ui.available_width() - 260.0).clamp(240.0, 600.0);
+        let input_width = ui.available_width();
+
+        // Paint a visible border around the input so it's discoverable.
+        let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(input_width, 32.0));
+        ui.painter().rect_filled(
+            input_rect,
+            CornerRadius::same(10),
+            theme::alpha(theme::BG_ELEVATED, 220),
+        );
+        ui.painter().rect_stroke(
+            input_rect,
+            CornerRadius::same(10),
+            Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG, 140)),
+            StrokeKind::Inside,
+        );
 
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .font(egui::FontId::monospace(12.0))
+                .font(egui::FontId::monospace(13.0))
                 .text_color(theme::FG)
-                .desired_width(input_width)
+                .desired_width(input_width - 28.0)
                 .hint_text(
                     egui::RichText::new("Search across all terminals...")
                         .color(theme::FG_DIM)
-                        .size(12.0),
+                        .size(12.5),
                 )
-                .margin(Margin::symmetric(12, 6)),
+                .margin(Margin::symmetric(14, 6)),
         );
 
         let input_rect = response.rect;

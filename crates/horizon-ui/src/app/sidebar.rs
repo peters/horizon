@@ -75,11 +75,7 @@ impl HorizonApp {
                                 .color(theme::FG_DIM)
                                 .size(10.5),
                         );
-                        ui.add_space(16.0);
-
-                        // Search bar takes the center of the toolbar.
-                        self.render_toolbar_search(ui);
-
+                        // Right-side buttons first (so we know how much space they take).
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
                             if ui.add(util::chrome_button("Settings")).clicked() {
@@ -97,6 +93,26 @@ impl HorizonApp {
                         });
                     },
                 );
+            });
+
+        // Search bar rendered centered on top of the toolbar.
+        self.render_centered_search(ctx, viewport);
+    }
+
+    fn render_centered_search(&mut self, ctx: &Context, viewport: Rect) {
+        let search_width = (viewport.width() * 0.35).clamp(280.0, 600.0);
+        let search_x = viewport.min.x + (viewport.width() - search_width) * 0.5;
+        let search_y = viewport.min.y + 7.0;
+
+        egui::Area::new(Id::new("toolbar_search"))
+            .fixed_pos(Pos2::new(search_x, search_y))
+            .constrain(false)
+            .order(Order::Tooltip)
+            .interactable(true)
+            .show(ctx, |ui| {
+                ui.set_min_width(search_width);
+                ui.set_max_width(search_width);
+                self.render_toolbar_search(ui);
             });
     }
 
