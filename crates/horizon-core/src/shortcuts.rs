@@ -238,9 +238,9 @@ impl Default for AppShortcuts {
         Self {
             command_palette: ShortcutBinding::new(ps, ShortcutKey::Letter('K')),
             new_terminal: ShortcutBinding::new(ps, ShortcutKey::Letter('N')),
-            open_remote_hosts: ShortcutBinding::new(ps, ShortcutKey::Letter('R')),
+            open_remote_hosts: ShortcutBinding::new(ps, ShortcutKey::Letter('H')),
             toggle_sidebar: ShortcutBinding::new(ps, ShortcutKey::Letter('B')),
-            toggle_hud: ShortcutBinding::new(ps, ShortcutKey::Letter('H')),
+            toggle_hud: ShortcutBinding::new(ps, ShortcutKey::Letter('U')),
             toggle_minimap: ShortcutBinding::new(ps, ShortcutKey::Letter('M')),
             align_workspaces_horizontally: ShortcutBinding::new(ps, ShortcutKey::Letter('A')),
             toggle_settings: ShortcutBinding::new(ps, ShortcutKey::Comma),
@@ -471,12 +471,27 @@ mod tests {
         let shortcuts = AppShortcuts::default();
         let ps = ShortcutModifiers::PRIMARY_SHIFT;
 
-        assert_eq!(shortcuts.command_palette, ShortcutBinding::new(ps, ShortcutKey::Letter('K')));
-        assert_eq!(shortcuts.toggle_hud, ShortcutBinding::new(ps, ShortcutKey::Letter('H')));
-        assert_eq!(shortcuts.open_remote_hosts, ShortcutBinding::new(ps, ShortcutKey::Letter('R')));
-        assert_eq!(shortcuts.toggle_minimap, ShortcutBinding::new(ps, ShortcutKey::Letter('M')));
-        assert_eq!(shortcuts.fullscreen_window, ShortcutBinding::new(ps, ShortcutKey::Function(11)));
-        assert_eq!(shortcuts.save_editor, ShortcutBinding::new(ps, ShortcutKey::Letter('S')));
+        assert_eq!(
+            shortcuts.command_palette,
+            ShortcutBinding::new(ps, ShortcutKey::Letter('K'))
+        );
+        assert_eq!(shortcuts.toggle_hud, ShortcutBinding::new(ps, ShortcutKey::Letter('U')));
+        assert_eq!(
+            shortcuts.open_remote_hosts,
+            ShortcutBinding::new(ps, ShortcutKey::Letter('H'))
+        );
+        assert_eq!(
+            shortcuts.toggle_minimap,
+            ShortcutBinding::new(ps, ShortcutKey::Letter('M'))
+        );
+        assert_eq!(
+            shortcuts.fullscreen_window,
+            ShortcutBinding::new(ps, ShortcutKey::Function(11))
+        );
+        assert_eq!(
+            shortcuts.save_editor,
+            ShortcutBinding::new(ps, ShortcutKey::Letter('S'))
+        );
     }
 
     #[test]

@@ -49,7 +49,9 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
 fn migrate_v1_to_v2(config: &mut Config) {
     rewrite(&mut config.shortcuts.command_palette, "Ctrl+K", "Ctrl+Shift+K");
     rewrite(&mut config.shortcuts.new_terminal, "Ctrl+N", "Ctrl+Shift+N");
+    rewrite(&mut config.shortcuts.open_remote_hosts, "Ctrl+Shift+R", "Ctrl+Shift+H");
     rewrite(&mut config.shortcuts.toggle_sidebar, "Ctrl+B", "Ctrl+Shift+B");
+    rewrite(&mut config.shortcuts.toggle_hud, "Ctrl+Shift+H", "Ctrl+Shift+U");
     rewrite(&mut config.shortcuts.toggle_settings, "Ctrl+,", "Ctrl+Shift+Comma");
     rewrite(&mut config.shortcuts.reset_view, "Ctrl+0", "Ctrl+Shift+0");
     rewrite(&mut config.shortcuts.zoom_in, "Ctrl+Plus", "Ctrl+Shift+Plus");
@@ -88,7 +90,9 @@ mod tests {
 shortcuts:
   command_palette: Ctrl+K
   new_terminal: Ctrl+N
+  open_remote_hosts: Ctrl+Shift+R
   toggle_sidebar: Ctrl+B
+  toggle_hud: Ctrl+Shift+H
   toggle_settings: \"Ctrl+,\"
   reset_view: Ctrl+0
   zoom_in: Ctrl+Plus
@@ -117,7 +121,9 @@ shortcuts:
 
         assert_eq!(config.shortcuts.command_palette, "Ctrl+Shift+K");
         assert_eq!(config.shortcuts.new_terminal, "Ctrl+Shift+N");
+        assert_eq!(config.shortcuts.open_remote_hosts, "Ctrl+Shift+H");
         assert_eq!(config.shortcuts.toggle_sidebar, "Ctrl+Shift+B");
+        assert_eq!(config.shortcuts.toggle_hud, "Ctrl+Shift+U");
         assert_eq!(config.shortcuts.toggle_settings, "Ctrl+Shift+Comma");
         assert_eq!(config.shortcuts.reset_view, "Ctrl+Shift+0");
         assert_eq!(config.shortcuts.zoom_in, "Ctrl+Shift+Plus");

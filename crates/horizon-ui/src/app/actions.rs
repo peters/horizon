@@ -379,7 +379,7 @@ impl HorizonApp {
                     self.create_panel();
                 }
             }
-            CommandId::OpenRemoteHosts => self.open_remote_hosts_panel(),
+            CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
@@ -470,7 +470,10 @@ impl HorizonApp {
             (self.shortcuts.reset_view, CommandId::ResetView),
             (self.shortcuts.zoom_in, CommandId::ZoomIn),
             (self.shortcuts.zoom_out, CommandId::ZoomOut),
-            (self.shortcuts.align_workspaces_horizontally, CommandId::AlignWorkspacesHorizontally),
+            (
+                self.shortcuts.align_workspaces_horizontally,
+                CommandId::AlignWorkspacesHorizontally,
+            ),
             (self.shortcuts.toggle_settings, CommandId::ToggleSettings),
             (self.shortcuts.toggle_sidebar, CommandId::ToggleSidebar),
             (self.shortcuts.toggle_hud, CommandId::ToggleHud),
@@ -1124,5 +1127,4 @@ mod tests {
 
         assert_eq!(target, Some(panel_b));
     }
-
 }

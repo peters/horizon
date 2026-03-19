@@ -209,9 +209,9 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+Shift+K".to_string(),
             new_terminal: "Ctrl+Shift+N".to_string(),
-            open_remote_hosts: "Ctrl+Shift+R".to_string(),
+            open_remote_hosts: "Ctrl+Shift+H".to_string(),
             toggle_sidebar: "Ctrl+Shift+B".to_string(),
-            toggle_hud: "Ctrl+Shift+H".to_string(),
+            toggle_hud: "Ctrl+Shift+U".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+Shift+Comma".to_string(),
@@ -649,9 +649,8 @@ mod tests {
 
     #[test]
     fn duplicate_shortcuts_are_rejected() {
-        let error =
-            Config::from_yaml("shortcuts:\n  command_palette: Ctrl+Shift+K\n  new_terminal: Ctrl+Shift+K\n")
-                .expect_err("config should reject duplicate shortcuts");
+        let error = Config::from_yaml("shortcuts:\n  command_palette: Ctrl+Shift+K\n  new_terminal: Ctrl+Shift+K\n")
+            .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
     }
@@ -673,9 +672,8 @@ mod tests {
 
     #[test]
     fn overlapping_shortcuts_are_rejected() {
-        let error =
-            Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+K\n  command_palette: Ctrl+Shift+K\n")
-                .expect_err("config should reject overlapping shortcuts");
+        let error = Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+K\n  command_palette: Ctrl+Shift+K\n")
+            .expect_err("config should reject overlapping shortcuts");
 
         assert!(error.to_string().contains("conflicts with"));
         assert!(error.to_string().contains("toggle_sidebar"));
