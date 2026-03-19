@@ -4,9 +4,25 @@ use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
     #[profiling::function]
-    pub(super) fn reset_view(&mut self) {
-        self.canvas_view = horizon_core::CanvasViewState::default();
+    pub(super) fn reset_view(&mut self, ctx: &Context) {
+        self.canvas_view.set_zoom(horizon_core::DEFAULT_CANVAS_ZOOM);
         self.pan_target = None;
+
+        if let Some(workspace_id) = self
+            .board
+            .active_workspace
+            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
+            .or_else(|| self.leftmost_workspace_id())
+            && let Some((pos, size)) = self.workspace_focus_frame(workspace_id)
+        {
+            self.board.focus_workspace(workspace_id);
+            let canvas_rect = self.canvas_rect(ctx);
+            let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, true);
+            self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        } else {
+            self.canvas_view = horizon_core::CanvasViewState::default();
+        }
+
         self.mark_runtime_dirty();
     }
 
@@ -34,16 +50,13 @@ impl HorizonApp {
         left_align: bool,
     ) {
         let canvas_rect = self.canvas_rect(ctx);
-        let zoom = self.canvas_view.zoom;
-        let pan_margin = 40.0;
-        let x = if left_align {
-            pan_margin - canvas_pos.x * zoom
-        } else {
-            canvas_rect.width() * 0.5 - (canvas_pos.x + canvas_size.x * 0.5) * zoom
-        };
-        let y = canvas_rect.height() * 0.5 - (canvas_pos.y + canvas_size.y * 0.5) * zoom;
-
-        self.pan_target = Some(Vec2::new(x, y));
+        self.pan_target = Some(aligned_pan_offset(
+            canvas_rect,
+            canvas_pos,
+            canvas_size,
+            self.canvas_view.zoom,
+            left_align,
+        ));
     }
 
     pub(super) fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
@@ -96,6 +109,37 @@ impl HorizonApp {
         );
         self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
     }
+
+    fn workspace_focus_frame(&self, workspace_id: horizon_core::WorkspaceId) -> Option<(Pos2, Vec2)> {
+        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+            return Some((
+                Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT),
+                Vec2::new(
+                    max[0] - min[0] + 2.0 * WS_BG_PAD,
+                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
+                ),
+            ));
+        }
+
+        self.board.workspace(workspace_id).map(|workspace| {
+            (
+                Pos2::new(workspace.position[0], workspace.position[1]),
+                Vec2::new(super::WS_EMPTY_SIZE[0], super::WS_EMPTY_SIZE[1]),
+            )
+        })
+    }
+}
+
+fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
+    let pan_margin = 40.0;
+    let x = if left_align {
+        pan_margin - canvas_pos.x * zoom
+    } else {
+        canvas_rect.width() * 0.5 - (canvas_pos.x + canvas_size.x * 0.5) * zoom
+    };
+    let y = canvas_rect.height() * 0.5 - (canvas_pos.y + canvas_size.y * 0.5) * zoom;
+
+    Vec2::new(x, y)
 }
 
 #[must_use]
@@ -115,7 +159,7 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::CanvasViewState;
 
-    use super::canvas_scene_transform;
+    use super::{aligned_pan_offset, canvas_scene_transform};
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -142,5 +186,14 @@ mod tests {
 
         assert!((round_trip.x - point.x).abs() <= f32::EPSILON);
         assert!((round_trip.y - point.y).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn aligned_pan_offset_left_aligns_canvas_point() {
+        let rect = Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1200.0, 800.0));
+        let offset = aligned_pan_offset(rect, Pos2::new(320.0, 180.0), Vec2::new(420.0, 260.0), 1.0, true);
+
+        assert!((offset.x + 280.0).abs() <= f32::EPSILON);
+        assert!((offset.y - 90.0).abs() <= f32::EPSILON);
     }
 }

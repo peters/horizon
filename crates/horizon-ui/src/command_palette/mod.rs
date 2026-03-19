@@ -434,6 +434,8 @@ fn shorten_path(path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use horizon_core::AppShortcuts;
+
     use super::*;
 
     #[test]
@@ -494,7 +496,7 @@ mod tests {
             workspace_name: "dev".into(),
             cwd: Some("/home".into()),
         }];
-        let actions = crate::command_registry::action_commands("Ctrl");
+        let actions = crate::command_registry::action_commands(&AppShortcuts::default(), "Ctrl");
 
         let results = build_results(PaletteMode::ActionsOnly, "", &workspaces, &panels, &actions);
         assert!(results.iter().all(|r| r.category == Category::Action));

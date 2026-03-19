@@ -1,4 +1,4 @@
-use egui::{Button, Context, Modifiers, Pos2, Rect, Stroke, Vec2};
+use egui::{Button, Context, Pos2, Rect, Stroke, Vec2};
 
 use crate::theme;
 
@@ -35,10 +35,6 @@ pub(super) fn viewport_local_rect(ctx: &Context) -> Rect {
 
 pub(super) fn empty_string_as_none(value: &str) -> Option<&str> {
     if value.is_empty() { None } else { Some(value) }
-}
-
-pub(super) fn primary_shortcut_modifier(modifiers: Modifiers) -> bool {
-    modifiers.ctrl || modifiers.command
 }
 
 pub(super) fn primary_shortcut_label() -> &'static str {
@@ -236,8 +232,8 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_panel_size, format_grid_position, primary_shortcut_label, primary_shortcut_modifier};
-    use egui::{Modifiers, Pos2, Vec2};
+    use super::{clamp_panel_size, format_grid_position, primary_shortcut_label};
+    use egui::{Pos2, Vec2};
 
     fn default_panel_canvas_pos(index: usize) -> Pos2 {
         const PANEL_COLUMN_SPACING: f32 = 540.0;
@@ -267,26 +263,6 @@ mod tests {
     fn grid_positions_are_rounded_for_display() {
         assert_eq!(format_grid_position(Pos2::new(12.4, -7.6)), "12, -8");
         assert_eq!(format_grid_position(Pos2::new(-3.5, 2.5)), "-4, 3");
-    }
-
-    #[test]
-    fn primary_shortcut_modifier_accepts_ctrl() {
-        let modifiers = Modifiers {
-            ctrl: true,
-            ..Modifiers::default()
-        };
-
-        assert!(primary_shortcut_modifier(modifiers));
-    }
-
-    #[test]
-    fn primary_shortcut_modifier_accepts_command() {
-        let modifiers = Modifiers {
-            command: true,
-            ..Modifiers::default()
-        };
-
-        assert!(primary_shortcut_modifier(modifiers));
     }
 
     #[test]

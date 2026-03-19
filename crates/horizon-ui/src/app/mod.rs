@@ -8,6 +8,7 @@ mod panels;
 mod persistence;
 mod session;
 mod settings;
+pub(crate) mod shortcuts;
 mod sidebar;
 mod startup_session;
 pub(crate) mod util;
@@ -22,9 +23,9 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, CanvasViewState, Config, GitWatcher, PanelId, PresetConfig,
-    ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision,
-    WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
+    PresetConfig, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser,
+    StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -119,6 +120,7 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
+    shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
     detached_workspaces: BTreeMap<String, WindowConfig>,
@@ -153,6 +155,9 @@ impl HorizonApp {
         session_store: SessionStore,
         startup: StartupDecision,
     ) -> Self {
+        let shortcuts = resolve_shortcuts(config);
+        let action_commands_cache =
+            crate::command_registry::action_commands(&shortcuts, crate::app::util::primary_shortcut_label());
         let mut fonts = egui::FontDefinitions::default();
 
         fonts.font_data.insert(
@@ -207,6 +212,7 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
+            shortcuts,
             presets: config.presets.clone(),
             window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
@@ -222,7 +228,7 @@ impl HorizonApp {
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
-            action_commands_cache: crate::command_registry::action_commands(crate::app::util::primary_shortcut_label()),
+            action_commands_cache,
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_pos: None,
@@ -243,6 +249,16 @@ impl HorizonApp {
         }
 
         app
+    }
+}
+
+fn resolve_shortcuts(config: &Config) -> AppShortcuts {
+    match config.shortcuts.resolve() {
+        Ok(shortcuts) => shortcuts,
+        Err(error) => {
+            tracing::error!("invalid shortcut config loaded at runtime: {error}");
+            AppShortcuts::default()
+        }
     }
 }
 

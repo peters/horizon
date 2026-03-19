@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use comrak::nodes::NodeValue;
 use comrak::{Arena, Options, parse_document};
-use egui::{Align, Color32, CornerRadius, FontId, Key, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
-use horizon_core::{MarkdownEditor, Panel, PreviewMode};
+use egui::{Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
+use horizon_core::{MarkdownEditor, Panel, PreviewMode, ShortcutBinding};
 
+use crate::app::shortcuts::shortcut_pressed;
 use crate::theme;
 
 const FONT_SIZE: f32 = 14.0;
@@ -53,7 +54,7 @@ impl<'a> MarkdownEditorView<'a> {
     }
 
     /// Renders the editor panel. Returns `true` if clicked (for focus tracking).
-    pub fn show(&mut self, ui: &mut egui::Ui, _is_active_panel: bool) -> bool {
+    pub fn show(&mut self, ui: &mut egui::Ui, _is_active_panel: bool, save_shortcut: ShortcutBinding) -> bool {
         let Some(editor) = self.panel.content.editor_mut() else {
             return false;
         };
@@ -65,8 +66,7 @@ impl<'a> MarkdownEditorView<'a> {
         // Body area
         let body_rect = Rect::from_min_max(Pos2::new(ui.cursor().min.x, mode_rect.max.y + 2.0), ui.max_rect().max);
 
-        // Handle Ctrl+S
-        if ui.input(|i| i.modifiers.command && i.key_pressed(Key::S))
+        if ui.input(|input| shortcut_pressed(input, save_shortcut))
             && let Some(ed) = self.panel.content.editor_mut()
         {
             ed.save_if_dirty();

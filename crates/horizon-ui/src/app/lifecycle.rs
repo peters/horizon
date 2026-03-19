@@ -215,8 +215,7 @@ impl HorizonApp {
 
         if let Ok(config) = Config::load(Some(&self.config_path)) {
             tracing::info!("config file changed, reloading presets");
-            self.template_config = config.clone();
-            self.presets.clone_from(&config.presets);
+            self.apply_runtime_config(&config);
             self.board.sync_workspace_metadata(&config);
         }
     }
@@ -258,7 +257,7 @@ impl HorizonApp {
         self.pending_detached_window_position_restore
             .retain(|local_id| self.detached_workspaces.contains_key(local_id));
         if self.board.workspaces.is_empty() {
-            self.reset_view();
+            self.reset_view(ctx);
         } else if count_after < count_before && count_after == 1 {
             let workspace_id = self.board.workspaces[0].id;
             self.board.focus_workspace(workspace_id);

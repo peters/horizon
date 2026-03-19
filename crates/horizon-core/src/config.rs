@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
+use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -157,26 +158,89 @@ fn default_presets() -> Vec<PresetConfig> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShortcutsConfig {
+    #[serde(alias = "quick_nav")]
+    pub command_palette: String,
     pub new_terminal: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
+    pub toggle_minimap: String,
+    pub align_workspaces_horizontally: String,
     pub toggle_settings: String,
     pub reset_view: String,
+    pub zoom_in: String,
+    pub zoom_out: String,
     pub fullscreen_panel: String,
+    pub exit_fullscreen_panel: String,
     pub fullscreen_window: String,
+    pub save_editor: String,
 }
 
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
+            command_palette: "Ctrl+K".to_string(),
             new_terminal: "Ctrl+N".to_string(),
             toggle_sidebar: "Ctrl+B".to_string(),
-            toggle_hud: "Ctrl+H".to_string(),
+            toggle_hud: "Ctrl+Shift+H".to_string(),
+            toggle_minimap: "Ctrl+Shift+M".to_string(),
+            align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+,".to_string(),
             reset_view: "Ctrl+0".to_string(),
+            zoom_in: "Ctrl+Plus".to_string(),
+            zoom_out: "Ctrl+Minus".to_string(),
             fullscreen_panel: "F11".to_string(),
+            exit_fullscreen_panel: "Escape".to_string(),
             fullscreen_window: "Ctrl+F11".to_string(),
+            save_editor: "Ctrl+S".to_string(),
         }
+    }
+}
+
+impl ShortcutsConfig {
+    /// Parse and validate the configured app shortcuts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any shortcut string is invalid or duplicated.
+    pub fn resolve(&self) -> Result<AppShortcuts> {
+        let shortcuts = AppShortcuts {
+            command_palette: parse_shortcut("command_palette", &self.command_palette)?,
+            new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
+            toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
+            toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
+            toggle_minimap: parse_shortcut("toggle_minimap", &self.toggle_minimap)?,
+            align_workspaces_horizontally: parse_shortcut(
+                "align_workspaces_horizontally",
+                &self.align_workspaces_horizontally,
+            )?,
+            toggle_settings: parse_shortcut("toggle_settings", &self.toggle_settings)?,
+            reset_view: parse_shortcut("reset_view", &self.reset_view)?,
+            zoom_in: parse_shortcut("zoom_in", &self.zoom_in)?,
+            zoom_out: parse_shortcut("zoom_out", &self.zoom_out)?,
+            fullscreen_panel: parse_shortcut("fullscreen_panel", &self.fullscreen_panel)?,
+            exit_fullscreen_panel: parse_shortcut("exit_fullscreen_panel", &self.exit_fullscreen_panel)?,
+            fullscreen_window: parse_shortcut("fullscreen_window", &self.fullscreen_window)?,
+            save_editor: parse_shortcut("save_editor", &self.save_editor)?,
+        };
+
+        validate_distinct_shortcuts([
+            ("command_palette", shortcuts.command_palette),
+            ("new_terminal", shortcuts.new_terminal),
+            ("toggle_sidebar", shortcuts.toggle_sidebar),
+            ("toggle_hud", shortcuts.toggle_hud),
+            ("toggle_minimap", shortcuts.toggle_minimap),
+            ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
+            ("toggle_settings", shortcuts.toggle_settings),
+            ("reset_view", shortcuts.reset_view),
+            ("zoom_in", shortcuts.zoom_in),
+            ("zoom_out", shortcuts.zoom_out),
+            ("fullscreen_panel", shortcuts.fullscreen_panel),
+            ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
+            ("fullscreen_window", shortcuts.fullscreen_window),
+            ("save_editor", shortcuts.save_editor),
+        ])?;
+
+        Ok(shortcuts)
     }
 }
 
@@ -283,14 +347,14 @@ impl Config {
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let config = if let Some(p) = path {
             let contents = std::fs::read_to_string(p)?;
-            serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?
+            Self::from_yaml(&contents)?
         } else {
             let mut found = None;
             for candidate in config_candidates() {
                 if candidate.exists() {
                     let contents = std::fs::read_to_string(&candidate)?;
                     tracing::info!("loaded config from {}", candidate.display());
-                    found = Some(serde_yaml::from_str(&contents).map_err(|e| Error::Config(e.to_string()))?);
+                    found = Some(Self::from_yaml(&contents)?);
                     break;
                 }
             }
@@ -300,6 +364,17 @@ impl Config {
             })
         };
 
+        Ok(config)
+    }
+
+    /// Parse and validate config YAML.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deserialization or semantic validation fails.
+    pub fn from_yaml(contents: &str) -> Result<Self> {
+        let config: Self = serde_yaml::from_str(contents).map_err(|e| Error::Config(e.to_string()))?;
+        config.validate()?;
         Ok(config)
     }
 
@@ -324,7 +399,10 @@ impl Config {
             return Some(path.to_path_buf());
         }
 
-        Self::default_path()
+        config_candidates()
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .or_else(Self::default_path)
     }
 
     #[must_use]
@@ -335,6 +413,16 @@ impl Config {
             return PathBuf::from(home).join(rest);
         }
         PathBuf::from(s)
+    }
+
+    /// Validate semantic config rules that deserialization alone cannot catch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured shortcut is invalid or duplicated.
+    pub fn validate(&self) -> Result<()> {
+        self.shortcuts.resolve()?;
+        Ok(())
     }
 }
 
@@ -349,7 +437,7 @@ fn config_candidates_with_env(xdg_config_home: Option<PathBuf>, home: Option<Pat
     let mut paths = Vec::new();
 
     if let Some(home) = home {
-        paths.push(home.join(".horizon").join("config.yaml"));
+        push_config_dir_candidates(&mut paths, &home.join(".horizon"));
     }
 
     if let Some(xdg) = xdg_config_home {
@@ -367,6 +455,34 @@ fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
     paths.push(base.join("config.yml"));
 }
 
+fn parse_shortcut(name: &str, value: &str) -> Result<ShortcutBinding> {
+    ShortcutBinding::parse(value).map_err(|error| {
+        Error::Config(format!(
+            "invalid shortcuts.{name}: {}",
+            error.to_string().trim_start_matches("Config error: ")
+        ))
+    })
+}
+
+fn validate_distinct_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding); N]) -> Result<()> {
+    for index in 0..N {
+        let (name, binding) = bindings[index];
+        for (previous, previous_binding) in bindings[..index].iter().copied() {
+            if binding == previous_binding {
+                return Err(Error::Config(format!(
+                    "duplicate shortcut `{binding}` for shortcuts.{previous} and shortcuts.{name}"
+                )));
+            }
+            if binding.overlaps(previous_binding) {
+                return Err(Error::Config(format!(
+                    "shortcut `{binding}` for shortcuts.{name} conflicts with shortcuts.{previous} (`{previous_binding}`)"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -382,6 +498,7 @@ mod tests {
             candidates.first(),
             Some(&PathBuf::from("/tmp/horizon-home/.horizon/config.yaml"))
         );
+        assert!(candidates.iter().any(|path| path.ends_with(".horizon/config.yml")));
         assert!(
             candidates
                 .iter()
@@ -409,5 +526,38 @@ mod tests {
             serde_yaml::from_str("features:\n  attention_feed: false\n").expect("config should deserialize");
 
         assert!(!config.features.attention_feed);
+    }
+
+    #[test]
+    fn duplicate_shortcuts_are_rejected() {
+        let error = Config::from_yaml("shortcuts:\n  command_palette: Ctrl+K\n  new_terminal: Ctrl+K\n")
+            .expect_err("config should reject duplicate shortcuts");
+
+        assert!(error.to_string().contains("duplicate shortcut"));
+    }
+
+    #[test]
+    fn legacy_quick_nav_alias_is_accepted() {
+        let config = Config::from_yaml("shortcuts:\n  quick_nav: Alt+K\n").expect("config should deserialize");
+
+        assert_eq!(config.shortcuts.command_palette, "Alt+K");
+        assert_eq!(
+            config
+                .shortcuts
+                .resolve()
+                .expect("shortcuts should resolve")
+                .command_palette,
+            crate::shortcuts::ShortcutBinding::parse("Alt+K").expect("shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn overlapping_shortcuts_are_rejected() {
+        let error =
+            Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+B\n  align_workspaces_horizontally: Ctrl+Shift+B\n")
+                .expect_err("config should reject overlapping shortcuts");
+
+        assert!(error.to_string().contains("conflicts with"));
+        assert!(error.to_string().contains("toggle_sidebar"));
     }
 }
