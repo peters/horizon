@@ -17,7 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-horizon-core = { path = "../horizon-core", version = "0.1.0" }
+horizon-core.workspace = true
 eframe.workspace = true
 egui.workspace = true
 # Pulls the backend feature set into eframe's transitive wgpu dependency.

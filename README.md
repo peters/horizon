@@ -229,6 +229,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 ## Contributing
 
 See [**AGENTS.md**](AGENTS.md) for development setup, architecture, coding standards, and CI requirements.
+Release instructions live in [**docs/release-flow.md**](docs/release-flow.md).
 Manual smoke-test plans live under [**docs/testing**](docs/testing), including the
 [**workspace close smoke test**](docs/testing/workspace-close-smoketest-plan.md).
 
