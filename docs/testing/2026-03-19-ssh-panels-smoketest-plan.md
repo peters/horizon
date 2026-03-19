@@ -171,7 +171,7 @@ Capture:
 
 ### 2. Verify command-palette SSH entries
 
-Open the command palette with `Ctrl+K`.
+Open the command palette with `Ctrl+Shift+K`.
 
 Checks:
 

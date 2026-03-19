@@ -22,59 +22,6 @@ use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIG
 
 mod support;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AppShortcut {
-    CommandPalette,
-    ResetView,
-    ZoomIn,
-    ZoomOut,
-    AlignWorkspacesHorizontally,
-    ToggleSettings,
-    ToggleSidebar,
-    ToggleHud,
-    ToggleMinimap,
-    NewPanel,
-    OpenRemoteHosts,
-    FullscreenPanel,
-    ExitFullscreenPanel,
-    FullscreenWindow,
-}
-
-impl AppShortcut {
-    /// Only a small explicit fullscreen allowlist stays global when the
-    /// focused panel is a terminal and Horizon is not inside another text
-    /// entry surface.
-    const fn bypasses_terminal_focus_gate(self) -> bool {
-        matches!(
-            self,
-            Self::FullscreenPanel | Self::ExitFullscreenPanel | Self::FullscreenWindow
-        )
-    }
-}
-
-fn app_shortcut_enabled(terminal_owns_keyboard: bool, shortcut: AppShortcut) -> bool {
-    !terminal_owns_keyboard || shortcut.bypasses_terminal_focus_gate()
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HorizonTextInputState {
-    settings_open: bool,
-    dir_picker_open: bool,
-    command_palette_open: bool,
-    renaming_panel: bool,
-    renaming_workspace: bool,
-}
-
-impl HorizonTextInputState {
-    const fn is_active(self) -> bool {
-        self.settings_open
-            || self.dir_picker_open
-            || self.command_palette_open
-            || self.renaming_panel
-            || self.renaming_workspace
-    }
-}
-
 fn panel_focus_target_at_pointer_press(
     panel_order: &[PanelId],
     panel_rects: &HashMap<PanelId, Rect>,
@@ -185,24 +132,6 @@ impl HorizonApp {
         }
 
         OverlayExclusion::new(zones)
-    }
-
-    pub(super) fn terminal_accepts_keyboard_input(&self, _ctx: &Context) -> bool {
-        let focused_has_terminal = self
-            .board
-            .focused
-            .and_then(|panel_id| self.board.panel(panel_id))
-            .is_some_and(|panel| panel.content.terminal().is_some());
-        let horizon_text_input_active = HorizonTextInputState {
-            settings_open: self.settings.is_some(),
-            dir_picker_open: self.dir_picker.is_some(),
-            command_palette_open: self.command_palette.is_some(),
-            renaming_panel: self.renaming_panel.is_some(),
-            renaming_workspace: self.renaming_workspace.is_some(),
-        }
-        .is_active();
-
-        focused_has_terminal && !horizon_text_input_active && self.remote_hosts_overlay.is_none()
     }
 
     pub(super) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {
@@ -508,15 +437,11 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
-        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
         let (f11, ctrl_f11, escape) = ctx.input(|input| {
             (
-                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenPanel)
-                    && shortcut_pressed(input, self.shortcuts.fullscreen_panel),
-                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenWindow)
-                    && shortcut_pressed(input, self.shortcuts.fullscreen_window),
-                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ExitFullscreenPanel)
-                    && shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
+                shortcut_pressed(input, self.shortcuts.fullscreen_panel),
+                shortcut_pressed(input, self.shortcuts.fullscreen_window),
+                shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
             )
         });
 
@@ -541,68 +466,40 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
+        let shortcut_bindings: &[(_, CommandId)] = &[
+            (self.shortcuts.reset_view, CommandId::ResetView),
+            (self.shortcuts.zoom_in, CommandId::ZoomIn),
+            (self.shortcuts.zoom_out, CommandId::ZoomOut),
+            (
+                self.shortcuts.align_workspaces_horizontally,
+                CommandId::AlignWorkspacesHorizontally,
+            ),
+            (self.shortcuts.toggle_settings, CommandId::ToggleSettings),
+            (self.shortcuts.toggle_sidebar, CommandId::ToggleSidebar),
+            (self.shortcuts.toggle_hud, CommandId::ToggleHud),
+            (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
+            (self.shortcuts.open_remote_hosts, CommandId::OpenRemoteHosts),
+            (self.shortcuts.new_terminal, CommandId::NewPanel),
+        ];
 
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::CommandPalette)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette))
-        {
+        let (toggle_palette, triggered_command) = ctx.input(|input| {
+            let palette = shortcut_pressed(input, self.shortcuts.command_palette);
+            let command = shortcut_bindings
+                .iter()
+                .find(|(binding, _)| shortcut_pressed(input, *binding))
+                .map(|(_, id)| id.clone());
+            (palette, command)
+        });
+
+        if toggle_palette {
             self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
                 Some(CommandPalette::new())
             };
         }
-
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ResetView)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view))
-        {
-            self.execute_command(ctx, &CommandId::ResetView);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomIn)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in))
-        {
-            self.execute_command(ctx, &CommandId::ZoomIn);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomOut)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out))
-        {
-            self.execute_command(ctx, &CommandId::ZoomOut);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::AlignWorkspacesHorizontally)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally))
-        {
-            self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
-        }
-
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSettings)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings))
-        {
-            self.execute_command(ctx, &CommandId::ToggleSettings);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSidebar)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar))
-        {
-            self.execute_command(ctx, &CommandId::ToggleSidebar);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleHud)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud))
-        {
-            self.execute_command(ctx, &CommandId::ToggleHud);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleMinimap)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap))
-        {
-            self.execute_command(ctx, &CommandId::ToggleMinimap);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::OpenRemoteHosts)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.open_remote_hosts))
-        {
-            self.execute_command(ctx, &CommandId::OpenRemoteHosts);
-        }
-        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::NewPanel)
-            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal))
-        {
-            self.execute_command(ctx, &CommandId::NewPanel);
+        if let Some(command_id) = triggered_command {
+            self.execute_command(ctx, &command_id);
         }
     }
 
@@ -960,11 +857,10 @@ mod tests {
     use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        AppShortcut, HorizonTextInputState, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces,
-        app_shortcut_enabled, canvas_rect_for_layout, command_palette_panel_entries, command_palette_preset_entries,
-        command_palette_workspace_entries, detached_workspace_ids, estimated_settings_bar_rect,
-        estimated_settings_panel_rect, inherit_workspace_cwd, panel_focus_target_at_pointer_press,
-        update_workspace_cwd, workspace_cwd,
+        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
+        command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
+        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd,
+        panel_focus_target_at_pointer_press, update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1187,49 +1083,6 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_shortcuts_are_explicit_terminal_focus_exceptions() {
-        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenPanel));
-        assert!(app_shortcut_enabled(true, AppShortcut::ExitFullscreenPanel));
-        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenWindow));
-    }
-
-    #[test]
-    fn horizon_text_input_active_only_tracks_explicit_horizon_surfaces() {
-        let inactive = HorizonTextInputState {
-            settings_open: false,
-            dir_picker_open: false,
-            command_palette_open: false,
-            renaming_panel: false,
-            renaming_workspace: false,
-        };
-        let active_states = [
-            HorizonTextInputState {
-                settings_open: true,
-                ..inactive
-            },
-            HorizonTextInputState {
-                dir_picker_open: true,
-                ..inactive
-            },
-            HorizonTextInputState {
-                command_palette_open: true,
-                ..inactive
-            },
-            HorizonTextInputState {
-                renaming_panel: true,
-                ..inactive
-            },
-            HorizonTextInputState {
-                renaming_workspace: true,
-                ..inactive
-            },
-        ];
-
-        assert!(!inactive.is_active());
-        assert!(active_states.iter().all(|state| state.is_active()));
-    }
-
-    #[test]
     fn panel_focus_target_prefers_existing_focused_panel_when_rects_overlap() {
         let panel_a = PanelId(1);
         let panel_b = PanelId(2);
@@ -1273,49 +1126,5 @@ mod tests {
             panel_focus_target_at_pointer_press(&[panel_a, panel_b], &panel_rects, None, Pos2::new(40.0, 40.0));
 
         assert_eq!(target, Some(panel_b));
-    }
-
-    #[test]
-    fn non_fullscreen_shortcuts_are_blocked_while_terminal_owns_keyboard() {
-        for shortcut in [
-            AppShortcut::CommandPalette,
-            AppShortcut::ResetView,
-            AppShortcut::ZoomIn,
-            AppShortcut::ZoomOut,
-            AppShortcut::AlignWorkspacesHorizontally,
-            AppShortcut::ToggleSettings,
-            AppShortcut::ToggleSidebar,
-            AppShortcut::ToggleHud,
-            AppShortcut::ToggleMinimap,
-            AppShortcut::NewPanel,
-            AppShortcut::OpenRemoteHosts,
-        ] {
-            assert!(
-                !app_shortcut_enabled(true, shortcut),
-                "{shortcut:?} unexpectedly bypassed the terminal focus gate"
-            );
-        }
-    }
-
-    #[test]
-    fn app_shortcuts_remain_available_when_terminal_does_not_own_keyboard() {
-        for shortcut in [
-            AppShortcut::CommandPalette,
-            AppShortcut::ResetView,
-            AppShortcut::ZoomIn,
-            AppShortcut::ZoomOut,
-            AppShortcut::AlignWorkspacesHorizontally,
-            AppShortcut::ToggleSettings,
-            AppShortcut::ToggleSidebar,
-            AppShortcut::ToggleHud,
-            AppShortcut::ToggleMinimap,
-            AppShortcut::NewPanel,
-            AppShortcut::OpenRemoteHosts,
-            AppShortcut::FullscreenPanel,
-            AppShortcut::ExitFullscreenPanel,
-            AppShortcut::FullscreenWindow,
-        ] {
-            assert!(app_shortcut_enabled(false, shortcut));
-        }
     }
 }

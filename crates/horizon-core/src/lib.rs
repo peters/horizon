@@ -3,6 +3,7 @@
 mod attention;
 mod board;
 mod config;
+mod config_migration;
 pub mod dir_search;
 mod editor;
 mod error;
