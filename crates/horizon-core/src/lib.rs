@@ -14,6 +14,7 @@ mod layout;
 mod panel;
 mod runtime_state;
 mod session_store;
+mod shortcuts;
 mod terminal;
 mod transcript;
 mod usage_dashboard;
@@ -44,6 +45,7 @@ pub use session_store::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary, StartupChooser,
     StartupDecision, StartupPromptReason,
 };
+pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;

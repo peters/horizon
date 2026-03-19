@@ -124,19 +124,34 @@ cargo run --release
 
 ## Quick Tour
 
+### Keyboard Shortcuts
+
+All app shortcuts are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
+
 | Shortcut | What it does |
 |:---------|:-------------|
-| **Ctrl+N** | New terminal panel |
 | **Ctrl+K** | Quick-navigate to any workspace |
-| **Ctrl+,** | Open settings editor |
-| **Ctrl+Plus / Ctrl+Minus** | Zoom canvas in or out |
-| **Ctrl+Scroll** | Zoom around the cursor |
+| **Ctrl+N** | New terminal panel |
 | **Ctrl+B** | Toggle sidebar |
+| **Ctrl+H** | Toggle HUD |
 | **Ctrl+M** | Toggle minimap |
+| **Ctrl+,** | Open settings editor |
 | **Ctrl+0** | Reset canvas view |
+| **Ctrl+Plus** | Zoom canvas in |
+| **Ctrl+Minus** | Zoom canvas out |
 | **F11** | Fullscreen the active panel |
+| **Escape** | Exit active panel fullscreen |
+| **Ctrl+F11** | Toggle window fullscreen |
+| **Ctrl+S** | Save the active Markdown editor |
+
+### Modifier-Assisted Mouse Actions
+
+| Interaction | What it does |
+|:------------|:-------------|
+| **Ctrl+Scroll** | Zoom around the cursor |
 | **Ctrl+Click** | Open URL or file path under cursor |
 | **Ctrl+double-click** canvas | Create a new workspace |
+| **Ctrl+double-click** inside a workspace | Add a new terminal |
 
 <sub>On macOS, substitute Cmd for Ctrl.</sub>
 
@@ -144,9 +159,24 @@ cargo run --release
 
 ## Configuration
 
-Horizon reads `~/.horizon/config.yaml`. Define workspaces, panel presets, and feature flags:
+The settings editor writes back to the same config file Horizon loaded. By default that is `~/.horizon/config.yaml`, and `config.yml` is also supported when discovered or passed explicitly. You can define workspaces, panel presets, feature flags, and keyboard shortcuts:
 
 ```yaml
+shortcuts:
+  quick_nav: Ctrl+K
+  new_terminal: Ctrl+N
+  toggle_sidebar: Ctrl+B
+  toggle_hud: Ctrl+H
+  toggle_minimap: Ctrl+M
+  toggle_settings: Ctrl+,
+  reset_view: Ctrl+0
+  zoom_in: Ctrl+Plus
+  zoom_out: Ctrl+Minus
+  fullscreen_panel: F11
+  exit_fullscreen_panel: Escape
+  fullscreen_window: Ctrl+F11
+  save_editor: Ctrl+S
+
 workspaces:
   - name: Backend
     cwd: ~/projects/api
@@ -176,6 +206,8 @@ presets:
 features:
   attention_feed: false
 ```
+
+Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
 
 ---
 

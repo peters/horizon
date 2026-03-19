@@ -8,6 +8,7 @@ mod panels;
 mod persistence;
 mod session;
 mod settings;
+pub(crate) mod shortcuts;
 mod sidebar;
 mod startup_session;
 mod util;
@@ -22,9 +23,9 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, CanvasViewState, Config, GitWatcher, PanelId, PresetConfig,
-    ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser, StartupDecision,
-    WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
+    PresetConfig, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser,
+    StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -118,6 +119,7 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
+    shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
     detached_workspaces: BTreeMap<String, WindowConfig>,
@@ -205,6 +207,7 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
+            shortcuts: resolve_shortcuts(config),
             presets: config.presets.clone(),
             window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
@@ -240,6 +243,16 @@ impl HorizonApp {
         }
 
         app
+    }
+}
+
+fn resolve_shortcuts(config: &Config) -> AppShortcuts {
+    match config.shortcuts.resolve() {
+        Ok(shortcuts) => shortcuts,
+        Err(error) => {
+            tracing::error!("invalid shortcut config loaded at runtime: {error}");
+            AppShortcuts::default()
+        }
     }
 }
 

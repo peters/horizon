@@ -215,8 +215,7 @@ impl HorizonApp {
 
         if let Ok(config) = Config::load(Some(&self.config_path)) {
             tracing::info!("config file changed, reloading presets");
-            self.template_config = config.clone();
-            self.presets.clone_from(&config.presets);
+            self.apply_runtime_config(&config);
             self.board.sync_workspace_metadata(&config);
         }
     }

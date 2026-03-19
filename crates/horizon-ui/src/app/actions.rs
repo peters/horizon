@@ -10,7 +10,8 @@ use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
-use super::util::{OverlayExclusion, editor_panel_size_for_file, primary_shortcut_modifier, viewport_local_rect};
+use super::shortcuts::shortcut_pressed;
+use super::util::{OverlayExclusion, editor_panel_size_for_file, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
@@ -324,9 +325,11 @@ impl HorizonApp {
 
     pub(super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         let (f11, ctrl_f11, escape) = ctx.input(|input| {
-            let f11 = input.key_pressed(egui::Key::F11);
-            let ctrl = input.modifiers.ctrl || input.modifiers.command;
-            (f11 && !ctrl, f11 && ctrl, input.key_pressed(egui::Key::Escape))
+            (
+                shortcut_pressed(input, self.shortcuts.fullscreen_panel),
+                shortcut_pressed(input, self.shortcuts.fullscreen_window),
+                shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
+            )
         });
 
         if ctrl_f11 {
@@ -350,7 +353,7 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| input.key_pressed(egui::Key::K) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.quick_nav)) {
             self.quick_nav = if self.quick_nav.is_some() {
                 None
             } else {
@@ -358,18 +361,15 @@ impl HorizonApp {
             };
         }
 
-        if ctx.input(|input| input.key_pressed(egui::Key::Num0) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
             self.reset_view();
         }
 
         let canvas_rect = self.canvas_rect(ctx);
-        if ctx.input(|input| {
-            primary_shortcut_modifier(input.modifiers)
-                && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals))
-        }) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
             let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::Minus) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
             let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
         }
 
@@ -377,19 +377,19 @@ impl HorizonApp {
             return;
         }
 
-        if ctx.input(|input| input.key_pressed(egui::Key::Comma) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
             self.toggle_settings();
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::B) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
             self.sidebar_visible = !self.sidebar_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::H) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
             self.hud_visible = !self.hud_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::M) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
             self.minimap_visible = !self.minimap_visible;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::N) && primary_shortcut_modifier(input.modifiers)) {
+        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
             let workspace_id = self.board.ensure_workspace();
             if let Some(preset) = self.presets.first().cloned() {
                 self.add_panel_to_workspace(workspace_id, preset, None);
