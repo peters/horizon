@@ -1052,10 +1052,12 @@ mod tests {
         let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
 
         assert_eq!(leftmost, Some(left));
-        assert!(
-            board
-                .workspace(detached)
-                .is_some_and(|workspace| workspace.position == detached_position)
-        );
+        assert!(board.workspace(detached).is_some_and(|workspace| {
+            workspace
+                .position
+                .iter()
+                .zip(detached_position)
+                .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
+        }));
     }
 }
