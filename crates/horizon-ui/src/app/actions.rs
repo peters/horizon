@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
 use egui::{Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
-use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
+use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
