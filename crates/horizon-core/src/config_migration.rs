@@ -33,6 +33,8 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
 
     config.version = CURRENT_CONFIG_VERSION;
 
+    config.validate()?;
+
     if let Err(error) = write_back(config, config_path) {
         tracing::warn!(%error, "could not write migrated config back to disk");
     }
@@ -45,34 +47,20 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
 /// Only rewrites bindings that still match the old v1 defaults so that
 /// user-customised shortcuts are left untouched.
 fn migrate_v1_to_v2(config: &mut Config) {
-    const REWRITES: &[(&str, &str)] = &[
-        ("Ctrl+K", "Ctrl+Shift+K"),
-        ("Ctrl+N", "Ctrl+Shift+N"),
-        ("Ctrl+B", "Ctrl+Shift+B"),
-        ("Ctrl+,", "Ctrl+Shift+Comma"),
-        ("Ctrl+0", "Ctrl+Shift+0"),
-        ("Ctrl+Plus", "Ctrl+Shift+Plus"),
-        ("Ctrl+Minus", "Ctrl+Shift+Minus"),
-        ("Ctrl+F11", "Ctrl+Shift+F11"),
-        ("Ctrl+S", "Ctrl+Shift+S"),
-    ];
+    rewrite(&mut config.shortcuts.command_palette, "Ctrl+K", "Ctrl+Shift+K");
+    rewrite(&mut config.shortcuts.new_terminal, "Ctrl+N", "Ctrl+Shift+N");
+    rewrite(&mut config.shortcuts.toggle_sidebar, "Ctrl+B", "Ctrl+Shift+B");
+    rewrite(&mut config.shortcuts.toggle_settings, "Ctrl+,", "Ctrl+Shift+Comma");
+    rewrite(&mut config.shortcuts.reset_view, "Ctrl+0", "Ctrl+Shift+0");
+    rewrite(&mut config.shortcuts.zoom_in, "Ctrl+Plus", "Ctrl+Shift+Plus");
+    rewrite(&mut config.shortcuts.zoom_out, "Ctrl+Minus", "Ctrl+Shift+Minus");
+    rewrite(&mut config.shortcuts.fullscreen_window, "Ctrl+F11", "Ctrl+Shift+F11");
+    rewrite(&mut config.shortcuts.save_editor, "Ctrl+S", "Ctrl+Shift+S");
+}
 
-    let fields: &mut [&mut String] = &mut [
-        &mut config.shortcuts.command_palette,
-        &mut config.shortcuts.new_terminal,
-        &mut config.shortcuts.toggle_sidebar,
-        &mut config.shortcuts.toggle_settings,
-        &mut config.shortcuts.reset_view,
-        &mut config.shortcuts.zoom_in,
-        &mut config.shortcuts.zoom_out,
-        &mut config.shortcuts.fullscreen_window,
-        &mut config.shortcuts.save_editor,
-    ];
-
-    for (field, (old_default, new_default)) in fields.iter_mut().zip(REWRITES.iter()) {
-        if bindings_match(field, old_default) {
-            **field = (*new_default).to_string();
-        }
+fn rewrite(field: &mut String, old_default: &str, new_default: &str) {
+    if bindings_match(field, old_default) {
+        *field = new_default.to_string();
     }
 }
 

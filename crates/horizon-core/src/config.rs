@@ -27,6 +27,9 @@ pub struct Config {
     pub workspaces: Vec<WorkspaceConfig>,
 }
 
+/// Existing config files without a `version` field are treated as v1
+/// so they enter the migration path.  `Config::default()` uses
+/// `CURRENT_CONFIG_VERSION` for freshly generated configs.
 fn default_version() -> u32 {
     1
 }
