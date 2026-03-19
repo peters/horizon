@@ -41,6 +41,10 @@ fn queue_debounced_pty_resize(pending_pty_resize: &mut Option<std::time::Instant
     pending_pty_resize.get_or_insert(requested_at);
 }
 
+fn should_debounce_pty_resize(pty_resized: bool, mode: TermMode) -> bool {
+    pty_resized && !mode.contains(TermMode::ALT_SCREEN)
+}
+
 pub struct TerminalSpawnOptions {
     pub program: String,
     pub args: Vec<String>,
@@ -317,6 +321,7 @@ impl Terminal {
         let cols = cols.max(2);
         let cell_width = cell_width.max(1);
         let cell_height = cell_height.max(1);
+        let mode = self.mode();
 
         if rows == self.rows && cols == self.cols && cell_width == self.cell_width && cell_height == self.cell_height {
             if immediate {
@@ -335,19 +340,15 @@ impl Terminal {
         // Resize the terminal grid immediately for smooth visual feedback.
         self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
 
-        if immediate {
+        if immediate || !should_debounce_pty_resize(self.pty_resized, mode) {
             self.send_pty_resize();
             return;
         }
 
-        if self.pty_resized {
-            // Keep the first deferred resize request timestamp so repeated
-            // drag-resize events still flush through to the child process at
-            // a bounded cadence instead of being postponed indefinitely.
-            queue_debounced_pty_resize(&mut self.pending_pty_resize, std::time::Instant::now());
-        } else {
-            self.send_pty_resize();
-        }
+        // Keep the first deferred resize request timestamp so repeated
+        // drag-resize events still flush through to the child process at
+        // a bounded cadence instead of being postponed indefinitely.
+        queue_debounced_pty_resize(&mut self.pending_pty_resize, std::time::Instant::now());
     }
 
     fn flush_pending_pty_resize(&mut self) {
@@ -704,7 +705,7 @@ mod tests {
     use super::{
         AgentNotification, HorizonOscTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
         default_terminal_rgb, find_file_path_at_column, find_url_at_column, queue_debounced_pty_resize,
-        replay_terminal_bytes,
+        replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
@@ -953,6 +954,13 @@ mod tests {
         queue_debounced_pty_resize(&mut pending, second);
 
         assert_eq!(pending, Some(first));
+    }
+
+    #[test]
+    fn should_debounce_pty_resize_skips_alt_screen() {
+        assert!(should_debounce_pty_resize(true, TermMode::empty()));
+        assert!(!should_debounce_pty_resize(true, TermMode::ALT_SCREEN));
+        assert!(!should_debounce_pty_resize(false, TermMode::empty()));
     }
 
     #[test]

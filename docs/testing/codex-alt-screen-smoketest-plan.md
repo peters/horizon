@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Validate the investigation patch that disables Horizon's sparse alt-screen frame reuse for Codex panels only.
+Validate the Codex render fixes that remove stale sparse alt-screen reuse and keep fullscreen Codex layouts synchronized during repeated resize.
 
 ## Setup
 
@@ -38,8 +38,11 @@ Validate the investigation patch that disables Horizon's sparse alt-screen frame
    - tool output insertion
    - focus changes between panel and other UI
 5. Resize the Codex panel slowly and then rapidly.
-6. Toggle panel fullscreen if available and repeat prompt/response rendering.
-7. Capture a screenshot after launch and another during active redraw.
+6. While Codex shows its bottom composer/status area, keep resizing from alternating edges and corners for 5 to 10 seconds.
+7. Verify the bottom composer or status bar stays visually attached to the active content instead of leaving a large stale blank band above it.
+8. Confirm newly typed characters still appear on the active prompt line after the repeated resize sequence.
+9. Toggle panel fullscreen if available and repeat prompt/response rendering.
+10. Capture a screenshot after launch and another during active redraw.
 
 ## Regression Comparison
 
@@ -57,6 +60,7 @@ Validate the investigation patch that disables Horizon's sparse alt-screen frame
 3. Hover and drag the scrollbar during active Codex output.
 4. Select terminal text in the Codex panel and confirm selection rendering still works.
 5. Let Codex sit idle, then wake it with input and confirm there is no stale cached frame.
+6. Compare a normal shell panel against the alt-screen Codex panel during rapid resize and confirm the shell still avoids resize-flood regressions while Codex reflows immediately.
 
 ## Persistence And Resume
 
@@ -72,8 +76,9 @@ Validate the investigation patch that disables Horizon's sparse alt-screen frame
 
 1. No stale previous-frame content remains visible in Codex after fullscreen transitions.
 2. No new blank-viewport flashes appear in `fzf`/`sk`.
-3. Cursor, colors, and scrollbar remain aligned after repeated resizes.
-4. Panel chrome and canvas interactions remain unchanged outside the terminal body.
+3. Codex does not leave a large blank gap between the conversation/output area and the bottom composer after repeated resizes.
+4. Cursor, colors, and scrollbar remain aligned after repeated resizes.
+5. Panel chrome and canvas interactions remain unchanged outside the terminal body.
 
 ## Evidence To Record
 
@@ -84,4 +89,5 @@ Validate the investigation patch that disables Horizon's sparse alt-screen frame
 5. Screenshots for:
    - launch
    - active redraw
+   - repeated resize with bottom composer visible
    - non-Codex regression comparison
