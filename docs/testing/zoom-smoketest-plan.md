@@ -18,7 +18,7 @@ pinch path.
 1. Launch Horizon and confirm the first frame is correct before any interaction.
 2. Verify the grid, workspace frames, workspace labels, panel chrome, panel
 content, and minimap all render at default zoom.
-3. Press `Ctrl+0` and confirm the view stays at identity when already reset.
+3. Press `Ctrl+Shift+0` and confirm the view stays at identity when already reset.
 
 ## Zoom In And Out
 
@@ -30,7 +30,7 @@ content all visually scale instead of only recomputing layout.
 sequence.
 5. Hover directly over an editor or usage panel and repeat the same sequence.
 6. If available, repeat the same checks with a pinch gesture.
-7. Use `Ctrl+Plus` and `Ctrl+Minus` and confirm the viewport-center shortcut
+7. Use `Ctrl+Shift+Plus` and `Ctrl+Shift+Minus` and confirm the viewport-center shortcut
 path behaves the same as cursor-anchored zoom.
 8. Zoom to the minimum clamp and confirm further zoom-out input is ignored
 cleanly.
@@ -53,7 +53,7 @@ consistent.
 3. Pan at a zoomed-out level and confirm no jump or drift occurs.
 4. Scroll-pan on empty canvas without `Ctrl` and confirm that still pans rather
 than zooms.
-5. Press `Ctrl+0` from a zoomed, panned state and confirm both pan and zoom
+5. Press `Ctrl+Shift+0` from a zoomed, panned state and confirm both pan and zoom
 reset together.
 
 ## Minimap

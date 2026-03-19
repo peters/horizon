@@ -1,20 +1,47 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
-use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
-use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
+use egui::{Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
+use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
-use crate::command_palette::{CommandPalette, PaletteAction, PanelEntry, PresetEntry, WorkspaceEntry};
+use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::theme;
 
+use self::support::{
+    command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
+    detached_workspace_ids, preset_picker_heading, render_preset_picker_row,
+};
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use super::shortcuts::shortcut_pressed;
 use super::util::{OverlayExclusion, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+
+mod support;
+
+fn panel_focus_target_at_pointer_press(
+    panel_order: &[PanelId],
+    panel_rects: &HashMap<PanelId, Rect>,
+    focused_panel: Option<PanelId>,
+    pointer_pos: Pos2,
+) -> Option<PanelId> {
+    if focused_panel.is_some_and(|panel_id| {
+        panel_rects
+            .get(&panel_id)
+            .is_some_and(|rect| rect.contains(pointer_pos))
+    }) {
+        return focused_panel;
+    }
+
+    panel_order
+        .iter()
+        .rev()
+        .copied()
+        .find(|panel_id| panel_rects.get(panel_id).is_some_and(|rect| rect.contains(pointer_pos)))
+}
 
 impl HorizonApp {
     pub(super) fn leftmost_workspace_id(&self) -> Option<WorkspaceId> {
@@ -107,16 +134,34 @@ impl HorizonApp {
         OverlayExclusion::new(zones)
     }
 
-    pub(super) fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
-        let focused_has_terminal = self
+    pub(super) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {
+        let Some(pointer_pos) = ctx.input(|input| {
+            input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        }) else {
+            return;
+        };
+
+        let panel_order: Vec<_> = self
             .board
-            .focused
-            .and_then(|panel_id| self.board.panel(panel_id))
-            .is_some_and(|panel| panel.content.terminal().is_some());
-        focused_has_terminal
-            && !ctx.wants_keyboard_input()
-            && self.dir_picker.is_none()
-            && self.command_palette.is_none()
+            .panels
+            .iter()
+            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
+            .map(|panel| panel.id)
+            .collect();
+
+        if let Some(panel_id) =
+            panel_focus_target_at_pointer_press(&panel_order, &self.panel_screen_rects, self.board.focused, pointer_pos)
+        {
+            self.board.focus(panel_id);
+        }
     }
 
     pub(super) fn create_panel(&mut self) {
@@ -334,7 +379,7 @@ impl HorizonApp {
                     self.create_panel();
                 }
             }
-            CommandId::OpenRemoteHosts => self.open_remote_hosts_panel(),
+            CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
@@ -421,48 +466,40 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette)) {
+        let shortcut_bindings: &[(_, CommandId)] = &[
+            (self.shortcuts.reset_view, CommandId::ResetView),
+            (self.shortcuts.zoom_in, CommandId::ZoomIn),
+            (self.shortcuts.zoom_out, CommandId::ZoomOut),
+            (
+                self.shortcuts.align_workspaces_horizontally,
+                CommandId::AlignWorkspacesHorizontally,
+            ),
+            (self.shortcuts.toggle_settings, CommandId::ToggleSettings),
+            (self.shortcuts.toggle_sidebar, CommandId::ToggleSidebar),
+            (self.shortcuts.toggle_hud, CommandId::ToggleHud),
+            (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
+            (self.shortcuts.open_remote_hosts, CommandId::OpenRemoteHosts),
+            (self.shortcuts.new_terminal, CommandId::NewPanel),
+        ];
+
+        let (toggle_palette, triggered_command) = ctx.input(|input| {
+            let palette = shortcut_pressed(input, self.shortcuts.command_palette);
+            let command = shortcut_bindings
+                .iter()
+                .find(|(binding, _)| shortcut_pressed(input, *binding))
+                .map(|(_, id)| id.clone());
+            (palette, command)
+        });
+
+        if toggle_palette {
             self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
                 Some(CommandPalette::new())
             };
         }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
-            self.execute_command(ctx, &CommandId::ResetView);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
-            self.execute_command(ctx, &CommandId::ZoomIn);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
-            self.execute_command(ctx, &CommandId::ZoomOut);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
-            self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
-        }
-
-        if self.terminal_accepts_keyboard_input(ctx) {
-            return;
-        }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
-            self.execute_command(ctx, &CommandId::ToggleSettings);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
-            self.execute_command(ctx, &CommandId::ToggleSidebar);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
-            self.execute_command(ctx, &CommandId::ToggleHud);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
-            self.execute_command(ctx, &CommandId::ToggleMinimap);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.open_remote_hosts)) {
-            self.execute_command(ctx, &CommandId::OpenRemoteHosts);
-        }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
-            self.execute_command(ctx, &CommandId::NewPanel);
+        if let Some(command_id) = triggered_command {
+            self.execute_command(ctx, &command_id);
         }
     }
 
@@ -733,86 +770,6 @@ enum PresetPickerAction {
     },
 }
 
-fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'static str {
-    if target_workspace.is_some() {
-        "New Terminal"
-    } else {
-        "New Workspace"
-    }
-}
-
-fn render_preset_picker_row(
-    ui: &mut egui::Ui,
-    target_workspace: Option<WorkspaceId>,
-    canvas_pos: [f32; 2],
-    preset: &PresetConfig,
-) -> Option<PresetPickerAction> {
-    let label = if let Some(alias) = &preset.alias {
-        format!("{} ({})", preset.name, alias)
-    } else {
-        preset.name.clone()
-    };
-
-    match target_workspace {
-        Some(workspace_id) => render_panel_preset_picker_row(ui, workspace_id, canvas_pos, preset, label),
-        None => render_workspace_preset_picker_row(ui, canvas_pos, preset, label),
-    }
-}
-
-fn render_panel_preset_picker_row(
-    ui: &mut egui::Ui,
-    workspace_id: WorkspaceId,
-    canvas_pos: [f32; 2],
-    preset: &PresetConfig,
-    label: String,
-) -> Option<PresetPickerAction> {
-    let mut selected_action = None;
-    ui.horizontal(|ui| {
-        let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-        if ui.add(Button::new(create_text).frame(false)).clicked() {
-            selected_action = Some(PresetPickerAction::CreatePanel {
-                workspace_id,
-                preset: preset.clone(),
-                canvas_pos: Some(canvas_pos),
-            });
-        }
-
-        let dir_text = egui::RichText::new("Dir").size(11.0).color(theme::FG_DIM);
-        if ui.add(Button::new(dir_text).frame(false)).clicked() {
-            selected_action = Some(PresetPickerAction::ChooseDirectory {
-                workspace_id,
-                preset: preset.clone(),
-                canvas_pos: Some(canvas_pos),
-            });
-        }
-    });
-    selected_action
-}
-
-fn render_workspace_preset_picker_row(
-    ui: &mut egui::Ui,
-    canvas_pos: [f32; 2],
-    preset: &PresetConfig,
-    label: String,
-) -> Option<PresetPickerAction> {
-    let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-    if !ui.add(Button::new(create_text).frame(false)).clicked() {
-        return None;
-    }
-
-    Some(if preset.requires_workspace_cwd() {
-        PresetPickerAction::CreateWorkspace {
-            canvas_pos,
-            preset: preset.clone(),
-        }
-    } else {
-        PresetPickerAction::CreateWorkspaceDirect {
-            canvas_pos,
-            preset: preset.clone(),
-        }
-    })
-}
-
 fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&PathBuf>) {
     if options.cwd.is_none()
         && let Some(workspace_cwd) = workspace_cwd
@@ -827,94 +784,6 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     {
         workspace.cwd = Some(path.clone());
     }
-}
-
-fn detached_workspace_ids(
-    board: &horizon_core::Board,
-    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
-) -> HashSet<WorkspaceId> {
-    detached_workspaces
-        .keys()
-        .filter_map(|local_id| board.workspace_id_by_local_id(local_id))
-        .collect()
-}
-
-fn command_palette_workspace_entries(
-    board: &horizon_core::Board,
-    detached_workspace_ids: &HashSet<WorkspaceId>,
-    active_workspace: Option<WorkspaceId>,
-) -> Vec<WorkspaceEntry> {
-    board
-        .workspaces
-        .iter()
-        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
-        .map(|workspace| {
-            let (r, g, b) = workspace.accent();
-            WorkspaceEntry {
-                id: workspace.id,
-                name: workspace.name.clone(),
-                color: Color32::from_rgb(r, g, b),
-                panel_count: workspace.panels.len(),
-                is_active: active_workspace == Some(workspace.id),
-            }
-        })
-        .collect()
-}
-
-fn command_palette_panel_entries(
-    board: &horizon_core::Board,
-    detached_workspace_ids: &HashSet<WorkspaceId>,
-) -> Vec<PanelEntry> {
-    board
-        .panels
-        .iter()
-        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id))
-        .map(|panel| {
-            let workspace_name = board
-                .workspace(panel.workspace_id)
-                .map_or_else(String::new, |workspace| workspace.name.clone());
-            PanelEntry {
-                id: panel.id,
-                title: panel.display_title().into_owned(),
-                workspace_name,
-                cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
-            }
-        })
-        .collect()
-}
-
-fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<PresetEntry> {
-    presets
-        .iter()
-        .enumerate()
-        .map(|(index, preset)| {
-            let mut keywords = vec![preset.kind.display_name().to_ascii_lowercase()];
-            if let Some(alias) = &preset.alias {
-                keywords.push(alias.clone());
-            }
-            if let Some(connection) = &preset.ssh_connection {
-                keywords.push(connection.host.clone());
-                if let Some(user) = &connection.user {
-                    keywords.push(user.clone());
-                }
-            }
-
-            let detail = if let Some(connection) = &preset.ssh_connection {
-                connection.display_label()
-            } else if let Some(alias) = &preset.alias {
-                format!("{}  {}", preset.kind.display_name(), alias)
-            } else {
-                preset.kind.display_name().to_string()
-            };
-
-            PresetEntry {
-                index,
-                label: preset.name.clone(),
-                detail,
-                keywords,
-            }
-        })
-        .collect()
 }
 
 fn align_attached_workspaces(
@@ -933,17 +802,17 @@ fn align_attached_workspaces(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::PathBuf;
 
     use egui::{Color32, Pos2, Rect};
-    use horizon_core::{Board, PanelKind, PanelOptions, PresetConfig, WindowConfig, Workspace, WorkspaceId};
+    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
         SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
         detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd,
-        update_workspace_cwd, workspace_cwd,
+        panel_focus_target_at_pointer_press, update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1163,5 +1032,51 @@ mod tests {
                 .zip(detached_position)
                 .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
         }));
+    }
+
+    #[test]
+    fn panel_focus_target_prefers_existing_focused_panel_when_rects_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target = panel_focus_target_at_pointer_press(
+            &[panel_a, panel_b],
+            &panel_rects,
+            Some(panel_a),
+            Pos2::new(40.0, 40.0),
+        );
+
+        assert_eq!(target, Some(panel_a));
+    }
+
+    #[test]
+    fn panel_focus_target_uses_frontmost_panel_order_for_unfocused_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target =
+            panel_focus_target_at_pointer_press(&[panel_a, panel_b], &panel_rects, None, Pos2::new(40.0, 40.0));
+
+        assert_eq!(target, Some(panel_b));
     }
 }

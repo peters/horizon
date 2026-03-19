@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
-
-const DEFAULT_AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RemoteHostStatus {
@@ -53,8 +51,9 @@ pub struct RemoteHost {
     pub ssh_connection: SshConnection,
     pub sources: RemoteHostSources,
     pub status: RemoteHostStatus,
-    pub last_seen: Option<String>,
+    pub last_seen_secs: Option<i64>,
     pub os: Option<String>,
+    pub hostname: Option<String>,
     pub tags: Vec<String>,
     pub ips: Vec<String>,
 }
@@ -75,146 +74,6 @@ impl RemoteHost {
 pub struct RemoteHostCatalog {
     pub hosts: Vec<RemoteHost>,
     pub refreshed_at: Option<SystemTime>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RemoteHostsAction {
-    OpenSsh { label: String, connection: SshConnection },
-}
-
-pub struct RemoteHostsPanel {
-    pub catalog: RemoteHostCatalog,
-    pub query: String,
-    pub selected: usize,
-    pub refresh_in_flight: bool,
-    pub last_error: Option<String>,
-    pending_action: Option<RemoteHostsAction>,
-    refresh_requested: bool,
-    auto_refresh_interval: Option<Duration>,
-    user_drafts: HashMap<String, String>,
-    last_refresh_started_at: Option<Instant>,
-    last_refresh_completed_at: Option<Instant>,
-}
-
-impl RemoteHostsPanel {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            catalog: RemoteHostCatalog::default(),
-            query: String::new(),
-            selected: 0,
-            refresh_in_flight: false,
-            last_error: None,
-            pending_action: None,
-            refresh_requested: true,
-            auto_refresh_interval: Some(DEFAULT_AUTO_REFRESH_INTERVAL),
-            user_drafts: HashMap::new(),
-            last_refresh_started_at: None,
-            last_refresh_completed_at: None,
-        }
-    }
-
-    pub fn request_refresh(&mut self) {
-        self.refresh_requested = true;
-    }
-
-    #[must_use]
-    pub fn should_start_refresh(&self) -> bool {
-        self.refresh_requested && !self.refresh_in_flight
-    }
-
-    pub fn mark_refresh_started(&mut self) {
-        self.refresh_in_flight = true;
-        self.refresh_requested = false;
-        self.last_error = None;
-        self.last_refresh_started_at = Some(Instant::now());
-    }
-
-    pub fn apply_refresh_result(&mut self, result: Result<RemoteHostCatalog>) {
-        self.refresh_in_flight = false;
-        self.last_refresh_completed_at = Some(Instant::now());
-        self.last_refresh_started_at = None;
-
-        match result {
-            Ok(catalog) => {
-                self.catalog = catalog;
-                self.last_error = None;
-                self.selected = self.selected.min(self.catalog.hosts.len().saturating_sub(1));
-            }
-            Err(error) => {
-                self.last_error = Some(error.to_string());
-            }
-        }
-    }
-
-    pub fn maybe_request_auto_refresh(&mut self) {
-        if self.refresh_requested || self.refresh_in_flight {
-            return;
-        }
-
-        let Some(auto_refresh_interval) = self.auto_refresh_interval else {
-            return;
-        };
-        let should_refresh = self
-            .last_refresh_completed_at
-            .is_none_or(|last_refresh| last_refresh.elapsed() >= auto_refresh_interval);
-        if should_refresh {
-            self.request_refresh();
-        }
-    }
-
-    pub fn queue_open_ssh(&mut self, host: &RemoteHost) {
-        self.pending_action = Some(RemoteHostsAction::OpenSsh {
-            label: host.label.clone(),
-            connection: self.effective_ssh_connection(host),
-        });
-    }
-
-    pub fn take_pending_action(&mut self) -> Option<RemoteHostsAction> {
-        self.pending_action.take()
-    }
-
-    #[must_use]
-    pub fn auto_refresh_interval(&self) -> Option<Duration> {
-        self.auto_refresh_interval
-    }
-
-    pub fn set_auto_refresh_interval(&mut self, interval: Option<Duration>) {
-        self.auto_refresh_interval = interval;
-        self.request_refresh();
-    }
-
-    pub fn user_draft_for_host_mut(&mut self, host: &RemoteHost) -> &mut String {
-        let key = remote_host_state_key(host);
-        self.user_drafts.entry(key).or_insert_with(|| {
-            host.ssh_connection
-                .user
-                .as_deref()
-                .map_or_else(String::new, ToString::to_string)
-        })
-    }
-
-    #[must_use]
-    pub fn effective_ssh_connection(&self, host: &RemoteHost) -> SshConnection {
-        let mut connection = host.ssh_connection.clone();
-        connection.user = self
-            .user_drafts
-            .get(&remote_host_state_key(host))
-            .and_then(|value| non_empty_string(value))
-            .or_else(|| host.ssh_connection.user.as_deref().and_then(non_empty_string));
-        connection
-    }
-
-    #[must_use]
-    pub fn last_refresh_completed_at(&self) -> Option<Instant> {
-        self.last_refresh_completed_at
-    }
-}
-
-impl Default for RemoteHostsPanel {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Discover remote hosts from supported local sources.
@@ -251,8 +110,9 @@ fn build_remote_host_catalog(
                 tailscale: false,
             },
             status: RemoteHostStatus::Unknown,
-            last_seen: None,
+            last_seen_secs: None,
             os: None,
+            hostname: None,
             tags: Vec::new(),
             ips: Vec::new(),
         });
@@ -265,9 +125,12 @@ fn build_remote_host_catalog(
                 let host = &mut hosts[*index];
                 host.sources.tailscale = true;
                 host.status = node.status;
-                host.last_seen.clone_from(&node.last_seen);
+                host.last_seen_secs = node.last_seen_secs;
                 if host.os.is_none() {
                     host.os.clone_from(&node.os);
+                }
+                if host.hostname.is_none() {
+                    host.hostname.clone_from(&node.hostname);
                 }
                 host.tags = merge_unique_strings(&host.tags, &node.tags);
                 host.ips = merge_unique_strings(&host.ips, &node.ips);
@@ -288,8 +151,9 @@ fn build_remote_host_catalog(
                 tailscale: true,
             },
             status: node.status,
-            last_seen: node.last_seen,
+            last_seen_secs: node.last_seen_secs,
             os: node.os,
+            hostname: node.hostname,
             tags: node.tags,
             ips: node.ips,
         });
@@ -343,8 +207,9 @@ struct TailscaleNode {
     label: String,
     target_host: String,
     status: RemoteHostStatus,
-    last_seen: Option<String>,
+    last_seen_secs: Option<i64>,
     os: Option<String>,
+    hostname: Option<String>,
     tags: Vec<String>,
     ips: Vec<String>,
 }
@@ -411,8 +276,11 @@ impl TailscalePeer {
             } else {
                 RemoteHostStatus::Offline
             },
-            last_seen: (!self.online).then(|| format_last_seen(&self.last_seen)).flatten(),
+            last_seen_secs: (!self.online)
+                .then(|| parse_iso8601_epoch_secs(&self.last_seen))
+                .flatten(),
             os: self.os.and_then(|value| non_empty_string(&value)),
+            hostname: sanitized_host_name(&self.host_name),
             tags: self.tags.into_iter().filter_map(|tag| non_empty_string(&tag)).collect(),
             ips: self
                 .tailscale_ips
@@ -441,22 +309,32 @@ fn short_dns_label(value: &str) -> String {
     value.split('.').next().unwrap_or(value).to_string()
 }
 
-fn format_last_seen(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.starts_with("0001-01-01") {
+/// Parse an ISO 8601 timestamp like "2025-09-26T11:54:48Z" to Unix epoch seconds.
+fn parse_iso8601_epoch_secs(value: &str) -> Option<i64> {
+    let s = value.trim().trim_end_matches('Z');
+    if s.len() < 16 || s.starts_with("0001-01-01") {
         return None;
     }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    let day: i64 = s.get(8..10)?.parse().ok()?;
+    let hour: i64 = s.get(11..13)?.parse().ok()?;
+    let min: i64 = s.get(14..16)?.parse().ok()?;
+    let sec: i64 = s.get(17..19).and_then(|v| v.parse().ok()).unwrap_or(0);
 
-    let compact = trimmed.trim_end_matches('Z').replace('T', " ");
-    Some(compact.chars().take(16).collect())
+    let years = year - 1970;
+    let leap_years = (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
+    let month_days: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let month_offset = *month_days.get(month.checked_sub(1)? as usize)?;
+    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap_adj = i64::from(is_leap && month > 2);
+    let total_days = years * 365 + leap_years + month_offset + leap_adj + day - 1;
+
+    Some(total_days * 86400 + hour * 3600 + min * 60 + sec)
 }
 
 fn normalized_host_key(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
-}
-
-fn remote_host_state_key(host: &RemoteHost) -> String {
-    normalized_host_key(host.target())
 }
 
 fn merge_unique_strings(existing: &[String], incoming: &[String]) -> Vec<String> {
@@ -493,10 +371,7 @@ fn tailscale_node_sort_rank(node: &TailscaleNode) -> u8 {
 mod tests {
     use crate::ssh::{DiscoveredSshHost, SshConnection};
 
-    use super::{
-        RemoteHost, RemoteHostSources, RemoteHostStatus, RemoteHostsAction, RemoteHostsPanel, TailscaleNode,
-        build_remote_host_catalog, parse_tailscale_status,
-    };
+    use super::{RemoteHostStatus, TailscaleNode, build_remote_host_catalog, parse_tailscale_status};
 
     #[test]
     fn parse_tailscale_status_discovers_online_and_offline_nodes() {
@@ -531,8 +406,10 @@ mod tests {
         assert_eq!(nodes[0].label, "militaerveien-master");
         assert_eq!(nodes[0].target_host, "militaerveien-master.tailnet-f382.ts.net");
         assert_eq!(nodes[0].status, RemoteHostStatus::Online);
+        assert_eq!(nodes[0].hostname.as_deref(), Some("YP-D79ACC7ED0"));
         assert_eq!(nodes[1].status, RemoteHostStatus::Offline);
-        assert_eq!(nodes[1].last_seen.as_deref(), Some("2025-09-26 11:54"));
+        // 2025-09-26T11:54:48Z => Unix epoch seconds
+        assert_eq!(nodes[1].last_seen_secs, Some(1_758_887_688));
         assert!(nodes[0].tags.iter().any(|tag| tag == "cuda"));
     }
 
@@ -551,8 +428,9 @@ mod tests {
                 label: "militaerveien-master".to_string(),
                 target_host: "militaerveien-master.tailnet-f382.ts.net".to_string(),
                 status: RemoteHostStatus::Online,
-                last_seen: None,
+                last_seen_secs: None,
                 os: Some("linux".to_string()),
+                hostname: None,
                 tags: vec!["cuda".to_string()],
                 ips: vec!["100.106.71.89".to_string()],
             }],
@@ -569,40 +447,5 @@ mod tests {
         assert_eq!(mil.status, RemoteHostStatus::Online);
         assert_eq!(mil.os.as_deref(), Some("linux"));
         assert!(mil.tags.iter().any(|tag| tag == "cuda"));
-    }
-
-    #[test]
-    fn queue_open_ssh_uses_per_host_user_draft() {
-        let host = RemoteHost {
-            label: "mil".to_string(),
-            ssh_connection: SshConnection {
-                host: "militaerveien-master.tailnet-f382.ts.net".to_string(),
-                ..SshConnection::default()
-            },
-            sources: RemoteHostSources {
-                ssh_config: false,
-                tailscale: true,
-            },
-            status: RemoteHostStatus::Online,
-            last_seen: None,
-            os: Some("linux".to_string()),
-            tags: Vec::new(),
-            ips: Vec::new(),
-        };
-        let mut panel = RemoteHostsPanel::new();
-        *panel.user_draft_for_host_mut(&host) = "peter".to_string();
-
-        panel.queue_open_ssh(&host);
-
-        let Some(RemoteHostsAction::OpenSsh { label, connection }) = panel.take_pending_action() else {
-            panic!("expected queued ssh action");
-        };
-
-        assert_eq!(label, "mil");
-        assert_eq!(connection.user.as_deref(), Some("peter"));
-        assert_eq!(
-            connection.display_label(),
-            "peter@militaerveien-master.tailnet-f382.ts.net"
-        );
     }
 }

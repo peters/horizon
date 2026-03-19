@@ -35,6 +35,37 @@ struct HistoryMeter {
     focused: bool,
 }
 
+fn panel_accent(workspace_accent: Option<Color32>, focused: bool) -> Color32 {
+    workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG })
+}
+
+fn panel_fill(accent: Color32, focused: bool) -> Color32 {
+    theme::blend(theme::PANEL_BG, accent, if focused { 0.06 } else { 0.0 })
+}
+
+fn panel_border_stroke(accent: Color32, focused: bool) -> Stroke {
+    Stroke::new(if focused { 1.8 } else { 1.2 }, theme::panel_border(accent, focused))
+}
+
+fn panel_titlebar_fill(accent: Color32, focused: bool) -> Color32 {
+    theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.28 } else { 0.10 })
+}
+
+fn panel_title_color(focused: bool) -> Color32 {
+    if focused { theme::FG } else { theme::FG_SOFT }
+}
+
+fn focus_ring_stroke(accent: Color32, focused: bool) -> Option<Stroke> {
+    focused.then(|| Stroke::new(3.0, theme::alpha(theme::blend(theme::ACCENT, accent, 0.35), 56)))
+}
+
+fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(titlebar_rect.min.x + 12.0, titlebar_rect.max.y - 4.0),
+        Vec2::new(44.0, 2.5),
+    )
+}
+
 pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused: bool) -> (&'static str, Color32) {
     match kind {
         PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(workspace_color, if focused { 200 } else { 80 })),
@@ -58,10 +89,6 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
             "GC",
             theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
         ),
-        PanelKind::RemoteHosts => (
-            "RH",
-            theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 130 }),
-        ),
         PanelKind::Usage => (
             "US",
             theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
@@ -73,25 +100,45 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let painter = ui.painter_at(chrome.panel_rect);
     let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
 
-    painter.rect_filled(chrome.panel_rect, CornerRadius::same(16), theme::PANEL_BG);
+    if let Some(stroke) = focus_ring_stroke(accent, chrome.focused) {
+        painter.rect_stroke(
+            chrome.panel_rect.expand(2.0),
+            CornerRadius::same(18),
+            stroke,
+            StrokeKind::Outside,
+        );
+    }
+
+    painter.rect_filled(
+        chrome.panel_rect,
+        CornerRadius::same(16),
+        panel_fill(accent, chrome.focused),
+    );
     painter.rect_stroke(
         chrome.panel_rect,
         CornerRadius::same(16),
-        Stroke::new(1.2, theme::panel_border(accent, chrome.focused)),
+        panel_border_stroke(accent, chrome.focused),
         StrokeKind::Outside,
     );
     painter.rect_filled(
         chrome.titlebar_rect,
         CornerRadius::same(16),
-        theme::blend(theme::PANEL_BG_ALT, accent, if chrome.focused { 0.18 } else { 0.10 }),
+        panel_titlebar_fill(accent, chrome.focused),
     );
+    if chrome.focused {
+        painter.rect_filled(
+            title_focus_indicator_rect(chrome.titlebar_rect),
+            CornerRadius::same(2),
+            theme::alpha(accent, 220),
+        );
+    }
 
     if let Some(title) = chrome.title {
         let title_x = if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
                 Pos2::new(chrome.titlebar_rect.min.x + 14.0, chrome.titlebar_rect.center().y),
-                4.5,
-                color,
+                if chrome.focused { 5.0 } else { 4.5 },
+                theme::alpha(color, if chrome.focused { 240 } else { 180 }),
             );
             chrome.titlebar_rect.min.x + 26.0
         } else {
@@ -102,7 +149,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             egui::Align2::LEFT_CENTER,
             title,
             egui::FontId::proportional(13.0),
-            theme::FG,
+            panel_title_color(chrome.focused),
         );
     }
 
@@ -135,10 +182,14 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    paint_close_and_resize_controls(&painter, chrome.close_rect, chrome.resize_rect, chrome.close_hovered);
+}
+
+fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, resize_rect: Rect, close_hovered: bool) {
     painter.circle_filled(
-        chrome.close_rect.center(),
+        close_rect.center(),
         5.0,
-        if chrome.close_hovered {
+        if close_hovered {
             theme::BTN_CLOSE
         } else {
             theme::alpha(theme::FG_DIM, 140)
@@ -148,15 +199,15 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM, 170));
     painter.line_segment(
         [
-            chrome.resize_rect.right_bottom(),
-            chrome.resize_rect.left_top() + Vec2::new(6.0, 12.0),
+            resize_rect.right_bottom(),
+            resize_rect.left_top() + Vec2::new(6.0, 12.0),
         ],
         handle_stroke,
     );
     painter.line_segment(
         [
-            chrome.resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
-            chrome.resize_rect.left_top() + Vec2::new(12.0, 12.0),
+            resize_rect.right_bottom() - Vec2::new(0.0, 6.0),
+            resize_rect.left_top() + Vec2::new(12.0, 12.0),
         ],
         handle_stroke,
     );
@@ -166,11 +217,7 @@ fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focus
     if kind == PanelKind::Ssh {
         return theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 170 });
     }
-    if kind == PanelKind::RemoteHosts {
-        return theme::alpha(Color32::from_rgb(148, 226, 213), if focused { 220 } else { 170 });
-    }
-
-    workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG })
+    panel_accent(workspace_accent, focused)
 }
 
 fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMeter) {
@@ -409,5 +456,38 @@ pub(super) fn show_inline_rename_editor(
         RenameEditAction::Commit
     } else {
         RenameEditAction::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Color32, Pos2, Rect};
+
+    use super::{
+        focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color, panel_titlebar_fill,
+        title_focus_indicator_rect,
+    };
+
+    #[test]
+    fn focused_panel_style_is_more_prominent() {
+        let accent = Color32::from_rgb(137, 180, 250);
+
+        assert!(focus_ring_stroke(accent, true).is_some());
+        assert_eq!(focus_ring_stroke(accent, false), None);
+        assert!(panel_border_stroke(accent, true).width > panel_border_stroke(accent, false).width);
+        assert_ne!(panel_fill(accent, true), panel_fill(accent, false));
+        assert_ne!(panel_titlebar_fill(accent, true), panel_titlebar_fill(accent, false));
+        assert_ne!(panel_title_color(true), panel_title_color(false));
+    }
+
+    #[test]
+    fn title_focus_indicator_stays_inside_titlebar() {
+        let titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 54.0));
+        let indicator = title_focus_indicator_rect(titlebar_rect);
+
+        assert!(titlebar_rect.contains(indicator.min));
+        assert!(titlebar_rect.contains(indicator.max - indicator.size() * 0.01));
+        assert!(indicator.width() > 0.0);
+        assert!(indicator.height() > 0.0);
     }
 }
