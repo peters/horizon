@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
@@ -10,6 +11,8 @@ use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default = "default_version")]
+    pub version: u32,
     #[serde(default)]
     pub window: WindowConfig,
     #[serde(default)]
@@ -24,9 +27,14 @@ pub struct Config {
     pub workspaces: Vec<WorkspaceConfig>,
 }
 
+fn default_version() -> u32 {
+    1
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
+            version: CURRENT_CONFIG_VERSION,
             window: WindowConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
@@ -369,25 +377,32 @@ impl Config {
     ///
     /// Returns an error if a discovered config file cannot be read or parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let config = if let Some(p) = path {
+        let (mut config, resolved_path) = if let Some(p) = path {
             let contents = std::fs::read_to_string(p)?;
-            Self::from_yaml(&contents)?
+            (Self::deserialize_yaml(&contents)?, Some(p.to_path_buf()))
         } else {
             let mut found = None;
             for candidate in config_candidates() {
                 if candidate.exists() {
                     let contents = std::fs::read_to_string(&candidate)?;
                     tracing::info!("loaded config from {}", candidate.display());
-                    found = Some(Self::from_yaml(&contents)?);
+                    found = Some((Self::deserialize_yaml(&contents)?, candidate));
                     break;
                 }
             }
-            found.unwrap_or_else(|| {
+            if let Some((config, path)) = found {
+                (config, Some(path))
+            } else {
                 tracing::info!("no config found, using defaults");
-                Self::default()
-            })
+                (Self::default(), None)
+            }
         };
 
+        if let Some(ref config_path) = resolved_path {
+            config_migration::migrate_if_needed(&mut config, config_path)?;
+        }
+
+        config.validate()?;
         Ok(config)
     }
 
@@ -397,9 +412,13 @@ impl Config {
     ///
     /// Returns an error if deserialization or semantic validation fails.
     pub fn from_yaml(contents: &str) -> Result<Self> {
-        let config: Self = serde_yaml::from_str(contents).map_err(|e| Error::Config(e.to_string()))?;
+        let config = Self::deserialize_yaml(contents)?;
         config.validate()?;
         Ok(config)
+    }
+
+    fn deserialize_yaml(contents: &str) -> Result<Self> {
+        serde_yaml::from_str(contents).map_err(|e| Error::Config(e.to_string()))
     }
 
     /// Serialize this config to YAML.
