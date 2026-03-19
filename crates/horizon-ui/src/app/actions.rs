@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
@@ -47,6 +47,37 @@ impl AppShortcut {
 
 fn app_shortcut_enabled(terminal_owns_keyboard: bool, shortcut: AppShortcut) -> bool {
     !terminal_owns_keyboard || shortcut.bypasses_terminal_focus_gate()
+}
+
+fn horizon_text_input_active(
+    settings_open: bool,
+    dir_picker_open: bool,
+    command_palette_open: bool,
+    renaming_panel: bool,
+    renaming_workspace: bool,
+) -> bool {
+    settings_open || dir_picker_open || command_palette_open || renaming_panel || renaming_workspace
+}
+
+fn panel_focus_target_at_pointer_press(
+    panel_order: &[PanelId],
+    panel_rects: &HashMap<PanelId, Rect>,
+    focused_panel: Option<PanelId>,
+    pointer_pos: Pos2,
+) -> Option<PanelId> {
+    if focused_panel.is_some_and(|panel_id| {
+        panel_rects
+            .get(&panel_id)
+            .is_some_and(|rect| rect.contains(pointer_pos))
+    }) {
+        return focused_panel;
+    }
+
+    panel_order
+        .iter()
+        .rev()
+        .copied()
+        .find(|panel_id| panel_rects.get(panel_id).is_some_and(|rect| rect.contains(pointer_pos)))
 }
 
 impl HorizonApp {
@@ -140,16 +171,54 @@ impl HorizonApp {
         OverlayExclusion::new(zones)
     }
 
-    pub(super) fn terminal_accepts_keyboard_input(&self, ctx: &Context) -> bool {
+    pub(super) fn terminal_accepts_keyboard_input(&self, _ctx: &Context) -> bool {
         let focused_has_terminal = self
             .board
             .focused
             .and_then(|panel_id| self.board.panel(panel_id))
             .is_some_and(|panel| panel.content.terminal().is_some());
-        focused_has_terminal
-            && !ctx.wants_keyboard_input()
-            && self.dir_picker.is_none()
-            && self.command_palette.is_none()
+        let horizon_text_input_active = horizon_text_input_active(
+            self.settings.is_some(),
+            self.dir_picker.is_some(),
+            self.command_palette.is_some(),
+            self.renaming_panel.is_some(),
+            self.renaming_workspace.is_some(),
+        );
+
+        // Egui text focus can lag by a frame when the user clicks from an
+        // editor back into a terminal. Gate on Horizon-owned text surfaces
+        // explicitly so terminal focus reacquires shortcuts immediately.
+        focused_has_terminal && !horizon_text_input_active
+    }
+
+    pub(super) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {
+        let Some(pointer_pos) = ctx.input(|input| {
+            input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        }) else {
+            return;
+        };
+
+        let panel_order: Vec<_> = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
+            .map(|panel| panel.id)
+            .collect();
+
+        if let Some(panel_id) =
+            panel_focus_target_at_pointer_press(&panel_order, &self.panel_screen_rects, self.board.focused, pointer_pos)
+        {
+            self.board.focus(panel_id);
+        }
     }
 
     pub(super) fn create_panel(&mut self) {
@@ -904,17 +973,17 @@ fn align_attached_workspaces(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::PathBuf;
 
     use egui::{Color32, Pos2, Rect};
-    use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
+    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
         AppShortcut, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, app_shortcut_enabled,
         canvas_rect_for_layout, command_palette_panel_entries, command_palette_workspace_entries,
-        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd,
-        update_workspace_cwd, workspace_cwd,
+        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, horizon_text_input_active,
+        inherit_workspace_cwd, panel_focus_target_at_pointer_press, update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1118,6 +1187,62 @@ mod tests {
         assert!(app_shortcut_enabled(true, AppShortcut::FullscreenPanel));
         assert!(app_shortcut_enabled(true, AppShortcut::ExitFullscreenPanel));
         assert!(app_shortcut_enabled(true, AppShortcut::FullscreenWindow));
+    }
+
+    #[test]
+    fn horizon_text_input_active_only_tracks_explicit_horizon_surfaces() {
+        assert!(!horizon_text_input_active(false, false, false, false, false));
+        assert!(horizon_text_input_active(true, false, false, false, false));
+        assert!(horizon_text_input_active(false, true, false, false, false));
+        assert!(horizon_text_input_active(false, false, true, false, false));
+        assert!(horizon_text_input_active(false, false, false, true, false));
+        assert!(horizon_text_input_active(false, false, false, false, true));
+    }
+
+    #[test]
+    fn panel_focus_target_prefers_existing_focused_panel_when_rects_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target = panel_focus_target_at_pointer_press(
+            &[panel_a, panel_b],
+            &panel_rects,
+            Some(panel_a),
+            Pos2::new(40.0, 40.0),
+        );
+
+        assert_eq!(target, Some(panel_a));
+    }
+
+    #[test]
+    fn panel_focus_target_uses_frontmost_panel_order_for_unfocused_overlap() {
+        let panel_a = PanelId(1);
+        let panel_b = PanelId(2);
+        let panel_rects = HashMap::from([
+            (
+                panel_a,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+            (
+                panel_b,
+                Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(80.0, 80.0)),
+            ),
+        ]);
+
+        let target =
+            panel_focus_target_at_pointer_press(&[panel_a, panel_b], &panel_rects, None, Pos2::new(40.0, 40.0));
+
+        assert_eq!(target, Some(panel_b));
     }
 
     #[test]
