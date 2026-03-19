@@ -5,8 +5,9 @@ use egui::containers::panel::PanelState;
 use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
 use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
+use crate::command_palette::{CommandPalette, PaletteAction, PanelEntry, WorkspaceEntry};
+use crate::command_registry::CommandId;
 use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
-use crate::quick_nav::{QuickNav, QuickNavAction, WorkspaceEntry};
 use crate::theme;
 
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
@@ -110,7 +111,10 @@ impl HorizonApp {
             .focused
             .and_then(|panel_id| self.board.panel(panel_id))
             .is_some_and(|panel| panel.content.terminal().is_some());
-        focused_has_terminal && !ctx.wants_keyboard_input() && self.dir_picker.is_none()
+        focused_has_terminal
+            && !ctx.wants_keyboard_input()
+            && self.dir_picker.is_none()
+            && self.command_palette.is_none()
     }
 
     pub(super) fn create_panel(&mut self) {
@@ -240,12 +244,12 @@ impl HorizonApp {
         ));
     }
 
-    pub(super) fn render_quick_nav(&mut self, ctx: &Context) {
-        let Some(nav) = self.quick_nav.as_mut() else {
+    pub(super) fn render_command_palette(&mut self, ctx: &Context) {
+        let Some(palette) = self.command_palette.as_mut() else {
             return;
         };
 
-        let entries: Vec<WorkspaceEntry> = self
+        let workspace_entries: Vec<WorkspaceEntry> = self
             .board
             .workspaces
             .iter()
@@ -261,11 +265,38 @@ impl HorizonApp {
             })
             .collect();
 
-        match nav.show(ctx, &entries) {
-            QuickNavAction::None => {}
-            QuickNavAction::Cancelled => self.quick_nav = None,
-            QuickNavAction::Selected(workspace_id) => {
-                self.quick_nav = None;
+        let panel_entries: Vec<PanelEntry> = self
+            .board
+            .panels
+            .iter()
+            .map(|panel| {
+                let workspace_name = self
+                    .board
+                    .workspace(panel.workspace_id)
+                    .map_or_else(String::new, |ws| ws.name.clone());
+                PanelEntry {
+                    id: panel.id,
+                    title: panel.title.clone(),
+                    workspace_name,
+                    cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
+                }
+            })
+            .collect();
+
+        let action = palette.show(ctx, &workspace_entries, &panel_entries, &self.action_commands_cache);
+        match action {
+            PaletteAction::None => {}
+            PaletteAction::Cancelled => self.command_palette = None,
+            PaletteAction::Execute(cmd) => {
+                self.command_palette = None;
+                self.execute_command(ctx, &cmd);
+            }
+        }
+    }
+
+    fn execute_command(&mut self, ctx: &Context, cmd: &CommandId) {
+        match *cmd {
+            CommandId::SwitchWorkspace(workspace_id) => {
                 self.board.focus_workspace(workspace_id);
                 if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
                     let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
@@ -276,6 +307,46 @@ impl HorizonApp {
                     self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
                 }
             }
+            CommandId::FocusPanel(panel_id) => {
+                self.board.focus(panel_id);
+                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
+                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
+                {
+                    self.focus_workspace_bounds(ctx, min, max, true);
+                }
+            }
+            CommandId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
+            CommandId::ToggleHud => self.hud_visible = !self.hud_visible,
+            CommandId::ToggleMinimap => self.minimap_visible = !self.minimap_visible,
+            CommandId::ToggleFullscreenWindow => {
+                let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+            }
+            CommandId::ToggleFullscreenPanel => {
+                self.fullscreen_panel = if self.fullscreen_panel.is_some() {
+                    None
+                } else {
+                    self.board.focused
+                };
+            }
+            CommandId::ResetView => self.reset_view(),
+            CommandId::ZoomIn => {
+                let canvas_rect = self.canvas_rect(ctx);
+                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+            }
+            CommandId::ZoomOut => {
+                let canvas_rect = self.canvas_rect(ctx);
+                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+            }
+            CommandId::NewPanel => {
+                let workspace_id = self.board.ensure_workspace();
+                if let Some(preset) = self.presets.first().cloned() {
+                    self.add_panel_to_workspace(workspace_id, preset, None);
+                } else {
+                    self.create_panel();
+                }
+            }
+            CommandId::ToggleSettings => self.toggle_settings(),
         }
     }
 
@@ -351,26 +422,25 @@ impl HorizonApp {
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
         if ctx.input(|input| input.key_pressed(egui::Key::K) && primary_shortcut_modifier(input.modifiers)) {
-            self.quick_nav = if self.quick_nav.is_some() {
+            self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
-                Some(QuickNav::new())
+                Some(CommandPalette::new())
             };
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::Num0) && primary_shortcut_modifier(input.modifiers)) {
-            self.reset_view();
+            self.execute_command(ctx, &CommandId::ResetView);
         }
 
-        let canvas_rect = self.canvas_rect(ctx);
         if ctx.input(|input| {
             primary_shortcut_modifier(input.modifiers)
                 && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals))
         }) {
-            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+            self.execute_command(ctx, &CommandId::ZoomIn);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Minus) && primary_shortcut_modifier(input.modifiers)) {
-            let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+            self.execute_command(ctx, &CommandId::ZoomOut);
         }
 
         if self.terminal_accepts_keyboard_input(ctx) {
@@ -378,24 +448,19 @@ impl HorizonApp {
         }
 
         if ctx.input(|input| input.key_pressed(egui::Key::Comma) && primary_shortcut_modifier(input.modifiers)) {
-            self.toggle_settings();
+            self.execute_command(ctx, &CommandId::ToggleSettings);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::B) && primary_shortcut_modifier(input.modifiers)) {
-            self.sidebar_visible = !self.sidebar_visible;
+            self.execute_command(ctx, &CommandId::ToggleSidebar);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::H) && primary_shortcut_modifier(input.modifiers)) {
-            self.hud_visible = !self.hud_visible;
+            self.execute_command(ctx, &CommandId::ToggleHud);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::M) && primary_shortcut_modifier(input.modifiers)) {
-            self.minimap_visible = !self.minimap_visible;
+            self.execute_command(ctx, &CommandId::ToggleMinimap);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::N) && primary_shortcut_modifier(input.modifiers)) {
-            let workspace_id = self.board.ensure_workspace();
-            if let Some(preset) = self.presets.first().cloned() {
-                self.add_panel_to_workspace(workspace_id, preset, None);
-            } else {
-                self.create_panel();
-            }
+            self.execute_command(ctx, &CommandId::NewPanel);
         }
     }
 
