@@ -16,6 +16,39 @@ use super::shortcuts::shortcut_pressed;
 use super::util::{OverlayExclusion, editor_panel_size_for_file, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppShortcut {
+    CommandPalette,
+    ResetView,
+    ZoomIn,
+    ZoomOut,
+    AlignWorkspacesHorizontally,
+    ToggleSettings,
+    ToggleSidebar,
+    ToggleHud,
+    ToggleMinimap,
+    NewPanel,
+    FullscreenPanel,
+    ExitFullscreenPanel,
+    FullscreenWindow,
+}
+
+impl AppShortcut {
+    /// Only a small explicit fullscreen allowlist stays global when the
+    /// focused panel is a terminal and Horizon is not inside another text
+    /// entry surface.
+    const fn bypasses_terminal_focus_gate(self) -> bool {
+        matches!(
+            self,
+            Self::FullscreenPanel | Self::ExitFullscreenPanel | Self::FullscreenWindow
+        )
+    }
+}
+
+fn app_shortcut_enabled(terminal_owns_keyboard: bool, shortcut: AppShortcut) -> bool {
+    !terminal_owns_keyboard || shortcut.bypasses_terminal_focus_gate()
+}
+
 impl HorizonApp {
     pub(super) fn leftmost_workspace_id(&self) -> Option<WorkspaceId> {
         self.board
@@ -375,11 +408,15 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
+        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
         let (f11, ctrl_f11, escape) = ctx.input(|input| {
             (
-                shortcut_pressed(input, self.shortcuts.fullscreen_panel),
-                shortcut_pressed(input, self.shortcuts.fullscreen_window),
-                shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenPanel)
+                    && shortcut_pressed(input, self.shortcuts.fullscreen_panel),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::FullscreenWindow)
+                    && shortcut_pressed(input, self.shortcuts.fullscreen_window),
+                app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ExitFullscreenPanel)
+                    && shortcut_pressed(input, self.shortcuts.exit_fullscreen_panel),
             )
         });
 
@@ -404,7 +441,11 @@ impl HorizonApp {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &Context) {
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette)) {
+        let terminal_owns_keyboard = self.terminal_accepts_keyboard_input(ctx);
+
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::CommandPalette)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.command_palette))
+        {
             self.command_palette = if self.command_palette.is_some() {
                 None
             } else {
@@ -412,36 +453,50 @@ impl HorizonApp {
             };
         }
 
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ResetView)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.reset_view))
+        {
             self.execute_command(ctx, &CommandId::ResetView);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomIn)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_in))
+        {
             self.execute_command(ctx, &CommandId::ZoomIn);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ZoomOut)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.zoom_out))
+        {
             self.execute_command(ctx, &CommandId::ZoomOut);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::AlignWorkspacesHorizontally)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.align_workspaces_horizontally))
+        {
             self.execute_command(ctx, &CommandId::AlignWorkspacesHorizontally);
         }
 
-        if self.terminal_accepts_keyboard_input(ctx) {
-            return;
-        }
-
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSettings)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_settings))
+        {
             self.execute_command(ctx, &CommandId::ToggleSettings);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleSidebar)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_sidebar))
+        {
             self.execute_command(ctx, &CommandId::ToggleSidebar);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleHud)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_hud))
+        {
             self.execute_command(ctx, &CommandId::ToggleHud);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::ToggleMinimap)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.toggle_minimap))
+        {
             self.execute_command(ctx, &CommandId::ToggleMinimap);
         }
-        if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
+        if app_shortcut_enabled(terminal_owns_keyboard, AppShortcut::NewPanel)
+            && ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal))
+        {
             self.execute_command(ctx, &CommandId::NewPanel);
         }
     }
@@ -856,10 +911,10 @@ mod tests {
     use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, canvas_rect_for_layout,
-        command_palette_panel_entries, command_palette_workspace_entries, detached_workspace_ids,
-        estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd,
-        workspace_cwd,
+        AppShortcut, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, align_attached_workspaces, app_shortcut_enabled,
+        canvas_rect_for_layout, command_palette_panel_entries, command_palette_workspace_entries,
+        detached_workspace_ids, estimated_settings_bar_rect, estimated_settings_panel_rect, inherit_workspace_cwd,
+        update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
@@ -1056,5 +1111,54 @@ mod tests {
                 .zip(detached_position)
                 .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
         }));
+    }
+
+    #[test]
+    fn fullscreen_shortcuts_are_explicit_terminal_focus_exceptions() {
+        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenPanel));
+        assert!(app_shortcut_enabled(true, AppShortcut::ExitFullscreenPanel));
+        assert!(app_shortcut_enabled(true, AppShortcut::FullscreenWindow));
+    }
+
+    #[test]
+    fn non_fullscreen_shortcuts_are_blocked_while_terminal_owns_keyboard() {
+        for shortcut in [
+            AppShortcut::CommandPalette,
+            AppShortcut::ResetView,
+            AppShortcut::ZoomIn,
+            AppShortcut::ZoomOut,
+            AppShortcut::AlignWorkspacesHorizontally,
+            AppShortcut::ToggleSettings,
+            AppShortcut::ToggleSidebar,
+            AppShortcut::ToggleHud,
+            AppShortcut::ToggleMinimap,
+            AppShortcut::NewPanel,
+        ] {
+            assert!(
+                !app_shortcut_enabled(true, shortcut),
+                "{shortcut:?} unexpectedly bypassed the terminal focus gate"
+            );
+        }
+    }
+
+    #[test]
+    fn app_shortcuts_remain_available_when_terminal_does_not_own_keyboard() {
+        for shortcut in [
+            AppShortcut::CommandPalette,
+            AppShortcut::ResetView,
+            AppShortcut::ZoomIn,
+            AppShortcut::ZoomOut,
+            AppShortcut::AlignWorkspacesHorizontally,
+            AppShortcut::ToggleSettings,
+            AppShortcut::ToggleSidebar,
+            AppShortcut::ToggleHud,
+            AppShortcut::ToggleMinimap,
+            AppShortcut::NewPanel,
+            AppShortcut::FullscreenPanel,
+            AppShortcut::ExitFullscreenPanel,
+            AppShortcut::FullscreenWindow,
+        ] {
+            assert!(app_shortcut_enabled(false, shortcut));
+        }
     }
 }
