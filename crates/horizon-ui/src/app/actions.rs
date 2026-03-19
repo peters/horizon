@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
@@ -249,39 +250,10 @@ impl HorizonApp {
             return;
         };
 
-        let workspace_entries: Vec<WorkspaceEntry> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
-                let (r, g, b) = workspace.accent();
-                WorkspaceEntry {
-                    id: workspace.id,
-                    name: workspace.name.clone(),
-                    color: Color32::from_rgb(r, g, b),
-                    panel_count: workspace.panels.len(),
-                    is_active: self.board.active_workspace == Some(workspace.id),
-                }
-            })
-            .collect();
-
-        let panel_entries: Vec<PanelEntry> = self
-            .board
-            .panels
-            .iter()
-            .map(|panel| {
-                let workspace_name = self
-                    .board
-                    .workspace(panel.workspace_id)
-                    .map_or_else(String::new, |ws| ws.name.clone());
-                PanelEntry {
-                    id: panel.id,
-                    title: panel.title.clone(),
-                    workspace_name,
-                    cwd: panel.launch_cwd.as_ref().map(|p| p.display().to_string()),
-                }
-            })
-            .collect();
+        let detached_workspace_ids = detached_workspace_ids(&self.board, &self.detached_workspaces);
+        let workspace_entries =
+            command_palette_workspace_entries(&self.board, &detached_workspace_ids, self.board.active_workspace);
+        let panel_entries = command_palette_panel_entries(&self.board, &detached_workspace_ids);
 
         let action = palette.show(ctx, &workspace_entries, &panel_entries, &self.action_commands_cache);
         match action {
@@ -815,15 +787,71 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
+fn detached_workspace_ids(
+    board: &horizon_core::Board,
+    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+) -> HashSet<WorkspaceId> {
+    detached_workspaces
+        .keys()
+        .filter_map(|local_id| board.workspace_id_by_local_id(local_id))
+        .collect()
+}
+
+fn command_palette_workspace_entries(
+    board: &horizon_core::Board,
+    detached_workspace_ids: &HashSet<WorkspaceId>,
+    active_workspace: Option<WorkspaceId>,
+) -> Vec<WorkspaceEntry> {
+    board
+        .workspaces
+        .iter()
+        .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
+        .map(|workspace| {
+            let (r, g, b) = workspace.accent();
+            WorkspaceEntry {
+                id: workspace.id,
+                name: workspace.name.clone(),
+                color: Color32::from_rgb(r, g, b),
+                panel_count: workspace.panels.len(),
+                is_active: active_workspace == Some(workspace.id),
+            }
+        })
+        .collect()
+}
+
+fn command_palette_panel_entries(
+    board: &horizon_core::Board,
+    detached_workspace_ids: &HashSet<WorkspaceId>,
+) -> Vec<PanelEntry> {
+    board
+        .panels
+        .iter()
+        .filter(|panel| !detached_workspace_ids.contains(&panel.workspace_id))
+        .map(|panel| {
+            let workspace_name = board
+                .workspace(panel.workspace_id)
+                .map_or_else(String::new, |workspace| workspace.name.clone());
+            PanelEntry {
+                id: panel.id,
+                title: panel.title.clone(),
+                workspace_name,
+                cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashSet};
     use std::path::PathBuf;
 
-    use egui::{Pos2, Rect};
-    use horizon_core::{Board, PanelOptions, Workspace, WorkspaceId};
+    use egui::{Color32, Pos2, Rect};
+    use horizon_core::{Board, PanelKind, PanelOptions, WindowConfig, Workspace, WorkspaceId};
 
     use super::{
-        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, canvas_rect_for_layout, estimated_settings_bar_rect,
+        SIDEBAR_WIDTH, TOOLBAR_HEIGHT, canvas_rect_for_layout, command_palette_panel_entries,
+        command_palette_workspace_entries, detached_workspace_ids, estimated_settings_bar_rect,
         estimated_settings_panel_rect, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd,
     };
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
@@ -931,5 +959,69 @@ mod tests {
 
         assert_eq!(rect.min, Pos2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT));
         assert_eq!(rect.max, Pos2::new(840.0, 800.0 - SETTINGS_BAR_HEIGHT));
+    }
+
+    #[test]
+    fn detached_workspace_ids_resolve_from_local_ids() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+        let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
+
+        let mut detached_workspaces = BTreeMap::new();
+        detached_workspaces.insert(detached_local_id, WindowConfig::default());
+
+        let ids = detached_workspace_ids(&board, &detached_workspaces);
+
+        assert!(ids.contains(&detached));
+        assert!(!ids.contains(&attached));
+    }
+
+    #[test]
+    fn command_palette_workspace_entries_skip_detached_workspaces() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+
+        let entries = command_palette_workspace_entries(&board, &HashSet::from([detached]), Some(attached));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, attached);
+        assert_eq!(entries[0].name, "attached");
+        assert_eq!(entries[0].color, Color32::from_rgb(137, 180, 250));
+        assert!(entries[0].is_active);
+    }
+
+    #[test]
+    fn command_palette_panel_entries_skip_panels_in_detached_workspaces() {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+        let attached_panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    command: Some("attached.md".to_string()),
+                    ..PanelOptions::default()
+                },
+                attached,
+            )
+            .expect("attached panel");
+        board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    command: Some("detached.md".to_string()),
+                    ..PanelOptions::default()
+                },
+                detached,
+            )
+            .expect("detached panel");
+
+        let entries = command_palette_panel_entries(&board, &HashSet::from([detached]));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, attached_panel);
+        assert_eq!(entries[0].workspace_name, "attached");
     }
 }
