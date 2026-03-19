@@ -32,7 +32,6 @@ struct WorkspaceInteraction {
     drag_delta: Vec2,
     start_rename: bool,
     rename_action: RenameEditAction,
-    show_layout_toolbar: bool,
     action: Option<WorkspaceAction>,
 }
 
@@ -281,7 +280,6 @@ fn render_workspace_visual(
             drag_delta: Vec2::ZERO,
             start_rename: false,
             rename_action: RenameEditAction::None,
-            show_layout_toolbar: false,
             action: None,
         };
     }
@@ -315,7 +313,6 @@ fn render_workspace_visual(
                         buffer,
                         egui::FontId::proportional(12.5),
                     ),
-                    show_layout_toolbar: false,
                     action: None,
                 }
             } else {
@@ -342,7 +339,6 @@ fn render_workspace_visual(
                     drag_delta: label_response.drag_delta(),
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
-                    show_layout_toolbar: label_response.hovered(),
                     action: None,
                 };
                 show_workspace_context_menu(&label_response, workspace, &mut interaction);
@@ -353,7 +349,7 @@ fn render_workspace_visual(
 
     if !is_renaming
         && interaction.action.is_none()
-        && should_show_workspace_layout_toolbar(ctx, workspace, interaction.show_layout_toolbar)
+        && should_show_workspace_layout_toolbar(workspace)
         && !overlay_zones.intersects(workspace.toolbar_screen_rect)
     {
         interaction.action = render_workspace_layout_toolbar(ctx, workspace, canvas_transform, canvas_clip_rect);
@@ -455,17 +451,8 @@ fn paint_workspace_grip(painter: &egui::Painter, center: Pos2, highlighted: bool
     }
 }
 
-fn should_show_workspace_layout_toolbar(ctx: &Context, workspace: &WorkspaceVisual, label_hovered: bool) -> bool {
-    if workspace.panel_count == 0 {
-        return false;
-    }
-
-    if workspace.is_active || label_hovered {
-        return true;
-    }
-
-    ctx.input(|input| input.pointer.hover_pos())
-        .is_some_and(|pointer| workspace.toolbar_screen_rect.contains(pointer))
+fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) -> bool {
+    workspace.panel_count > 0
 }
 
 fn render_workspace_layout_toolbar(
@@ -688,4 +675,40 @@ fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_rect: Rect, c
         egui::FontId::proportional(10.5),
         theme::alpha(theme::blend(theme::FG_DIM, color, 0.18), 196),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkspaceVisual, should_show_workspace_layout_toolbar};
+    use egui::{Color32, Pos2, Rect, Vec2};
+    use horizon_core::WorkspaceId;
+
+    fn workspace_visual(panel_count: usize) -> WorkspaceVisual {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(120.0, 64.0));
+        WorkspaceVisual {
+            id: WorkspaceId(1),
+            name: "Alpha".to_string(),
+            color: Color32::WHITE,
+            canvas_rect: rect,
+            screen_rect: rect,
+            label_canvas_rect: rect,
+            toolbar_canvas_rect: rect,
+            toolbar_screen_rect: rect,
+            is_active: false,
+            is_empty: panel_count == 0,
+            label_hidden: false,
+            panel_count,
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn layout_toolbar_stays_hidden_for_empty_workspaces() {
+        assert!(!should_show_workspace_layout_toolbar(&workspace_visual(0)));
+    }
+
+    #[test]
+    fn layout_toolbar_stays_visible_for_single_panel_workspaces() {
+        assert!(should_show_workspace_layout_toolbar(&workspace_visual(1)));
+    }
 }

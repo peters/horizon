@@ -255,6 +255,8 @@ impl HorizonApp {
         if self.detached_workspaces.len() != detached_before {
             self.mark_runtime_dirty();
         }
+        self.pending_detached_window_position_restore
+            .retain(|local_id| self.detached_workspaces.contains_key(local_id));
         if self.board.workspaces.is_empty() {
             self.reset_view();
         } else if count_after < count_before && count_after == 1 {
