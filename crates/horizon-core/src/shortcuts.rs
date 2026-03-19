@@ -237,9 +237,9 @@ impl Default for AppShortcuts {
         Self {
             command_palette: ShortcutBinding::new(primary, ShortcutKey::Letter('K')),
             new_terminal: ShortcutBinding::new(primary, ShortcutKey::Letter('N')),
-            open_remote_hosts: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('R')),
+            open_remote_hosts: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('H')),
             toggle_sidebar: ShortcutBinding::new(primary, ShortcutKey::Letter('B')),
-            toggle_hud: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('H')),
+            toggle_hud: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('U')),
             toggle_minimap: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('M')),
             align_workspaces_horizontally: ShortcutBinding::new(
                 primary.plus(ShortcutModifiers::SHIFT),
@@ -480,14 +480,14 @@ mod tests {
             shortcuts.toggle_hud,
             ShortcutBinding::new(
                 ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('H'),
+                ShortcutKey::Letter('U'),
             )
         );
         assert_eq!(
             shortcuts.open_remote_hosts,
             ShortcutBinding::new(
                 ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('R'),
+                ShortcutKey::Letter('H'),
             )
         );
         assert_eq!(

@@ -198,9 +198,9 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+K".to_string(),
             new_terminal: "Ctrl+N".to_string(),
-            open_remote_hosts: "Ctrl+Shift+R".to_string(),
+            open_remote_hosts: "Ctrl+Shift+H".to_string(),
             toggle_sidebar: "Ctrl+B".to_string(),
-            toggle_hud: "Ctrl+Shift+H".to_string(),
+            toggle_hud: "Ctrl+Shift+U".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+,".to_string(),

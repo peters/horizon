@@ -29,7 +29,7 @@ pub(super) fn palette_layout(screen: Rect) -> PaletteLayout {
     }
 }
 
-pub(super) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
+pub(crate) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
     let painter = ui.painter();
     painter.rect_filled(card_rect, CornerRadius::same(20), theme::PANEL_BG);
     painter.rect_stroke(

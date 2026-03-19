@@ -202,10 +202,7 @@ impl HorizonApp {
         }
         .is_active();
 
-        // Egui text focus can lag by a frame when the user clicks from an
-        // editor back into a terminal. Gate on Horizon-owned text surfaces
-        // explicitly so terminal focus reacquires shortcuts immediately.
-        focused_has_terminal && !horizon_text_input_active
+        focused_has_terminal && !horizon_text_input_active && self.remote_hosts_overlay.is_none()
     }
 
     pub(super) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {
@@ -453,7 +450,7 @@ impl HorizonApp {
                     self.create_panel();
                 }
             }
-            CommandId::OpenRemoteHosts => self.open_remote_hosts_panel(),
+            CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
