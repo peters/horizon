@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use egui::containers::panel::PanelState;
 use egui::{Button, Color32, Context, Id, Margin, Order, Pos2, Rect, Stroke, Vec2};
-use horizon_core::{PanelId, PanelKind, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
+use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{CommandPalette, PaletteAction, PanelEntry, PresetEntry, WorkspaceEntry};
 use crate::command_registry::CommandId;
@@ -13,7 +13,7 @@ use crate::theme;
 
 use super::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use super::shortcuts::shortcut_pressed;
-use super::util::{OverlayExclusion, editor_panel_size_for_file, viewport_local_rect};
+use super::util::{OverlayExclusion, viewport_local_rect};
 use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
@@ -463,54 +463,6 @@ impl HorizonApp {
         }
         if ctx.input(|input| shortcut_pressed(input, self.shortcuts.new_terminal)) {
             self.execute_command(ctx, &CommandId::NewPanel);
-        }
-    }
-
-    pub(super) fn handle_file_drop(&mut self, ctx: &Context) {
-        let (hovered, dropped, pointer_pos) = ctx.input(|input| {
-            (
-                !input.raw.hovered_files.is_empty(),
-                input.raw.dropped_files.clone(),
-                input.pointer.hover_pos().or(input.pointer.latest_pos()),
-            )
-        });
-
-        if hovered && let Some(pos) = pointer_pos {
-            self.file_hover_pos = Some(pos);
-        }
-
-        if dropped.is_empty() {
-            return;
-        }
-
-        let screen_pos = self.file_hover_pos.or(pointer_pos);
-        self.file_hover_pos = None;
-        let canvas_rect = self.canvas_rect(ctx);
-        let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
-
-        for file in dropped {
-            let Some(path) = file.path else { continue };
-            let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-            if !matches!(ext, "md" | "markdown" | "txt" | "mdx") {
-                continue;
-            }
-
-            let workspace_id = self
-                .board
-                .active_workspace
-                .unwrap_or_else(|| self.board.ensure_workspace());
-            let options = PanelOptions {
-                name: path.file_name().map(|name| name.to_string_lossy().to_string()),
-                command: Some(path.display().to_string()),
-                kind: PanelKind::Editor,
-                position: canvas_pos.map(|pos| [pos.x, pos.y]),
-                size: Some(editor_panel_size_for_file(&path)),
-                ..PanelOptions::default()
-            };
-            if let Err(error) = self.create_panel_with_options(options, workspace_id) {
-                tracing::error!("failed to create editor panel from dropped file: {error}");
-            }
-            self.mark_runtime_dirty();
         }
     }
 

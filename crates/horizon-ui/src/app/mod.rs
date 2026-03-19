@@ -2,6 +2,7 @@ mod actions;
 mod attention_feed;
 mod canvas;
 mod detached_viewports;
+mod file_drop;
 mod lifecycle;
 mod panel_chrome;
 mod panels;
@@ -22,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui::{Context, Pos2, Rect, Vec2};
+use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
@@ -103,6 +104,7 @@ pub struct HorizonApp {
     pan_target: Option<Vec2>,
     is_panning: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
+    panel_screen_order: Vec<PanelId>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
@@ -141,7 +143,7 @@ pub struct HorizonApp {
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
-    file_hover_pos: Option<Pos2>,
+    file_hover_positions: HashMap<ViewportId, Pos2>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
@@ -196,6 +198,7 @@ impl HorizonApp {
             workspace_creates: Vec::new(),
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
+            panel_screen_order: Vec::new(),
             terminal_grid_cache: HashMap::new(),
             editor_preview_cache: HashMap::new(),
             canvas_grid_cache: CanvasGridCache::default(),
@@ -234,7 +237,7 @@ impl HorizonApp {
             action_commands_cache,
             runtime_dirty_since: None,
             initial_pan_done: false,
-            file_hover_pos: None,
+            file_hover_positions: HashMap::new(),
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,

@@ -145,6 +145,7 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_panels(&mut self, ctx: &Context) {
         self.panel_screen_rects.clear();
+        self.panel_screen_order.clear();
 
         let workspaces: Vec<(WorkspaceId, String, Color32)> = self
             .board
@@ -480,6 +481,7 @@ impl HorizonApp {
         outcome: &PanelUiOutcome,
     ) -> bool {
         self.panel_screen_rects.insert(panel_id, snapshot.screen_rect);
+        self.panel_screen_order.push(panel_id);
 
         if matches!(outcome.command, Some(PanelCommand::StartRename)) {
             self.clear_workspace_rename();

@@ -125,7 +125,7 @@ impl HorizonApp {
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
-        self.handle_file_drop(ctx);
+        self.handle_root_file_drop(ctx);
         let had_terminal_output = self.board.process_output();
 
         for panel_id in self.board.exited_panels() {
