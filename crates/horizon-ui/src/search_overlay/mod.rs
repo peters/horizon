@@ -1,6 +1,8 @@
 mod render;
 
-use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
+use egui::{
+    Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
+};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
@@ -78,9 +80,10 @@ impl SearchOverlay {
         self.maybe_refresh_results(board);
 
         let input_width = ui.available_width();
+        let input_height = 32.0_f32;
 
-        // Paint a visible accent border so the search bar is always discoverable.
-        let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(input_width, 32.0));
+        // Reserve the full rect and paint background + accent border.
+        let (input_rect, _) = ui.allocate_exact_size(Vec2::new(input_width, input_height), Sense::hover());
         ui.painter().rect_filled(
             input_rect,
             CornerRadius::same(10),
@@ -93,20 +96,26 @@ impl SearchOverlay {
             StrokeKind::Inside,
         );
 
-        let response = ui.add(
+        // Place the frameless TextEdit inside the painted rect.
+        let text_rect = input_rect.shrink2(Vec2::new(2.0, 0.0));
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(text_rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::monospace(13.0))
                 .text_color(theme::FG)
-                .desired_width(input_width - 28.0)
+                .desired_width(text_rect.width() - 24.0)
+                .frame(false)
                 .hint_text(
                     egui::RichText::new("Search across all terminals...")
                         .color(theme::FG_DIM)
                         .size(12.5),
                 )
-                .margin(Margin::symmetric(14, 6)),
+                .margin(Margin::symmetric(12, 0)),
         );
-
-        let input_rect = response.rect;
 
         if self.request_focus {
             response.request_focus();
