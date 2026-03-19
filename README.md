@@ -118,7 +118,7 @@ git lfs pull
 cargo run --release
 ```
 
-> Requires **Git LFS** for bundled assets and **Rust 1.85+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
+> Requires **Git LFS** for bundled assets and **Rust 1.88+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
 
 ---
 

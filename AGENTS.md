@@ -24,7 +24,7 @@ No Rust toolchain or system headers are needed for this path.
 
 #### Prerequisites
 
-- **Rust stable ≥ 1.85** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
+- **Rust stable ≥ 1.88** (edition 2024). Install via [rustup](https://rustup.rs) if not present.
 - **Linux only:** the eframe/wgpu rendering stack needs system headers. Install them before `cargo build`:
   - Debian/Ubuntu: `sudo apt install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libgl-dev cmake`
   - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake`
