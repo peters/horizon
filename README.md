@@ -81,7 +81,7 @@ A built-in **git status panel** watches your repo in the background. See changed
 <td>
 
 ### Live Settings Editor
-Open the config with **Ctrl+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
+Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
 
 </td>
 <td>
@@ -126,25 +126,25 @@ cargo run --release
 
 ### Keyboard Shortcuts
 
-All app shortcuts are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
+All app shortcuts use **Ctrl+Shift** to avoid conflicts with shell programs (Ctrl+C, Ctrl+K, Ctrl+B, etc.) and OS-level bindings. They are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
 Duplicate or overlapping bindings are rejected, including near-conflicts such as `Ctrl+B` and `Ctrl+Shift+B`.
 
 | Shortcut | What it does |
 |:---------|:-------------|
-| **Ctrl+K** | Quick-navigate to any workspace |
-| **Ctrl+N** | New terminal panel |
-| **Ctrl+B** | Toggle sidebar |
-| **Ctrl+H** | Toggle HUD |
-| **Ctrl+M** | Toggle minimap |
+| **Ctrl+Shift+K** | Quick-navigate to any workspace |
+| **Ctrl+Shift+N** | New terminal panel |
+| **Ctrl+Shift+B** | Toggle sidebar |
+| **Ctrl+Shift+H** | Toggle HUD |
+| **Ctrl+Shift+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
-| **Ctrl+,** | Open settings editor |
-| **Ctrl+0** | Reset canvas view |
-| **Ctrl+Plus** | Zoom canvas in |
-| **Ctrl+Minus** | Zoom canvas out |
+| **Ctrl+Shift+,** | Open settings editor |
+| **Ctrl+Shift+0** | Reset canvas view |
+| **Ctrl+Shift+Plus** | Zoom canvas in |
+| **Ctrl+Shift+Minus** | Zoom canvas out |
 | **F11** | Fullscreen the active panel |
 | **Escape** | Exit active panel fullscreen |
-| **Ctrl+F11** | Toggle window fullscreen |
-| **Ctrl+S** | Save the active Markdown editor |
+| **Ctrl+Shift+F11** | Toggle window fullscreen |
+| **Ctrl+Shift+S** | Save the active Markdown editor |
 
 ### Modifier-Assisted Mouse Actions
 
@@ -165,20 +165,20 @@ The settings editor writes back to the same config file Horizon loaded. By defau
 
 ```yaml
 shortcuts:
-  command_palette: Ctrl+K
-  new_terminal: Ctrl+N
-  toggle_sidebar: Ctrl+B
+  command_palette: Ctrl+Shift+K
+  new_terminal: Ctrl+Shift+N
+  toggle_sidebar: Ctrl+Shift+B
   toggle_hud: Ctrl+Shift+H
   toggle_minimap: Ctrl+Shift+M
   align_workspaces_horizontally: Ctrl+Shift+A
-  toggle_settings: Ctrl+,
-  reset_view: Ctrl+0
-  zoom_in: Ctrl+Plus
-  zoom_out: Ctrl+Minus
+  toggle_settings: Ctrl+Shift+Comma
+  reset_view: Ctrl+Shift+0
+  zoom_in: Ctrl+Shift+Plus
+  zoom_out: Ctrl+Shift+Minus
   fullscreen_panel: F11
   exit_fullscreen_panel: Escape
-  fullscreen_window: Ctrl+F11
-  save_editor: Ctrl+S
+  fullscreen_window: Ctrl+Shift+F11
+  save_editor: Ctrl+Shift+S
 
 workspaces:
   - name: Backend

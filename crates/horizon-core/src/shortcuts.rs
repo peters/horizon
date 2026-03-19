@@ -233,26 +233,23 @@ pub struct AppShortcuts {
 
 impl Default for AppShortcuts {
     fn default() -> Self {
-        let primary = ShortcutModifiers::PRIMARY;
+        let primary_shift = ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT);
         Self {
-            command_palette: ShortcutBinding::new(primary, ShortcutKey::Letter('K')),
-            new_terminal: ShortcutBinding::new(primary, ShortcutKey::Letter('N')),
-            open_remote_hosts: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('R')),
-            toggle_sidebar: ShortcutBinding::new(primary, ShortcutKey::Letter('B')),
-            toggle_hud: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('H')),
-            toggle_minimap: ShortcutBinding::new(primary.plus(ShortcutModifiers::SHIFT), ShortcutKey::Letter('M')),
-            align_workspaces_horizontally: ShortcutBinding::new(
-                primary.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('A'),
-            ),
-            toggle_settings: ShortcutBinding::new(primary, ShortcutKey::Comma),
-            reset_view: ShortcutBinding::new(primary, ShortcutKey::Digit(0)),
-            zoom_in: ShortcutBinding::new(primary, ShortcutKey::Plus),
-            zoom_out: ShortcutBinding::new(primary, ShortcutKey::Minus),
+            command_palette: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('K')),
+            new_terminal: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('N')),
+            open_remote_hosts: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('R')),
+            toggle_sidebar: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('B')),
+            toggle_hud: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('H')),
+            toggle_minimap: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('M')),
+            align_workspaces_horizontally: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('A')),
+            toggle_settings: ShortcutBinding::new(primary_shift, ShortcutKey::Comma),
+            reset_view: ShortcutBinding::new(primary_shift, ShortcutKey::Digit(0)),
+            zoom_in: ShortcutBinding::new(primary_shift, ShortcutKey::Plus),
+            zoom_out: ShortcutBinding::new(primary_shift, ShortcutKey::Minus),
             fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
             exit_fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape),
-            fullscreen_window: ShortcutBinding::new(primary, ShortcutKey::Function(11)),
-            save_editor: ShortcutBinding::new(primary, ShortcutKey::Letter('S')),
+            fullscreen_window: ShortcutBinding::new(primary_shift, ShortcutKey::Function(11)),
+            save_editor: ShortcutBinding::new(primary_shift, ShortcutKey::Letter('S')),
         }
     }
 }
@@ -471,39 +468,31 @@ mod tests {
     #[test]
     fn app_shortcuts_default_matches_documented_bindings() {
         let shortcuts = AppShortcuts::default();
+        let primary_shift = ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT);
 
         assert_eq!(
             shortcuts.command_palette,
-            ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('K'))
+            ShortcutBinding::new(primary_shift, ShortcutKey::Letter('K'))
         );
         assert_eq!(
             shortcuts.toggle_hud,
-            ShortcutBinding::new(
-                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('H'),
-            )
+            ShortcutBinding::new(primary_shift, ShortcutKey::Letter('H'))
         );
         assert_eq!(
             shortcuts.open_remote_hosts,
-            ShortcutBinding::new(
-                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('R'),
-            )
+            ShortcutBinding::new(primary_shift, ShortcutKey::Letter('R'))
         );
         assert_eq!(
             shortcuts.toggle_minimap,
-            ShortcutBinding::new(
-                ShortcutModifiers::PRIMARY.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('M'),
-            )
+            ShortcutBinding::new(primary_shift, ShortcutKey::Letter('M'))
         );
         assert_eq!(
             shortcuts.fullscreen_window,
-            ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Function(11))
+            ShortcutBinding::new(primary_shift, ShortcutKey::Function(11))
         );
         assert_eq!(
             shortcuts.save_editor,
-            ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('S'))
+            ShortcutBinding::new(primary_shift, ShortcutKey::Letter('S'))
         );
     }
 

@@ -196,21 +196,21 @@ pub struct ShortcutsConfig {
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
-            command_palette: "Ctrl+K".to_string(),
-            new_terminal: "Ctrl+N".to_string(),
+            command_palette: "Ctrl+Shift+K".to_string(),
+            new_terminal: "Ctrl+Shift+N".to_string(),
             open_remote_hosts: "Ctrl+Shift+R".to_string(),
-            toggle_sidebar: "Ctrl+B".to_string(),
+            toggle_sidebar: "Ctrl+Shift+B".to_string(),
             toggle_hud: "Ctrl+Shift+H".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
-            toggle_settings: "Ctrl+,".to_string(),
-            reset_view: "Ctrl+0".to_string(),
-            zoom_in: "Ctrl+Plus".to_string(),
-            zoom_out: "Ctrl+Minus".to_string(),
+            toggle_settings: "Ctrl+Shift+Comma".to_string(),
+            reset_view: "Ctrl+Shift+0".to_string(),
+            zoom_in: "Ctrl+Shift+Plus".to_string(),
+            zoom_out: "Ctrl+Shift+Minus".to_string(),
             fullscreen_panel: "F11".to_string(),
             exit_fullscreen_panel: "Escape".to_string(),
-            fullscreen_window: "Ctrl+F11".to_string(),
-            save_editor: "Ctrl+S".to_string(),
+            fullscreen_window: "Ctrl+Shift+F11".to_string(),
+            save_editor: "Ctrl+Shift+S".to_string(),
         }
     }
 }
@@ -627,8 +627,9 @@ mod tests {
 
     #[test]
     fn duplicate_shortcuts_are_rejected() {
-        let error = Config::from_yaml("shortcuts:\n  command_palette: Ctrl+K\n  new_terminal: Ctrl+K\n")
-            .expect_err("config should reject duplicate shortcuts");
+        let error =
+            Config::from_yaml("shortcuts:\n  command_palette: Ctrl+Shift+K\n  new_terminal: Ctrl+Shift+K\n")
+                .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
     }
@@ -651,7 +652,7 @@ mod tests {
     #[test]
     fn overlapping_shortcuts_are_rejected() {
         let error =
-            Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+B\n  align_workspaces_horizontally: Ctrl+Shift+B\n")
+            Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+K\n  command_palette: Ctrl+Shift+K\n")
                 .expect_err("config should reject overlapping shortcuts");
 
         assert!(error.to_string().contains("conflicts with"));
