@@ -75,26 +75,12 @@ impl HorizonApp {
                                 .color(theme::FG_DIM)
                                 .size(10.5),
                         );
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.add_space(8.0);
-                            if ui.add(util::chrome_button("Settings")).clicked() {
-                                self.toggle_settings();
-                            }
-                            ui.add_space(8.0);
-                            let remote_hosts_button = ui.add(util::chrome_button("Remote Hosts")).on_hover_text(
-                                self.shortcuts
-                                    .open_remote_hosts
-                                    .display_label(util::primary_shortcut_label()),
-                            );
-                            if remote_hosts_button.clicked() {
-                                self.toggle_remote_hosts_overlay(ui.ctx());
-                            }
-                        });
+                        self.render_toolbar_actions(ui);
                     },
                 );
 
                 // Search bar centered inside the toolbar area.
-                let search_width = (viewport.width() * 0.35).clamp(280.0, 600.0);
+                let search_width = (viewport.width() * 0.28).clamp(220.0, 520.0);
                 let search_rect = Rect::from_center_size(
                     Pos2::new(
                         viewport.min.x + viewport.width() * 0.5,
@@ -109,6 +95,57 @@ impl HorizonApp {
                 );
                 self.render_toolbar_search(&mut search_ui);
             });
+    }
+
+    fn render_toolbar_actions(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(8.0);
+            if ui.add(util::chrome_button("Settings")).clicked() {
+                self.toggle_settings();
+            }
+            ui.add_space(8.0);
+            let remote_hosts_button = ui.add(util::chrome_button("Remote Hosts")).on_hover_text(
+                self.shortcuts
+                    .open_remote_hosts
+                    .display_label(util::primary_shortcut_label()),
+            );
+            if remote_hosts_button.clicked() {
+                self.toggle_remote_hosts_overlay(ui.ctx());
+            }
+            ui.add_space(8.0);
+            let fit_workspace_button =
+                ui.add_enabled(self.has_attached_workspace(), util::chrome_button("Fit Workspace"));
+            let fit_workspace_button = fit_workspace_button.on_hover_text(
+                self.shortcuts
+                    .fit_active_workspace
+                    .display_label(util::primary_shortcut_label()),
+            );
+            if fit_workspace_button.clicked() {
+                self.execute_command(ui.ctx(), &crate::command_registry::CommandId::FitActiveWorkspace);
+            }
+            ui.add_space(8.0);
+            let quick_nav_button = ui.add(util::chrome_button("Quick Nav")).on_hover_text(
+                self.shortcuts
+                    .command_palette
+                    .display_label(util::primary_shortcut_label()),
+            );
+            if quick_nav_button.clicked() {
+                self.open_command_palette();
+            }
+            ui.add_space(8.0);
+            if ui.add(util::chrome_button("New Workspace")).clicked() {
+                let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+                self.create_workspace_visible(ui.ctx(), &name);
+            }
+            ui.add_space(8.0);
+        });
+    }
+
+    fn has_attached_workspace(&self) -> bool {
+        self.board
+            .workspaces
+            .iter()
+            .any(|workspace| !self.workspace_is_detached(workspace.id))
     }
 
     pub(super) fn render_sidebar(&mut self, ctx: &Context) {
