@@ -10,8 +10,6 @@ pub struct SearchMatch {
     pub byte_offset: usize,
     /// Length of the match in bytes.
     pub byte_len: usize,
-    /// The full text of the matched line.
-    pub line_text: String,
 }
 
 /// All matches found in a single panel.
@@ -19,6 +17,8 @@ pub struct SearchMatch {
 pub struct PanelSearchResult {
     pub panel_id: PanelId,
     pub panel_title: String,
+    /// The extracted lines of text from this terminal.
+    pub lines: Vec<String>,
     pub matches: Vec<SearchMatch>,
 }
 
@@ -86,6 +86,7 @@ pub fn search_board(board: &Board, query: &str, options: &SearchOptions) -> Sear
             results.panels.push(PanelSearchResult {
                 panel_id,
                 panel_title,
+                lines,
                 matches,
             });
         }
@@ -134,7 +135,6 @@ fn search_lines_literal(lines: &[String], query: &str, case_sensitive: bool, mat
                 line_index,
                 byte_offset,
                 byte_len: query.len(),
-                line_text: line.clone(),
             });
             start = byte_offset + needle.len().max(1);
             if matches.len() >= MAX_MATCHES_PER_PANEL {
@@ -161,7 +161,6 @@ fn search_lines_regex(lines: &[String], pattern: &str, case_sensitive: bool, mat
                 line_index,
                 byte_offset: m.start(),
                 byte_len: m.len(),
-                line_text: line.clone(),
             });
             if matches.len() >= MAX_MATCHES_PER_PANEL {
                 return;

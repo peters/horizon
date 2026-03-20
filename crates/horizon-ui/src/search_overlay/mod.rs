@@ -27,6 +27,7 @@ struct DisplayRow {
     match_count_label: Option<String>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct SearchOverlay {
     query: String,
     last_query: String,
@@ -36,6 +37,7 @@ pub(crate) struct SearchOverlay {
     cached_results: SearchResults,
     display_rows: Vec<DisplayRow>,
     request_focus: bool,
+    options_dirty: bool,
 }
 
 pub(crate) enum SearchAction {
@@ -54,6 +56,7 @@ impl SearchOverlay {
             cached_results: SearchResults::default(),
             display_rows: Vec::new(),
             request_focus: true,
+            options_dirty: false,
         }
     }
 
@@ -163,12 +166,12 @@ impl SearchOverlay {
                         ui.horizontal(|ui| {
                             if render_toggle_button(ui, "Aa", self.case_sensitive, "case") {
                                 self.case_sensitive = !self.case_sensitive;
-                                self.last_query = String::from("\x00_invalidate");
+                                self.options_dirty = true;
                             }
                             ui.add_space(2.0);
                             if render_toggle_button(ui, ".*", self.regex_mode, "regex") {
                                 self.regex_mode = !self.regex_mode;
-                                self.last_query = String::from("\x00_invalidate");
+                                self.options_dirty = true;
                             }
                             ui.add_space(8.0);
                             render_status_line(ui, self.cached_results.total_matches, self.cached_results.panels.len());
@@ -186,9 +189,10 @@ impl SearchOverlay {
     }
 
     fn maybe_refresh_results(&mut self, board: &Board) {
-        if self.query == self.last_query {
+        if !self.options_dirty && self.query == self.last_query {
             return;
         }
+        self.options_dirty = false;
 
         self.last_query.clone_from(&self.query);
         let options = SearchOptions {
@@ -210,6 +214,7 @@ impl SearchOverlay {
             };
 
             for (i, m) in panel_result.matches.iter().enumerate() {
+                let line_text = panel_result.lines.get(m.line_index).cloned().unwrap_or_default();
                 self.display_rows.push(DisplayRow {
                     panel_id: panel_result.panel_id,
                     panel_title: if i == 0 {
@@ -217,7 +222,7 @@ impl SearchOverlay {
                     } else {
                         String::new()
                     },
-                    line_text: m.line_text.clone(),
+                    line_text,
                     match_count_label: if i == 0 { count_label.clone() } else { None },
                 });
             }
@@ -249,12 +254,7 @@ impl SearchOverlay {
         });
 
         if escape {
-            // Clear query and close dropdown; the search bar stays visible.
-            self.query.clear();
-            self.last_query.clear();
-            self.cached_results = SearchResults::default();
-            self.display_rows.clear();
-            self.selected = 0;
+            self.clear();
             return Some(SearchAction::None);
         }
         if up && self.selected > 0 {
@@ -299,7 +299,7 @@ impl SearchOverlay {
                             &row.panel_title
                         },
                         line_text: &row.line_text,
-                        match_count_label: row.match_count_label.clone(),
+                        match_count_label: row.match_count_label.as_deref(),
                     };
 
                     if render_match_row(ui, width, i, &data, self.selected == i) {

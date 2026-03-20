@@ -123,8 +123,9 @@ impl Terminal {
                     line.push(ch);
                 }
             }
-            let trimmed = line.trim_end().to_string();
-            lines.push(trimmed);
+            let trimmed_len = line.trim_end().len();
+            line.truncate(trimmed_len);
+            lines.push(line);
         }
 
         // Drop empty trailing lines.

@@ -1,6 +1,4 @@
-use egui::{Pos2, Vec2};
-
-use crate::app::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
+use crate::app::HorizonApp;
 use crate::search_overlay::SearchAction;
 use crate::search_overlay::SearchOverlay;
 
@@ -14,7 +12,6 @@ impl HorizonApp {
         match action {
             SearchAction::None => {}
             SearchAction::FocusPanel(panel_id) => {
-                // Clear the query after navigating to a result.
                 if let Some(overlay) = &mut self.search_overlay {
                     overlay.clear();
                 }
@@ -22,12 +19,7 @@ impl HorizonApp {
                 if let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
                 {
-                    let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                    let size = Vec2::new(
-                        max[0] - min[0] + 2.0 * WS_BG_PAD,
-                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                    );
-                    self.pan_to_canvas_pos_aligned(ui.ctx(), pos, size, true);
+                    self.focus_workspace_bounds(ui.ctx(), min, max, true);
                 }
             }
         }

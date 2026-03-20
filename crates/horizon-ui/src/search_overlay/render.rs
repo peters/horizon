@@ -43,7 +43,7 @@ pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) 
 pub(super) struct MatchRowData<'a> {
     pub panel_title: &'a str,
     pub line_text: &'a str,
-    pub match_count_label: Option<String>,
+    pub match_count_label: Option<&'a str>,
 }
 
 pub(super) fn render_match_row(
@@ -99,7 +99,7 @@ pub(super) fn render_match_row(
         estimate_text_width(data.panel_title, 12.0) + 10.0
     };
     let detail_x = label_x + title_width;
-    let max_detail_x = row_rect.max.x - badge_width(data.match_count_label.as_ref()) - 6.0;
+    let max_detail_x = row_rect.max.x - badge_width(data.match_count_label) - 6.0;
 
     if detail_x < max_detail_x {
         let available = max_detail_x - detail_x;
@@ -189,7 +189,7 @@ fn estimate_text_width(text: &str, font_size: f32) -> f32 {
     usize_to_f32(text.len()) * char_width
 }
 
-fn badge_width(label: Option<&String>) -> f32 {
+fn badge_width(label: Option<&str>) -> f32 {
     label.map_or(0.0, |s| estimate_text_width(s, 9.5) + 24.0)
 }
 
