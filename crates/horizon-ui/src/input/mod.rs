@@ -200,6 +200,66 @@ mod tests {
         assert_eq!(delete.bytes, b"\x1b[3~");
     }
 
+    #[test]
+    fn legacy_c0_keys_match_expected_sequences() {
+        let cases: [(&str, Key, Modifiers, &[u8]); 14] = [
+            ("shift enter", Key::Enter, Modifiers::SHIFT, b"\r"),
+            ("alt enter", Key::Enter, Modifiers::ALT, b"\x1b\r"),
+            (
+                "alt shift enter",
+                Key::Enter,
+                Modifiers::ALT | Modifiers::SHIFT,
+                b"\x1b\r",
+            ),
+            ("shift escape", Key::Escape, Modifiers::SHIFT, b"\x1b"),
+            ("ctrl escape", Key::Escape, Modifiers::CTRL, b"\x1b"),
+            ("alt escape", Key::Escape, Modifiers::ALT, b"\x1b\x1b"),
+            ("shift backspace", Key::Backspace, Modifiers::SHIFT, b"\x7f"),
+            ("ctrl backspace", Key::Backspace, Modifiers::CTRL, b"\x08"),
+            ("alt backspace", Key::Backspace, Modifiers::ALT, b"\x1b\x7f"),
+            (
+                "ctrl alt backspace",
+                Key::Backspace,
+                Modifiers::CTRL | Modifiers::ALT,
+                b"\x1b\x08",
+            ),
+            ("ctrl tab", Key::Tab, Modifiers::CTRL, b"\t"),
+            ("shift tab", Key::Tab, Modifiers::SHIFT, b"\x1b[Z"),
+            (
+                "ctrl shift tab",
+                Key::Tab,
+                Modifiers::CTRL | Modifiers::SHIFT,
+                b"\x1b[Z",
+            ),
+            (
+                "alt shift tab",
+                Key::Tab,
+                Modifiers::ALT | Modifiers::SHIFT,
+                b"\x1b\x1b[Z",
+            ),
+        ];
+
+        for (name, key, modifiers, expected) in cases {
+            let translation =
+                translate_key_event(key, true, false, modifiers, TermMode::NONE).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(translation.bytes, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn kitty_shift_enter_remains_modifier_aware() {
+        let translation = translate_key_event(
+            Key::Enter,
+            true,
+            false,
+            Modifiers::SHIFT,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        )
+        .expect("kitty shift enter");
+
+        assert_eq!(translation.bytes, b"\x1b[13;2u");
+    }
+
     /// Regression: `AltGr` is reported by winit as Alt. When typing @
     /// via `AltGr+2`, `translate_key_event` must NOT produce an alt-prefixed
     /// sequence for Num2, because the actual character (@) arrives as a
