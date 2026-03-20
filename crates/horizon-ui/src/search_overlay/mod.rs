@@ -2,17 +2,18 @@ mod render;
 
 use std::time::{Duration, Instant};
 
-use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
+use egui::{Align, Context, Id, Layout, Margin, Order, Pos2, Rect, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
 use crate::theme;
 
 use render::{
-    MatchRowData, paint_dropdown_frame, paint_empty_results, render_match_row, render_section_header,
-    render_status_line, render_toggle_button,
+    MatchRowData, paint_dropdown_frame, paint_empty_results, paint_toolbar_search_input, render_match_row,
+    render_section_header, render_status_line, render_toggle_button,
 };
 
 const DROPDOWN_WIDTH: f32 = 600.0;
+const TOOLBAR_INPUT_HEIGHT: f32 = 36.0;
 const ROW_HEIGHT: f32 = 32.0;
 const SECTION_HEADER_HEIGHT: f32 = 24.0;
 const MAX_VISIBLE_ROWS: usize = 12;
@@ -103,10 +104,19 @@ impl SearchOverlay {
         self.maybe_refresh_results(ui.ctx(), board);
 
         let input_width = ui.available_width();
+        let input_rect = ui.allocate_space(Vec2::new(input_width, TOOLBAR_INPUT_HEIGHT)).1;
+        let text_edit_id = ui.make_persistent_id("toolbar_search_input");
+        let input_has_focus =
+            self.request_focus || ui.input(|input| input.focused) && ui.memory(|memory| memory.has_focus(text_edit_id));
+        let input_hovered = ui.rect_contains_pointer(input_rect);
 
-        let response = ui.add_sized(
-            Vec2::new(input_width, 32.0),
+        paint_toolbar_search_input(ui, input_rect, input_has_focus, input_hovered, !self.query.is_empty());
+
+        let response = ui.put(
+            input_rect,
             egui::TextEdit::singleline(&mut self.query)
+                .id(text_edit_id)
+                .frame(false)
                 .font(egui::FontId::monospace(13.0))
                 .text_color(theme::FG)
                 .hint_text(
@@ -114,17 +124,7 @@ impl SearchOverlay {
                         .color(theme::FG_DIM)
                         .size(12.5),
                 )
-                .margin(Margin::symmetric(12, 0)),
-        );
-
-        // Paint the accent border on top of the default frame so it's
-        // always visible regardless of focus state.
-        let input_rect = response.rect;
-        ui.painter().rect_stroke(
-            input_rect,
-            CornerRadius::same(6),
-            Stroke::new(1.5, theme::alpha(theme::ACCENT, 130)),
-            StrokeKind::Inside,
+                .margin(Margin::symmetric(42, 9)),
         );
 
         if self.request_focus {
