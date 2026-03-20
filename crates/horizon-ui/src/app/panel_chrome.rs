@@ -144,13 +144,9 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         } else {
             chrome.titlebar_rect.min.x + 12.0
         };
-        painter.text(
-            Pos2::new(title_x, chrome.titlebar_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            title,
-            egui::FontId::proportional(13.0),
-            panel_title_color(chrome.focused),
-        );
+        let title_right = title_right_boundary(&chrome);
+        let max_width = (title_right - title_x).max(0.0);
+        paint_truncated_title(&painter, title, title_x, chrome.titlebar_rect.center().y, max_width, chrome.focused);
     }
 
     if let Some((severity, summary)) = chrome.attention_badge {
@@ -211,6 +207,53 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
         ],
         handle_stroke,
     );
+}
+
+/// Compute the right x boundary where the title text must stop, accounting
+/// for all badges (history meter, SSH status, attention) that sit to its right.
+fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
+    let mut right = chrome.close_rect.min.x - 12.0;
+    if chrome.scrollback_limit > 0 {
+        right = panel_history_badge_rect(chrome.titlebar_rect, chrome.close_rect).min.x - 8.0;
+    }
+    if chrome.ssh_status.is_some() {
+        // SSH badge sits left of the history meter; reserve ~90px.
+        right -= 90.0;
+    }
+    if chrome.attention_badge.is_some() {
+        // Attention badge sits left of the history meter; reserve ~110px.
+        right -= 110.0;
+    }
+    right
+}
+
+fn paint_truncated_title(
+    painter: &egui::Painter,
+    title: &str,
+    x: f32,
+    center_y: f32,
+    max_width: f32,
+    focused: bool,
+) {
+    use egui::text::{LayoutJob, TextFormat, TextWrapping};
+
+    let mut job = LayoutJob::single_section(
+        title.to_string(),
+        TextFormat {
+            font_id: egui::FontId::proportional(13.0),
+            color: panel_title_color(focused),
+            ..Default::default()
+        },
+    );
+    job.wrap = TextWrapping {
+        max_width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('\u{2026}'),
+    };
+    let galley = painter.layout_job(job);
+    let text_height = galley.size().y;
+    painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
 }
 
 fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focused: bool) -> Color32 {
