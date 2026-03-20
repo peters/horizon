@@ -77,6 +77,7 @@ impl SearchOverlay {
         self.cached_results = SearchResults::default();
         self.display_rows.clear();
         self.selected = 0;
+        self.query_changed_at = None;
     }
 
     /// Create a search overlay without auto-focusing the input. Used for
@@ -124,7 +125,7 @@ impl SearchOverlay {
         }
 
         if response.changed() {
-            self.selected = 0;
+            self.note_query_changed(Instant::now());
         }
 
         // Handle keyboard while the input has focus.
@@ -134,26 +135,19 @@ impl SearchOverlay {
             return action;
         }
 
-        // Show dropdown results below the input when focused with a query.
-        if !self.query.is_empty() && response.has_focus() {
-            self.show_results_dropdown(ui.ctx(), input_rect)
+        // Keep the dropdown interactive while the pointer is over it so
+        // result-row and toggle clicks are not dropped when the text field
+        // loses focus on mouse down.
+        let dropdown_rect = self.dropdown_rect(input_rect);
+        if self.should_show_dropdown(ui.ctx(), response.has_focus(), dropdown_rect) {
+            self.show_results_dropdown(ui.ctx(), dropdown_rect)
         } else {
             SearchAction::None
         }
     }
 
-    fn show_results_dropdown(&mut self, ctx: &Context, anchor_rect: Rect) -> SearchAction {
+    fn show_results_dropdown(&mut self, ctx: &Context, dropdown_rect: Rect) -> SearchAction {
         self.clamp_selection();
-
-        let dropdown_x = (anchor_rect.max.x - DROPDOWN_WIDTH).max(anchor_rect.min.x);
-        let dropdown_top = anchor_rect.max.y + 6.0;
-        let max_results_height = self.dropdown_content_height();
-        let dropdown_height = max_results_height + 56.0;
-
-        let dropdown_rect = Rect::from_min_size(
-            Pos2::new(dropdown_x, dropdown_top),
-            Vec2::new(DROPDOWN_WIDTH, dropdown_height),
-        );
 
         let mut action = SearchAction::None;
 
@@ -193,6 +187,27 @@ impl SearchOverlay {
         action
     }
 
+    fn dropdown_rect(&self, anchor_rect: Rect) -> Rect {
+        let dropdown_x = (anchor_rect.max.x - DROPDOWN_WIDTH).max(anchor_rect.min.x);
+        let dropdown_top = anchor_rect.max.y + 6.0;
+        let max_results_height = self.dropdown_content_height();
+        let dropdown_height = max_results_height + 56.0;
+
+        Rect::from_min_size(
+            Pos2::new(dropdown_x, dropdown_top),
+            Vec2::new(DROPDOWN_WIDTH, dropdown_height),
+        )
+    }
+
+    fn should_show_dropdown(&self, ctx: &Context, input_has_focus: bool, dropdown_rect: Rect) -> bool {
+        !self.query.is_empty()
+            && (input_has_focus
+                || ctx.pointer_hover_pos().is_some_and(|pos| dropdown_rect.contains(pos))
+                || ctx
+                    .pointer_interact_pos()
+                    .is_some_and(|pos| dropdown_rect.contains(pos)))
+    }
+
     const DEBOUNCE: Duration = Duration::from_millis(150);
 
     fn maybe_refresh_results(&mut self, ctx: &Context, board: &Board) {
@@ -208,13 +223,15 @@ impl SearchOverlay {
         if options_changed {
             // Option toggles fire immediately (no debounce needed).
             self.options_dirty = false;
+            self.query_changed_at = None;
         } else {
             // Query text changed -- debounce to avoid searching on every
             // keystroke when many terminals are open.
             let now = Instant::now();
             let changed_at = *self.query_changed_at.get_or_insert(now);
-            if now.duration_since(changed_at) < Self::DEBOUNCE {
-                ctx.request_repaint_after(Self::DEBOUNCE);
+            let remaining = Self::DEBOUNCE.saturating_sub(now.duration_since(changed_at));
+            if !remaining.is_zero() {
+                ctx.request_repaint_after(remaining);
                 return;
             }
             self.query_changed_at = None;
@@ -228,6 +245,11 @@ impl SearchOverlay {
         self.cached_results = search_board(board, &self.query, &options);
         self.rebuild_display_rows();
         self.selected = 0;
+    }
+
+    fn note_query_changed(&mut self, now: Instant) {
+        self.selected = 0;
+        self.query_changed_at = Some(now);
     }
 
     fn rebuild_display_rows(&mut self) {
@@ -335,5 +357,83 @@ impl SearchOverlay {
             });
 
         clicked_idx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use egui::{Pos2, Rect, Vec2};
+
+    use super::SearchOverlay;
+
+    #[test]
+    fn note_query_changed_resets_debounce_anchor() {
+        let mut overlay = SearchOverlay::new();
+        let first_change = Instant::now();
+        let second_change = first_change + Duration::from_millis(100);
+
+        overlay.note_query_changed(first_change);
+        assert_eq!(overlay.query_changed_at, Some(first_change));
+
+        overlay.note_query_changed(second_change);
+        assert_eq!(overlay.query_changed_at, Some(second_change));
+    }
+
+    #[test]
+    fn clear_resets_pending_debounce() {
+        let mut overlay = SearchOverlay::new();
+        overlay.note_query_changed(Instant::now());
+
+        overlay.clear();
+
+        assert!(overlay.query_changed_at.is_none());
+        assert!(overlay.query.is_empty());
+        assert!(overlay.last_query.is_empty());
+    }
+
+    #[test]
+    fn dropdown_stays_open_while_pointer_is_over_results() {
+        let overlay = SearchOverlay {
+            query: "workspace-beta-only".to_string(),
+            ..SearchOverlay::new()
+        };
+        let ctx = egui::Context::default();
+        let dropdown_rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(120.0, 80.0));
+
+        let pointer = dropdown_rect.center();
+        let mut input = egui::RawInput {
+            events: vec![egui::Event::PointerMoved(pointer)],
+            ..egui::RawInput::default()
+        };
+        input.viewport_id = egui::ViewportId::ROOT;
+        ctx.begin_pass(input);
+        let show_dropdown = overlay.should_show_dropdown(&ctx, false, dropdown_rect);
+        let _ = ctx.end_pass();
+
+        assert!(show_dropdown);
+    }
+
+    #[test]
+    fn dropdown_hides_after_outside_click_when_input_loses_focus() {
+        let overlay = SearchOverlay {
+            query: "workspace-beta-only".to_string(),
+            ..SearchOverlay::new()
+        };
+        let ctx = egui::Context::default();
+        let dropdown_rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(120.0, 80.0));
+
+        let outside = Pos2::new(dropdown_rect.max.x + 20.0, dropdown_rect.max.y + 20.0);
+        let mut input = egui::RawInput {
+            events: vec![egui::Event::PointerMoved(outside)],
+            ..egui::RawInput::default()
+        };
+        input.viewport_id = egui::ViewportId::ROOT;
+        ctx.begin_pass(input);
+        let show_dropdown = overlay.should_show_dropdown(&ctx, false, dropdown_rect);
+        let _ = ctx.end_pass();
+
+        assert!(!show_dropdown);
     }
 }
