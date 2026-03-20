@@ -146,7 +146,14 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         };
         let title_right = title_right_boundary(&chrome);
         let max_width = (title_right - title_x).max(0.0);
-        paint_truncated_title(&painter, title, title_x, chrome.titlebar_rect.center().y, max_width, chrome.focused);
+        paint_truncated_title(
+            &painter,
+            title,
+            title_x,
+            chrome.titlebar_rect.center().y,
+            max_width,
+            chrome.focused,
+        );
     }
 
     if let Some((severity, summary)) = chrome.attention_badge {
@@ -227,14 +234,7 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     right
 }
 
-fn paint_truncated_title(
-    painter: &egui::Painter,
-    title: &str,
-    x: f32,
-    center_y: f32,
-    max_width: f32,
-    focused: bool,
-) {
+fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
     use egui::text::{LayoutJob, TextFormat, TextWrapping};
 
     let mut job = LayoutJob::single_section(
