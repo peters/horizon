@@ -4,6 +4,7 @@ use crate::app::shortcuts::shortcut_pressed;
 use crate::app::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
 use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
+use crate::search_overlay::SearchOverlay;
 
 use super::align_attached_workspaces;
 use super::support::{
@@ -111,6 +112,15 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
+            CommandId::ToggleSearch => {
+                // Focus the toolbar search input (or create it with focus
+                // if it doesn't exist yet).
+                if let Some(overlay) = &mut self.search_overlay {
+                    overlay.focus();
+                } else {
+                    self.search_overlay = Some(SearchOverlay::new());
+                }
+            }
         }
     }
 
@@ -129,6 +139,7 @@ impl HorizonApp {
             (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
             (self.shortcuts.open_remote_hosts, CommandId::OpenRemoteHosts),
             (self.shortcuts.new_terminal, CommandId::NewPanel),
+            (self.shortcuts.search, CommandId::ToggleSearch),
         ];
 
         let (toggle_palette, triggered_command) = ctx.input(|input| {

@@ -202,6 +202,7 @@ pub struct ShortcutsConfig {
     pub exit_fullscreen_panel: String,
     pub fullscreen_window: String,
     pub save_editor: String,
+    pub search: String,
 }
 
 impl Default for ShortcutsConfig {
@@ -222,6 +223,7 @@ impl Default for ShortcutsConfig {
             exit_fullscreen_panel: "Escape".to_string(),
             fullscreen_window: "Ctrl+Shift+F11".to_string(),
             save_editor: "Ctrl+Shift+S".to_string(),
+            search: "Ctrl+Shift+F".to_string(),
         }
     }
 }
@@ -252,6 +254,7 @@ impl ShortcutsConfig {
             exit_fullscreen_panel: parse_shortcut("exit_fullscreen_panel", &self.exit_fullscreen_panel)?,
             fullscreen_window: parse_shortcut("fullscreen_window", &self.fullscreen_window)?,
             save_editor: parse_shortcut("save_editor", &self.save_editor)?,
+            search: parse_shortcut("search", &self.search)?,
         };
 
         validate_distinct_shortcuts([
@@ -270,6 +273,7 @@ impl ShortcutsConfig {
             ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
             ("fullscreen_window", shortcuts.fullscreen_window),
             ("save_editor", shortcuts.save_editor),
+            ("search", shortcuts.search),
         ])?;
 
         Ok(shortcuts)

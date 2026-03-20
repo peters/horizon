@@ -75,8 +75,6 @@ impl HorizonApp {
                                 .color(theme::FG_DIM)
                                 .size(10.5),
                         );
-                        ui.add_space(10.0);
-
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
                             if ui.add(util::chrome_button("Settings")).clicked() {
@@ -94,6 +92,22 @@ impl HorizonApp {
                         });
                     },
                 );
+
+                // Search bar centered inside the toolbar area.
+                let search_width = (viewport.width() * 0.35).clamp(280.0, 600.0);
+                let search_rect = Rect::from_center_size(
+                    Pos2::new(
+                        viewport.min.x + viewport.width() * 0.5,
+                        viewport.min.y + TOOLBAR_HEIGHT * 0.5,
+                    ),
+                    Vec2::new(search_width, TOOLBAR_HEIGHT - 14.0),
+                );
+                let mut search_ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(search_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                self.render_toolbar_search(&mut search_ui);
             });
     }
 

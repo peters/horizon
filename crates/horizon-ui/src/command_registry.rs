@@ -25,6 +25,9 @@ pub enum CommandId {
 
     // Settings
     ToggleSettings,
+
+    // Search
+    ToggleSearch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +139,12 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             label: "Settings".into(),
             shortcut: Some(shortcuts.toggle_settings.display_label(primary_label)),
             keywords: vec!["settings".into(), "config".into(), "preferences".into()],
+        },
+        CommandEntry {
+            id: CommandId::ToggleSearch,
+            label: "Search Terminals".into(),
+            shortcut: Some(shortcuts.search.display_label(primary_label)),
+            keywords: vec!["find".into(), "search".into(), "grep".into(), "text".into()],
         },
     ]
 }

@@ -36,6 +36,7 @@ use crate::command_registry::CommandEntry;
 use crate::dir_picker::DirPicker;
 use crate::editor_widget::MarkdownPreviewCache;
 use crate::remote_hosts_overlay::RemoteHostsOverlay;
+use crate::search_overlay::SearchOverlay;
 use crate::terminal_widget::TerminalGridCache;
 use crate::theme;
 
@@ -134,6 +135,7 @@ pub struct HorizonApp {
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
+    search_overlay: Option<SearchOverlay>,
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
@@ -232,6 +234,7 @@ impl HorizonApp {
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
+            search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
             initial_pan_done: false,
