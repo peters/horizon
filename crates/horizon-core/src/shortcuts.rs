@@ -217,6 +217,8 @@ impl fmt::Display for ShortcutBinding {
 pub struct AppShortcuts {
     pub command_palette: ShortcutBinding,
     pub new_terminal: ShortcutBinding,
+    pub focus_active_workspace: ShortcutBinding,
+    pub fit_active_workspace: ShortcutBinding,
     pub open_remote_hosts: ShortcutBinding,
     pub toggle_sidebar: ShortcutBinding,
     pub toggle_hud: ShortcutBinding,
@@ -239,6 +241,8 @@ impl Default for AppShortcuts {
         Self {
             command_palette: ShortcutBinding::new(ps, ShortcutKey::Letter('K')),
             new_terminal: ShortcutBinding::new(ps, ShortcutKey::Letter('N')),
+            focus_active_workspace: ShortcutBinding::new(ps, ShortcutKey::Letter('W')),
+            fit_active_workspace: ShortcutBinding::new(ps, ShortcutKey::Digit(9)),
             open_remote_hosts: ShortcutBinding::new(ps, ShortcutKey::Letter('H')),
             toggle_sidebar: ShortcutBinding::new(ps, ShortcutKey::Letter('B')),
             toggle_hud: ShortcutBinding::new(ps, ShortcutKey::Letter('U')),

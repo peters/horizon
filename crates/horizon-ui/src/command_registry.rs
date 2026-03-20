@@ -6,6 +6,8 @@ pub enum CommandId {
     // Navigation
     SwitchWorkspace(WorkspaceId),
     FocusPanel(PanelId),
+    FocusActiveWorkspace,
+    FitActiveWorkspace,
 
     // View
     ToggleSidebar,
@@ -67,6 +69,18 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             label: "New Panel".into(),
             shortcut: Some(shortcuts.new_terminal.display_label(primary_label)),
             keywords: vec!["create".into(), "terminal".into(), "add".into()],
+        },
+        CommandEntry {
+            id: CommandId::FocusActiveWorkspace,
+            label: "Focus Active Workspace".into(),
+            shortcut: Some(shortcuts.focus_active_workspace.display_label(primary_label)),
+            keywords: vec!["workspace".into(), "focus".into(), "pan".into(), "center".into()],
+        },
+        CommandEntry {
+            id: CommandId::FitActiveWorkspace,
+            label: "Fit Active Workspace".into(),
+            shortcut: Some(shortcuts.fit_active_workspace.display_label(primary_label)),
+            keywords: vec!["workspace".into(), "fit".into(), "zoom".into(), "frame".into()],
         },
         CommandEntry {
             id: CommandId::OpenRemoteHosts,
@@ -182,6 +196,23 @@ mod tests {
 
         assert_eq!(entry.label, "Align Workspaces");
         assert_eq!(entry.shortcut.as_deref(), Some("Ctrl+Shift+A"));
+    }
+
+    #[test]
+    fn action_commands_include_workspace_focus_and_fit() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+
+        let focus = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::FocusActiveWorkspace)
+            .expect("workspace focus command");
+        let fit = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::FitActiveWorkspace)
+            .expect("workspace fit command");
+
+        assert_eq!(focus.shortcut.as_deref(), Some("Ctrl+Shift+W"));
+        assert_eq!(fit.shortcut.as_deref(), Some("Ctrl+Shift+9"));
     }
 
     #[test]

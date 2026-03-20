@@ -189,6 +189,8 @@ pub struct ShortcutsConfig {
     #[serde(alias = "quick_nav")]
     pub command_palette: String,
     pub new_terminal: String,
+    pub focus_active_workspace: String,
+    pub fit_active_workspace: String,
     pub open_remote_hosts: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
@@ -210,6 +212,8 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+Shift+K".to_string(),
             new_terminal: "Ctrl+Shift+N".to_string(),
+            focus_active_workspace: "Ctrl+Shift+W".to_string(),
+            fit_active_workspace: "Ctrl+Shift+9".to_string(),
             open_remote_hosts: "Ctrl+Shift+H".to_string(),
             toggle_sidebar: "Ctrl+Shift+B".to_string(),
             toggle_hud: "Ctrl+Shift+U".to_string(),
@@ -238,6 +242,8 @@ impl ShortcutsConfig {
         let shortcuts = AppShortcuts {
             command_palette: parse_shortcut("command_palette", &self.command_palette)?,
             new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
+            focus_active_workspace: parse_shortcut("focus_active_workspace", &self.focus_active_workspace)?,
+            fit_active_workspace: parse_shortcut("fit_active_workspace", &self.fit_active_workspace)?,
             open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
@@ -260,6 +266,8 @@ impl ShortcutsConfig {
         validate_distinct_shortcuts([
             ("command_palette", shortcuts.command_palette),
             ("new_terminal", shortcuts.new_terminal),
+            ("focus_active_workspace", shortcuts.focus_active_workspace),
+            ("fit_active_workspace", shortcuts.fit_active_workspace),
             ("open_remote_hosts", shortcuts.open_remote_hosts),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
@@ -671,6 +679,23 @@ mod tests {
                 .expect("shortcuts should resolve")
                 .command_palette,
             crate::shortcuts::ShortcutBinding::parse("Alt+K").expect("shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn workspace_navigation_shortcuts_resolve() {
+        let config = Config::from_yaml("shortcuts:\n  focus_active_workspace: Alt+W\n  fit_active_workspace: Alt+9\n")
+            .expect("config should deserialize");
+
+        let shortcuts = config.shortcuts.resolve().expect("shortcuts should resolve");
+
+        assert_eq!(
+            shortcuts.focus_active_workspace,
+            crate::shortcuts::ShortcutBinding::parse("Alt+W").expect("shortcut should parse")
+        );
+        assert_eq!(
+            shortcuts.fit_active_workspace,
+            crate::shortcuts::ShortcutBinding::parse("Alt+9").expect("shortcut should parse")
         );
     }
 
