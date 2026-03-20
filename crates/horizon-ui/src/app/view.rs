@@ -1,7 +1,7 @@
 use egui::{Context, Pos2, Rect, Ui, Vec2, emath::TSTransform};
-use horizon_core::WorkspaceId;
+use horizon_core::{PanelId, WorkspaceId};
 
-use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
+use super::{HorizonApp, PANEL_PADDING, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 impl HorizonApp {
     pub(super) fn ensure_workspace_visible(&mut self, ctx: &Context) -> WorkspaceId {
@@ -123,6 +123,13 @@ impl HorizonApp {
         true
     }
 
+    pub(super) fn focus_panel_visible(&mut self, ctx: &Context, panel_id: PanelId, left_align: bool) {
+        self.board.focus(panel_id);
+        if let Some((pos, size)) = self.panel_focus_frame(panel_id) {
+            self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
+        }
+    }
+
     pub(super) fn focus_workspace_bounds(&mut self, ctx: &Context, min: [f32; 2], max: [f32; 2], left_align: bool) {
         let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
         let size = Vec2::new(
@@ -161,6 +168,19 @@ impl HorizonApp {
             )
         })
     }
+
+    fn panel_focus_frame(&self, panel_id: PanelId) -> Option<(Pos2, Vec2)> {
+        self.board
+            .panel(panel_id)
+            .map(|panel| panel_focus_frame(panel.layout.position, panel.layout.size))
+    }
+}
+
+fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
+    (
+        Pos2::new(position[0] - PANEL_PADDING, position[1] - PANEL_PADDING),
+        Vec2::new(size[0] + PANEL_PADDING * 2.0, size[1] + PANEL_PADDING * 2.0),
+    )
 }
 
 fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
@@ -192,7 +212,7 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::CanvasViewState;
 
-    use super::{aligned_pan_offset, canvas_scene_transform};
+    use super::{aligned_pan_offset, canvas_scene_transform, panel_focus_frame};
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -228,5 +248,13 @@ mod tests {
 
         assert!((offset.x + 280.0).abs() <= f32::EPSILON);
         assert!((offset.y - 90.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn panel_focus_frame_adds_padding_around_panel_bounds() {
+        let (pos, size) = panel_focus_frame([240.0, 120.0], [520.0, 340.0]);
+
+        assert_eq!(pos, Pos2::new(232.0, 112.0));
+        assert_eq!(size, Vec2::new(536.0, 356.0));
     }
 }

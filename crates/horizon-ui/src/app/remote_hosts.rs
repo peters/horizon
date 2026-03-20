@@ -10,9 +10,9 @@ use super::HorizonApp;
 const DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 impl HorizonApp {
-    pub(super) fn toggle_remote_hosts_overlay(&mut self) {
+    pub(super) fn toggle_remote_hosts_overlay(&mut self, ctx: &egui::Context) {
         if self.remote_hosts_overlay.is_some() {
-            self.remote_hosts_overlay = None;
+            self.dismiss_remote_hosts_overlay(ctx);
         } else {
             self.remote_hosts_overlay = Some(RemoteHostsOverlay::new());
             self.maybe_start_remote_hosts_refresh();
@@ -42,12 +42,12 @@ impl HorizonApp {
         match action {
             RemoteHostsOverlayAction::None => {}
             RemoteHostsOverlayAction::Cancelled => {
-                self.remote_hosts_overlay = None;
+                self.dismiss_remote_hosts_overlay(ctx);
             }
             RemoteHostsOverlayAction::OpenSsh { label, connection } => {
-                self.remote_hosts_overlay = None;
+                self.dismiss_remote_hosts_overlay(ctx);
                 let workspace_id = self.remote_sessions_workspace(ctx);
-                self.open_ssh_panel(workspace_id, label, connection);
+                self.open_ssh_panel(ctx, workspace_id, label, connection);
             }
         }
     }
@@ -113,6 +113,12 @@ impl HorizonApp {
         rx
     }
 
+    fn dismiss_remote_hosts_overlay(&mut self, ctx: &egui::Context) {
+        if self.remote_hosts_overlay.take().is_some() {
+            ctx.memory_mut(egui::Memory::stop_text_input);
+        }
+    }
+
     fn remote_sessions_workspace(&mut self, ctx: &egui::Context) -> WorkspaceId {
         const WORKSPACE_NAME: &str = "Remote Sessions";
         if let Some(ws) = self.board.workspaces.iter().find(|ws| ws.name == WORKSPACE_NAME) {
@@ -124,7 +130,13 @@ impl HorizonApp {
         ws_id
     }
 
-    fn open_ssh_panel(&mut self, workspace_id: WorkspaceId, label: String, connection: horizon_core::SshConnection) {
+    fn open_ssh_panel(
+        &mut self,
+        ctx: &egui::Context,
+        workspace_id: WorkspaceId,
+        label: String,
+        connection: horizon_core::SshConnection,
+    ) {
         let options = PanelOptions {
             name: Some(label),
             kind: PanelKind::Ssh,
@@ -132,10 +144,14 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
 
-        if let Err(error) = self.create_panel_with_options(options, workspace_id) {
-            tracing::error!("failed to create ssh panel from remote hosts: {error}");
-        } else {
-            self.mark_runtime_dirty();
+        match self.create_panel_with_options(options, workspace_id) {
+            Ok(panel_id) => {
+                self.focus_panel_visible(ctx, panel_id, false);
+                self.mark_runtime_dirty();
+            }
+            Err(error) => {
+                tracing::error!("failed to create ssh panel from remote hosts: {error}");
+            }
         }
     }
 }

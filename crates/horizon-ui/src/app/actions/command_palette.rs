@@ -101,7 +101,7 @@ impl HorizonApp {
                     self.create_panel(ctx);
                 }
             }
-            CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(),
+            CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
