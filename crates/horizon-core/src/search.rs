@@ -20,6 +20,10 @@ pub struct PanelSearchResult {
     /// The extracted lines of text from this terminal.
     pub lines: Vec<String>,
     pub matches: Vec<SearchMatch>,
+    /// Total grid lines (scrollback + screen) at snapshot time, before
+    /// trailing-empty-line trimming.  Used to map a `line_index` back to
+    /// a scrollback offset.
+    pub total_lines: usize,
 }
 
 /// Aggregated search results across all panels.
@@ -47,12 +51,12 @@ const MAX_MATCHES_PER_PANEL: usize = 200;
 ///
 /// Delegates to `Terminal::full_text_lines` which reads the entire grid
 /// (scrollback + screen) in a single mutex lock.
-fn extract_terminal_lines(board: &Board, panel_id: PanelId) -> Vec<String> {
+fn extract_terminal_lines(board: &Board, panel_id: PanelId) -> (Vec<String>, usize) {
     let Some(panel) = board.panel(panel_id) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let Some(terminal) = panel.terminal() else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
 
     terminal.full_text_lines(MAX_EXTRACT_LINES)
@@ -79,7 +83,7 @@ pub fn search_board(board: &Board, query: &str, options: &SearchOptions) -> Sear
     let mut results = SearchResults::default();
 
     for (panel_id, panel_title) in panel_ids {
-        let lines = extract_terminal_lines(board, panel_id);
+        let (lines, total_lines) = extract_terminal_lines(board, panel_id);
         let matches = search_lines(&lines, query, options);
         if !matches.is_empty() {
             results.total_matches += matches.len();
@@ -88,6 +92,7 @@ pub fn search_board(board: &Board, query: &str, options: &SearchOptions) -> Sear
                 panel_title,
                 lines,
                 matches,
+                total_lines,
             });
         }
     }

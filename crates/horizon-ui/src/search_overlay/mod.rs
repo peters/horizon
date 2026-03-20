@@ -27,6 +27,10 @@ struct DisplayRow {
     panel_title: String,
     line_text: String,
     match_count_label: Option<String>,
+    /// Zero-based line index of the match within the extracted text snapshot.
+    line_index: usize,
+    /// Total grid lines at snapshot time (before trailing-empty-line trimming).
+    total_lines: usize,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -46,7 +50,11 @@ pub(crate) struct SearchOverlay {
 
 pub(crate) enum SearchAction {
     None,
-    FocusPanel(PanelId),
+    FocusPanel {
+        panel_id: PanelId,
+        line_index: usize,
+        total_lines: usize,
+    },
 }
 
 impl SearchOverlay {
@@ -179,7 +187,12 @@ impl SearchOverlay {
                         ui.add_space(4.0);
 
                         if let Some(idx) = self.render_results(ui, inner.width()) {
-                            action = SearchAction::FocusPanel(self.display_rows[idx].panel_id);
+                            let row = &self.display_rows[idx];
+                            action = SearchAction::FocusPanel {
+                                panel_id: row.panel_id,
+                                line_index: row.line_index,
+                                total_lines: row.total_lines,
+                            };
                         }
                     },
                 );
@@ -285,6 +298,8 @@ impl SearchOverlay {
                     },
                     line_text,
                     match_count_label: if i == 0 { count_label.clone() } else { None },
+                    line_index: m.line_index,
+                    total_lines: panel_result.total_lines,
                 });
             }
         }
@@ -325,7 +340,12 @@ impl SearchOverlay {
             self.selected += 1;
         }
         if enter && !self.display_rows.is_empty() {
-            return Some(SearchAction::FocusPanel(self.display_rows[self.selected].panel_id));
+            let row = &self.display_rows[self.selected];
+            return Some(SearchAction::FocusPanel {
+                panel_id: row.panel_id,
+                line_index: row.line_index,
+                total_lines: row.total_lines,
+            });
         }
 
         None
@@ -467,6 +487,7 @@ mod tests {
                     byte_offset: 0,
                     byte_len: 5,
                 }],
+                total_lines: 1,
             }],
             total_matches: 1,
         };
@@ -475,6 +496,8 @@ mod tests {
             panel_title: "build".to_string(),
             line_text: "error: first failure".to_string(),
             match_count_label: None,
+            line_index: 0,
+            total_lines: 1,
         }];
 
         overlay.maybe_refresh_results_at(&Context::default(), &Board::new(), true, Instant::now());

@@ -85,11 +85,16 @@ impl Terminal {
 
     /// Extract all text from the terminal grid including scrollback history.
     ///
-    /// Returns lines from oldest (top of scrollback) to newest (bottom of
+    /// Returns `(lines, grid_total)` where `grid_total` is the total number
+    /// of grid lines (scrollback + screen, capped at `max_lines`) *before*
+    /// trailing-empty-line trimming.  Callers can use `grid_total` together
+    /// with a line index to compute a scrollback offset.
+    ///
+    /// Lines are ordered oldest (top of scrollback) to newest (bottom of
     /// screen). Each line is trimmed of trailing whitespace. The extraction
     /// locks the terminal mutex once and copies text in a single pass.
     #[must_use]
-    pub fn full_text_lines(&self, max_lines: usize) -> Vec<String> {
+    pub fn full_text_lines(&self, max_lines: usize) -> (Vec<String>, usize) {
         let term = self.term.lock();
         let grid = term.grid();
         let cols = grid.columns();
@@ -131,7 +136,7 @@ impl Terminal {
             lines.pop();
         }
 
-        lines
+        (lines, total)
     }
 
     #[must_use]

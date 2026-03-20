@@ -11,11 +11,16 @@ impl HorizonApp {
         let action = overlay.show_toolbar_input(ui, &self.board);
         match action {
             SearchAction::None => {}
-            SearchAction::FocusPanel(panel_id) => {
+            SearchAction::FocusPanel {
+                panel_id,
+                line_index,
+                total_lines,
+            } => {
                 if let Some(overlay) = &mut self.search_overlay {
                     overlay.clear();
                 }
                 self.board.focus(panel_id);
+                scroll_to_search_match(&mut self.board, panel_id, line_index, total_lines);
                 if let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
                     && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
                 {
@@ -24,4 +29,27 @@ impl HorizonApp {
             }
         }
     }
+}
+
+/// Scroll a panel's terminal so the matched line is visible, roughly centered.
+fn scroll_to_search_match(
+    board: &mut horizon_core::Board,
+    panel_id: horizon_core::PanelId,
+    line_index: usize,
+    snapshot_total: usize,
+) {
+    let Some(panel) = board.panel_mut(panel_id) else {
+        return;
+    };
+    let Some(terminal) = panel.terminal() else {
+        return;
+    };
+    let rows = usize::from(terminal.rows());
+    let lines_from_bottom = snapshot_total.saturating_sub(1).saturating_sub(line_index);
+    if lines_from_bottom < rows {
+        panel.set_scrollback(0);
+        return;
+    }
+    let scrollback = lines_from_bottom.saturating_sub(rows / 2);
+    panel.set_scrollback(scrollback);
 }
