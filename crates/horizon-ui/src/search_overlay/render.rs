@@ -1,9 +1,109 @@
-use egui::{Align, CornerRadius, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
+use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 
 use crate::app::util::usize_to_f32;
 use crate::theme;
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
+
+pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: bool, hovered: bool, has_query: bool) {
+    let painter = ui.painter();
+    let glow_alpha = if focused {
+        34
+    } else if hovered {
+        20
+    } else {
+        10
+    };
+    let shell_fill = theme::blend(
+        theme::PANEL_BG,
+        theme::ACCENT,
+        if focused {
+            0.14
+        } else if hovered {
+            0.08
+        } else {
+            0.04
+        },
+    );
+    let core_fill = theme::blend(
+        theme::BG_ELEVATED,
+        theme::ACCENT,
+        if focused {
+            0.16
+        } else if hovered {
+            0.09
+        } else {
+            0.05
+        },
+    );
+    let border = theme::alpha(
+        theme::blend(
+            theme::BORDER_SUBTLE,
+            theme::ACCENT,
+            if focused {
+                0.78
+            } else if hovered {
+                0.5
+            } else {
+                0.32
+            },
+        ),
+        if focused { 240 } else { 210 },
+    );
+    let icon_fill = if focused || has_query {
+        theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.4)
+    } else {
+        theme::alpha(theme::PANEL_BG_ALT, 230)
+    };
+    let icon_stroke = if focused || hovered {
+        theme::alpha(theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.58), 230)
+    } else {
+        theme::alpha(theme::BORDER_SUBTLE, 220)
+    };
+    let icon_color = if focused || has_query {
+        theme::FG
+    } else {
+        theme::FG_SOFT
+    };
+
+    painter.rect_stroke(
+        rect.expand(3.0),
+        CornerRadius::same(13),
+        Stroke::new(3.0, theme::alpha(theme::ACCENT, glow_alpha)),
+        StrokeKind::Outside,
+    );
+    painter.rect_filled(rect, CornerRadius::same(10), shell_fill);
+
+    let core_rect = rect.shrink(1.0);
+    painter.rect_filled(core_rect, CornerRadius::same(9), core_fill);
+    painter.rect_stroke(
+        core_rect,
+        CornerRadius::same(9),
+        Stroke::new(1.0, border),
+        StrokeKind::Inside,
+    );
+
+    painter.line_segment(
+        [
+            Pos2::new(core_rect.min.x + 16.0, core_rect.min.y + 1.5),
+            Pos2::new(core_rect.max.x - 16.0, core_rect.min.y + 1.5),
+        ],
+        Stroke::new(1.0, theme::alpha(theme::FG, if focused { 28 } else { 16 })),
+    );
+
+    let badge_rect = Rect::from_center_size(
+        Pos2::new(core_rect.min.x + 24.0, core_rect.center().y),
+        Vec2::new(22.0, 22.0),
+    );
+    painter.rect_filled(badge_rect, CornerRadius::same(7), icon_fill);
+    painter.rect_stroke(
+        badge_rect,
+        CornerRadius::same(7),
+        Stroke::new(1.0, icon_stroke),
+        StrokeKind::Inside,
+    );
+    paint_search_icon(painter, badge_rect.center(), icon_color);
+}
 
 pub(super) fn paint_dropdown_frame(ui: &egui::Ui, rect: Rect) {
     let painter = ui.painter();
@@ -187,6 +287,18 @@ fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
 fn estimate_text_width(text: &str, font_size: f32) -> f32 {
     let char_width = font_size * 0.58;
     usize_to_f32(text.len()) * char_width
+}
+
+fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
+    let loop_center = Pos2::new(center.x - 1.5, center.y - 1.5);
+    painter.circle_stroke(loop_center, 4.5, Stroke::new(1.35, color));
+    painter.line_segment(
+        [
+            Pos2::new(loop_center.x + 3.5, loop_center.y + 3.5),
+            Pos2::new(loop_center.x + 7.0, loop_center.y + 7.0),
+        ],
+        Stroke::new(1.35, color),
+    );
 }
 
 fn badge_width(label: Option<&str>) -> f32 {
