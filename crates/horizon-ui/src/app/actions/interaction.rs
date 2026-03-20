@@ -1,4 +1,4 @@
-use egui::{Context, Vec2};
+use egui::{Context, Rect, Vec2};
 
 use crate::app::HorizonApp;
 use crate::app::shortcuts::shortcut_pressed;
@@ -35,7 +35,11 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(in crate::app) fn handle_canvas_pan(&mut self, ctx: &Context) {
-        let canvas_rect = self.canvas_rect(ctx);
+        self.handle_canvas_pan_in_rect(ctx, self.canvas_rect(ctx));
+    }
+
+    #[profiling::function]
+    pub(in crate::app) fn handle_canvas_pan_in_rect(&mut self, ctx: &Context, canvas_rect: Rect) {
         let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta, zoom_delta) =
             ctx.input(|input| {
                 (

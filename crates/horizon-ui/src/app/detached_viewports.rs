@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
 
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, Layout, Pos2, Rect, Stroke, StrokeKind, TopBottomPanel, Vec2,
-    ViewportBuilder, ViewportCommand, ViewportId,
+    Align, Button, Color32, Context, CornerRadius, Layout, Pos2, Rect, Stroke, TopBottomPanel, Vec2, ViewportBuilder,
+    ViewportCommand, ViewportId,
 };
 use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
 use super::util::viewport_local_rect;
-use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
+use super::{DetachedWorkspaceViewportState, HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 const DETACHED_WINDOW_OFFSET: f32 = 48.0;
 
@@ -30,7 +30,7 @@ impl HorizonApp {
 
         self.detached_workspaces.insert(
             workspace.local_id.clone(),
-            self.initial_detached_window_config(workspace_id),
+            DetachedWorkspaceViewportState::new(self.initial_detached_window_config(workspace_id)),
         );
         self.pending_detached_window_position_restore
             .insert(workspace.local_id.clone());
@@ -75,7 +75,11 @@ impl HorizonApp {
                 stale_local_ids.push(local_id);
                 continue;
             };
-            let Some(window_config) = self.detached_workspaces.get(&local_id).cloned() else {
+            let Some(window_config) = self
+                .detached_workspaces
+                .get(&local_id)
+                .map(|state| state.window.clone())
+            else {
                 continue;
             };
 
@@ -112,6 +116,7 @@ impl HorizonApp {
             return;
         }
         self.sync_detached_window_config(ctx, workspace_local_id);
+        self.fit_detached_canvas_view_once(ctx, workspace_id, workspace_local_id);
 
         let Some(workspace_name) = self
             .board
@@ -175,52 +180,75 @@ impl HorizonApp {
         let saved_panel_screen_rects = std::mem::take(&mut self.panel_screen_rects);
         let saved_panel_screen_order = std::mem::take(&mut self.panel_screen_order);
         let saved_panels_to_close = std::mem::take(&mut self.panels_to_close);
-        self.canvas_view = self.detached_canvas_view(ctx, workspace_id);
-        self.pan_target = None;
-        self.is_panning = false;
+        let saved_workspace_screen_rects = std::mem::take(&mut self.workspace_screen_rects);
+        if !self.restore_detached_viewport_state(workspace_local_id) {
+            self.panel_screen_rects = saved_panel_screen_rects;
+            self.panel_screen_order = saved_panel_screen_order;
+            self.panels_to_close = saved_panels_to_close;
+            self.workspace_screen_rects = saved_workspace_screen_rects;
+            return;
+        }
 
+        let canvas_rect = detached_canvas_rect(ctx);
+        let workspace_bounds = self.board.workspace_bounds_map();
+        self.handle_canvas_pan_in_rect(ctx, canvas_rect);
         self.render_canvas(ctx);
-        self.render_detached_workspace_frame(ctx, workspace_id);
+        self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.render_panels_for_workspace(ctx, workspace_id);
-        self.handle_workspace_file_drop(ctx, workspace_id, detached_canvas_rect(ctx));
+        self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
+        if self.pan_target.is_some() {
+            ctx.request_repaint();
+        }
+
+        self.persist_detached_viewport_state(workspace_local_id);
 
         self.canvas_view = saved_canvas_view;
         self.pan_target = saved_pan_target;
         self.is_panning = saved_is_panning;
+        self.panels_to_close = saved_panels_to_close;
         self.panel_screen_rects = saved_panel_screen_rects;
         self.panel_screen_order = saved_panel_screen_order;
-        self.panels_to_close = saved_panels_to_close;
+        self.workspace_screen_rects = saved_workspace_screen_rects;
     }
 
-    fn render_detached_workspace_frame(&self, ctx: &Context, workspace_id: WorkspaceId) {
-        let Some(workspace) = self.board.workspace(workspace_id) else {
+    fn fit_detached_canvas_view_once(&mut self, ctx: &Context, workspace_id: WorkspaceId, workspace_local_id: &str) {
+        let fitted_canvas_view = self.detached_canvas_view(ctx, workspace_id);
+        let Some(detached_state) = self.detached_workspaces.get_mut(workspace_local_id) else {
+            return;
+        };
+        if !detached_state.initial_fit_pending {
+            return;
+        }
+
+        detached_state.canvas_view = fitted_canvas_view;
+        detached_state.pan_target = None;
+        detached_state.is_panning = false;
+        detached_state.initial_fit_pending = false;
+    }
+
+    fn restore_detached_viewport_state(&mut self, workspace_local_id: &str) -> bool {
+        let Some(detached_state) = self.detached_workspaces.get_mut(workspace_local_id) else {
+            return false;
+        };
+
+        self.canvas_view = detached_state.canvas_view;
+        self.pan_target = detached_state.pan_target;
+        self.is_panning = detached_state.is_panning;
+        self.panel_screen_rects = std::mem::take(&mut detached_state.panel_screen_rects);
+        self.panel_screen_order = std::mem::take(&mut detached_state.panel_screen_order);
+        true
+    }
+
+    fn persist_detached_viewport_state(&mut self, workspace_local_id: &str) {
+        let Some(detached_state) = self.detached_workspaces.get_mut(workspace_local_id) else {
             return;
         };
 
-        let canvas_rect = detached_canvas_rect(ctx);
-        let (r, g, b) = workspace.accent();
-        let color = Color32::from_rgb(r, g, b);
-        let screen_rect = if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-            let top_left = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-            let bottom_right = Pos2::new(max[0] + WS_BG_PAD, max[1] + WS_BG_PAD);
-            Rect::from_min_max(
-                self.canvas_to_screen(canvas_rect, top_left),
-                self.canvas_to_screen(canvas_rect, bottom_right),
-            )
-        } else {
-            let screen_min =
-                self.canvas_to_screen(canvas_rect, Pos2::new(workspace.position[0], workspace.position[1]));
-            Rect::from_min_size(screen_min, Vec2::new(WS_EMPTY_SIZE[0], WS_EMPTY_SIZE[1]))
-        };
-
-        egui::Area::new(egui::Id::new(("detached_workspace_bg", workspace.id.0)))
-            .fixed_pos(screen_rect.min)
-            .constrain(false)
-            .order(egui::Order::Background)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::hover());
-                paint_detached_workspace_frame(ui, rect, color, self.board.active_workspace == Some(workspace_id));
-            });
+        detached_state.canvas_view = self.canvas_view;
+        detached_state.pan_target = self.pan_target;
+        detached_state.is_panning = self.is_panning;
+        detached_state.panel_screen_rects = std::mem::take(&mut self.panel_screen_rects);
+        detached_state.panel_screen_order = std::mem::take(&mut self.panel_screen_order);
     }
 
     fn render_panels_for_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
@@ -301,9 +329,10 @@ impl HorizonApp {
 
     fn sync_detached_window_config(&mut self, ctx: &Context, workspace_local_id: &str) {
         let (inner_rect, outer_rect) = ctx.input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
-        let Some(window_config) = self.detached_workspaces.get_mut(workspace_local_id) else {
+        let Some(detached_state) = self.detached_workspaces.get_mut(workspace_local_id) else {
             return;
         };
+        let window_config = &mut detached_state.window;
 
         let mut changed = false;
         if let Some(rect) = inner_rect {
@@ -404,33 +433,6 @@ fn detached_viewport_builder(
     }
 
     builder
-}
-
-fn paint_detached_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool) {
-    let fill = if is_active {
-        theme::alpha(theme::blend(theme::PANEL_BG_ALT, color, 0.12), 112)
-    } else {
-        theme::alpha(theme::PANEL_BG_ALT, 180)
-    };
-    let stroke_color = if is_active {
-        theme::alpha(color, 156)
-    } else {
-        theme::alpha(theme::blend(theme::BORDER_SUBTLE, color, 0.18), 110)
-    };
-
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(20),
-        fill,
-        Stroke::new(1.0, stroke_color),
-        StrokeKind::Outside,
-    );
-    ui.painter().rect_stroke(
-        rect.shrink(1.0),
-        CornerRadius::same(19),
-        Stroke::new(1.0, theme::alpha(color, if is_active { 42 } else { 20 })),
-        StrokeKind::Inside,
-    );
 }
 
 #[cfg(test)]

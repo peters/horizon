@@ -7,6 +7,7 @@ use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
 use crate::theme;
 
 use super::PresetPickerAction;
+use crate::app::DetachedWorkspaceViewportState;
 
 pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'static str {
     if target_workspace.is_some() {
@@ -90,7 +91,7 @@ fn render_workspace_preset_picker_row(
 
 pub(super) fn detached_workspace_ids(
     board: &horizon_core::Board,
-    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+    detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
 ) -> HashSet<WorkspaceId> {
     detached_workspaces
         .keys()

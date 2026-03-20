@@ -17,6 +17,7 @@ pub(super) fn render_workspace_visual(
     workspace: &WorkspaceVisual,
     rename_buffer: Option<&mut String>,
     overlay_zones: &OverlayExclusion,
+    show_layout_toolbar: bool,
     canvas_transform: TSTransform,
     canvas_clip_rect: Rect,
 ) -> WorkspaceInteraction {
@@ -110,7 +111,8 @@ pub(super) fn render_workspace_visual(
         })
         .inner;
 
-    if !is_renaming
+    if show_layout_toolbar
+        && !is_renaming
         && interaction.action.is_none()
         && should_show_workspace_layout_toolbar(workspace)
         && !overlay_zones.intersects(workspace.toolbar_screen_rect)
