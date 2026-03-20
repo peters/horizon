@@ -38,6 +38,7 @@ pub enum PanelKind {
     Ssh,
     Codex,
     Claude,
+    OpenCode,
     Command,
     Editor,
     GitChanges,
@@ -47,7 +48,7 @@ pub enum PanelKind {
 impl PanelKind {
     #[must_use]
     pub fn is_agent(self) -> bool {
-        matches!(self, Self::Codex | Self::Claude)
+        matches!(self, Self::Codex | Self::Claude | Self::OpenCode)
     }
 
     #[must_use]
@@ -57,6 +58,7 @@ impl PanelKind {
             Self::Ssh => "SSH",
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::OpenCode => "OpenCode",
             Self::Command => "Command",
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
@@ -353,7 +355,7 @@ impl Panel {
     }
 
     /// Restart the terminal process while keeping the same panel identity,
-    /// layout, and session binding.  For agent panels (Codex / Claude) this
+    /// layout, and session binding. For agent panels (Codex / Claude / `OpenCode`) this
     /// resumes the existing session so no work is lost.
     ///
     /// # Errors
@@ -476,7 +478,7 @@ impl Panel {
     /// from initial prompt rendering on startup/restore.
     #[must_use]
     pub fn detect_attention(&self) -> Option<&'static str> {
-        if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude) {
+        if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode) {
             return None;
         }
         let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
@@ -694,6 +696,49 @@ mod tests {
     }
 
     #[test]
+    fn opencode_session_resume_uses_session_flag() {
+        let binding = AgentSessionBinding::new(PanelKind::OpenCode, "session-42".to_string(), None, None, None);
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--agent".to_string(), "build".to_string()],
+            None,
+            PanelKind::OpenCode,
+            &PanelResume::Session {
+                session_id: "session-42".to_string(),
+            },
+            Some(&binding),
+            true,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("opencode"));
+        assert!(args[1].contains("--agent"));
+        assert!(args[1].contains("build"));
+        assert!(args[1].contains("--session session-42"));
+    }
+
+    #[test]
+    fn opencode_fresh_without_binding_starts_without_session_flag() {
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--agent".to_string(), "build".to_string()],
+            None,
+            PanelKind::OpenCode,
+            &PanelResume::Fresh,
+            None,
+            false,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("opencode"));
+        assert!(args[1].contains("--agent"));
+        assert!(args[1].contains("build"));
+        assert!(!args[1].contains("--session"));
+    }
+
+    #[test]
     fn explicit_command_wins_over_kind_defaults() {
         let (_program, args) = resolve_launch_command(
             Some("python".to_string()),
@@ -730,12 +775,17 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::Claude),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::OpenCode),
+            AGENT_PANEL_SCROLLBACK_LIMIT
+        );
     }
 
     #[test]
     fn codex_panels_disable_kitty_keyboard_protocol() {
         assert!(!kitty_keyboard_for_kind(PanelKind::Codex));
         assert!(kitty_keyboard_for_kind(PanelKind::Claude));
+        assert!(kitty_keyboard_for_kind(PanelKind::OpenCode));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
         assert!(kitty_keyboard_for_kind(PanelKind::Ssh));
     }

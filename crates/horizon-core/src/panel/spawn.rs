@@ -396,6 +396,18 @@ pub(super) fn resolve_launch_command(
             launch_args.extend(args);
             wrap_in_login_shell(program, launch_args)
         }
+        PanelKind::OpenCode => {
+            let program = command.unwrap_or_else(|| "opencode".to_string());
+            let mut launch_args = args;
+            if should_resume_binding {
+                if let Some(binding) = session_binding {
+                    launch_args.extend(["--session".to_string(), binding.session_id.clone()]);
+                }
+            } else if let PanelResume::Session { session_id } = resume {
+                launch_args.extend(["--session".to_string(), session_id.clone()]);
+            }
+            wrap_in_login_shell(program, launch_args)
+        }
     }
 }
 
@@ -448,7 +460,7 @@ fn resolve_session_binding(
         // first user message, so preassigning an ID would not match any
         // on-disk session state.
         session_binding = match (resume, kind) {
-            (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude) => {
+            (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode) => {
                 Some(AgentSessionBinding::new(
                     kind,
                     session_id.clone(),
@@ -467,6 +479,7 @@ fn resolve_session_binding(
                 && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
         }
         PanelKind::Codex
+        | PanelKind::OpenCode
         | PanelKind::Ssh
         | PanelKind::Shell
         | PanelKind::Command
@@ -545,7 +558,7 @@ fn horizon_claude_plugin_dir() -> Option<String> {
 
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     match kind {
-        PanelKind::Codex | PanelKind::Claude => AGENT_PANEL_SCROLLBACK_LIMIT,
+        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode => AGENT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
     }
