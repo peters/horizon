@@ -59,7 +59,7 @@ Group related panels into **color-coded workspaces**. Auto-arrange with five lay
 <td>
 
 ### AI Agent Panels
-First-class **Claude Code** and **Codex** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
+First-class **Claude Code**, **Codex**, and **OpenCode** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
 
 </td>
 </tr>
@@ -205,6 +205,7 @@ workspaces:
     panels:
       - kind: shell
       - kind: claude
+      - kind: open_code
       - kind: git_changes
 
   - name: Frontend
@@ -220,6 +221,9 @@ presets:
   - name: Claude Code
     alias: cc
     kind: claude
+  - name: OpenCode
+    alias: oc
+    kind: open_code
   - name: Git Changes
     alias: gc
     kind: git_changes

@@ -5,7 +5,7 @@ use crate::usage_stats::{UsageSnapshot, spawn_usage_poll};
 /// Panel content for the Usage dashboard.
 ///
 /// Holds a background-polling receiver that delivers periodic snapshots
-/// of Claude Code and Codex CLI usage statistics.
+/// of Claude Code, Codex CLI, and `OpenCode` usage statistics.
 pub struct UsageDashboard {
     rx: Option<mpsc::Receiver<UsageSnapshot>>,
     pub snapshot: Option<UsageSnapshot>,

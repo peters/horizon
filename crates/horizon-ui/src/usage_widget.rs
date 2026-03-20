@@ -2,11 +2,12 @@ use std::convert::TryFrom;
 use std::time::Duration;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
-use horizon_core::{DailyUsage, Panel, ToolUsage, UsageSnapshot, format_tokens};
+use horizon_core::{DailyUsage, Panel, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 
 use crate::{loading_spinner, theme};
 
 const CODEX_COLOR: Color32 = Color32::from_rgb(100, 200, 120);
+const OPENCODE_COLOR: Color32 = Color32::from_rgb(102, 214, 173);
 const SECTION_FONT_SIZE: f32 = 11.0;
 const STAT_LABEL_SIZE: f32 = 12.0;
 const STAT_VALUE_SIZE: f32 = 14.0;
@@ -76,17 +77,84 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
     render_section_header(ui, "Today");
 
     let available_width = ui.available_width();
-    let card_width = ((available_width - 8.0) / 2.0).max(140.0);
-    let card_height = 80.0;
+    let card_height = 86.0;
 
-    ui.horizontal(|ui| {
-        render_stat_card(ui, "Claude Code", &snapshot.claude, true, card_width, card_height);
+    if available_width >= 520.0 {
+        let card_width = ((available_width - 16.0) / 3.0).max(130.0);
+        ui.horizontal(|ui| {
+            render_stat_card(
+                ui,
+                "Claude Code",
+                &snapshot.claude,
+                theme::ACCENT,
+                true,
+                card_width,
+                card_height,
+            );
+            ui.add_space(8.0);
+            render_stat_card(
+                ui,
+                "Codex CLI",
+                &snapshot.codex,
+                CODEX_COLOR,
+                false,
+                card_width,
+                card_height,
+            );
+            ui.add_space(8.0);
+            render_stat_card(
+                ui,
+                "OpenCode",
+                &snapshot.opencode,
+                OPENCODE_COLOR,
+                false,
+                card_width,
+                card_height,
+            );
+        });
+    } else {
+        let card_width = available_width.max(140.0);
+        render_stat_card(
+            ui,
+            "Claude Code",
+            &snapshot.claude,
+            theme::ACCENT,
+            true,
+            card_width,
+            card_height,
+        );
         ui.add_space(8.0);
-        render_stat_card(ui, "Codex CLI", &snapshot.codex, false, card_width, card_height);
-    });
+        render_stat_card(
+            ui,
+            "Codex CLI",
+            &snapshot.codex,
+            CODEX_COLOR,
+            false,
+            card_width,
+            card_height,
+        );
+        ui.add_space(8.0);
+        render_stat_card(
+            ui,
+            "OpenCode",
+            &snapshot.opencode,
+            OPENCODE_COLOR,
+            false,
+            card_width,
+            card_height,
+        );
+    }
 }
 
-fn render_stat_card(ui: &mut egui::Ui, title: &str, usage: &ToolUsage, is_claude: bool, width: f32, height: f32) {
+fn render_stat_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    usage: &ToolUsage,
+    title_color: Color32,
+    show_messages: bool,
+    width: f32,
+    height: f32,
+) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter();
 
@@ -98,7 +166,6 @@ fn render_stat_card(ui: &mut egui::Ui, title: &str, usage: &ToolUsage, is_claude
         egui::StrokeKind::Outside,
     );
 
-    let title_color = if is_claude { theme::ACCENT } else { CODEX_COLOR };
     let x = rect.min.x + CARD_PAD;
     let mut y = rect.min.y + CARD_PAD;
 
@@ -130,12 +197,22 @@ fn render_stat_card(ui: &mut egui::Ui, title: &str, usage: &ToolUsage, is_claude
         theme::FG_SOFT,
     );
 
-    if is_claude && usage.today_messages > 0 {
+    if show_messages && usage.today_messages > 0 {
         let msg_text = format!("{} messages", usage.today_messages);
         painter.text(
             Pos2::new(rect.max.x - CARD_PAD, y),
             egui::Align2::RIGHT_TOP,
             &msg_text,
+            egui::FontId::proportional(STAT_LABEL_SIZE),
+            theme::FG_DIM,
+        );
+    }
+
+    if usage.today_cost > 0.0 {
+        painter.text(
+            Pos2::new(rect.max.x - CARD_PAD, rect.max.y - CARD_PAD),
+            egui::Align2::RIGHT_BOTTOM,
+            format_cost(usage.today_cost),
             egui::FontId::proportional(STAT_LABEL_SIZE),
             theme::FG_DIM,
         );
@@ -163,6 +240,18 @@ fn render_week_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
         format_tokens(snapshot.codex.week_tokens),
     );
     ui.label(RichText::new(codex_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
+
+    let opencode_line = format!(
+        "OpenCode: {} sessions \u{00B7} {} tokens{}",
+        snapshot.opencode.week_sessions,
+        format_tokens(snapshot.opencode.week_tokens),
+        if snapshot.opencode.week_cost > 0.0 {
+            format!(" \u{00B7} {}", format_cost(snapshot.opencode.week_cost))
+        } else {
+            String::new()
+        },
+    );
+    ui.label(RichText::new(opencode_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
 }
 
 fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
@@ -172,96 +261,129 @@ fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
 
     render_section_header(ui, "Last 14 Days");
 
-    // Find the max combined session count for scaling the bars.
     let max_sessions: u32 = daily
         .iter()
-        .map(|d| d.claude_sessions.saturating_add(d.codex_sessions))
+        .map(|d| {
+            d.claude_sessions
+                .saturating_add(d.codex_sessions)
+                .saturating_add(d.opencode_sessions)
+        })
         .max()
         .unwrap_or(1)
         .max(1);
 
-    // Header row
     let available = ui.available_width();
     let date_width = 62.0;
     let bar_area_start = date_width + 8.0;
-    let counts_width = 120.0;
+    let counts_width = 172.0;
     let bar_area_width = (available - bar_area_start - counts_width).clamp(40.0, BAR_MAX_WIDTH);
 
+    render_daily_chart_header(ui, date_width, bar_area_width);
+
+    for day in daily {
+        render_daily_chart_row(ui, day, available, bar_area_start, bar_area_width, max_sessions);
+    }
+}
+
+fn render_daily_chart_header(ui: &mut egui::Ui, date_width: f32, bar_area_width: f32) {
     ui.horizontal(|ui| {
         ui.add_space(date_width + 8.0 + bar_area_width + 4.0);
         ui.label(RichText::new("Claude").size(10.0).color(theme::ACCENT).strong());
         ui.add_space(8.0);
         ui.label(RichText::new("Codex").size(10.0).color(CODEX_COLOR).strong());
+        ui.add_space(8.0);
+        ui.label(RichText::new("OpenCode").size(10.0).color(OPENCODE_COLOR).strong());
     });
+}
 
-    for day in daily {
-        let (row_rect, _) = ui.allocate_exact_size(Vec2::new(available, ROW_HEIGHT), egui::Sense::hover());
-        let painter = ui.painter();
+fn render_daily_chart_row(
+    ui: &mut egui::Ui,
+    day: &DailyUsage,
+    available: f32,
+    bar_area_start: f32,
+    bar_area_width: f32,
+    max_sessions: u32,
+) {
+    let (row_rect, _) = ui.allocate_exact_size(Vec2::new(available, ROW_HEIGHT), egui::Sense::hover());
+    let painter = ui.painter();
+    let counts_x = row_rect.min.x + bar_area_start + bar_area_width + 8.0;
 
-        // Date label (e.g. "Mar 16")
-        let short_date = format_short_date(&day.date);
-        painter.text(
-            Pos2::new(row_rect.min.x + 2.0, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &short_date,
-            egui::FontId::monospace(11.0),
-            theme::FG_DIM,
-        );
+    paint_daily_chart_date(painter, &row_rect, day);
+    paint_daily_chart_bar(painter, &row_rect, day, bar_area_start, bar_area_width, max_sessions);
+    paint_daily_chart_count(painter, counts_x, row_rect.center().y, day.claude_sessions, 0.0);
+    paint_daily_chart_count(painter, counts_x, row_rect.center().y, day.codex_sessions, 52.0);
+    paint_daily_chart_count(painter, counts_x, row_rect.center().y, day.opencode_sessions, 112.0);
+}
 
-        // Stacked bar
-        let bar_x = row_rect.min.x + bar_area_start;
-        let bar_y = row_rect.center().y - BAR_HEIGHT / 2.0;
-        let total = day.claude_sessions.saturating_add(day.codex_sessions);
+fn paint_daily_chart_date(painter: &egui::Painter, row_rect: &Rect, day: &DailyUsage) {
+    painter.text(
+        Pos2::new(row_rect.min.x + 2.0, row_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format_short_date(&day.date),
+        egui::FontId::monospace(11.0),
+        theme::FG_DIM,
+    );
+}
 
-        if total > 0 {
-            let total_width = scaled_bar_width(bar_area_width, total, max_sessions);
-            let claude_width = scaled_bar_width(total_width, day.claude_sessions, total);
-            let codex_width = (total_width - claude_width).max(0.0);
-
-            if claude_width > 0.0 {
-                painter.rect_filled(
-                    Rect::from_min_size(Pos2::new(bar_x, bar_y), Vec2::new(claude_width, BAR_HEIGHT)),
-                    CornerRadius::same(3),
-                    theme::ACCENT,
-                );
-            }
-            if codex_width > 0.0 {
-                painter.rect_filled(
-                    Rect::from_min_size(
-                        Pos2::new(bar_x + claude_width, bar_y),
-                        Vec2::new(codex_width, BAR_HEIGHT),
-                    ),
-                    CornerRadius::same(3),
-                    CODEX_COLOR,
-                );
-            }
-        }
-
-        // Session counts
-        let counts_x = row_rect.min.x + bar_area_start + bar_area_width + 8.0;
-        painter.text(
-            Pos2::new(counts_x, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            day.claude_sessions.to_string(),
-            egui::FontId::monospace(11.0),
-            if day.claude_sessions > 0 {
-                theme::FG_SOFT
-            } else {
-                theme::FG_DIM
-            },
-        );
-        painter.text(
-            Pos2::new(counts_x + 52.0, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            day.codex_sessions.to_string(),
-            egui::FontId::monospace(11.0),
-            if day.codex_sessions > 0 {
-                theme::FG_SOFT
-            } else {
-                theme::FG_DIM
-            },
-        );
+fn paint_daily_chart_bar(
+    painter: &egui::Painter,
+    row_rect: &Rect,
+    day: &DailyUsage,
+    bar_area_start: f32,
+    bar_area_width: f32,
+    max_sessions: u32,
+) {
+    let total = day
+        .claude_sessions
+        .saturating_add(day.codex_sessions)
+        .saturating_add(day.opencode_sessions);
+    if total == 0 {
+        return;
     }
+
+    let total_width = scaled_bar_width(bar_area_width, total, max_sessions);
+    let claude_width = scaled_bar_width(total_width, day.claude_sessions, total);
+    let remaining_width = (total_width - claude_width).max(0.0);
+    let codex_width = scaled_bar_width(
+        remaining_width,
+        day.codex_sessions,
+        total.saturating_sub(day.claude_sessions),
+    );
+    let opencode_width = (remaining_width - codex_width).max(0.0);
+    let bar_x = row_rect.min.x + bar_area_start;
+    let bar_y = row_rect.center().y - BAR_HEIGHT / 2.0;
+
+    paint_daily_chart_bar_segment(painter, bar_x, bar_y, claude_width, theme::ACCENT);
+    paint_daily_chart_bar_segment(painter, bar_x + claude_width, bar_y, codex_width, CODEX_COLOR);
+    paint_daily_chart_bar_segment(
+        painter,
+        bar_x + claude_width + codex_width,
+        bar_y,
+        opencode_width,
+        OPENCODE_COLOR,
+    );
+}
+
+fn paint_daily_chart_bar_segment(painter: &egui::Painter, x: f32, y: f32, width: f32, color: Color32) {
+    if width <= 0.0 {
+        return;
+    }
+
+    painter.rect_filled(
+        Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, BAR_HEIGHT)),
+        CornerRadius::same(3),
+        color,
+    );
+}
+
+fn paint_daily_chart_count(painter: &egui::Painter, counts_x: f32, center_y: f32, sessions: u32, offset_x: f32) {
+    painter.text(
+        Pos2::new(counts_x + offset_x, center_y),
+        egui::Align2::LEFT_CENTER,
+        sessions.to_string(),
+        egui::FontId::monospace(11.0),
+        if sessions > 0 { theme::FG_SOFT } else { theme::FG_DIM },
+    );
 }
 
 fn scaled_bar_width(bar_area_width: f32, numerator: u32, denominator: u32) -> f32 {
