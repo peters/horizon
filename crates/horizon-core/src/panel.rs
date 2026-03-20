@@ -11,6 +11,7 @@ use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
+use crate::task::{TaskPanelStatus, TaskRole};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
@@ -109,6 +110,8 @@ pub struct PanelOptions {
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub transcript_root: Option<PathBuf>,
+    pub task_role: Option<TaskRole>,
+    pub task_status: TaskPanelStatus,
 }
 
 impl Default for PanelOptions {
@@ -129,6 +132,8 @@ impl Default for PanelOptions {
             session_binding: None,
             template: None,
             transcript_root: None,
+            task_role: None,
+            task_status: TaskPanelStatus::default(),
         }
     }
 }
@@ -145,6 +150,8 @@ pub struct Panel {
     pub content: PanelContent,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    pub task_role: Option<TaskRole>,
+    pub task_status: TaskPanelStatus,
     pub launched_at_millis: i64,
     has_custom_name: bool,
     /// Set by `process_output` each frame; read by attention detection to skip
@@ -177,6 +184,16 @@ impl Panel {
     #[must_use]
     pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
         self.ssh_status
+    }
+
+    #[must_use]
+    pub fn task_role(&self) -> Option<TaskRole> {
+        self.task_role
+    }
+
+    #[must_use]
+    pub fn task_status(&self) -> Option<&TaskPanelStatus> {
+        self.task_role.map(|_| &self.task_status)
     }
 
     #[must_use]
@@ -522,6 +539,7 @@ mod tests {
         platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
+    use crate::task::TaskPanelStatus;
 
     fn test_panel(title: &str, terminal_title: &str, has_custom_name: bool) -> Panel {
         Panel {
@@ -536,6 +554,8 @@ mod tests {
             content: PanelContent::Usage(UsageDashboard::new()),
             session_binding: None,
             template: None,
+            task_role: None,
+            task_status: TaskPanelStatus::default(),
             launched_at_millis: 0,
             has_custom_name,
             had_recent_output: false,

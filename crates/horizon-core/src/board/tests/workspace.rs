@@ -241,6 +241,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 position: Some([0.0, 40.0]),
                 template: None,
                 layout: None,
+                task_binding: None,
                 panels: Vec::new(),
             },
             WorkspaceState {
@@ -250,6 +251,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 position: Some([640.0, 40.0]),
                 template: None,
                 layout: None,
+                task_binding: None,
                 panels: vec![PanelState {
                     local_id: "panel".to_string(),
                     name: "notes".to_string(),
@@ -265,6 +267,8 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                     size: None,
                     session_binding: None,
                     template: None,
+                    task_role: None,
+                    task_status: crate::TaskPanelStatus::default(),
                     editor_content: None,
                 }],
             },

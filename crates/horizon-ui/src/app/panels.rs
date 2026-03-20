@@ -1,5 +1,7 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
+use horizon_core::{
+    AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, TaskPanelStatus, WorkspaceId,
+};
 
 use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
@@ -28,6 +30,7 @@ struct PanelSnapshot {
     is_renaming: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
     ssh_status: Option<SshConnectionStatus>,
+    task_status: Option<TaskPanelStatus>,
 }
 
 #[derive(Default)]
@@ -95,13 +98,14 @@ fn show_panel_body_contents(
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&mut MarkdownPreviewCache>,
     terminal_grid_cache: Option<&mut TerminalGridCache>,
+    task_usage: &[horizon_core::TaskUsageSummary],
 ) -> bool {
     match panel.kind {
         PanelKind::Editor => {
             MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused, editor_save_shortcut)
         }
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
-        PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
+        PanelKind::Usage => UsageDashboardView::new(panel, task_usage).show(ui, is_focused),
         _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
     }
 }
@@ -127,13 +131,30 @@ impl HorizonApp {
                         .max_rect(body_rect)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
+                        let task_usage = if self
+                            .board
+                            .panel(panel_id)
+                            .is_some_and(|panel| panel.kind == PanelKind::Usage)
+                        {
+                            horizon_core::collect_task_usage(&self.board)
+                        } else {
+                            Vec::new()
+                        };
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(self.editor_preview_cache.entry(panel_id).or_default())
                             } else {
                                 None
                             };
-                            show_panel_body_contents(ui, panel, true, self.shortcuts.save_editor, preview_cache, None);
+                            show_panel_body_contents(
+                                ui,
+                                panel,
+                                true,
+                                self.shortcuts.save_editor,
+                                preview_cache,
+                                None,
+                                &task_usage,
+                            );
                         }
                     },
                 );
@@ -190,7 +211,12 @@ impl HorizonApp {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces);
+        let task_usage = if snapshot.kind == PanelKind::Usage {
+            horizon_core::collect_task_usage(&self.board)
+        } else {
+            Vec::new()
+        };
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces, &task_usage);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome)
     }
 
@@ -243,6 +269,7 @@ impl HorizonApp {
                 is_renaming: self.renaming_panel == Some(panel_id),
                 attention_badge,
                 ssh_status: panel.ssh_status(),
+                task_status: panel.task_status().cloned(),
             })
         })
     }
@@ -255,6 +282,7 @@ impl HorizonApp {
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
         workspaces: &[(WorkspaceId, String, Color32)],
+        task_usage: &[horizon_core::TaskUsageSummary],
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
 
@@ -330,6 +358,7 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
+                        task_status: snapshot.task_status.as_ref(),
                     },
                 );
 
@@ -368,6 +397,7 @@ impl HorizonApp {
                                 self.shortcuts.save_editor,
                                 preview_cache,
                                 grid_cache,
+                                task_usage,
                             );
                         }
                     },

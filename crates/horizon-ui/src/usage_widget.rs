@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use std::time::Duration;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
-use horizon_core::{DailyUsage, Panel, ToolUsage, UsageSnapshot, format_cost, format_tokens};
+use horizon_core::{DailyUsage, Panel, TaskUsageSummary, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 
 use crate::{loading_spinner, theme};
 
@@ -19,11 +19,12 @@ const ROW_HEIGHT: f32 = 22.0;
 
 pub struct UsageDashboardView<'a> {
     panel: &'a mut Panel,
+    task_usage: &'a [TaskUsageSummary],
 }
 
 impl<'a> UsageDashboardView<'a> {
-    pub fn new(panel: &'a mut Panel) -> Self {
-        Self { panel }
+    pub fn new(panel: &'a mut Panel, task_usage: &'a [TaskUsageSummary]) -> Self {
+        Self { panel, task_usage }
     }
 
     /// Renders the usage dashboard. Returns `true` if clicked (for focus tracking).
@@ -48,6 +49,10 @@ impl<'a> UsageDashboardView<'a> {
                     render_today_section(ui, snapshot);
                     ui.add_space(12.0);
                     render_week_section(ui, snapshot);
+                    if !self.task_usage.is_empty() {
+                        ui.add_space(12.0);
+                        render_task_section(ui, self.task_usage);
+                    }
                     ui.add_space(12.0);
                     render_daily_chart(ui, &snapshot.daily);
                     ui.add_space(8.0);
@@ -252,6 +257,64 @@ fn render_week_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
         },
     );
     ui.label(RichText::new(opencode_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
+}
+
+fn render_task_section(ui: &mut egui::Ui, task_usage: &[TaskUsageSummary]) {
+    render_section_header(ui, "Tasks");
+
+    for task in task_usage.iter().take(8) {
+        let claude = if task.claude_sessions > 0 {
+            format!(
+                "Claude {}s / {} tok / {} msgs",
+                task.claude_sessions,
+                format_tokens(task.claude_tokens),
+                task.claude_messages
+            )
+        } else {
+            "Claude 0".to_string()
+        };
+        let codex = if task.codex_sessions > 0 {
+            format!(
+                "Codex {}s / {} tok",
+                task.codex_sessions,
+                format_tokens(task.codex_tokens)
+            )
+        } else {
+            "Codex 0".to_string()
+        };
+
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(CARD_CORNER), theme::BG_ELEVATED);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(CARD_CORNER),
+            egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + CARD_PAD, rect.min.y + 10.0),
+            egui::Align2::LEFT_TOP,
+            &task.label,
+            egui::FontId::proportional(12.0),
+            theme::FG,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + CARD_PAD, rect.min.y + 26.0),
+            egui::Align2::LEFT_TOP,
+            format!("{claude}  ·  {codex}"),
+            egui::FontId::monospace(10.0),
+            theme::FG_DIM,
+        );
+        painter.text(
+            Pos2::new(rect.max.x - CARD_PAD, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            format!("{} tok", format_tokens(task.total_tokens())),
+            egui::FontId::monospace(11.0),
+            theme::ACCENT,
+        );
+        ui.add_space(6.0);
+    }
 }
 
 fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {

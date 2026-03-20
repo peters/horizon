@@ -10,6 +10,7 @@ use crate::git_changes::DiffViewer;
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
+use crate::task::{TaskPanelStatus, TaskRole};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::usage_dashboard::UsageDashboard;
@@ -28,6 +29,8 @@ struct StaticPanelSeed {
     position: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
     template: Option<PanelTemplateRef>,
+    task_role: Option<TaskRole>,
+    task_status: TaskPanelStatus,
 }
 
 struct TerminalLaunchTrace<'a> {
@@ -40,26 +43,6 @@ struct TerminalLaunchTrace<'a> {
 }
 
 impl StaticPanelSeed {
-    fn new(
-        id: PanelId,
-        workspace_id: WorkspaceId,
-        local_id: String,
-        name: Option<String>,
-        position: Option<[f32; 2]>,
-        size: Option<[f32; 2]>,
-        template: Option<PanelTemplateRef>,
-    ) -> Self {
-        Self {
-            id,
-            workspace_id,
-            local_id,
-            name,
-            position,
-            size,
-            template,
-        }
-    }
-
     fn take_title(&mut self, fallback: impl FnOnce() -> String) -> (String, bool) {
         let has_custom_name = self.name.is_some();
         (self.name.take().unwrap_or_else(fallback), has_custom_name)
@@ -89,6 +72,8 @@ impl StaticPanelSeed {
             content,
             session_binding: None,
             template: self.template,
+            task_role: self.task_role,
+            task_status: self.task_status,
             launched_at_millis: current_unix_millis(),
             has_custom_name,
             had_recent_output: false,
@@ -112,9 +97,21 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 position,
                 size,
                 template,
+                task_role,
+                task_status,
                 ..
             } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let seed = StaticPanelSeed {
+                id,
+                workspace_id,
+                local_id,
+                name,
+                position,
+                size,
+                template,
+                task_role,
+                task_status,
+            };
             spawn_editor(seed, command)
         }
         PanelKind::GitChanges => {
@@ -124,9 +121,21 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 size,
                 template,
                 cwd,
+                task_role,
+                task_status,
                 ..
             } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let seed = StaticPanelSeed {
+                id,
+                workspace_id,
+                local_id,
+                name,
+                position,
+                size,
+                template,
+                task_role,
+                task_status,
+            };
             Ok(spawn_git_changes(seed, cwd))
         }
         PanelKind::Usage => {
@@ -135,9 +144,21 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 position,
                 size,
                 template,
+                task_role,
+                task_status,
                 ..
             } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let seed = StaticPanelSeed {
+                id,
+                workspace_id,
+                local_id,
+                name,
+                position,
+                size,
+                template,
+                task_role,
+                task_status,
+            };
             Ok(spawn_usage(seed))
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
@@ -160,6 +181,8 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         session_binding,
         template,
         transcript_root,
+        task_role,
+        task_status,
         ..
     } = opts;
 
@@ -185,7 +208,6 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         session_binding.as_ref(),
         should_resume_binding,
     );
-
     let launch_trace = TerminalLaunchTrace {
         kind,
         resume: &resume,
@@ -195,14 +217,14 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         cmd: format!("{program} {}", launch_args.join(" ")),
     };
     log_terminal_launch(id, &launch_trace);
-
-    let (program, launch_args) = if let Some(transcript) = transcript.as_ref() {
-        transcript.wrap_launch_command(program, launch_args)
-    } else {
-        (program, launch_args)
+    let (program, launch_args) = match transcript {
+        Some(transcript) => transcript.wrap_launch_command(program, launch_args),
+        None => (program, launch_args),
     };
     let has_custom_name = name.is_some();
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
+    let layout = panel_layout(position, size);
+    let ssh_status = ssh_status_for_kind(kind);
     let terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args: launch_args,
@@ -217,23 +239,20 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         env: agent_env(kind),
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
-
     tracing::info!("created panel '{}' (id={})", title, id.0);
-
     Ok(Panel {
         id,
         local_id,
         title,
         kind,
         resume,
-        layout: PanelLayout {
-            position: position.unwrap_or_default(),
-            size: size.unwrap_or(DEFAULT_PANEL_SIZE),
-        },
+        layout,
         workspace_id,
         content: PanelContent::Terminal(terminal),
         session_binding,
         template,
+        task_role,
+        task_status,
         launched_at_millis: current_unix_millis(),
         has_custom_name,
         had_recent_output: false,
@@ -242,12 +261,19 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         launch_args: saved_args,
         launch_cwd: saved_cwd,
         ssh_connection: saved_ssh_connection,
-        ssh_status: if kind == PanelKind::Ssh {
-            Some(SshConnectionStatus::Connecting)
-        } else {
-            None
-        },
+        ssh_status,
     })
+}
+
+fn panel_layout(position: Option<[f32; 2]>, size: Option<[f32; 2]>) -> PanelLayout {
+    PanelLayout {
+        position: position.unwrap_or_default(),
+        size: size.unwrap_or(DEFAULT_PANEL_SIZE),
+    }
+}
+
+fn ssh_status_for_kind(kind: PanelKind) -> Option<SshConnectionStatus> {
+    (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting)
 }
 
 fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -> String {

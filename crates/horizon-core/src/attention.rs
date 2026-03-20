@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use crate::{PanelId, WorkspaceId};
+use crate::{PanelId, TaskRole, WorkspaceId};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AttentionId(pub u64);
@@ -19,6 +19,15 @@ pub enum AttentionState {
     Dismissed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AttentionKind {
+    Generic,
+    InputRequested,
+    ReviewRequested,
+    Blocked,
+    Completed,
+}
+
 #[derive(Clone, Debug)]
 pub struct AttentionItem {
     pub id: AttentionId,
@@ -26,6 +35,9 @@ pub struct AttentionItem {
     pub panel_id: Option<PanelId>,
     pub source: String,
     pub summary: String,
+    pub kind: AttentionKind,
+    pub task_label: Option<String>,
+    pub task_role: Option<TaskRole>,
     pub severity: AttentionSeverity,
     pub state: AttentionState,
     pub created_at: SystemTime,
@@ -48,6 +60,9 @@ impl AttentionItem {
             panel_id,
             source: source.into(),
             summary: summary.into(),
+            kind: AttentionKind::Generic,
+            task_label: None,
+            task_role: None,
             severity,
             state: AttentionState::Open,
             created_at: SystemTime::now(),
@@ -67,7 +82,15 @@ impl AttentionItem {
 
     #[must_use]
     pub fn is_agent_ready_for_input(&self) -> bool {
-        self.source == "agent" && self.summary == "Ready for input"
+        self.kind == AttentionKind::Generic && self.source == "agent" && self.summary == "Ready for input"
+    }
+
+    #[must_use]
+    pub fn with_task(mut self, kind: AttentionKind, task_label: Option<String>, task_role: Option<TaskRole>) -> Self {
+        self.kind = kind;
+        self.task_label = task_label;
+        self.task_role = task_role;
+        self
     }
 
     pub fn resolve(&mut self) {

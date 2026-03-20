@@ -1,5 +1,7 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
+use horizon_core::{
+    AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, TaskPanelStatus, TaskPrState, TaskWaitStatus,
+};
 
 use crate::theme;
 
@@ -22,6 +24,7 @@ pub(super) struct PanelChrome<'a> {
     pub workspace_accent: Option<Color32>,
     pub attention_badge: Option<&'a (AttentionSeverity, String)>,
     pub ssh_status: Option<SshConnectionStatus>,
+    pub task_status: Option<&'a TaskPanelStatus>,
 }
 
 #[derive(Clone, Copy)]
@@ -172,6 +175,15 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             status,
         );
     }
+    if let Some(task_status) = chrome.task_status {
+        paint_task_status_badges(
+            &painter,
+            chrome.titlebar_rect,
+            chrome.close_rect,
+            chrome.scrollback_limit > 0,
+            task_status,
+        );
+    }
 
     if chrome.scrollback_limit > 0 {
         paint_history_meter(
@@ -223,6 +235,14 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 /// Compute the right x boundary where the title text must stop, accounting
 /// for all badges (history meter, SSH status, attention) that sit to its right.
 fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
+    let mut right = status_badge_right_boundary(chrome);
+    if chrome.task_status.is_some() {
+        right -= 220.0;
+    }
+    right
+}
+
+fn status_badge_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     let mut right = chrome.close_rect.min.x - 12.0;
     if chrome.scrollback_limit > 0 {
         right = panel_history_badge_rect(chrome.titlebar_rect, chrome.close_rect).min.x - 8.0;
@@ -236,6 +256,98 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
         right -= 110.0;
     }
     right
+}
+
+fn paint_task_status_badges(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    history_visible: bool,
+    status: &TaskPanelStatus,
+) {
+    let mut right = close_rect.min.x - 12.0;
+    if history_visible {
+        right = panel_history_badge_rect(titlebar_rect, close_rect).min.x - 8.0;
+    }
+
+    let wait_text = status.wait_status.label();
+    let pr_text = status.pr_state.label();
+    let branch_text = status
+        .branch
+        .as_deref()
+        .map_or_else(|| "no branch".to_string(), truncate_branch_badge);
+
+    for (text, fill, fg) in [
+        (
+            wait_text.to_string(),
+            wait_status_fill(status.wait_status),
+            wait_status_fg(status.wait_status),
+        ),
+        (pr_text, pr_state_fill(&status.pr_state), theme::alpha(theme::FG, 220)),
+        (
+            branch_text,
+            theme::alpha(theme::BG_ELEVATED, 210),
+            theme::alpha(theme::FG_SOFT, 220),
+        ),
+    ] {
+        let width = badge_width(&text);
+        let rect = Rect::from_min_size(
+            Pos2::new(right - width, titlebar_rect.center().y - 9.0),
+            Vec2::new(width, 18.0),
+        );
+        painter.rect_filled(rect, CornerRadius::same(7), fill);
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::monospace(9.5),
+            fg,
+        );
+        right = rect.min.x - 6.0;
+    }
+}
+
+fn badge_width(text: &str) -> f32 {
+    14.0 + text.chars().fold(0.0, |width, _| width + 6.2)
+}
+
+fn truncate_branch_badge(branch: &str) -> String {
+    const MAX_CHARS: usize = 18;
+    if branch.chars().count() <= MAX_CHARS {
+        return branch.to_string();
+    }
+    let mut truncated: String = branch.chars().take(MAX_CHARS - 1).collect();
+    truncated.push('…');
+    truncated
+}
+
+fn wait_status_fill(status: TaskWaitStatus) -> Color32 {
+    match status {
+        TaskWaitStatus::Running => theme::alpha(theme::ACCENT, 45),
+        TaskWaitStatus::NeedsInput => theme::alpha(theme::PALETTE_RED, 48),
+        TaskWaitStatus::NeedsReview => theme::alpha(Color32::from_rgb(249, 226, 175), 54),
+        TaskWaitStatus::Blocked => theme::alpha(theme::PALETTE_RED, 64),
+        TaskWaitStatus::Done => theme::alpha(theme::PALETTE_GREEN, 60),
+    }
+}
+
+fn wait_status_fg(status: TaskWaitStatus) -> Color32 {
+    match status {
+        TaskWaitStatus::NeedsReview => Color32::from_rgb(249, 226, 175),
+        TaskWaitStatus::Done => theme::PALETTE_GREEN,
+        TaskWaitStatus::Running => theme::alpha(theme::FG, 220),
+        TaskWaitStatus::NeedsInput | TaskWaitStatus::Blocked => theme::PALETTE_RED,
+    }
+}
+
+fn pr_state_fill(status: &TaskPrState) -> Color32 {
+    match status {
+        TaskPrState::None => theme::alpha(theme::BG_ELEVATED, 210),
+        TaskPrState::Draft { .. } => theme::alpha(Color32::from_rgb(249, 226, 175), 52),
+        TaskPrState::Open { .. } => theme::alpha(theme::ACCENT, 45),
+        TaskPrState::Merged { .. } => theme::alpha(theme::PALETTE_GREEN, 56),
+        TaskPrState::Closed { .. } => theme::alpha(theme::PALETTE_RED, 50),
+    }
 }
 
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {

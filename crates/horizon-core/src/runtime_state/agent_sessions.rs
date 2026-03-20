@@ -387,6 +387,7 @@ mod tests {
                 position: None,
                 template: None,
                 layout: None,
+                task_binding: None,
                 panels: vec![
                     PanelState {
                         local_id: "a".to_string(),

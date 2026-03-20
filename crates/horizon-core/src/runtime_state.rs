@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::ssh::SshConnection;
+use crate::task::{TaskPanelStatus, TaskRole, TaskWorkspaceBinding};
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
@@ -233,6 +234,8 @@ impl RuntimeState {
                             ssh_connection: panel.ssh_connection.clone(),
                             session_binding: panel.session_binding.clone(),
                             template: panel.template.clone(),
+                            task_role: panel.task_role,
+                            task_status: panel.task_status.clone(),
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
@@ -247,6 +250,7 @@ impl RuntimeState {
                     position: Some(workspace.position),
                     template: workspace.template.clone(),
                     layout: workspace.layout,
+                    task_binding: workspace.task_binding.clone(),
                     panels,
                 }
             })
@@ -307,6 +311,8 @@ pub struct WorkspaceState {
         deserialize_with = "deserialize_workspace_layout"
     )]
     pub layout: Option<WorkspaceLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_binding: Option<TaskWorkspaceBinding>,
     pub panels: Vec<PanelState>,
 }
 
@@ -362,6 +368,7 @@ impl WorkspaceState {
                 workspace_name: workspace.name.clone(),
             }),
             layout: None,
+            task_binding: None,
             panels,
         }
     }
@@ -385,6 +392,10 @@ pub struct PanelState {
     pub size: Option<[f32; 2]>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_role: Option<TaskRole>,
+    #[serde(default, skip_serializing_if = "task_status_is_default")]
+    pub task_status: TaskPanelStatus,
     /// Scratch editor buffer content (persisted for file-less editors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_content: Option<String>,
@@ -432,6 +443,8 @@ impl PanelState {
                 cwd,
                 ssh_connection,
             }),
+            task_role: None,
+            task_status: TaskPanelStatus::default(),
             editor_content: None,
         }
     }
@@ -458,6 +471,8 @@ impl PanelState {
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             transcript_root: None,
+            task_role: self.task_role,
+            task_status: self.task_status.clone(),
         }
     }
 }
@@ -479,9 +494,15 @@ impl Default for PanelState {
             size: None,
             session_binding: None,
             template: None,
+            task_role: None,
+            task_status: TaskPanelStatus::default(),
             editor_content: None,
         }
     }
+}
+
+fn task_status_is_default(status: &TaskPanelStatus) -> bool {
+    status == &TaskPanelStatus::default()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -547,6 +568,10 @@ fn empty_to_none(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        GitHubRepoRef, GitHubWorkItemKind, GitHubWorkItemRef, TaskPanelStatus, TaskPrState, TaskRole, TaskWaitStatus,
+        TaskWorkspaceBinding,
+    };
 
     #[test]
     fn from_board_preserves_window_view_focus_and_bindings() {
@@ -638,6 +663,66 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn from_board_persists_task_workspace_and_panel_status() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace_at("task", [640.0, 80.0]);
+        let panel_id = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    task_role: Some(TaskRole::Implement),
+                    task_status: TaskPanelStatus {
+                        branch: Some("feat/issue-123".to_string()),
+                        pr_state: TaskPrState::Draft { number: 123 },
+                        wait_status: TaskWaitStatus::NeedsInput,
+                    },
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("panel should spawn");
+        board.workspace_mut(workspace_id).expect("workspace").task_binding = Some(TaskWorkspaceBinding {
+            task_id: "task-123".to_string(),
+            work_item: GitHubWorkItemRef {
+                repo: GitHubRepoRef {
+                    owner: "peters".to_string(),
+                    name: "horizon".to_string(),
+                },
+                kind: GitHubWorkItemKind::Issue,
+                number: 123,
+                title: "Shift+Enter".to_string(),
+                url: "https://github.com/peters/horizon/issues/123".to_string(),
+                review_comment_id: None,
+            },
+            repo_root: "/repo".to_string(),
+        });
+
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let saved_workspace = state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.local_id == board.workspace(workspace_id).expect("workspace").local_id)
+            .expect("workspace state");
+        let saved_panel = saved_workspace
+            .panels
+            .iter()
+            .find(|panel| panel.local_id == board.panel(panel_id).expect("panel").local_id)
+            .expect("panel state");
+
+        assert_eq!(
+            saved_workspace
+                .task_binding
+                .as_ref()
+                .map(|binding| binding.work_item.number),
+            Some(123)
+        );
+        assert_eq!(saved_panel.task_role, Some(TaskRole::Implement));
+        assert_eq!(saved_panel.task_status.branch.as_deref(), Some("feat/issue-123"));
+        assert_eq!(saved_panel.task_status.pr_state, TaskPrState::Draft { number: 123 });
+        assert_eq!(saved_panel.task_status.wait_status, TaskWaitStatus::NeedsInput);
     }
 
     #[test]

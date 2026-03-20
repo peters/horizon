@@ -13,6 +13,7 @@ mod settings;
 pub(crate) mod shortcuts;
 mod sidebar;
 mod startup_session;
+mod tasks;
 pub(crate) mod util;
 mod view;
 mod workspace;
@@ -26,8 +27,8 @@ use std::time::Instant;
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
-    StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    PresetConfig, RemoteHostCatalog, ResolvedGitHubWorkItem, ResolvedSession, RuntimeState, SessionLease, SessionStore,
+    ShutdownProgress, StartupChooser, StartupDecision, TaskPrState, WindowConfig, WorkspaceId,
 };
 
 use crate::app::canvas::CanvasGridCache;
@@ -35,6 +36,7 @@ use crate::command_palette::CommandPalette;
 use crate::command_registry::CommandEntry;
 use crate::dir_picker::DirPicker;
 use crate::editor_widget::MarkdownPreviewCache;
+use crate::github_work_item_overlay::GitHubWorkItemOverlay;
 use crate::remote_hosts_overlay::RemoteHostsOverlay;
 use crate::search_overlay::SearchOverlay;
 use crate::terminal_widget::TerminalGridCache;
@@ -135,8 +137,14 @@ pub struct HorizonApp {
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
+    github_work_item_overlay: Option<GitHubWorkItemOverlay>,
     search_overlay: Option<SearchOverlay>,
     action_commands_cache: Vec<CommandEntry>,
+    github_work_item_resolve_rx: Option<Receiver<horizon_core::Result<ResolvedGitHubWorkItem>>>,
+    github_work_item_resolving: bool,
+    last_task_status_refresh: Option<Instant>,
+    task_status_refresh_rx: Option<Receiver<Vec<TaskStatusRefresh>>>,
+    task_status_refresh_in_flight: bool,
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_positions: HashMap<ViewportId, Pos2>,
@@ -145,6 +153,11 @@ pub struct HorizonApp {
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,
     exit_cleanup_complete: bool,
+}
+
+struct TaskStatusRefresh {
+    workspace_id: WorkspaceId,
+    pr_state: TaskPrState,
 }
 
 impl HorizonApp {
@@ -234,8 +247,14 @@ impl HorizonApp {
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
+            github_work_item_overlay: None,
             search_overlay: None,
             action_commands_cache,
+            github_work_item_resolve_rx: None,
+            github_work_item_resolving: false,
+            last_task_status_refresh: None,
+            task_status_refresh_rx: None,
+            task_status_refresh_in_flight: false,
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_positions: HashMap::new(),

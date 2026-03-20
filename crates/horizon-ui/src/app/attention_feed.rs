@@ -1,5 +1,5 @@
 use egui::{Button, Color32, CornerRadius, Id, Order, Pos2, Rect, RichText, ScrollArea, Sense, Vec2};
-use horizon_core::{AttentionId, AttentionItem, AttentionSeverity, Board, OverlaysConfig, PanelId};
+use horizon_core::{AttentionId, AttentionItem, AttentionKind, AttentionSeverity, Board, OverlaysConfig, PanelId};
 use std::time::SystemTime;
 
 use crate::theme;
@@ -89,7 +89,12 @@ pub fn render_attention_feed(
 
 fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Attention Feed").size(11.0).color(theme::FG_DIM).strong());
+        ui.label(
+            RichText::new("Attention Queue")
+                .size(11.0)
+                .color(theme::FG_DIM)
+                .strong(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let open_count = items.iter().filter(|i| i.is_open()).count();
             if open_count > 0 {
@@ -156,6 +161,14 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
             } else {
                 theme::FG_SOFT
             };
+            if let Some(task_label) = &item.task_label {
+                let role_label = item.task_role.map_or("Task", horizon_core::TaskRole::label);
+                ui.label(
+                    RichText::new(format!("{task_label} • {role_label}"))
+                        .size(9.5)
+                        .color(theme::FG_DIM),
+                );
+            }
             ui.label(RichText::new(&item.summary).size(11.0).color(msg_color));
 
             ui.horizontal(|ui| {
@@ -170,8 +183,13 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
                         dismiss_clicked = dismiss.clicked();
                     }
                     if item.is_open() && item.panel_id.is_some() {
+                        let action_label = if item.task_label.is_some() {
+                            "Open task \u{2192}"
+                        } else {
+                            "Go to panel \u{2192}"
+                        };
                         let goto = ui.add(
-                            egui::Button::new(RichText::new("Go to panel \u{2192}").size(9.5).color(theme::ACCENT))
+                            egui::Button::new(RichText::new(action_label).size(9.5).color(theme::ACCENT))
                                 .fill(theme::alpha(theme::ACCENT, 20))
                                 .corner_radius(CornerRadius::same(4))
                                 .stroke(egui::Stroke::NONE),
@@ -222,7 +240,7 @@ fn render_feed_item_header(ui: &mut egui::Ui, item: &AttentionItem, is_resolved:
         ui.painter()
             .rect_filled(indicator_rect.1, CornerRadius::same(2), dot_color);
 
-        let label = severity_label(item.severity);
+        let label = attention_label(item);
         ui.label(
             RichText::new(label)
                 .size(9.0)
@@ -266,6 +284,16 @@ fn severity_label(severity: AttentionSeverity) -> &'static str {
         AttentionSeverity::High => "ATTENTION",
         AttentionSeverity::Medium => "DONE",
         AttentionSeverity::Low => "INFO",
+    }
+}
+
+fn attention_label(item: &AttentionItem) -> &'static str {
+    match item.kind {
+        AttentionKind::InputRequested => "INPUT",
+        AttentionKind::ReviewRequested => "REVIEW",
+        AttentionKind::Blocked => "BLOCKED",
+        AttentionKind::Completed => "DONE",
+        AttentionKind::Generic => severity_label(item.severity),
     }
 }
 

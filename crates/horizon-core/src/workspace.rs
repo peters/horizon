@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::board::WorkspaceLayout;
 use crate::panel::PanelId;
 use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
+use crate::task::TaskWorkspaceBinding;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
@@ -22,6 +23,7 @@ pub struct Workspace {
     pub cwd: Option<PathBuf>,
     pub template: Option<WorkspaceTemplateRef>,
     pub layout: Option<WorkspaceLayout>,
+    pub task_binding: Option<TaskWorkspaceBinding>,
 }
 
 /// Predefined accent colors for workspace clusters.
@@ -50,6 +52,7 @@ impl Workspace {
             cwd: None,
             template: None,
             layout: None,
+            task_binding: None,
         }
     }
 

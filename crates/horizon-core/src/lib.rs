@@ -10,6 +10,7 @@ mod error;
 pub mod git_changes;
 pub mod git_status;
 pub mod git_watcher;
+mod github;
 mod horizon_home;
 mod layout;
 mod panel;
@@ -19,6 +20,8 @@ pub mod search;
 mod session_store;
 mod shortcuts;
 mod ssh;
+mod task;
+mod task_usage;
 mod terminal;
 mod transcript;
 mod usage_dashboard;
@@ -28,7 +31,7 @@ mod workspace;
 
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
-pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
+pub use attention::{AttentionId, AttentionItem, AttentionKind, AttentionSeverity, AttentionState};
 pub use board::{Board, ShutdownProgress, WorkspaceLayout};
 pub use config::{
     Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig,
@@ -39,6 +42,10 @@ pub use error::{Error, Result};
 pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
+pub use github::{
+    GitHubRepoContext, GitHubRepoRef, GitHubWorkItemKind, GitHubWorkItemRef, ResolvedGitHubWorkItem,
+    discover_repo_context, refresh_pull_request_status, resolve_work_item_input,
+};
 pub use horizon_home::HorizonHome;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use remote_hosts::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, discover_remote_hosts};
@@ -53,6 +60,8 @@ pub use session_store::{
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
+pub use task::{TaskPanelStatus, TaskPrState, TaskRole, TaskUsageSummary, TaskWaitStatus, TaskWorkspaceBinding};
+pub use task_usage::collect_task_usage;
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;

@@ -24,6 +24,9 @@ pub enum CommandId {
     NewPanel,
     OpenRemoteHosts,
     CreatePanelFromPreset(usize),
+    CreateWorkspaceFromGitHubIssue,
+    CreateWorkspaceFromGitHubPullRequest,
+    CreateWorkspaceFromGitHubReviewComment,
 
     // Settings
     ToggleSettings,
@@ -63,7 +66,7 @@ pub struct CommandEntry {
 /// Build the static list of action commands (not workspace/panel -- those are
 /// dynamic and assembled at query time by the palette).
 pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
-    vec![
+    let mut commands = vec![
         CommandEntry {
             id: CommandId::NewPanel,
             label: "New Panel".into(),
@@ -160,6 +163,49 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             shortcut: Some(shortcuts.search.display_label(primary_label)),
             keywords: vec!["find".into(), "search".into(), "grep".into(), "text".into()],
         },
+    ];
+    commands.extend(github_workspace_commands());
+    commands
+}
+
+fn github_workspace_commands() -> [CommandEntry; 3] {
+    [
+        CommandEntry {
+            id: CommandId::CreateWorkspaceFromGitHubIssue,
+            label: "GitHub Issue Workspace".into(),
+            shortcut: None,
+            keywords: vec![
+                "github".into(),
+                "issue".into(),
+                "agent".into(),
+                "workspace".into(),
+                "task".into(),
+            ],
+        },
+        CommandEntry {
+            id: CommandId::CreateWorkspaceFromGitHubPullRequest,
+            label: "GitHub PR Workspace".into(),
+            shortcut: None,
+            keywords: vec![
+                "github".into(),
+                "pull request".into(),
+                "pr".into(),
+                "agent".into(),
+                "workspace".into(),
+            ],
+        },
+        CommandEntry {
+            id: CommandId::CreateWorkspaceFromGitHubReviewComment,
+            label: "GitHub Review Workspace".into(),
+            shortcut: None,
+            keywords: vec![
+                "github".into(),
+                "review".into(),
+                "comment".into(),
+                "agent".into(),
+                "workspace".into(),
+            ],
+        },
     ]
 }
 
@@ -182,6 +228,14 @@ mod tests {
     #[test]
     fn action_commands_all_have_shortcuts() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
+            if matches!(
+                entry.id,
+                CommandId::CreateWorkspaceFromGitHubIssue
+                    | CommandId::CreateWorkspaceFromGitHubPullRequest
+                    | CommandId::CreateWorkspaceFromGitHubReviewComment
+            ) {
+                continue;
+            }
             assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
         }
     }
@@ -229,5 +283,26 @@ mod tests {
             .expect("toggle sidebar command");
 
         assert_eq!(entry.shortcut.as_deref(), Some("Alt+S"));
+    }
+
+    #[test]
+    fn action_commands_include_github_workspace_entries() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.id == CommandId::CreateWorkspaceFromGitHubIssue)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.id == CommandId::CreateWorkspaceFromGitHubPullRequest)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.id == CommandId::CreateWorkspaceFromGitHubReviewComment)
+        );
     }
 }

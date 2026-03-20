@@ -136,7 +136,9 @@ impl HorizonApp {
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog();
         self.poll_remote_hosts_refresh();
+        self.poll_github_work_item_resolution(ctx);
         self.poll_git_watchers();
+        self.poll_task_status_refresh();
         self.poll_config_reload();
 
         had_terminal_output
@@ -144,8 +146,15 @@ impl HorizonApp {
 
     #[profiling::function]
     fn poll_git_watchers(&mut self) {
-        // Collect which workspaces need watchers (have GitChanges panels).
+        // Collect which workspaces need watchers (have GitChanges panels or task-bound panels).
         let mut workspaces_needing_watchers: HashMap<WorkspaceId, Option<std::path::PathBuf>> = HashMap::new();
+        for workspace in &self.board.workspaces {
+            if let Some(binding) = &workspace.task_binding {
+                workspaces_needing_watchers
+                    .entry(workspace.id)
+                    .or_insert(Some(std::path::PathBuf::from(&binding.repo_root)));
+            }
+        }
         for panel in &self.board.panels {
             if panel.kind == PanelKind::GitChanges {
                 let cwd = panel
@@ -174,6 +183,7 @@ impl HorizonApp {
             .collect();
 
         for (workspace_id, status) in updates {
+            self.update_task_workspace_branch(workspace_id, status.branch.as_deref());
             for panel in &mut self.board.panels {
                 if panel.workspace_id == workspace_id
                     && panel.kind == PanelKind::GitChanges
@@ -348,6 +358,7 @@ impl HorizonApp {
     ) {
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
+        self.render_github_work_item_overlay(ctx);
         self.render_remote_hosts_overlay(ctx);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();

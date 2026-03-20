@@ -379,6 +379,7 @@ mod tests {
                 position: None,
                 template: None,
                 layout: None,
+                task_binding: None,
                 panels: vec![PanelState {
                     local_id: "panel".to_string(),
                     name: "Claude".to_string(),
@@ -427,6 +428,7 @@ mod tests {
                 position: None,
                 template: None,
                 layout: None,
+                task_binding: None,
                 panels: vec![
                     PanelState {
                         local_id: "fresh".to_string(),

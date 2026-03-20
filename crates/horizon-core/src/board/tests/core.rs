@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use crate::attention::{AttentionSeverity, AttentionState};
+use crate::attention::{AttentionKind, AttentionSeverity, AttentionState};
 use crate::panel::{PanelKind, PanelOptions};
+use crate::{GitHubRepoRef, GitHubWorkItemKind, GitHubWorkItemRef, TaskRole, TaskWaitStatus, TaskWorkspaceBinding};
 
 use super::super::*;
 use super::editor_panel_options;
@@ -132,6 +133,47 @@ fn stale_ready_for_input_attention_auto_dismisses() {
         .find(|item| item.id == attention_id)
         .expect("attention item");
     assert_eq!(item.state, AttentionState::Dismissed);
+}
+
+#[test]
+fn review_task_attention_sets_task_queue_metadata() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("review");
+    let panel_id = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Editor,
+                task_role: Some(TaskRole::Review),
+                ..editor_panel_options()
+            },
+            workspace_id,
+        )
+        .expect("panel should spawn");
+    board.workspace_mut(workspace_id).expect("workspace").task_binding = Some(TaskWorkspaceBinding {
+        task_id: "task-review".to_string(),
+        work_item: GitHubWorkItemRef {
+            repo: GitHubRepoRef {
+                owner: "peters".to_string(),
+                name: "horizon".to_string(),
+            },
+            kind: GitHubWorkItemKind::PullRequest,
+            number: 77,
+            title: "Review queue".to_string(),
+            url: "https://github.com/peters/horizon/pull/77".to_string(),
+            review_comment_id: None,
+        },
+        repo_root: "/repo".to_string(),
+    });
+
+    board.reconcile_agent_attention_signal(panel_id, workspace_id, "Ready for input");
+
+    let item = board.unresolved_attention_for_panel(panel_id).expect("task attention");
+    assert_eq!(item.kind, AttentionKind::ReviewRequested);
+    assert_eq!(item.task_label.as_deref(), Some("PR #77"));
+    assert_eq!(
+        board.panel(panel_id).expect("panel").task_status.wait_status,
+        TaskWaitStatus::NeedsReview
+    );
 }
 
 #[test]

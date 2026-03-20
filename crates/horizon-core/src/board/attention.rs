@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use crate::attention::{AttentionId, AttentionItem, AttentionSeverity};
+use crate::attention::{AttentionId, AttentionItem, AttentionKind, AttentionSeverity};
 use crate::panel::{PanelId, current_unix_millis};
+use crate::task::{TaskRole, TaskWaitStatus};
 use crate::workspace::WorkspaceId;
 
 use super::Board;
@@ -37,7 +38,19 @@ impl Board {
                     "done" => AttentionSeverity::Medium,
                     _ => AttentionSeverity::Low,
                 };
-                self.create_attention(workspace_id, Some(panel_id), "agent-notify", notif.message, severity);
+                let summary = notif.message;
+                let wait_status = self.update_task_wait_status(panel_id, None, Some(&summary));
+                self.create_attention_for_panel(
+                    panel_id,
+                    workspace_id,
+                    "agent-notify",
+                    summary,
+                    severity,
+                    attention_kind_for_wait_status(
+                        self.panel(panel_id).and_then(crate::panel::Panel::task_role),
+                        wait_status,
+                    ),
+                );
             }
 
             if let Some(summary) = attention {
@@ -51,15 +64,18 @@ impl Board {
             if attention.is_none() && bell && kind.is_agent() {
                 let age_ms = current_unix_millis().saturating_sub(launched_at);
                 if !has_open && age_ms >= 10_000 {
-                    self.create_attention(
+                    self.update_task_wait_status(panel_id, Some("Needs attention"), None);
+                    self.create_attention_for_panel(
+                        panel_id,
                         workspace_id,
-                        Some(panel_id),
                         "agent",
                         "Needs attention",
                         AttentionSeverity::High,
+                        AttentionKind::Blocked,
                     );
                 }
             } else if attention.is_none() && has_open {
+                self.update_task_wait_status(panel_id, None, None);
                 let ids_to_resolve: Vec<_> = self
                     .attention
                     .iter()
@@ -81,6 +97,7 @@ impl Board {
         workspace_id: WorkspaceId,
         summary: &str,
     ) {
+        let wait_status = self.update_task_wait_status(panel_id, Some(summary), None);
         let next_signal = (!summary.is_empty()).then_some(summary);
         let previous_signal = self.panel_attention_signals.get(&panel_id).map(String::as_str);
         if previous_signal == next_signal {
@@ -91,7 +108,18 @@ impl Board {
 
         match next_signal {
             Some(summary) => {
-                self.create_attention(workspace_id, Some(panel_id), "agent", summary, AttentionSeverity::High);
+                let attention_kind = attention_kind_for_wait_status(
+                    self.panel(panel_id).and_then(crate::panel::Panel::task_role),
+                    wait_status,
+                );
+                self.create_attention_for_panel(
+                    panel_id,
+                    workspace_id,
+                    "agent",
+                    summary,
+                    AttentionSeverity::High,
+                    attention_kind,
+                );
                 self.panel_attention_signals.insert(panel_id, summary.to_string());
             }
             None => {
@@ -178,5 +206,91 @@ impl Board {
                     .cmp(&right.severity)
                     .then_with(|| left.id.0.cmp(&right.id.0))
             })
+    }
+
+    fn create_attention_for_panel(
+        &mut self,
+        panel_id: PanelId,
+        workspace_id: WorkspaceId,
+        source: impl Into<String>,
+        summary: impl Into<String>,
+        severity: AttentionSeverity,
+        kind: AttentionKind,
+    ) -> AttentionId {
+        let task_label = self
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.task_binding.as_ref())
+            .map(crate::task::TaskWorkspaceBinding::label);
+        let task_role = self.panel(panel_id).and_then(crate::panel::Panel::task_role);
+        let id = AttentionId(self.next_attention_id);
+        self.next_attention_id += 1;
+        self.attention.push(
+            AttentionItem::new(id, workspace_id, Some(panel_id), source, summary, severity)
+                .with_task(kind, task_label, task_role),
+        );
+        id
+    }
+
+    fn update_task_wait_status(
+        &mut self,
+        panel_id: PanelId,
+        attention_summary: Option<&str>,
+        notification_summary: Option<&str>,
+    ) -> TaskWaitStatus {
+        let Some(panel) = self.panel(panel_id) else {
+            return TaskWaitStatus::Running;
+        };
+        let Some(role) = panel.task_role() else {
+            return TaskWaitStatus::Running;
+        };
+
+        let next_status = task_wait_status_for_signal(role, attention_summary, notification_summary);
+        if let Some(panel) = self.panel_mut(panel_id) {
+            panel.task_status.wait_status = next_status;
+        }
+        next_status
+    }
+}
+
+fn task_wait_status_for_signal(
+    role: TaskRole,
+    attention_summary: Option<&str>,
+    notification_summary: Option<&str>,
+) -> TaskWaitStatus {
+    let summary = notification_summary.or(attention_summary).unwrap_or_default();
+    if summary.is_empty() {
+        return TaskWaitStatus::Running;
+    }
+    if summary.eq_ignore_ascii_case("needs attention") {
+        return TaskWaitStatus::Blocked;
+    }
+    if summary.eq_ignore_ascii_case("waiting for approval") || summary.eq_ignore_ascii_case("waiting for input") {
+        return TaskWaitStatus::NeedsInput;
+    }
+    if summary.eq_ignore_ascii_case("ready for input") {
+        return if role == TaskRole::Review {
+            TaskWaitStatus::NeedsReview
+        } else {
+            TaskWaitStatus::Running
+        };
+    }
+    if summary.contains("done") || summary.contains("complete") {
+        return TaskWaitStatus::Done;
+    }
+    if role == TaskRole::Review {
+        TaskWaitStatus::NeedsReview
+    } else {
+        TaskWaitStatus::NeedsInput
+    }
+}
+
+fn attention_kind_for_wait_status(role: Option<TaskRole>, status: TaskWaitStatus) -> AttentionKind {
+    match status {
+        TaskWaitStatus::NeedsReview => AttentionKind::ReviewRequested,
+        TaskWaitStatus::NeedsInput => AttentionKind::InputRequested,
+        TaskWaitStatus::Blocked => AttentionKind::Blocked,
+        TaskWaitStatus::Done => AttentionKind::Completed,
+        TaskWaitStatus::Running if role == Some(TaskRole::Review) => AttentionKind::ReviewRequested,
+        TaskWaitStatus::Running => AttentionKind::Generic,
     }
 }

@@ -7,6 +7,7 @@ mod command_registry;
 mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;
+mod github_work_item_overlay;
 mod input;
 mod loading_spinner;
 mod plugin_install;

@@ -112,6 +112,15 @@ impl HorizonApp {
                 }
             }
             CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(ctx),
+            CommandId::CreateWorkspaceFromGitHubIssue => {
+                self.open_github_work_item_overlay(horizon_core::GitHubWorkItemKind::Issue);
+            }
+            CommandId::CreateWorkspaceFromGitHubPullRequest => {
+                self.open_github_work_item_overlay(horizon_core::GitHubWorkItemKind::PullRequest);
+            }
+            CommandId::CreateWorkspaceFromGitHubReviewComment => {
+                self.open_github_work_item_overlay(horizon_core::GitHubWorkItemKind::ReviewComment);
+            }
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
