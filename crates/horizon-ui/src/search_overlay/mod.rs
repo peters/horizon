@@ -126,6 +126,7 @@ impl SearchOverlay {
 
         if response.changed() {
             self.note_query_changed(Instant::now());
+            ui.ctx().request_repaint_after(Self::DEBOUNCE);
         }
 
         // Handle keyboard while the input has focus.
@@ -211,11 +212,25 @@ impl SearchOverlay {
     const DEBOUNCE: Duration = Duration::from_millis(150);
 
     fn maybe_refresh_results(&mut self, ctx: &Context, board: &Board) {
+        let terminal_output_changed = self.should_refresh_for_terminal_output(board);
+        self.maybe_refresh_results_at(ctx, board, terminal_output_changed, Instant::now());
+    }
+
+    fn should_refresh_for_terminal_output(&self, board: &Board) -> bool {
+        !self.query.is_empty() && board.panels.iter().any(horizon_core::Panel::had_recent_output)
+    }
+
+    fn note_query_changed(&mut self, now: Instant) {
+        self.selected = 0;
+        self.query_changed_at = Some(now);
+    }
+
+    fn maybe_refresh_results_at(&mut self, ctx: &Context, board: &Board, terminal_output_changed: bool, now: Instant) {
         let query_changed = self.query != self.last_query;
         let options_changed = self.options_dirty;
+        let query_or_options_changed = query_changed || options_changed;
 
-        if !query_changed && !options_changed {
-            // Nothing to do; clear any stale debounce timer.
+        if !query_changed && !options_changed && !terminal_output_changed {
             self.query_changed_at = None;
             return;
         }
@@ -224,10 +239,9 @@ impl SearchOverlay {
             // Option toggles fire immediately (no debounce needed).
             self.options_dirty = false;
             self.query_changed_at = None;
-        } else {
+        } else if query_changed {
             // Query text changed -- debounce to avoid searching on every
             // keystroke when many terminals are open.
-            let now = Instant::now();
             let changed_at = *self.query_changed_at.get_or_insert(now);
             let remaining = Self::DEBOUNCE.saturating_sub(now.duration_since(changed_at));
             if !remaining.is_zero() {
@@ -244,12 +258,11 @@ impl SearchOverlay {
         };
         self.cached_results = search_board(board, &self.query, &options);
         self.rebuild_display_rows();
-        self.selected = 0;
-    }
-
-    fn note_query_changed(&mut self, now: Instant) {
-        self.selected = 0;
-        self.query_changed_at = Some(now);
+        if query_or_options_changed {
+            self.selected = 0;
+        } else {
+            self.clamp_selection();
+        }
     }
 
     fn rebuild_display_rows(&mut self) {
@@ -364,9 +377,10 @@ impl SearchOverlay {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use egui::{Pos2, Rect, Vec2};
+    use egui::{Context, Pos2, Rect, Vec2};
+    use horizon_core::{Board, PanelId, PanelSearchResult, SearchMatch, SearchResults};
 
-    use super::SearchOverlay;
+    use super::{DisplayRow, SearchOverlay};
 
     #[test]
     fn note_query_changed_resets_debounce_anchor() {
@@ -399,7 +413,7 @@ mod tests {
             query: "workspace-beta-only".to_string(),
             ..SearchOverlay::new()
         };
-        let ctx = egui::Context::default();
+        let ctx = Context::default();
         let dropdown_rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(120.0, 80.0));
 
         let pointer = dropdown_rect.center();
@@ -421,7 +435,7 @@ mod tests {
             query: "workspace-beta-only".to_string(),
             ..SearchOverlay::new()
         };
-        let ctx = egui::Context::default();
+        let ctx = Context::default();
         let dropdown_rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(120.0, 80.0));
 
         let outside = Pos2::new(dropdown_rect.max.x + 20.0, dropdown_rect.max.y + 20.0);
@@ -435,5 +449,57 @@ mod tests {
         let _ = ctx.end_pass();
 
         assert!(!show_dropdown);
+    }
+
+    #[test]
+    fn terminal_output_refreshes_cached_results_without_query_change() {
+        let mut overlay = SearchOverlay::new_inactive();
+        overlay.query = "error".to_string();
+        overlay.last_query = overlay.query.clone();
+        overlay.selected = 1;
+        overlay.cached_results = SearchResults {
+            panels: vec![PanelSearchResult {
+                panel_id: PanelId(7),
+                panel_title: "build".to_string(),
+                lines: vec!["error: first failure".to_string()],
+                matches: vec![SearchMatch {
+                    line_index: 0,
+                    byte_offset: 0,
+                    byte_len: 5,
+                }],
+            }],
+            total_matches: 1,
+        };
+        overlay.display_rows = vec![DisplayRow {
+            panel_id: PanelId(7),
+            panel_title: "build".to_string(),
+            line_text: "error: first failure".to_string(),
+            match_count_label: None,
+        }];
+
+        overlay.maybe_refresh_results_at(&Context::default(), &Board::new(), true, Instant::now());
+
+        assert_eq!(overlay.cached_results.total_matches, 0);
+        assert!(overlay.cached_results.panels.is_empty());
+        assert!(overlay.display_rows.is_empty());
+    }
+
+    #[test]
+    fn debounce_fires_after_window_expires() {
+        let mut overlay = SearchOverlay::new_inactive();
+        let ctx = Context::default();
+        let board = Board::new();
+        let edit_time = Instant::now();
+
+        overlay.query = "error".to_string();
+        overlay.note_query_changed(edit_time);
+
+        // Before debounce expires: should not search.
+        overlay.maybe_refresh_results_at(&ctx, &board, false, edit_time + Duration::from_millis(50));
+        assert!(overlay.last_query.is_empty());
+
+        // After debounce expires: should search.
+        overlay.maybe_refresh_results_at(&ctx, &board, false, edit_time + SearchOverlay::DEBOUNCE);
+        assert_eq!(overlay.last_query, overlay.query);
     }
 }

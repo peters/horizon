@@ -1,3 +1,5 @@
+use alacritty_terminal::term::cell::{Cell, Flags};
+
 use super::{
     Column, Dimensions, PathBuf, RenderableContent, Scroll, TermDamage, Terminal, current_cwd_for_pid,
     find_file_path_at_column, find_url_at_column,
@@ -49,6 +51,7 @@ impl Terminal {
         let rows = usize::from(self.rows);
         let mut lines: Vec<String> = Vec::with_capacity(max_lines);
         let mut current_line = String::with_capacity(cols);
+        let mut current_line_columns = 0;
         let mut current_row: Option<usize> = None;
 
         for indexed in content.display_iter {
@@ -64,13 +67,14 @@ impl Terminal {
                 }
                 current_row = Some(row);
                 current_line.clear();
+                current_line_columns = 0;
             }
-            if indexed.cell.c != ' ' || indexed.cell.zerowidth().is_some() {
-                while current_line.len() < indexed.point.column.0 {
-                    current_line.push(' ');
-                }
-                current_line.push(indexed.cell.c);
-            }
+            append_cell_text(
+                &mut current_line,
+                &mut current_line_columns,
+                indexed.point.column.0,
+                indexed.cell,
+            );
         }
         if !current_line.is_empty() {
             lines.push(current_line);
@@ -112,16 +116,10 @@ impl Terminal {
             };
 
             let mut line = String::with_capacity(cols);
+            let mut occupied_columns = 0;
             for col in 0..cols {
                 let cell = &grid[line_idx][Column(col)];
-                let ch = cell.c;
-                if ch != ' ' {
-                    // Pad with spaces up to this column if needed.
-                    while line.len() < col {
-                        line.push(' ');
-                    }
-                    line.push(ch);
-                }
+                append_cell_text(&mut line, &mut occupied_columns, col, cell);
             }
             let trimmed_len = line.trim_end().len();
             line.truncate(trimmed_len);
@@ -205,5 +203,82 @@ impl Terminal {
         }
 
         find_url_at_column(&line_chars, col).or_else(|| find_file_path_at_column(&line_chars, col))
+    }
+}
+
+fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_column: usize, cell: &Cell) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        || (cell.c == ' ' && cell.zerowidth().is_none())
+    {
+        return;
+    }
+
+    // Terminal columns are not the same as UTF-8 bytes, so track occupied
+    // columns separately to preserve spacing after multibyte and wide glyphs.
+    while *occupied_columns < target_column {
+        line.push(' ');
+        *occupied_columns += 1;
+    }
+
+    line.push(cell.c);
+    if let Some(chars) = cell.zerowidth() {
+        for ch in chars {
+            line.push(*ch);
+        }
+    }
+
+    *occupied_columns = target_column + if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::term::cell::{Cell, Flags};
+
+    use super::append_cell_text;
+
+    fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
+        let mut line = String::new();
+        let mut occupied_columns = 0;
+
+        for (column, cell) in cells {
+            append_cell_text(&mut line, &mut occupied_columns, *column, cell);
+        }
+
+        line
+    }
+
+    #[test]
+    fn multibyte_glyphs_preserve_following_padding() {
+        let accent_cell = Cell {
+            c: 'é',
+            ..Cell::default()
+        };
+        let x_cell = Cell {
+            c: 'x',
+            ..Cell::default()
+        };
+
+        let line = reconstruct_line(&[(0, accent_cell), (2, x_cell)]);
+
+        assert_eq!(line, "é x");
+    }
+
+    #[test]
+    fn wide_glyphs_consume_two_terminal_columns() {
+        let wide_cell = Cell {
+            c: '你',
+            flags: Flags::WIDE_CHAR,
+            ..Cell::default()
+        };
+        let x_cell = Cell {
+            c: 'x',
+            ..Cell::default()
+        };
+
+        let line = reconstruct_line(&[(0, wide_cell), (2, x_cell)]);
+
+        assert_eq!(line, "你x");
     }
 }
