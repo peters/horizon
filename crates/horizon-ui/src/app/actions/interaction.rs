@@ -84,7 +84,7 @@ impl HorizonApp {
         });
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if pointer_in_canvas && !pointer_over_panel {
+        } else if pointer_in_canvas && !pointer_over_panel && (!ctrl_or_cmd || pointer_over_panel_body) {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
             } else {
