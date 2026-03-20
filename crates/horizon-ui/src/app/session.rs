@@ -394,6 +394,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_needs_bootstrap_for_unbound_last_opencode_panel() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                cwd: None,
+                position: None,
+                template: None,
+                layout: None,
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "OpenCode".to_string(),
+                    kind: PanelKind::OpenCode,
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                }],
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
     fn runtime_state_skips_bootstrap_for_fresh_or_bound_panels() {
         let state = RuntimeState {
             workspaces: vec![WorkspaceState {

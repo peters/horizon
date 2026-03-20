@@ -198,21 +198,30 @@ fn named_key_sequence(key: Key, modifiers: Modifiers, mode: TermMode) -> Option<
         }
     }
 
-    if key == Key::Tab && modifiers.shift && !control_modifier(modifiers) && !modifiers.alt {
-        return Some(b"\x1b[Z".to_vec());
-    }
-
-    if matches!(key, Key::Enter | Key::Tab | Key::Backspace | Key::Escape) && !any_modifiers(modifiers) {
-        return Some(match key {
-            Key::Enter => b"\r".to_vec(),
-            Key::Tab => b"\t".to_vec(),
-            Key::Backspace => b"\x7f".to_vec(),
-            Key::Escape => b"\x1b".to_vec(),
-            _ => unreachable!(),
-        });
+    if let Some(sequence) = legacy_c0_sequence(key, modifiers) {
+        return Some(sequence);
     }
 
     build_sequence(key, None, modifiers, TermMode::NONE, true, false, None)
+}
+
+fn legacy_c0_sequence(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
+    let suffix = match key {
+        Key::Enter => &b"\r"[..],
+        Key::Escape => &b"\x1b"[..],
+        Key::Backspace if control_modifier(modifiers) => &b"\x08"[..],
+        Key::Backspace => &b"\x7f"[..],
+        Key::Tab if modifiers.shift => &b"\x1b[Z"[..],
+        Key::Tab => &b"\t"[..],
+        _ => return None,
+    };
+
+    let mut bytes = Vec::with_capacity(suffix.len() + usize::from(modifiers.alt));
+    if modifiers.alt {
+        bytes.push(b'\x1b');
+    }
+    bytes.extend_from_slice(suffix);
+    Some(bytes)
 }
 
 fn any_modifiers(modifiers: Modifiers) -> bool {

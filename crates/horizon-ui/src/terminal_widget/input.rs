@@ -703,6 +703,83 @@ mod tests {
         assert_eq!(bytes, b"@");
     }
 
+    #[test]
+    fn legacy_c0_key_events_are_forwarded_in_legacy_mode() {
+        let cases: [(&str, Event, &[u8]); 6] = [
+            (
+                "shift enter",
+                Event::Key {
+                    key: Key::Enter,
+                    physical_key: Some(Key::Enter),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                },
+                b"\r",
+            ),
+            (
+                "alt escape",
+                Event::Key {
+                    key: Key::Escape,
+                    physical_key: Some(Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT,
+                },
+                b"\x1b\x1b",
+            ),
+            (
+                "ctrl backspace",
+                Event::Key {
+                    key: Key::Backspace,
+                    physical_key: Some(Key::Backspace),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::CTRL,
+                },
+                b"\x08",
+            ),
+            (
+                "alt backspace",
+                Event::Key {
+                    key: Key::Backspace,
+                    physical_key: Some(Key::Backspace),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT,
+                },
+                b"\x1b\x7f",
+            ),
+            (
+                "ctrl shift tab",
+                Event::Key {
+                    key: Key::Tab,
+                    physical_key: Some(Key::Tab),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::CTRL | Modifiers::SHIFT,
+                },
+                b"\x1b[Z",
+            ),
+            (
+                "alt shift tab",
+                Event::Key {
+                    key: Key::Tab,
+                    physical_key: Some(Key::Tab),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                },
+                b"\x1b\x1b[Z",
+            ),
+        ];
+
+        for (name, event, expected) in cases {
+            let bytes = forward_bytes(&[event], TermMode::NONE);
+            assert_eq!(bytes, expected, "{name}");
+        }
+    }
+
     fn forward_bytes(events: &[Event], mode: TermMode) -> Vec<u8> {
         let mut forwarder = KeyboardInputForwarder::default();
         let mut bytes = Vec::new();
