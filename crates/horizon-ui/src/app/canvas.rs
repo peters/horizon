@@ -294,7 +294,7 @@ impl HorizonApp {
     }
 
     pub(super) fn render_empty_state_card(&mut self, ctx: &Context) {
-        if !self.board.panels.is_empty() {
+        if !should_show_empty_state_card(self.board.workspaces.len(), self.board.panels.len()) {
             return;
         }
 
@@ -394,6 +394,10 @@ impl HorizonApp {
                     });
             });
     }
+}
+
+fn should_show_empty_state_card(workspace_count: usize, panel_count: usize) -> bool {
+    workspace_count == 0 && panel_count == 0
 }
 
 fn workspace_content_bounds(
@@ -543,7 +547,10 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::CanvasViewState;
 
-    use super::{CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, dot_grid_axis_count, dot_grid_layout};
+    use super::{
+        CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, dot_grid_axis_count, dot_grid_layout,
+        should_show_empty_state_card,
+    };
 
     #[test]
     fn dot_grid_axis_count_handles_invalid_spacing() {
@@ -592,5 +599,12 @@ mod tests {
         let zoomed = CanvasGridCacheKey::new(rect, CanvasViewState::new([24.0, -12.0], 1.5));
 
         assert_ne!(base, zoomed);
+    }
+
+    #[test]
+    fn empty_state_card_only_shows_for_truly_empty_board() {
+        assert!(should_show_empty_state_card(0, 0));
+        assert!(!should_show_empty_state_card(1, 0));
+        assert!(!should_show_empty_state_card(1, 1));
     }
 }
