@@ -77,6 +77,7 @@ impl SearchOverlay {
         self.cached_results = SearchResults::default();
         self.display_rows.clear();
         self.selected = 0;
+        self.query_changed_at = None;
     }
 
     /// Create a search overlay without auto-focusing the input. Used for
@@ -124,6 +125,8 @@ impl SearchOverlay {
         }
 
         if response.changed() {
+            self.record_query_edit(Instant::now());
+            ui.ctx().request_repaint_after(Self::DEBOUNCE);
             self.selected = 0;
         }
 
@@ -200,6 +203,10 @@ impl SearchOverlay {
         self.maybe_refresh_results_at(ctx, board, terminal_output_changed, Instant::now());
     }
 
+    fn record_query_edit(&mut self, changed_at: Instant) {
+        self.query_changed_at = Some(changed_at);
+    }
+
     fn should_refresh_for_terminal_output(&self, board: &Board) -> bool {
         !self.query.is_empty() && board.panels.iter().any(horizon_core::Panel::had_recent_output)
     }
@@ -221,9 +228,14 @@ impl SearchOverlay {
         } else if query_changed {
             // Query text changed -- debounce to avoid searching on every
             // keystroke when many terminals are open.
-            let changed_at = *self.query_changed_at.get_or_insert(now);
-            if now.duration_since(changed_at) < Self::DEBOUNCE {
+            let Some(changed_at) = self.query_changed_at else {
+                self.record_query_edit(now);
                 ctx.request_repaint_after(Self::DEBOUNCE);
+                return;
+            };
+            let elapsed = now.duration_since(changed_at);
+            if elapsed < Self::DEBOUNCE {
+                ctx.request_repaint_after(Self::DEBOUNCE.saturating_sub(elapsed));
                 return;
             }
             self.query_changed_at = None;
@@ -353,7 +365,7 @@ impl SearchOverlay {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use egui::Context;
     use horizon_core::{Board, PanelId, PanelSearchResult, SearchMatch, SearchResults};
@@ -391,5 +403,30 @@ mod tests {
         assert_eq!(overlay.cached_results.total_matches, 0);
         assert!(overlay.cached_results.panels.is_empty());
         assert!(overlay.display_rows.is_empty());
+    }
+
+    #[test]
+    fn latest_query_edit_restarts_debounce_window() {
+        let mut overlay = SearchOverlay::new_inactive();
+        let ctx = Context::default();
+        let board = Board::new();
+        let first_edit = Instant::now();
+        let second_edit = first_edit + Duration::from_millis(100);
+
+        overlay.query = "error".to_string();
+        overlay.record_query_edit(first_edit);
+        overlay.query = "error:".to_string();
+        overlay.record_query_edit(second_edit);
+
+        overlay.maybe_refresh_results_at(
+            &ctx,
+            &board,
+            false,
+            first_edit + SearchOverlay::DEBOUNCE + Duration::from_millis(10),
+        );
+        assert!(overlay.last_query.is_empty());
+
+        overlay.maybe_refresh_results_at(&ctx, &board, false, second_edit + SearchOverlay::DEBOUNCE);
+        assert_eq!(overlay.last_query, overlay.query);
     }
 }
