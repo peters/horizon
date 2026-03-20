@@ -1,5 +1,7 @@
 mod render;
 
+use std::time::{Duration, Instant};
+
 use egui::{Align, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
 
@@ -38,6 +40,8 @@ pub(crate) struct SearchOverlay {
     display_rows: Vec<DisplayRow>,
     request_focus: bool,
     options_dirty: bool,
+    /// When the query last changed; search fires after the debounce window.
+    query_changed_at: Option<Instant>,
 }
 
 pub(crate) enum SearchAction {
@@ -57,6 +61,7 @@ impl SearchOverlay {
             display_rows: Vec::new(),
             request_focus: true,
             options_dirty: false,
+            query_changed_at: None,
         }
     }
 
@@ -86,7 +91,7 @@ impl SearchOverlay {
     /// Render the search input inline in the toolbar. Returns an action
     /// if the user selects a result or cancels.
     pub(crate) fn show_toolbar_input(&mut self, ui: &mut egui::Ui, board: &Board) -> SearchAction {
-        self.maybe_refresh_results(board);
+        self.maybe_refresh_results(ui.ctx(), board);
 
         let input_width = ui.available_width();
 
@@ -188,11 +193,32 @@ impl SearchOverlay {
         action
     }
 
-    fn maybe_refresh_results(&mut self, board: &Board) {
-        if !self.options_dirty && self.query == self.last_query {
+    const DEBOUNCE: Duration = Duration::from_millis(150);
+
+    fn maybe_refresh_results(&mut self, ctx: &Context, board: &Board) {
+        let query_changed = self.query != self.last_query;
+        let options_changed = self.options_dirty;
+
+        if !query_changed && !options_changed {
+            // Nothing to do; clear any stale debounce timer.
+            self.query_changed_at = None;
             return;
         }
-        self.options_dirty = false;
+
+        if options_changed {
+            // Option toggles fire immediately (no debounce needed).
+            self.options_dirty = false;
+        } else {
+            // Query text changed -- debounce to avoid searching on every
+            // keystroke when many terminals are open.
+            let now = Instant::now();
+            let changed_at = *self.query_changed_at.get_or_insert(now);
+            if now.duration_since(changed_at) < Self::DEBOUNCE {
+                ctx.request_repaint_after(Self::DEBOUNCE);
+                return;
+            }
+            self.query_changed_at = None;
+        }
 
         self.last_query.clone_from(&self.query);
         let options = SearchOptions {
