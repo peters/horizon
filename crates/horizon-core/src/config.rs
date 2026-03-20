@@ -106,8 +106,52 @@ impl Default for WindowConfig {
     }
 }
 
+pub(crate) fn default_opencode_presets() -> [PresetConfig; 2] {
+    [
+        PresetConfig {
+            name: "OpenCode".to_string(),
+            alias: Some("oc".to_string()),
+            kind: PanelKind::OpenCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Last,
+            ssh_connection: None,
+        },
+        PresetConfig {
+            name: "OpenCode (Fresh)".to_string(),
+            alias: Some("ocf".to_string()),
+            kind: PanelKind::OpenCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        },
+    ]
+}
+
+pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
+    for default_preset in default_opencode_presets() {
+        let expected_name = default_preset.name.to_ascii_lowercase();
+        let expected_alias = default_preset.alias.as_deref().map(str::to_ascii_lowercase);
+        let exists = presets.iter().any(|preset| {
+            preset.name.eq_ignore_ascii_case(&default_preset.name)
+                || preset
+                    .alias
+                    .as_deref()
+                    .zip(expected_alias.as_deref())
+                    .is_some_and(|(alias, expected)| alias.eq_ignore_ascii_case(expected))
+                || (preset.kind == PanelKind::OpenCode && preset.resume == default_preset.resume)
+                || preset.name.to_ascii_lowercase() == expected_name
+        });
+
+        if !exists {
+            presets.push(default_preset);
+        }
+    }
+}
+
 fn default_presets() -> Vec<PresetConfig> {
-    vec![
+    let mut presets = vec![
         PresetConfig {
             name: "Shell".to_string(),
             alias: Some("sh".to_string()),
@@ -153,6 +197,9 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
+    ];
+    presets.extend(default_opencode_presets());
+    presets.extend([
         PresetConfig {
             name: "Git Changes".to_string(),
             alias: Some("gc".to_string()),
@@ -180,7 +227,8 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
-    ]
+    ]);
+    presets
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -81,6 +81,10 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
             "CC",
             theme::alpha(Color32::from_rgb(203, 166, 247), if focused { 220 } else { 120 }),
         ),
+        PanelKind::OpenCode => (
+            "OC",
+            theme::alpha(Color32::from_rgb(102, 214, 173), if focused { 220 } else { 130 }),
+        ),
         PanelKind::Editor => (
             "MD",
             theme::alpha(Color32::from_rgb(166, 227, 161), if focused { 220 } else { 120 }),
