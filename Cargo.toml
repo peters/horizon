@@ -32,7 +32,7 @@ eframe = { version = "0.33.3", default-features = false, features = ["default_fo
 egui = "0.33.3"
 # Feature-only dependency: eframe/egui-wgpu keep using wgpu 27, so Horizon must
 # unify the native backend features here when eframe default features are disabled.
-wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
+wgpu = { version = "29.0.0", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
 egui_commonmark = { version = "0.22.0", default-features = false, features = ["pulldown_cmark"] }
 tempfile = "3.20.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
