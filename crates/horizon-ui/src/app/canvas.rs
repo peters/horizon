@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use egui::{
     Align, Color32, Context, CornerRadius, Id, Layout, Margin, Mesh, Order, Painter, Pos2, Rect, Sense, Shape, Stroke,
-    StrokeKind, UiBuilder, Vec2,
+    StrokeKind, Vec2,
 };
 use horizon_core::WorkspaceId;
 
@@ -290,13 +290,14 @@ impl HorizonApp {
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
                 paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
-                if self.board.panels.is_empty() {
-                    self.render_empty_state_card(ui, ctx);
-                }
             });
     }
 
-    fn render_empty_state_card(&mut self, ui: &mut egui::Ui, ctx: &Context) {
+    pub(super) fn render_empty_state_card(&mut self, ctx: &Context) {
+        if !self.board.panels.is_empty() {
+            return;
+        }
+
         let quick_nav_shortcut = self
             .shortcuts
             .command_palette
@@ -310,21 +311,22 @@ impl HorizonApp {
             .workspaces
             .iter()
             .any(|workspace| !self.workspace_is_detached(workspace.id));
-        let card_rect = Rect::from_center_size(ui.max_rect().center(), Vec2::new(540.0, 228.0));
+        let card_size = Vec2::new(540.0, 228.0);
+        let card_rect = Rect::from_center_size(self.canvas_rect(ctx).center(), card_size);
 
-        ui.scope_builder(
-            UiBuilder::new()
-                .max_rect(card_rect)
-                .layout(Layout::top_down(Align::Center)),
-            |ui| {
+        egui::Area::new(Id::new("empty_state_card"))
+            .fixed_pos(card_rect.min)
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(theme::alpha(theme::PANEL_BG, 238))
                     .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)))
                     .corner_radius(20)
                     .inner_margin(Margin::same(20))
                     .show(ui, |ui| {
-                        ui.set_min_size(card_rect.size());
-                        ui.vertical_centered(|ui| {
+                        ui.set_min_size(card_size);
+                        ui.set_max_size(card_size);
+                        ui.with_layout(Layout::top_down(Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new("Start with a workspace-first flow")
                                     .color(theme::FG)
@@ -390,8 +392,7 @@ impl HorizonApp {
                             );
                         });
                     });
-            },
-        );
+            });
     }
 }
 
