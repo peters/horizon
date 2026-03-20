@@ -161,10 +161,13 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Ctrl+Shift+F11** | Toggle window fullscreen |
 | **Ctrl+Shift+S** | Save the active Markdown editor |
 
-### Modifier-Assisted Mouse Actions
+### Mouse Actions
 
 | Interaction | What it does |
 |:------------|:-------------|
+| **Middle-mouse drag** | Pan the canvas |
+| **Space + Left-click drag** | Pan the canvas |
+| **Minimap click-and-drag** | Jump to that area of the canvas |
 | **Ctrl+Scroll** | Zoom around the cursor |
 | **Ctrl+Click** | Open URL or file path under cursor |
 | **Ctrl+double-click** canvas | Create a new workspace |
