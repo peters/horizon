@@ -196,10 +196,20 @@ impl SearchOverlay {
     const DEBOUNCE: Duration = Duration::from_millis(150);
 
     fn maybe_refresh_results(&mut self, ctx: &Context, board: &Board) {
+        let terminal_output_changed = self.should_refresh_for_terminal_output(board);
+        self.maybe_refresh_results_at(ctx, board, terminal_output_changed, Instant::now());
+    }
+
+    fn should_refresh_for_terminal_output(&self, board: &Board) -> bool {
+        !self.query.is_empty() && board.panels.iter().any(horizon_core::Panel::had_recent_output)
+    }
+
+    fn maybe_refresh_results_at(&mut self, ctx: &Context, board: &Board, terminal_output_changed: bool, now: Instant) {
         let query_changed = self.query != self.last_query;
         let options_changed = self.options_dirty;
+        let query_or_options_changed = query_changed || options_changed;
 
-        if !query_changed && !options_changed {
+        if !query_changed && !options_changed && !terminal_output_changed {
             // Nothing to do; clear any stale debounce timer.
             self.query_changed_at = None;
             return;
@@ -208,10 +218,9 @@ impl SearchOverlay {
         if options_changed {
             // Option toggles fire immediately (no debounce needed).
             self.options_dirty = false;
-        } else {
+        } else if query_changed {
             // Query text changed -- debounce to avoid searching on every
             // keystroke when many terminals are open.
-            let now = Instant::now();
             let changed_at = *self.query_changed_at.get_or_insert(now);
             if now.duration_since(changed_at) < Self::DEBOUNCE {
                 ctx.request_repaint_after(Self::DEBOUNCE);
@@ -227,7 +236,11 @@ impl SearchOverlay {
         };
         self.cached_results = search_board(board, &self.query, &options);
         self.rebuild_display_rows();
-        self.selected = 0;
+        if query_or_options_changed {
+            self.selected = 0;
+        } else {
+            self.clamp_selection();
+        }
     }
 
     fn rebuild_display_rows(&mut self) {
@@ -335,5 +348,48 @@ impl SearchOverlay {
             });
 
         clicked_idx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use egui::Context;
+    use horizon_core::{Board, PanelId, PanelSearchResult, SearchMatch, SearchResults};
+
+    use super::{DisplayRow, SearchOverlay};
+
+    #[test]
+    fn terminal_output_refreshes_cached_results_without_query_change() {
+        let mut overlay = SearchOverlay::new_inactive();
+        overlay.query = "error".to_string();
+        overlay.last_query = overlay.query.clone();
+        overlay.selected = 1;
+        overlay.cached_results = SearchResults {
+            panels: vec![PanelSearchResult {
+                panel_id: PanelId(7),
+                panel_title: "build".to_string(),
+                lines: vec!["error: first failure".to_string()],
+                matches: vec![SearchMatch {
+                    line_index: 0,
+                    byte_offset: 0,
+                    byte_len: 5,
+                }],
+            }],
+            total_matches: 1,
+        };
+        overlay.display_rows = vec![DisplayRow {
+            panel_id: PanelId(7),
+            panel_title: "build".to_string(),
+            line_text: "error: first failure".to_string(),
+            match_count_label: None,
+        }];
+
+        overlay.maybe_refresh_results_at(&Context::default(), &Board::new(), true, Instant::now());
+
+        assert_eq!(overlay.cached_results.total_matches, 0);
+        assert!(overlay.cached_results.panels.is_empty());
+        assert!(overlay.display_rows.is_empty());
     }
 }
