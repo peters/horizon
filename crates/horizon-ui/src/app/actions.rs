@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use horizon_core::{PanelOptions, PresetConfig, WorkspaceId};
 
 use self::support::detached_workspace_ids;
+use super::DetachedWorkspaceViewportState;
 
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
@@ -58,7 +59,7 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
 
 fn align_attached_workspaces(
     board: &mut horizon_core::Board,
-    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+    detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
 ) -> Option<WorkspaceId> {
     let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
     let workspace_ids: Vec<_> = board
@@ -86,7 +87,10 @@ mod tests {
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
         detached_workspace_ids,
     };
-    use super::{align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd};
+    use super::{
+        DetachedWorkspaceViewportState, align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd,
+        workspace_cwd,
+    };
     use crate::app::TOOLBAR_HEIGHT;
     use crate::app::root_chrome::effective_sidebar_width;
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
@@ -228,7 +232,10 @@ mod tests {
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
 
         let mut detached_workspaces = BTreeMap::new();
-        detached_workspaces.insert(detached_local_id, WindowConfig::default());
+        detached_workspaces.insert(
+            detached_local_id,
+            DetachedWorkspaceViewportState::new(WindowConfig::default()),
+        );
 
         let ids = detached_workspace_ids(&board, &detached_workspaces);
 
@@ -296,7 +303,10 @@ mod tests {
 
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
         let detached_position = board.workspace(detached).expect("detached workspace").position;
-        let detached_workspaces = BTreeMap::from([(detached_local_id, WindowConfig::default())]);
+        let detached_workspaces = BTreeMap::from([(
+            detached_local_id,
+            DetachedWorkspaceViewportState::new(WindowConfig::default()),
+        )]);
 
         let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
 

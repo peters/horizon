@@ -8,7 +8,7 @@ use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, Pan
 use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
-use super::{ActiveSession, HorizonApp, ResolvedSession, StartupBootstrap};
+use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap};
 
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
@@ -49,7 +49,12 @@ impl HorizonApp {
             .detached_workspaces
             .iter()
             .filter(|workspace| !workspace.workspace_local_id.is_empty())
-            .map(|workspace| (workspace.workspace_local_id.clone(), workspace.window.clone()))
+            .map(|workspace| {
+                (
+                    workspace.workspace_local_id.clone(),
+                    DetachedWorkspaceViewportState::new(workspace.window.clone()),
+                )
+            })
             .collect();
         self.pending_detached_window_position_restore = self.detached_workspaces.keys().cloned().collect();
         self.pending_detached_reattach.clear();

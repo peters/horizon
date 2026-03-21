@@ -252,7 +252,7 @@ impl HorizonApp {
         let count_after = self.board.workspaces.len();
         let detached_before = self.detached_workspaces.len();
         self.detached_workspaces
-            .retain(|local_id, _| self.board.workspace_id_by_local_id(local_id).is_some());
+            .retain(|local_id, _state| self.board.workspace_id_by_local_id(local_id).is_some());
         if self.detached_workspaces.len() != detached_before {
             self.mark_runtime_dirty();
         }

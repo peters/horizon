@@ -61,10 +61,47 @@ impl HorizonApp {
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
     ) {
-        let canvas_rect = self.canvas_rect(ctx);
+        self.render_workspace_backgrounds_in_rect(
+            ctx,
+            workspace_bounds,
+            overlay_zones,
+            self.canvas_rect(ctx),
+            None,
+            true,
+        );
+    }
+
+    #[profiling::function]
+    pub(super) fn render_detached_workspace_backgrounds(
+        &mut self,
+        ctx: &Context,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+        canvas_rect: Rect,
+        workspace_id: WorkspaceId,
+    ) {
+        self.render_workspace_backgrounds_in_rect(
+            ctx,
+            workspace_bounds,
+            &OverlayExclusion::new(Vec::new()),
+            canvas_rect,
+            Some(workspace_id),
+            false,
+        );
+    }
+
+    #[profiling::function]
+    fn render_workspace_backgrounds_in_rect(
+        &mut self,
+        ctx: &Context,
+        workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+        overlay_zones: &OverlayExclusion,
+        canvas_rect: Rect,
+        visible_detached_workspace: Option<WorkspaceId>,
+        show_layout_toolbar: bool,
+    ) {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
-        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones);
+        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
@@ -87,11 +124,20 @@ impl HorizonApp {
                     workspace,
                     Some(&mut self.rename_buffer),
                     overlay_zones,
+                    show_layout_toolbar,
                     canvas_transform,
                     canvas_clip_rect,
                 )
             } else {
-                render_workspace_visual(ctx, workspace, None, overlay_zones, canvas_transform, canvas_clip_rect)
+                render_workspace_visual(
+                    ctx,
+                    workspace,
+                    None,
+                    overlay_zones,
+                    show_layout_toolbar,
+                    canvas_transform,
+                    canvas_clip_rect,
+                )
             };
 
             if interaction.activate_workspace {
@@ -191,12 +237,13 @@ impl HorizonApp {
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
+        visible_detached_workspace: Option<WorkspaceId>,
     ) -> Vec<WorkspaceVisual> {
         self.board
             .workspaces
             .iter()
             .filter_map(|workspace| {
-                if self.workspace_is_detached(workspace.id) {
+                if self.workspace_is_detached(workspace.id) && visible_detached_workspace != Some(workspace.id) {
                     return None;
                 }
 

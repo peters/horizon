@@ -5,6 +5,7 @@ mod detached_viewports;
 mod file_drop;
 mod frame_stats;
 mod lifecycle;
+mod minimap;
 mod panel_chrome;
 mod panels;
 mod persistence;
@@ -86,6 +87,31 @@ struct StartupChooserState {
     error: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::app) struct DetachedWorkspaceViewportState {
+    window: WindowConfig,
+    canvas_view: CanvasViewState,
+    pan_target: Option<Vec2>,
+    is_panning: bool,
+    initial_fit_pending: bool,
+    panel_screen_rects: HashMap<PanelId, Rect>,
+    panel_screen_order: Vec<PanelId>,
+}
+
+impl DetachedWorkspaceViewportState {
+    fn new(window: WindowConfig) -> Self {
+        Self {
+            window,
+            canvas_view: CanvasViewState::default(),
+            pan_target: None,
+            is_panning: false,
+            initial_fit_pending: true,
+            panel_screen_rects: HashMap::new(),
+            panel_screen_order: Vec::new(),
+        }
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -121,7 +147,7 @@ pub struct HorizonApp {
     shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
-    detached_workspaces: BTreeMap<String, WindowConfig>,
+    detached_workspaces: BTreeMap<String, DetachedWorkspaceViewportState>,
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,

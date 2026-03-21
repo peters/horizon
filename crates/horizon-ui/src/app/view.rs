@@ -173,11 +173,14 @@ impl HorizonApp {
             return false;
         }
 
+        self.fit_workspace_in_rect(workspace_id, self.canvas_rect(ctx))
+    }
+
+    pub(super) fn fit_workspace_in_rect(&mut self, workspace_id: WorkspaceId, canvas_rect: Rect) -> bool {
         let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
             return false;
         };
 
-        let canvas_rect = self.canvas_rect(ctx);
         let zoom = fit_zoom_for_frame(canvas_rect.size(), size, Vec2::splat(64.0));
         let pan_offset = aligned_pan_offset(canvas_rect, pos, size, zoom, false);
 
