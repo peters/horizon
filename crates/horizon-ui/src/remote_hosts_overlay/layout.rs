@@ -6,7 +6,7 @@ pub(super) const INPUT_HEIGHT: f32 = 44.0;
 pub(super) const HEADER_ROW_HEIGHT: f32 = 26.0;
 pub(super) const ROW_HEIGHT: f32 = 28.0;
 
-const OVERLAY_WIDTH: f32 = 1020.0;
+const OVERLAY_WIDTH: f32 = 1100.0;
 const MAX_VISIBLE_ROWS: usize = 20;
 
 pub(super) struct OverlayLayout {
@@ -54,11 +54,11 @@ pub(super) fn overlay_layout(screen: Rect) -> OverlayLayout {
 
 pub(super) fn columns(content_width: f32) -> Columns {
     // Proportional column layout that adapts to overlay width.
-    let alias_frac = 0.25;
-    let ipv4_frac = 0.14;
-    let tags_frac = 0.24;
-    let hostname_frac = 0.16;
-    let status_frac = 0.06;
+    let alias_frac = 0.23;
+    let ipv4_frac = 0.13;
+    let tags_frac = 0.31;
+    let hostname_frac = 0.12;
+    let status_frac = 0.05;
     // last_seen gets the remainder.
 
     let x0 = 16.0;

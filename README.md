@@ -15,7 +15,7 @@
 
 <p align="center">
   <b>Horizon</b> is a GPU-accelerated terminal board that puts all your sessions<br/>
-  on an infinite canvas. Organize, pan, zoom, and never lose a terminal again.
+  on an infinite canvas. Organize by workspace, launch from presets, quick-nav fast, and never lose a terminal again.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal lives as a panel you can place, resize, and group however you want.
 
-Think of it as a whiteboard for your terminal sessions. Keep your frontend, backend, logs, and AI agents all visible at once — across multiple color-coded workspaces — and navigate between them with a minimap.
+Think of it as a whiteboard for your terminal sessions with a structured workflow on top. Start with color-coded workspaces, launch preset panels, jump with Quick Nav, and fit the active workspace whenever you want a clean overview.
 
 ---
 
@@ -45,7 +45,7 @@ Pan and zoom freely across a boundless workspace surface. Place terminals anywhe
 <td width="50%">
 
 ### Workspaces
-Group related panels into **color-coded workspaces**. Auto-arrange with five layout modes — rows, columns, grid, stack, cascade — or drag panels freely.
+Group related panels into **color-coded workspaces**. Auto-arrange with three layout modes — rows, columns, grid — or drag panels freely.
 
 </td>
 </tr>
@@ -59,7 +59,7 @@ Group related panels into **color-coded workspaces**. Auto-arrange with five lay
 <td>
 
 ### AI Agent Panels
-First-class **Claude Code** and **Codex** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
+First-class **Claude Code**, **Codex**, and **OpenCode** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
 
 </td>
 </tr>
@@ -147,6 +147,8 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 |:---------|:-------------|
 | **Ctrl+Shift+K** | Quick-navigate to any workspace |
 | **Ctrl+Shift+N** | New terminal panel |
+| **Ctrl+Shift+W** | Focus the active workspace at the current zoom |
+| **Ctrl+Shift+9** | Fit the active workspace into view |
 | **Ctrl+Shift+H** | Open Remote Hosts overlay |
 | **Ctrl+Shift+B** | Toggle sidebar |
 | **Ctrl+Shift+U** | Toggle HUD |
@@ -160,6 +162,16 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Escape** | Exit active panel fullscreen |
 | **Ctrl+Shift+F11** | Toggle window fullscreen |
 | **Ctrl+Shift+S** | Save the active Markdown editor |
+
+### Structured Workflow
+
+If you do not want to start by dragging panels around the canvas, use Horizon like this:
+
+1. Create a workspace from the toolbar or with **Ctrl+double-click** on the canvas.
+2. Add a terminal from your first preset with **Ctrl+Shift+N**.
+3. Jump between workspaces with **Quick Nav** using **Ctrl+Shift+K**.
+4. Use **Ctrl+Shift+W** to refocus the current workspace or **Ctrl+Shift+9** to fit it into view.
+5. Use the workspace header controls for **Rows**, **Cols**, or **Grid** when you want a structured layout without leaving the canvas.
 
 ### Mouse Actions
 
@@ -185,6 +197,8 @@ The settings editor writes back to the same config file Horizon loaded. By defau
 shortcuts:
   command_palette: Ctrl+Shift+K
   new_terminal: Ctrl+Shift+N
+  focus_active_workspace: Ctrl+Shift+W
+  fit_active_workspace: Ctrl+Shift+9
   open_remote_hosts: Ctrl+Shift+H
   toggle_sidebar: Ctrl+Shift+B
   toggle_hud: Ctrl+Shift+U
@@ -198,6 +212,7 @@ shortcuts:
   exit_fullscreen_panel: Escape
   fullscreen_window: Ctrl+Shift+F11
   save_editor: Ctrl+Shift+S
+  search: Ctrl+Shift+F
 
 workspaces:
   - name: Backend
@@ -205,6 +220,7 @@ workspaces:
     panels:
       - kind: shell
       - kind: claude
+      - kind: open_code
       - kind: git_changes
 
   - name: Frontend
@@ -220,6 +236,9 @@ presets:
   - name: Claude Code
     alias: cc
     kind: claude
+  - name: OpenCode
+    alias: oc
+    kind: open_code
   - name: Git Changes
     alias: gc
     kind: git_changes

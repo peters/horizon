@@ -38,6 +38,8 @@ struct WorkspaceInteraction {
 }
 
 enum WorkspaceAction {
+    Focus,
+    Fit,
     ClearLayout,
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
@@ -109,6 +111,8 @@ impl HorizonApp {
         let mut clear_workspace_layout = None;
         let mut arrange_workspace = None;
         let mut close_workspace_panels = None;
+        let mut focus_workspace_view = None;
+        let mut fit_workspace_view = None;
 
         for workspace in &visuals {
             self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
@@ -149,6 +153,12 @@ impl HorizonApp {
                 rename_action = interaction.rename_action;
             }
             match interaction.action {
+                Some(WorkspaceAction::Focus) => {
+                    focus_workspace_view = Some(workspace.id);
+                }
+                Some(WorkspaceAction::Fit) => {
+                    fit_workspace_view = Some(workspace.id);
+                }
                 Some(WorkspaceAction::ClearLayout) => {
                     focus_workspace = Some(workspace.id);
                     clear_workspace_layout = Some(workspace.id);
@@ -191,6 +201,12 @@ impl HorizonApp {
 
         if let Some(workspace_id) = focus_workspace {
             self.board.focus_workspace(workspace_id);
+        }
+        if let Some(workspace_id) = focus_workspace_view {
+            let _ = self.focus_workspace_visible(ctx, workspace_id, false);
+        }
+        if let Some(workspace_id) = fit_workspace_view {
+            let _ = self.fit_workspace_visible(ctx, workspace_id);
         }
         if let Some(workspace_id) = clear_workspace_layout
             && self.board.clear_workspace_layout(workspace_id)

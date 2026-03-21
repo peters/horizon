@@ -1,5 +1,5 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
+use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
 
 use crate::theme;
 
@@ -67,19 +67,19 @@ fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
 }
 
 pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused: bool) -> (&'static str, Color32) {
+    if let Some(definition) = agent_definition(kind) {
+        let [r, g, b] = definition.accent_rgb;
+        return (
+            definition.icon_label,
+            theme::alpha(Color32::from_rgb(r, g, b), if focused { 220 } else { 120 }),
+        );
+    }
+
     match kind {
         PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(workspace_color, if focused { 200 } else { 80 })),
         PanelKind::Ssh => (
             "SSH",
             theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 150 }),
-        ),
-        PanelKind::Codex => (
-            "CX",
-            theme::alpha(Color32::from_rgb(116, 162, 247), if focused { 220 } else { 120 }),
-        ),
-        PanelKind::Claude => (
-            "CC",
-            theme::alpha(Color32::from_rgb(203, 166, 247), if focused { 220 } else { 120 }),
         ),
         PanelKind::Editor => (
             "MD",
@@ -93,9 +93,13 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
             "US",
             theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
         ),
+        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
+            unreachable!()
+        }
     }
 }
 
+#[profiling::function]
 pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let painter = ui.painter_at(chrome.panel_rect);
     let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
@@ -234,6 +238,7 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     right
 }
 
+#[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
     use egui::text::{LayoutJob, TextFormat, TextWrapping};
 
@@ -263,6 +268,7 @@ fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focus
     panel_accent(workspace_accent, focused)
 }
 
+#[profiling::function]
 fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMeter) {
     let badge_rect = panel_history_badge_rect(meter.titlebar_rect, meter.close_rect);
     let track_rect = Rect::from_min_max(
@@ -329,6 +335,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
     );
 }
 
+#[profiling::function]
 fn paint_attention_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,
@@ -377,6 +384,7 @@ fn paint_attention_badge(
     );
 }
 
+#[profiling::function]
 fn paint_ssh_status_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,

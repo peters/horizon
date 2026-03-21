@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agents;
 mod attention;
 mod board;
 mod config;
@@ -12,6 +13,7 @@ pub mod git_status;
 pub mod git_watcher;
 mod horizon_home;
 mod layout;
+mod opencode_paths;
 mod panel;
 mod remote_hosts;
 mod runtime_state;
@@ -26,6 +28,7 @@ mod usage_stats;
 mod view;
 mod workspace;
 
+pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
@@ -56,6 +59,6 @@ pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ss
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
-pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_tokens};
+pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

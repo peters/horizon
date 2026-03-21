@@ -466,6 +466,7 @@ mod tests {
         assert!(PanelTranscript::for_panel(PanelKind::Command, Some("/tmp".into()), "panel-1").is_some());
         assert!(PanelTranscript::for_panel(PanelKind::Codex, Some("/tmp".into()), "panel-1").is_none());
         assert!(PanelTranscript::for_panel(PanelKind::Claude, Some("/tmp".into()), "panel-1").is_none());
+        assert!(PanelTranscript::for_panel(PanelKind::OpenCode, Some("/tmp".into()), "panel-1").is_none());
     }
 
     #[test]

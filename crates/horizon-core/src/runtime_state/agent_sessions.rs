@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::opencode_paths::opencode_db_path;
 
 use super::{AgentSessionBinding, PanelKind, normalize_cwd};
 
@@ -16,7 +17,7 @@ pub struct AgentSessionCatalog {
 }
 
 impl AgentSessionCatalog {
-    /// Load recent Claude and Codex sessions from their local stores.
+    /// Load recent Claude, Codex, and `OpenCode` sessions from their local stores.
     ///
     /// # Errors
     ///
@@ -24,6 +25,7 @@ impl AgentSessionCatalog {
     pub fn load() -> Result<Self> {
         let mut sessions = load_claude_sessions()?;
         sessions.extend(load_codex_sessions()?);
+        sessions.extend(load_opencode_sessions()?);
         sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         Ok(Self { sessions })
     }
@@ -309,16 +311,60 @@ fn load_codex_sessions() -> Result<Vec<AgentSessionRecord>> {
     Ok(sessions)
 }
 
+fn load_opencode_sessions() -> Result<Vec<AgentSessionRecord>> {
+    let Some(sqlite_path) = opencode_db_path() else {
+        return Ok(Vec::new());
+    };
+    if !sqlite_path.exists() {
+        return Ok(Vec::new());
+    }
+    load_opencode_sessions_from_path(&sqlite_path)
+}
+
+fn load_opencode_sessions_from_path(sqlite_path: &Path) -> Result<Vec<AgentSessionRecord>> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let connection =
+        Connection::open_with_flags(sqlite_path, flags).map_err(|error| Error::State(error.to_string()))?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, title, directory, time_updated
+             FROM session
+             WHERE time_archived IS NULL
+               AND parent_id IS NULL
+             ORDER BY time_updated DESC",
+        )
+        .map_err(|error| Error::State(error.to_string()))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AgentSessionRecord {
+                kind: PanelKind::OpenCode,
+                session_id: row.get(0)?,
+                label: row.get::<_, String>(1).ok().filter(|title| !title.is_empty()),
+                cwd: normalize_cwd(row.get::<_, String>(2).ok().as_deref()),
+                updated_at: row.get::<_, i64>(3)?,
+            })
+        })
+        .map_err(|error| Error::State(error.to_string()))?;
+
+    let mut sessions = Vec::new();
+    for row in rows {
+        sessions.push(row.map_err(|error| Error::State(error.to_string()))?);
+    }
+    Ok(sessions)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
+    use rusqlite::Connection;
     use uuid::Uuid;
 
     use super::super::{PanelResume, PanelState, RuntimeState, WorkspaceState};
     use super::{
         AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, load_claude_project_session_summary,
-        scan_claude_session_reader,
+        load_opencode_sessions_from_path, scan_claude_session_reader,
     };
 
     fn parse_claude_project_session<R: std::io::BufRead>(
@@ -444,5 +490,39 @@ mod tests {
         assert_eq!(session.cwd.as_deref(), Some("/repo"));
         assert_eq!(session.label.as_deref(), Some("reply with ok only"));
         assert_eq!(session.updated_at, 9);
+    }
+
+    #[test]
+    fn load_opencode_sessions_reads_root_sessions_from_sqlite() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let sqlite_path = temp_dir.path().join("opencode.db");
+        let conn = Connection::open(&sqlite_path).expect("sqlite");
+        conn.execute_batch(
+            "\
+CREATE TABLE session (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    parent_id TEXT,
+    time_updated INTEGER NOT NULL,
+    time_archived INTEGER
+);
+INSERT INTO session (id, title, directory, parent_id, time_updated, time_archived) VALUES
+    ('session-root', 'Fix auth flow', '/repo', NULL, 1000, NULL),
+    ('session-child', 'Child', '/repo', 'session-root', 2000, NULL),
+    ('session-archived', 'Archived', '/repo', NULL, 3000, 1),
+    ('session-other', 'Other repo', '/other', NULL, 4000, NULL);
+",
+        )
+        .expect("seed");
+
+        let sessions = load_opencode_sessions_from_path(&sqlite_path).expect("opencode sessions");
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].kind, PanelKind::OpenCode);
+        assert_eq!(sessions[0].session_id, "session-other");
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/other"));
+        assert_eq!(sessions[1].session_id, "session-root");
+        assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
     }
 }
