@@ -59,7 +59,7 @@ Group related panels into **color-coded workspaces**. Auto-arrange with three la
 <td>
 
 ### AI Agent Panels
-First-class **Claude Code**, **Codex**, and **OpenCode** integration. Sessions persist and auto-resume. A live **usage dashboard** tracks token spend across agents.
+First-class **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, and **KiloCode** integration. Session persistence and resume work where the underlying agent CLI supports it. A live **usage dashboard** tracks token spend across agents.
 
 </td>
 </tr>
@@ -239,6 +239,12 @@ presets:
   - name: OpenCode
     alias: oc
     kind: open_code
+  - name: Gemini CLI
+    alias: gm
+    kind: gemini
+  - name: KiloCode
+    alias: kc
+    kind: kilo_code
   - name: Git Changes
     alias: gc
     kind: git_changes
