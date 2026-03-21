@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::agent_definition;
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
@@ -39,6 +40,8 @@ pub enum PanelKind {
     Codex,
     Claude,
     OpenCode,
+    Gemini,
+    KiloCode,
     Command,
     Editor,
     GitChanges,
@@ -48,21 +51,28 @@ pub enum PanelKind {
 impl PanelKind {
     #[must_use]
     pub fn is_agent(self) -> bool {
-        matches!(self, Self::Codex | Self::Claude | Self::OpenCode)
+        agent_definition(self).is_some()
     }
 
     #[must_use]
-    pub const fn display_name(self) -> &'static str {
+    pub fn supports_session_binding(self) -> bool {
+        agent_definition(self).is_some_and(crate::AgentDefinition::supports_session_binding)
+    }
+
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        if let Some(definition) = agent_definition(self) {
+            return definition.display_name;
+        }
+
         match self {
             Self::Shell => "Shell",
             Self::Ssh => "SSH",
-            Self::Codex => "Codex",
-            Self::Claude => "Claude",
-            Self::OpenCode => "OpenCode",
             Self::Command => "Command",
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
+            Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode => unreachable!(),
         }
     }
 }
@@ -355,7 +365,7 @@ impl Panel {
     }
 
     /// Restart the terminal process while keeping the same panel identity,
-    /// layout, and session binding. For agent panels (Codex / Claude / `OpenCode`) this
+    /// layout, and session binding. For agent panels this
     /// resumes the existing session so no work is lost.
     ///
     /// # Errors
@@ -388,7 +398,7 @@ impl Panel {
         // Graceful shutdown of the old terminal.
         let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
 
-        let should_resume = self.kind.is_agent() && self.session_binding.is_some();
+        let should_resume = self.kind.supports_session_binding() && self.session_binding.is_some();
         let (program, launch_args) = resolve_launch_command(
             self.launch_command.clone(),
             self.launch_args.clone(),
@@ -478,7 +488,7 @@ impl Panel {
     /// from initial prompt rendering on startup/restore.
     #[must_use]
     pub fn detect_attention(&self) -> Option<&'static str> {
-        if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode) {
+        if !self.kind.is_agent() {
             return None;
         }
         let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
@@ -739,6 +749,45 @@ mod tests {
     }
 
     #[test]
+    fn gemini_panels_start_without_implicit_resume_flags() {
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--model".to_string(), "gemini-2.5-pro".to_string()],
+            None,
+            PanelKind::Gemini,
+            &PanelResume::Fresh,
+            None,
+            false,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("gemini"));
+        assert!(args[1].contains("--model"));
+        assert!(!args[1].contains("resume"));
+        assert!(!args[1].contains("--session"));
+        assert!(!args[1].contains("--continue"));
+    }
+
+    #[test]
+    fn kilocode_last_resume_uses_continue_flag() {
+        let (_program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::KiloCode,
+            &PanelResume::Last,
+            None,
+            false,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert!(args[1].contains("kilo"));
+        assert!(args[1].contains("--continue"));
+    }
+
+    #[test]
     fn explicit_command_wins_over_kind_defaults() {
         let (_program, args) = resolve_launch_command(
             Some("python".to_string()),
@@ -779,6 +828,14 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::OpenCode),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::Gemini),
+            AGENT_PANEL_SCROLLBACK_LIMIT
+        );
+        assert_eq!(
+            scrollback_limit_for_kind(PanelKind::KiloCode),
+            AGENT_PANEL_SCROLLBACK_LIMIT
+        );
     }
 
     #[test]
@@ -786,6 +843,8 @@ mod tests {
         assert!(!kitty_keyboard_for_kind(PanelKind::Codex));
         assert!(kitty_keyboard_for_kind(PanelKind::Claude));
         assert!(kitty_keyboard_for_kind(PanelKind::OpenCode));
+        assert!(!kitty_keyboard_for_kind(PanelKind::Gemini));
+        assert!(kitty_keyboard_for_kind(PanelKind::KiloCode));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
         assert!(kitty_keyboard_for_kind(PanelKind::Ssh));
     }

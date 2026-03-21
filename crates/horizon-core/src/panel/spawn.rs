@@ -14,6 +14,7 @@ use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
+use crate::{AgentIntegrationKind, AgentResumeMode, agent_definition};
 
 use super::{
     AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SCROLLBACK_LIMIT,
@@ -366,49 +367,65 @@ pub(super) fn resolve_launch_command(
                 (default_shell(), args)
             }
         }
-        PanelKind::Codex => {
-            let program = command.unwrap_or_else(|| "codex".to_string());
-            let mut launch_args = args;
-            if should_resume_binding {
-                if let Some(binding) = session_binding {
-                    launch_args.extend(["resume".to_string(), binding.session_id.clone()]);
-                }
-            } else if let PanelResume::Session { session_id } = resume {
-                launch_args.extend(["resume".to_string(), session_id.clone()]);
-            }
-            wrap_in_login_shell(program, launch_args)
-        }
-        PanelKind::Claude => {
-            let program = command.unwrap_or_else(|| "claude".to_string());
-            let mut launch_args = Vec::new();
-            if let Some(plugin_path) = horizon_claude_plugin_dir() {
-                launch_args.extend(["--plugin-dir".to_string(), plugin_path]);
-            }
-            if let Some(binding) = session_binding {
-                if should_resume_binding {
-                    launch_args.extend(["--resume".to_string(), binding.session_id.clone()]);
-                }
-            } else if let PanelResume::Session { session_id } = resume {
-                launch_args.extend(["--resume".to_string(), session_id.clone()]);
-            } else {
-                launch_args.extend(["--session-id".to_string(), Uuid::new_v4().to_string()]);
-            }
-            launch_args.extend(args);
-            wrap_in_login_shell(program, launch_args)
-        }
-        PanelKind::OpenCode => {
-            let program = command.unwrap_or_else(|| "opencode".to_string());
-            let mut launch_args = args;
-            if should_resume_binding {
-                if let Some(binding) = session_binding {
-                    launch_args.extend(["--session".to_string(), binding.session_id.clone()]);
-                }
-            } else if let PanelResume::Session { session_id } = resume {
-                launch_args.extend(["--session".to_string(), session_id.clone()]);
-            }
-            wrap_in_login_shell(program, launch_args)
+        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
+            resolve_agent_launch_command(command, args, kind, resume, session_binding, should_resume_binding)
         }
     }
+}
+
+fn resolve_agent_launch_command(
+    command: Option<String>,
+    args: Vec<String>,
+    kind: PanelKind,
+    resume: &PanelResume,
+    session_binding: Option<&AgentSessionBinding>,
+    should_resume_binding: bool,
+) -> (String, Vec<String>) {
+    let Some(definition) = agent_definition(kind) else {
+        unreachable!("agent launch requested for non-agent panel: {kind:?}");
+    };
+    let program = command.unwrap_or_else(|| definition.default_command.to_string());
+    let mut launch_args = match definition.integration {
+        AgentIntegrationKind::None => Vec::new(),
+        AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
+    };
+
+    match definition.resume_mode {
+        AgentResumeMode::ExactSubcommand { subcommand } => {
+            launch_args.extend(args);
+            if should_resume_binding {
+                if let Some(binding) = session_binding {
+                    launch_args.extend([subcommand.to_string(), binding.session_id.clone()]);
+                }
+            } else if let PanelResume::Session { session_id } = resume {
+                launch_args.extend([subcommand.to_string(), session_id.clone()]);
+            }
+        }
+        AgentResumeMode::ExactFlag {
+            flag,
+            fresh_session_flag,
+        } => {
+            if should_resume_binding {
+                if let Some(binding) = session_binding {
+                    launch_args.extend([flag.to_string(), binding.session_id.clone()]);
+                }
+            } else if let PanelResume::Session { session_id } = resume {
+                launch_args.extend([flag.to_string(), session_id.clone()]);
+            } else if let Some(fresh_session_flag) = fresh_session_flag {
+                launch_args.extend([fresh_session_flag.to_string(), Uuid::new_v4().to_string()]);
+            }
+            launch_args.extend(args);
+        }
+        AgentResumeMode::ContinueFlag { flag } => {
+            launch_args.extend(args);
+            if matches!(resume, PanelResume::Last) {
+                launch_args.push(flag.to_string());
+            }
+        }
+        AgentResumeMode::None => launch_args.extend(args),
+    }
+
+    wrap_in_login_shell(program, launch_args)
 }
 
 pub fn current_unix_millis() -> i64 {
@@ -460,7 +477,7 @@ fn resolve_session_binding(
         // first user message, so preassigning an ID would not match any
         // on-disk session state.
         session_binding = match (resume, kind) {
-            (PanelResume::Session { session_id }, PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode) => {
+            (PanelResume::Session { session_id }, kind) if kind.supports_session_binding() => {
                 Some(AgentSessionBinding::new(
                     kind,
                     session_id.clone(),
@@ -473,19 +490,11 @@ fn resolve_session_binding(
         };
     }
 
-    let should_resume_binding = match kind {
-        PanelKind::Claude => {
-            session_binding.is_some()
-                && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
-        }
-        PanelKind::Codex
-        | PanelKind::OpenCode
-        | PanelKind::Ssh
-        | PanelKind::Shell
-        | PanelKind::Command
-        | PanelKind::Editor
-        | PanelKind::GitChanges
-        | PanelKind::Usage => session_binding.is_some() || matches!(resume, PanelResume::Session { .. }),
+    let should_resume_binding = if kind == PanelKind::Claude {
+        session_binding.is_some()
+            && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
+    } else {
+        session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
     };
 
     (session_binding, should_resume_binding)
@@ -551,21 +560,31 @@ pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
     env
 }
 
-fn horizon_claude_plugin_dir() -> Option<String> {
+fn horizon_claude_plugin_args() -> Vec<String> {
     let path = HorizonHome::resolve().claude_plugin_dir();
-    path.is_dir().then(|| path.display().to_string())
+    if path.is_dir() {
+        vec!["--plugin-dir".to_string(), path.display().to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
-    match kind {
-        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode => AGENT_PANEL_SCROLLBACK_LIMIT,
-        PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
+    if kind.is_agent() {
+        AGENT_PANEL_SCROLLBACK_LIMIT
+    } else {
+        match kind {
+            PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
+            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
+            PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
+                unreachable!()
+            }
+        }
     }
 }
 
 pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
-    !matches!(kind, PanelKind::Codex)
+    agent_definition(kind).is_none_or(|definition| definition.kitty_keyboard)
 }
 
 #[cfg(test)]
