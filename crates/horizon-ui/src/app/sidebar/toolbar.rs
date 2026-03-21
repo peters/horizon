@@ -1,8 +1,10 @@
-use egui::{Align, Context, CornerRadius, Id, Layout, Order, Pos2, Rect, Stroke, UiBuilder, Vec2};
+use egui::{
+    Align, Align2, Context, CornerRadius, FontId, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2,
+};
 
 use crate::app::root_chrome::{
-    ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_BUTTON_HEIGHT, RootToolbarLayout, ToolbarAction, ToolbarItem,
-    root_toolbar_layout,
+    ROOT_TOOLBAR_BUTTON_GAP, ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_FPS_WIDTH, RootToolbarLayout, ToolbarAction,
+    ToolbarItem, root_toolbar_layout,
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
@@ -82,12 +84,69 @@ impl HorizonApp {
 
                 for item in &layout.visible_items {
                     match *item {
+                        ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
                         ToolbarItem::Action(action) => self.render_toolbar_action_button(ui, action),
                         ToolbarItem::OverflowMenu => self.render_toolbar_overflow_menu(ui, &layout.overflow_actions),
                     }
                 }
             },
         );
+    }
+
+    fn render_toolbar_fps_meter(&self, ui: &mut egui::Ui) {
+        let stats = self.frame_stats.snapshot();
+        let value = if stats.sample_count == 0 {
+            "--".to_string()
+        } else {
+            format!("{:>3.0}", stats.fps)
+        };
+        let accent = if stats.sample_count == 0 {
+            theme::BORDER_SUBTLE
+        } else if stats.fps >= 100.0 {
+            theme::PALETTE_GREEN
+        } else if stats.fps >= 60.0 {
+            theme::ACCENT
+        } else {
+            theme::PALETTE_RED
+        };
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(fps_meter_width(), 24.0), Sense::hover());
+        let painter = ui.painter();
+        let stroke_color = theme::alpha(theme::blend(theme::BORDER_SUBTLE, accent, 0.36), 220);
+        let fill_color = theme::alpha(theme::blend(theme::PANEL_BG_ALT, accent, 0.10), 232);
+        let dot_center = Pos2::new(rect.min.x + 10.0, rect.center().y);
+
+        painter.rect_filled(rect, CornerRadius::same(10), fill_color);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(10),
+            Stroke::new(1.0, stroke_color),
+            egui::StrokeKind::Outside,
+        );
+        painter.circle_filled(dot_center, 3.0, theme::alpha(accent, 230));
+        painter.text(
+            Pos2::new(rect.min.x + 18.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            value,
+            FontId::monospace(11.5),
+            theme::FG,
+        );
+        painter.text(
+            Pos2::new(rect.max.x - 8.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            "fps",
+            FontId::proportional(8.5),
+            theme::alpha(theme::FG_DIM, 220),
+        );
+
+        let tooltip = if stats.sample_count == 0 {
+            "Collecting frame samples...".to_string()
+        } else {
+            format!(
+                "{:.0} FPS average over {} frames ({:.2} ms/frame)",
+                stats.fps, stats.sample_count, stats.frame_time_ms
+            )
+        };
+        let _ = response.on_hover_text(tooltip);
     }
 
     fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
@@ -182,6 +241,10 @@ impl HorizonApp {
             ToolbarAction::Settings => self.toggle_settings(),
         }
     }
+}
+
+fn fps_meter_width() -> f32 {
+    ROOT_TOOLBAR_FPS_WIDTH
 }
 
 fn action_button_width(action: ToolbarAction) -> f32 {

@@ -10,6 +10,7 @@ const ROOT_TOOLBAR_VERTICAL_PAD: f32 = 8.0;
 const ROOT_TOOLBAR_CLUSTER_GAP: f32 = 12.0;
 const ROOT_TOOLBAR_SEARCH_MIN_WIDTH: f32 = 180.0;
 const ROOT_TOOLBAR_SEARCH_MAX_WIDTH: f32 = 420.0;
+pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 64.0;
 const ROOT_TOOLBAR_MORE_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 324.0;
@@ -46,6 +47,7 @@ impl ToolbarAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarItem {
+    FpsMeter,
     Action(ToolbarAction),
     OverflowMenu,
 }
@@ -53,6 +55,7 @@ pub(super) enum ToolbarItem {
 impl ToolbarItem {
     fn estimated_width(self) -> f32 {
         match self {
+            Self::FpsMeter => ROOT_TOOLBAR_FPS_WIDTH,
             Self::Action(action) => action.estimated_width(),
             Self::OverflowMenu => ROOT_TOOLBAR_MORE_WIDTH,
         }
@@ -90,11 +93,19 @@ pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
         ),
     );
 
-    let states = [(true, 2_usize), (false, 2_usize), (false, 1_usize), (false, 0_usize)];
-    let mut fallback = layout_candidate(viewport, content_rect, false, 0);
+    let states = [
+        (true, 2_usize, true),
+        (false, 2_usize, true),
+        (false, 1_usize, true),
+        (false, 0_usize, true),
+        (false, 2_usize, false),
+        (false, 1_usize, false),
+        (false, 0_usize, false),
+    ];
+    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false);
 
-    for (show_tagline, secondary_visible) in states {
-        let candidate = layout_candidate(viewport, content_rect, show_tagline, secondary_visible);
+    for (show_tagline, secondary_visible, show_fps) in states {
+        let candidate = layout_candidate(viewport, content_rect, show_tagline, secondary_visible, show_fps);
         if candidate.search_available >= ROOT_TOOLBAR_SEARCH_MIN_WIDTH {
             return candidate.layout;
         }
@@ -109,6 +120,7 @@ fn layout_candidate(
     content_rect: Rect,
     show_tagline: bool,
     secondary_visible: usize,
+    show_fps: bool,
 ) -> RootToolbarCandidate {
     let brand_width = ROOT_TOOLBAR_NAME_WIDTH
         + if show_tagline {
@@ -118,10 +130,12 @@ fn layout_candidate(
         };
     let brand_rect = Rect::from_min_size(content_rect.min, Vec2::new(brand_width, content_rect.height()));
 
-    let mut visible_items = vec![
-        ToolbarItem::Action(ToolbarAction::NewWorkspace),
-        ToolbarItem::Action(ToolbarAction::QuickNav),
-    ];
+    let mut visible_items = Vec::with_capacity(6);
+    if show_fps {
+        visible_items.push(ToolbarItem::FpsMeter);
+    }
+    visible_items.push(ToolbarItem::Action(ToolbarAction::NewWorkspace));
+    visible_items.push(ToolbarItem::Action(ToolbarAction::QuickNav));
     for action in ToolbarAction::SECONDARY.iter().take(secondary_visible).copied() {
         visible_items.push(ToolbarItem::Action(action));
     }
@@ -201,6 +215,7 @@ mod tests {
 
         assert!(!layout.show_tagline);
         assert!(layout.overflow_actions.is_empty());
+        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
@@ -215,7 +230,8 @@ mod tests {
         let layout = root_toolbar_layout(viewport);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert!(layout.overflow_actions.contains(&ToolbarAction::RemoteHosts));
+        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
     }
@@ -229,6 +245,7 @@ mod tests {
             layout.overflow_actions,
             vec![ToolbarAction::FitWorkspace, ToolbarAction::RemoteHosts]
         );
+        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
