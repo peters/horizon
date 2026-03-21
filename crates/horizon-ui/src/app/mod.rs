@@ -8,6 +8,7 @@ mod panel_chrome;
 mod panels;
 mod persistence;
 mod remote_hosts;
+mod root_chrome;
 mod session;
 mod settings;
 pub(crate) mod shortcuts;

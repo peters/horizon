@@ -78,53 +78,6 @@ pub(super) fn truncate_session_label(label: &str) -> String {
     truncated
 }
 
-pub(super) fn paint_empty_state(ui: &mut egui::Ui) {
-    let rect = ui.max_rect();
-    let card_rect = Rect::from_center_size(rect.center(), Vec2::new(380.0, 120.0));
-    let painter = ui.painter();
-    let shortcut = primary_shortcut_label();
-
-    painter.rect_filled(
-        card_rect,
-        egui::CornerRadius::same(20),
-        theme::alpha(theme::PANEL_BG, 236),
-    );
-    painter.rect_stroke(
-        card_rect,
-        egui::CornerRadius::same(20),
-        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)),
-        egui::StrokeKind::Outside,
-    );
-    painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 30.0),
-        egui::Align2::CENTER_CENTER,
-        "Spatial terminal observatory",
-        egui::FontId::proportional(17.0),
-        theme::FG,
-    );
-    painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 60.0),
-        egui::Align2::CENTER_CENTER,
-        format!("{shortcut}+double-click to create a workspace."),
-        egui::FontId::proportional(11.5),
-        theme::FG_SOFT,
-    );
-    painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 80.0),
-        egui::Align2::CENTER_CENTER,
-        format!("{shortcut}+double-click inside a workspace to add a terminal."),
-        egui::FontId::proportional(11.5),
-        theme::FG_SOFT,
-    );
-    painter.text(
-        Pos2::new(card_rect.center().x, card_rect.min.y + 102.0),
-        egui::Align2::CENTER_CENTER,
-        "Scroll to pan vertically, Shift+scroll horizontally.",
-        egui::FontId::proportional(10.5),
-        theme::FG_DIM,
-    );
-}
-
 pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
     let rect = ui.max_rect();
     let painter = ui.painter();

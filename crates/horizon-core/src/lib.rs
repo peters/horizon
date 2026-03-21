@@ -12,6 +12,7 @@ pub mod git_status;
 pub mod git_watcher;
 mod horizon_home;
 mod layout;
+mod opencode_paths;
 mod panel;
 mod remote_hosts;
 mod runtime_state;

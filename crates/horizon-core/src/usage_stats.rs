@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use serde::Deserialize;
 
+use crate::opencode_paths::opencode_db_path;
+
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Snapshot of usage statistics for Claude Code, Codex CLI, and `OpenCode`.
@@ -388,7 +390,7 @@ struct OpenCodeDayRow {
 }
 
 fn load_opencode_stats() -> Vec<OpenCodeDayRow> {
-    let Some(path) = home_dir().map(|h| h.join(".local/share/opencode/opencode.db")) else {
+    let Some(path) = opencode_db_path() else {
         return Vec::new();
     };
     if !path.exists() {

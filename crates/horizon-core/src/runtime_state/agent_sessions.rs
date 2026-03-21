@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::opencode_paths::opencode_db_path;
 
 use super::{AgentSessionBinding, PanelKind, normalize_cwd};
 
@@ -311,10 +312,9 @@ fn load_codex_sessions() -> Result<Vec<AgentSessionRecord>> {
 }
 
 fn load_opencode_sessions() -> Result<Vec<AgentSessionRecord>> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(sqlite_path) = opencode_db_path() else {
         return Ok(Vec::new());
     };
-    let sqlite_path = home.join(".local").join("share").join("opencode").join("opencode.db");
     if !sqlite_path.exists() {
         return Ok(Vec::new());
     }

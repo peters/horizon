@@ -11,6 +11,16 @@ impl HorizonApp {
         workspace_id
     }
 
+    pub(super) fn focus_active_workspace(&mut self, ctx: &Context, left_align: bool) -> bool {
+        self.active_attached_workspace_id()
+            .is_some_and(|workspace_id| self.focus_workspace_visible(ctx, workspace_id, left_align))
+    }
+
+    pub(super) fn fit_active_workspace(&mut self, ctx: &Context) -> bool {
+        self.active_attached_workspace_id()
+            .is_some_and(|workspace_id| self.fit_workspace_visible(ctx, workspace_id))
+    }
+
     pub(super) fn create_workspace_visible(&mut self, ctx: &Context, name: &str) -> WorkspaceId {
         let workspace_count_before = self.board.workspaces.len();
         let workspace_id = self.board.create_workspace(name);
@@ -139,6 +149,46 @@ impl HorizonApp {
         self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
     }
 
+    pub(super) fn focus_workspace_visible(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        left_align: bool,
+    ) -> bool {
+        if self.workspace_is_detached(workspace_id) {
+            return false;
+        }
+
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return false;
+        };
+
+        self.board.focus_workspace(workspace_id);
+        self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
+        true
+    }
+
+    pub(super) fn fit_workspace_visible(&mut self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
+        if self.workspace_is_detached(workspace_id) {
+            return false;
+        }
+
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return false;
+        };
+
+        let canvas_rect = self.canvas_rect(ctx);
+        let zoom = fit_zoom_for_frame(canvas_rect.size(), size, Vec2::splat(64.0));
+        let pan_offset = aligned_pan_offset(canvas_rect, pos, size, zoom, false);
+
+        self.board.focus_workspace(workspace_id);
+        self.pan_target = None;
+        self.canvas_view.set_zoom(zoom);
+        self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        self.mark_runtime_dirty();
+        true
+    }
+
     fn reveal_initial_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId, workspace_count_before: usize) {
         if workspace_count_before != 0 {
             return;
@@ -148,6 +198,13 @@ impl HorizonApp {
         if let Some((pos, size)) = self.workspace_focus_frame(workspace_id) {
             self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
         }
+    }
+
+    fn active_attached_workspace_id(&self) -> Option<WorkspaceId> {
+        self.board
+            .active_workspace
+            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
+            .or_else(|| self.leftmost_workspace_id())
     }
 
     fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
@@ -183,6 +240,18 @@ fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
     )
 }
 
+fn fit_zoom_for_frame(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 {
+    if frame_size.x <= f32::EPSILON || frame_size.y <= f32::EPSILON {
+        return horizon_core::DEFAULT_CANVAS_ZOOM;
+    }
+
+    let available_size = Vec2::new(
+        (canvas_size.x - margin.x * 2.0).max(1.0),
+        (canvas_size.y - margin.y * 2.0).max(1.0),
+    );
+    horizon_core::clamp_canvas_zoom((available_size.x / frame_size.x).min(available_size.y / frame_size.y))
+}
+
 fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
     let pan_margin = 40.0;
     let x = if left_align {
@@ -210,9 +279,9 @@ fn canvas_origin(canvas_rect: Rect) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use egui::{Pos2, Rect, Vec2};
-    use horizon_core::CanvasViewState;
+    use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
-    use super::{aligned_pan_offset, canvas_scene_transform, panel_focus_frame};
+    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame};
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -256,5 +325,21 @@ mod tests {
 
         assert_eq!(pos, Pos2::new(232.0, 112.0));
         assert_eq!(size, Vec2::new(536.0, 356.0));
+    }
+
+    #[test]
+    fn fit_zoom_for_frame_uses_most_constrained_axis() {
+        let zoom = fit_zoom_for_frame(Vec2::new(1200.0, 800.0), Vec2::new(600.0, 300.0), Vec2::splat(64.0));
+
+        assert!((zoom - 1.786_666_6).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn fit_zoom_for_frame_clamps_large_and_small_values() {
+        let zoomed_out = fit_zoom_for_frame(Vec2::new(600.0, 400.0), Vec2::new(4000.0, 3000.0), Vec2::splat(64.0));
+        let zoomed_in = fit_zoom_for_frame(Vec2::new(1600.0, 1000.0), Vec2::new(100.0, 80.0), Vec2::splat(64.0));
+
+        assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
+        assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
     }
 }

@@ -17,10 +17,7 @@ enum FileDropScope {
 
 impl HorizonApp {
     pub(super) fn handle_root_file_drop(&mut self, ctx: &Context) {
-        let workspace_id = self
-            .board
-            .active_workspace
-            .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
+        let workspace_id = self.board.active_workspace;
         let fullscreen_panel = self
             .fullscreen_panel
             .filter(|panel_id| self.panel_is_in_root_viewport(*panel_id));
@@ -40,7 +37,7 @@ impl HorizonApp {
         self.handle_file_drop_for_viewport(
             ctx,
             canvas_rect,
-            workspace_id,
+            Some(workspace_id),
             fullscreen_panel,
             FileDropScope::Workspace(workspace_id),
         );
@@ -50,7 +47,7 @@ impl HorizonApp {
         &mut self,
         ctx: &Context,
         canvas_rect: Rect,
-        workspace_id: WorkspaceId,
+        workspace_id: Option<WorkspaceId>,
         fullscreen_panel: Option<PanelId>,
         scope: FileDropScope,
     ) {
@@ -79,7 +76,7 @@ impl HorizonApp {
             return;
         }
 
-        self.open_dropped_editor_files(canvas_rect, workspace_id, screen_pos, &dropped);
+        self.open_dropped_editor_files(ctx, canvas_rect, workspace_id, screen_pos, &dropped);
     }
 
     fn panel_is_in_root_viewport(&self, panel_id: PanelId) -> bool {
@@ -159,8 +156,9 @@ impl HorizonApp {
 
     fn open_dropped_editor_files(
         &mut self,
+        ctx: &Context,
         canvas_rect: Rect,
-        workspace_id: WorkspaceId,
+        mut workspace_id: Option<WorkspaceId>,
         screen_pos: Option<Pos2>,
         dropped: &[egui::DroppedFile],
     ) {
@@ -168,11 +166,11 @@ impl HorizonApp {
 
         for file in dropped {
             let Some(path) = file.path.clone() else { continue };
-            let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-            if !matches!(ext, "md" | "markdown" | "txt" | "mdx") {
+            if !is_editor_drop_path(&path) {
                 continue;
             }
 
+            let workspace_id = *workspace_id.get_or_insert_with(|| self.ensure_workspace_visible(ctx));
             let options = PanelOptions {
                 name: path.file_name().map(|name| name.to_string_lossy().to_string()),
                 command: Some(path.display().to_string()),
@@ -187,6 +185,13 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+fn is_editor_drop_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("md" | "markdown" | "txt" | "mdx")
+    )
 }
 
 fn select_terminal_drop_target(
@@ -286,7 +291,7 @@ mod tests {
     use egui::{Pos2, Rect};
     use horizon_core::PanelId;
 
-    use super::{format_dropped_paths_for_terminal, select_terminal_drop_target};
+    use super::{format_dropped_paths_for_terminal, is_editor_drop_path, select_terminal_drop_target};
 
     #[test]
     fn formatting_keeps_safe_paths_unquoted() {
@@ -314,6 +319,16 @@ mod tests {
         let payload = format_dropped_paths_for_terminal(&dropped).expect("payload");
 
         assert_eq!(payload, "'/tmp/hello world'\"'\"'s.png' ");
+    }
+
+    #[test]
+    fn editor_drop_detection_accepts_supported_extensions_only() {
+        assert!(is_editor_drop_path(std::path::Path::new("/tmp/note.md")));
+        assert!(is_editor_drop_path(std::path::Path::new("/tmp/draft.markdown")));
+        assert!(is_editor_drop_path(std::path::Path::new("/tmp/readme.txt")));
+        assert!(is_editor_drop_path(std::path::Path::new("/tmp/page.mdx")));
+        assert!(!is_editor_drop_path(std::path::Path::new("/tmp/image.png")));
+        assert!(!is_editor_drop_path(std::path::Path::new("/tmp/archive.tar.gz")));
     }
 
     #[test]

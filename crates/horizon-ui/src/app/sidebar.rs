@@ -1,13 +1,14 @@
-use egui::{
-    Align, Button, Color32, Context, CornerRadius, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2,
-};
+mod toolbar;
+
+use egui::{Button, Color32, Context, CornerRadius, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::{AttentionSeverity, PanelId, WorkspaceId, WorkspaceLayout};
 
-use crate::{branding, theme};
+use crate::theme;
 
 use super::panels::panel_kind_icon;
+use super::root_chrome::effective_sidebar_width;
 use super::util;
-use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
@@ -33,82 +34,11 @@ struct SidebarActions {
 }
 
 impl HorizonApp {
-    pub(super) fn render_toolbar(&mut self, ctx: &Context) {
-        let viewport = util::viewport_local_rect(ctx);
-        egui::Area::new(Id::new("toolbar"))
-            .fixed_pos(viewport.min)
-            .constrain(false)
-            .order(Order::Tooltip)
-            .show(ctx, |ui| {
-                ui.set_min_size(Vec2::new(viewport.width(), TOOLBAR_HEIGHT));
-                ui.set_max_size(Vec2::new(viewport.width(), TOOLBAR_HEIGHT));
-                ui.painter().rect_filled(
-                    Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), TOOLBAR_HEIGHT)),
-                    CornerRadius::ZERO,
-                    theme::TITLEBAR_BG,
-                );
-                ui.painter().line_segment(
-                    [
-                        Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
-                        Pos2::new(viewport.max.x, viewport.min.y + TOOLBAR_HEIGHT),
-                    ],
-                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
-                );
-
-                let content_rect = Rect::from_min_max(
-                    Pos2::new(viewport.min.x + 14.0, viewport.min.y + 8.0),
-                    Pos2::new(viewport.max.x - 14.0, viewport.min.y + TOOLBAR_HEIGHT - 8.0),
-                );
-                ui.scope_builder(
-                    UiBuilder::new()
-                        .max_rect(content_rect)
-                        .layout(Layout::left_to_right(Align::Center)),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new(branding::APP_NAME)
-                                .color(theme::FG)
-                                .size(14.0)
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new(branding::APP_TAGLINE)
-                                .color(theme::FG_DIM)
-                                .size(10.5),
-                        );
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.add_space(8.0);
-                            if ui.add(util::chrome_button("Settings")).clicked() {
-                                self.toggle_settings();
-                            }
-                            ui.add_space(8.0);
-                            let remote_hosts_button = ui.add(util::chrome_button("Remote Hosts")).on_hover_text(
-                                self.shortcuts
-                                    .open_remote_hosts
-                                    .display_label(util::primary_shortcut_label()),
-                            );
-                            if remote_hosts_button.clicked() {
-                                self.toggle_remote_hosts_overlay(ui.ctx());
-                            }
-                        });
-                    },
-                );
-
-                // Search bar centered inside the toolbar area.
-                let search_width = (viewport.width() * 0.35).clamp(280.0, 600.0);
-                let search_rect = Rect::from_center_size(
-                    Pos2::new(
-                        viewport.min.x + viewport.width() * 0.5,
-                        viewport.min.y + TOOLBAR_HEIGHT * 0.5,
-                    ),
-                    Vec2::new(search_width, TOOLBAR_HEIGHT - 14.0),
-                );
-                let mut search_ui = ui.new_child(
-                    UiBuilder::new()
-                        .max_rect(search_rect)
-                        .layout(Layout::left_to_right(Align::Center)),
-                );
-                self.render_toolbar_search(&mut search_ui);
-            });
+    fn has_attached_workspace(&self) -> bool {
+        self.board
+            .workspaces
+            .iter()
+            .any(|workspace| !self.workspace_is_detached(workspace.id))
     }
 
     pub(super) fn render_sidebar(&mut self, ctx: &Context) {
@@ -118,7 +48,8 @@ impl HorizonApp {
 
         let viewport = util::viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
-        let sidebar_size = Vec2::new(SIDEBAR_WIDTH, viewport.height() - TOOLBAR_HEIGHT);
+        let sidebar_width = effective_sidebar_width(viewport.width());
+        let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
 
@@ -127,7 +58,7 @@ impl HorizonApp {
             .constrain(false)
             .order(Order::Tooltip)
             .show(ctx, |ui| {
-                Self::paint_sidebar_frame(ui, sidebar_origin, sidebar_size);
+                Self::paint_sidebar_frame(ui, sidebar_origin, sidebar_size, sidebar_width);
                 self.render_sidebar_contents(ui, &workspace_data, &mut actions);
             });
 
@@ -164,7 +95,7 @@ impl HorizonApp {
             .collect()
     }
 
-    fn paint_sidebar_frame(ui: &mut egui::Ui, sidebar_origin: Pos2, sidebar_size: Vec2) {
+    fn paint_sidebar_frame(ui: &mut egui::Ui, sidebar_origin: Pos2, sidebar_size: Vec2, sidebar_width: f32) {
         ui.set_min_size(sidebar_size);
         ui.set_max_size(sidebar_size);
         ui.painter().rect_filled(
@@ -174,8 +105,8 @@ impl HorizonApp {
         );
         ui.painter().line_segment(
             [
-                Pos2::new(sidebar_origin.x + SIDEBAR_WIDTH, sidebar_origin.y),
-                Pos2::new(sidebar_origin.x + SIDEBAR_WIDTH, sidebar_origin.y + sidebar_size.y),
+                Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y),
+                Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y + sidebar_size.y),
             ],
             Stroke::new(1.0, theme::BORDER_SUBTLE),
         );

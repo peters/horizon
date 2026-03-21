@@ -314,6 +314,7 @@ impl HorizonApp {
         self.render_canvas(ctx);
         let overlay_zones = self.overlay_exclusion_zones(ctx);
         self.render_workspace_backgrounds(ctx, &workspace_bounds, &overlay_zones);
+        self.render_empty_state_card(ctx);
         self.handle_canvas_double_click(ctx);
         self.render_panels(ctx);
         self.render_preset_picker(ctx);

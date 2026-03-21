@@ -1,7 +1,7 @@
-use egui::{Context, Pos2, Vec2};
+use egui::Context;
 
+use crate::app::HorizonApp;
 use crate::app::shortcuts::shortcut_pressed;
-use crate::app::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
 use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::search_overlay::SearchOverlay;
@@ -13,6 +13,18 @@ use super::support::{
 };
 
 impl HorizonApp {
+    pub(in crate::app) fn open_command_palette(&mut self) {
+        self.command_palette = Some(CommandPalette::new());
+    }
+
+    fn toggle_command_palette(&mut self) {
+        self.command_palette = if self.command_palette.is_some() {
+            None
+        } else {
+            Some(CommandPalette::new())
+        };
+    }
+
     pub(in crate::app) fn render_command_palette(&mut self, ctx: &Context) {
         let Some(palette) = self.command_palette.as_mut() else {
             return;
@@ -41,18 +53,10 @@ impl HorizonApp {
         }
     }
 
-    fn execute_command(&mut self, ctx: &Context, cmd: &CommandId) {
+    pub(in crate::app) fn execute_command(&mut self, ctx: &Context, cmd: &CommandId) {
         match *cmd {
             CommandId::SwitchWorkspace(workspace_id) => {
-                self.board.focus_workspace(workspace_id);
-                if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-                    let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                    let size = Vec2::new(
-                        max[0] - min[0] + 2.0 * WS_BG_PAD,
-                        max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                    );
-                    self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
-                }
+                let _ = self.focus_workspace_visible(ctx, workspace_id, true);
             }
             CommandId::FocusPanel(panel_id) => {
                 self.board.focus(panel_id);
@@ -61,6 +65,12 @@ impl HorizonApp {
                 {
                     self.focus_workspace_bounds(ctx, min, max, true);
                 }
+            }
+            CommandId::FocusActiveWorkspace => {
+                let _ = self.focus_active_workspace(ctx, false);
+            }
+            CommandId::FitActiveWorkspace => {
+                let _ = self.fit_active_workspace(ctx);
             }
             CommandId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             CommandId::ToggleHud => self.hud_visible = !self.hud_visible,
@@ -129,6 +139,8 @@ impl HorizonApp {
             (self.shortcuts.reset_view, CommandId::ResetView),
             (self.shortcuts.zoom_in, CommandId::ZoomIn),
             (self.shortcuts.zoom_out, CommandId::ZoomOut),
+            (self.shortcuts.focus_active_workspace, CommandId::FocusActiveWorkspace),
+            (self.shortcuts.fit_active_workspace, CommandId::FitActiveWorkspace),
             (
                 self.shortcuts.align_workspaces_horizontally,
                 CommandId::AlignWorkspacesHorizontally,
@@ -152,11 +164,7 @@ impl HorizonApp {
         });
 
         if toggle_palette {
-            self.command_palette = if self.command_palette.is_some() {
-                None
-            } else {
-                Some(CommandPalette::new())
-            };
+            self.toggle_command_palette();
         }
         if let Some(command_id) = triggered_command {
             self.execute_command(ctx, &command_id);
