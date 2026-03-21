@@ -62,22 +62,37 @@ pub(crate) fn terminal_viewport_size(available: Vec2, char_width: f32, line_heig
     }
 }
 
-pub(super) fn terminal_interaction(ui: &mut egui::Ui, layout: TerminalLayout, panel_id: u64) -> TerminalInteraction {
+pub(super) fn terminal_interaction(
+    ui: &mut egui::Ui,
+    layout: TerminalLayout,
+    panel_id: u64,
+    interactive: bool,
+) -> TerminalInteraction {
     let (allocated_rect, _) = ui.allocate_exact_size(layout.outer.size(), egui::Sense::hover());
     let layout = TerminalLayout {
         outer: allocated_rect,
         body: layout.body.translate(allocated_rect.min.to_vec2()),
         scrollbar: layout.scrollbar.translate(allocated_rect.min.to_vec2()),
     };
+    let body_sense = if interactive {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let scrollbar_sense = if interactive {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
     let body = ui.interact(
         layout.body,
         ui.make_persistent_id(("terminal_body", panel_id)),
-        egui::Sense::click_and_drag(),
+        body_sense,
     );
     let scrollbar = ui.interact(
         layout.scrollbar.expand2(Vec2::new(2.0, 2.0)),
         ui.make_persistent_id(("terminal_scrollbar", panel_id)),
-        egui::Sense::click_and_drag(),
+        scrollbar_sense,
     );
 
     TerminalInteraction {

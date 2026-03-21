@@ -3,6 +3,7 @@ mod attention_feed;
 mod canvas;
 mod detached_viewports;
 mod file_drop;
+mod frame_stats;
 mod lifecycle;
 mod panel_chrome;
 mod panels;
@@ -64,6 +65,7 @@ enum RenameEditAction {
     Cancel,
 }
 
+use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
 
 struct StartupBootstrap {
@@ -100,6 +102,7 @@ pub struct HorizonApp {
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
+    frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
@@ -199,6 +202,7 @@ impl HorizonApp {
             terminal_grid_cache: HashMap::new(),
             editor_preview_cache: HashMap::new(),
             canvas_grid_cache: CanvasGridCache::default(),
+            frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
@@ -273,6 +277,11 @@ fn resolve_shortcuts(config: &Config) -> AppShortcuts {
 impl eframe::App for HorizonApp {
     #[profiling::function]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        let now = Instant::now();
+        self.frame_stats.record_frame(now);
+        if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
+            ctx.request_repaint_after(delay);
+        }
         self.exit_on_close_request(ctx);
 
         if self.shutdown_progress.is_some() {

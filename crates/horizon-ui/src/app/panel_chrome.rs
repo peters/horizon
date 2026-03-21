@@ -100,6 +100,7 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
     }
 }
 
+#[profiling::function]
 pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let painter = ui.painter_at(chrome.panel_rect);
     let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
@@ -238,6 +239,7 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     right
 }
 
+#[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
     use egui::text::{LayoutJob, TextFormat, TextWrapping};
 
@@ -267,6 +269,7 @@ fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focus
     panel_accent(workspace_accent, focused)
 }
 
+#[profiling::function]
 fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMeter) {
     let badge_rect = panel_history_badge_rect(meter.titlebar_rect, meter.close_rect);
     let track_rect = Rect::from_min_max(
@@ -333,6 +336,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
     );
 }
 
+#[profiling::function]
 fn paint_attention_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,
@@ -381,6 +385,7 @@ fn paint_attention_badge(
     );
 }
 
+#[profiling::function]
 fn paint_ssh_status_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,

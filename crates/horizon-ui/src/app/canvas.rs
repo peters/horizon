@@ -33,13 +33,10 @@ struct CanvasGridCacheKey {
     rect_height: u32,
     spacing: u32,
     dot_diameter: u32,
-    offset_x: u32,
-    offset_y: u32,
 }
 
 impl CanvasGridCacheKey {
-    fn new(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Self {
-        let layout = dot_grid_layout(canvas_view);
+    fn new(rect: Rect, layout: DotGridLayout) -> Self {
         Self {
             rect_min_x: rect.min.x.to_bits(),
             rect_min_y: rect.min.y.to_bits(),
@@ -47,8 +44,6 @@ impl CanvasGridCacheKey {
             rect_height: rect.height().to_bits(),
             spacing: layout.spacing.to_bits(),
             dot_diameter: layout.dot_diameter.to_bits(),
-            offset_x: canvas_view.pan_offset[0].rem_euclid(layout.spacing).to_bits(),
-            offset_y: canvas_view.pan_offset[1].rem_euclid(layout.spacing).to_bits(),
         }
     }
 }
@@ -57,6 +52,7 @@ impl CanvasGridCacheKey {
 pub(super) struct CanvasGridCache {
     key: Option<CanvasGridCacheKey>,
     shape: Option<Shape>,
+    offset: Vec2,
 }
 
 impl HorizonApp {
@@ -455,14 +451,22 @@ fn minimap_point(model: &MinimapModel, canvas_x: f32, canvas_y: f32) -> Pos2 {
 
 fn paint_dot_grid(ui: &mut egui::Ui, canvas_view: horizon_core::CanvasViewState, cache: &mut CanvasGridCache) {
     let rect = ui.max_rect();
-    let key = CanvasGridCacheKey::new(rect, canvas_view);
+    let layout = dot_grid_layout(canvas_view);
+    let key = CanvasGridCacheKey::new(rect, layout);
+    let offset = dot_grid_offset(canvas_view, layout);
 
     if cache.key != Some(key) {
         cache.key = Some(key);
-        cache.shape = Some(build_dot_grid_shape(rect, canvas_view));
+        cache.shape = Some(build_dot_grid_shape(rect, layout));
+        cache.offset = Vec2::ZERO;
     }
 
-    if let Some(shape) = &cache.shape {
+    if let Some(shape) = &mut cache.shape {
+        let delta = offset - cache.offset;
+        if delta != Vec2::ZERO {
+            shape.translate(delta);
+            cache.offset = offset;
+        }
         ui.painter().add(shape.clone());
     }
 }
@@ -485,22 +489,27 @@ fn dot_grid_layout(canvas_view: horizon_core::CanvasViewState) -> DotGridLayout 
     }
 }
 
-fn build_dot_grid_shape(rect: Rect, canvas_view: horizon_core::CanvasViewState) -> Shape {
-    let layout = dot_grid_layout(canvas_view);
-    let offset_x = canvas_view.pan_offset[0].rem_euclid(layout.spacing);
-    let offset_y = canvas_view.pan_offset[1].rem_euclid(layout.spacing);
-    let columns = dot_grid_axis_count(rect.width(), layout.spacing);
-    let rows = dot_grid_axis_count(rect.height(), layout.spacing);
+fn dot_grid_offset(canvas_view: horizon_core::CanvasViewState, layout: DotGridLayout) -> Vec2 {
+    Vec2::new(
+        canvas_view.pan_offset[0].rem_euclid(layout.spacing),
+        canvas_view.pan_offset[1].rem_euclid(layout.spacing),
+    )
+}
+
+fn build_dot_grid_shape(rect: Rect, layout: DotGridLayout) -> Shape {
+    let expanded_rect = rect.expand(layout.spacing);
+    let columns = dot_grid_axis_count(expanded_rect.width(), layout.spacing);
+    let rows = dot_grid_axis_count(expanded_rect.height(), layout.spacing);
     let dot_count = columns.saturating_mul(rows);
 
     let mut mesh = Mesh::default();
     mesh.reserve_vertices(dot_count.saturating_mul(4));
     mesh.reserve_triangles(dot_count.saturating_mul(2));
 
-    let mut x = rect.min.x + offset_x;
-    while x <= rect.max.x {
-        let mut y = rect.min.y + offset_y;
-        while y <= rect.max.y {
+    let mut x = expanded_rect.min.x;
+    while x <= expanded_rect.max.x {
+        let mut y = expanded_rect.min.y;
+        while y <= expanded_rect.max.y {
             let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(layout.dot_diameter));
             mesh.add_colored_rect(dot_rect, theme::GRID_DOT);
             y += layout.spacing;
@@ -596,8 +605,8 @@ mod tests {
     #[test]
     fn canvas_grid_cache_key_tracks_zoom_changes() {
         let rect = Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1200.0, 800.0));
-        let base = CanvasGridCacheKey::new(rect, CanvasViewState::new([24.0, -12.0], 1.0));
-        let zoomed = CanvasGridCacheKey::new(rect, CanvasViewState::new([24.0, -12.0], 1.5));
+        let base = CanvasGridCacheKey::new(rect, dot_grid_layout(CanvasViewState::new([24.0, -12.0], 1.0)));
+        let zoomed = CanvasGridCacheKey::new(rect, dot_grid_layout(CanvasViewState::new([24.0, -12.0], 1.5)));
 
         assert_ne!(base, zoomed);
     }
