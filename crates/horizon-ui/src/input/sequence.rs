@@ -98,6 +98,13 @@ impl SequenceBuilder {
             let unshifted = base_key_text(key, physical_key)
                 .as_deref()
                 .and_then(single_char)
+                .filter(|&base_ch| {
+                    // Reject the physical-key mapping when it produces an ASCII
+                    // character but the actual text is non-ASCII. This happens on
+                    // international keyboards (e.g. Swedish å/ä/ö) where the
+                    // physical key position maps to a different US-layout character.
+                    ch.is_ascii() || !base_ch.is_ascii()
+                })
                 .unwrap_or_else(|| {
                     if self.modifiers.contains(SequenceModifiers::SHIFT) && key.alpha_key() {
                         ch.to_ascii_lowercase()
