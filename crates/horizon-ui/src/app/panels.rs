@@ -1,5 +1,7 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
+use horizon_core::{
+    AgentStatus, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId,
+};
 
 use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use crate::git_changes_widget::GitChangesView;
@@ -28,6 +30,7 @@ struct PanelSnapshot {
     is_renaming: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
     ssh_status: Option<SshConnectionStatus>,
+    agent_status: Option<AgentStatus>,
 }
 
 #[derive(Default)]
@@ -243,6 +246,7 @@ impl HorizonApp {
                 is_renaming: self.renaming_panel == Some(panel_id),
                 attention_badge,
                 ssh_status: panel.ssh_status(),
+                agent_status: panel.agent_status.as_ref().map(|s| s.status),
             })
         })
     }
@@ -330,6 +334,7 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
+                        agent_status: snapshot.agent_status,
                     },
                 );
 

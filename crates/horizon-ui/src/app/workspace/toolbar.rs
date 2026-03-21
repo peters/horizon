@@ -6,9 +6,9 @@ use crate::theme;
 
 use super::render::apply_canvas_transform;
 use super::{
-    WORKSPACE_LAYOUT_BUTTON_HEIGHT, WORKSPACE_LAYOUT_BUTTON_SPACING, WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH,
-    WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X, WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y, WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X,
-    WorkspaceAction, WorkspaceInteraction, WorkspaceVisual,
+    AgentSummary, WORKSPACE_LAYOUT_BUTTON_HEIGHT, WORKSPACE_LAYOUT_BUTTON_SPACING,
+    WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH, WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X, WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y,
+    WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X, WorkspaceAction, WorkspaceInteraction, WorkspaceVisual,
 };
 
 pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) -> bool {
@@ -113,6 +113,9 @@ pub(super) fn render_workspace_layout_toolbar(
                         if render_detach_button(ui, workspace) {
                             action = Some(WorkspaceAction::Detach);
                         }
+                        if let Some(summary) = &workspace.agent_summary {
+                            render_agent_summary(ui, summary, workspace.color);
+                        }
                     });
                 });
         });
@@ -209,6 +212,25 @@ fn workspace_layout_preset_row_width() -> f32 {
     workspace_layout_button_width(WorkspaceLayout::Rows)
         + workspace_layout_button_width(WorkspaceLayout::Columns)
         + workspace_layout_button_width(WorkspaceLayout::Grid)
+}
+
+fn render_agent_summary(ui: &mut egui::Ui, summary: &AgentSummary, _color: egui::Color32) {
+    let mut parts = Vec::new();
+    if summary.working > 0 {
+        parts.push(format!("{} working", summary.working));
+    }
+    if summary.waiting > 0 {
+        parts.push(format!("{} waiting", summary.waiting));
+    }
+    if summary.idle > 0 {
+        parts.push(format!("{} idle", summary.idle));
+    }
+
+    if !parts.is_empty() {
+        let text = parts.join(", ");
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(text).size(10.0).color(theme::FG_DIM));
+    }
 }
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {

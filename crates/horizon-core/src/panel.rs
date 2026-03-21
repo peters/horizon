@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::agent_status::{AgentStateSnapshot, AgentStatus, derive_agent_status};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
@@ -146,6 +147,8 @@ pub struct Panel {
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
+    /// Rich agent status derived each frame from terminal output.
+    pub agent_status: Option<AgentStateSnapshot>,
     has_custom_name: bool,
     /// Set by `process_output` each frame; read by attention detection to skip
     /// the expensive `last_lines_text` scan for panels without new content.
@@ -237,6 +240,18 @@ impl Panel {
                 self.ssh_status = Some(SshConnectionStatus::Connected);
             }
         }
+
+        if self.kind.is_agent() {
+            let text = terminal.last_lines_text(3);
+            let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
+            let next = derive_agent_status(&text, terminal.child_exited(), age_ms);
+            match &mut self.agent_status {
+                Some(snap) if snap.status != next => snap.transition(next),
+                None => self.agent_status = Some(AgentStateSnapshot::new(next)),
+                _ => {}
+            }
+        }
+
         had_output
     }
 
@@ -474,43 +489,17 @@ impl Panel {
 
     /// Check if this panel's terminal output suggests it needs user attention.
     ///
-    /// Suppressed for the first 10 seconds after launch to avoid false positives
-    /// from initial prompt rendering on startup/restore.
+    /// Delegates to the rich [`AgentStatus`] state machine (updated each frame
+    /// in `process_output()`) and maps it back to the string labels that the
+    /// attention system expects, preserving backward compatibility.
     #[must_use]
     pub fn detect_attention(&self) -> Option<&'static str> {
-        if !matches!(self.kind, PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode) {
-            return None;
+        match self.agent_status.as_ref()?.status {
+            AgentStatus::WaitingForApproval => Some("Waiting for approval"),
+            AgentStatus::WaitingForInput => Some("Waiting for input"),
+            AgentStatus::Idle => Some("Ready for input"),
+            _ => None,
         }
-        let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
-        if age_ms < 10_000 {
-            return None;
-        }
-        let terminal = self.content.terminal()?;
-        let text = terminal.last_lines_text(3);
-        if text.is_empty() {
-            return None;
-        }
-        for line in text.lines().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("Allow")
-                || trimmed.starts_with("Do you want")
-                || trimmed.ends_with("[y/N]")
-                || trimmed.ends_with("[Y/n]")
-                || trimmed.ends_with("(y/n)")
-            {
-                return Some("Waiting for approval");
-            }
-            if trimmed.ends_with('?') && trimmed.len() > 2 {
-                return Some("Waiting for input");
-            }
-            if trimmed.starts_with('>') || trimmed.starts_with("❯") {
-                return Some("Ready for input");
-            }
-        }
-        None
     }
 }
 
@@ -537,6 +526,7 @@ mod tests {
             session_binding: None,
             template: None,
             launched_at_millis: 0,
+            agent_status: None,
             has_custom_name,
             had_recent_output: false,
             launch_command: None,

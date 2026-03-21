@@ -384,9 +384,6 @@ mod tests {
                 local_id: "workspace".to_string(),
                 name: "termgalore".to_string(),
                 cwd: Some("/repo".to_string()),
-                position: None,
-                template: None,
-                layout: None,
                 panels: vec![
                     PanelState {
                         local_id: "a".to_string(),
@@ -405,6 +402,7 @@ mod tests {
                         ..PanelState::default()
                     },
                 ],
+                ..Default::default()
             }],
             ..RuntimeState::default()
         };

@@ -30,6 +30,10 @@ pub enum CommandId {
 
     // Search
     ToggleSearch,
+
+    // Agent orchestration
+    SendToAgent,
+    ShareOutput,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +67,12 @@ pub struct CommandEntry {
 /// Build the static list of action commands (not workspace/panel -- those are
 /// dynamic and assembled at query time by the palette).
 pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
+    let mut commands = navigation_and_view_commands(shortcuts, primary_label);
+    commands.extend(orchestration_commands());
+    commands
+}
+
+fn navigation_and_view_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
     vec![
         CommandEntry {
             id: CommandId::NewPanel,
@@ -163,6 +173,23 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
     ]
 }
 
+fn orchestration_commands() -> Vec<CommandEntry> {
+    vec![
+        CommandEntry {
+            id: CommandId::SendToAgent,
+            label: "Send to Agent".into(),
+            shortcut: None,
+            keywords: vec!["send".into(), "agent".into(), "inject".into(), "orchestrate".into()],
+        },
+        CommandEntry {
+            id: CommandId::ShareOutput,
+            label: "Share Output".into(),
+            shortcut: None,
+            keywords: vec!["share".into(), "output".into(), "capture".into(), "context".into()],
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use horizon_core::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
@@ -180,8 +207,12 @@ mod tests {
     }
 
     #[test]
-    fn action_commands_all_have_shortcuts() {
+    fn action_commands_all_have_shortcuts_where_expected() {
+        let shortcutless = [CommandId::SendToAgent, CommandId::ShareOutput];
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
+            if shortcutless.contains(&entry.id) {
+                continue;
+            }
             assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
         }
     }

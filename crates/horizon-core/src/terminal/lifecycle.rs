@@ -83,6 +83,7 @@ impl Terminal {
             child_exited: false,
             bell_pending: false,
             pending_notification: None,
+            pending_context_events: Vec::new(),
         };
         terminal.process_events();
         Ok(terminal)

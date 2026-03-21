@@ -131,6 +131,9 @@ impl HorizonApp {
                     self.search_overlay = Some(SearchOverlay::new());
                 }
             }
+            CommandId::SendToAgent | CommandId::ShareOutput => {
+                // TODO: open agent picker / share output flow
+            }
         }
     }
 

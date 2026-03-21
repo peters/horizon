@@ -1,5 +1,5 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
+use horizon_core::{AgentStatus, AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
 
 use crate::theme;
 
@@ -22,6 +22,7 @@ pub(super) struct PanelChrome<'a> {
     pub workspace_accent: Option<Color32>,
     pub attention_badge: Option<&'a (AttentionSeverity, String)>,
     pub ssh_status: Option<SshConnectionStatus>,
+    pub agent_status: Option<AgentStatus>,
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +172,9 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             chrome.scrollback_limit > 0,
             status,
         );
+    }
+    if let Some(status) = chrome.agent_status {
+        paint_agent_status_dot(&painter, chrome.titlebar_rect, status);
     }
 
     if chrome.scrollback_limit > 0 {
@@ -454,6 +458,30 @@ fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
         Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
         badge_size,
     )
+}
+
+fn paint_agent_status_dot(painter: &egui::Painter, titlebar_rect: Rect, status: AgentStatus) {
+    let (color, label) = agent_status_indicator(status);
+    let center = Pos2::new(titlebar_rect.max.x - 140.0, titlebar_rect.center().y);
+    painter.circle_filled(center, 4.0, color);
+    painter.text(
+        Pos2::new(center.x + 8.0, center.y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(9.5),
+        theme::FG_DIM,
+    );
+}
+
+fn agent_status_indicator(status: AgentStatus) -> (Color32, &'static str) {
+    match status {
+        AgentStatus::Launching => (theme::FG_DIM, "launching"),
+        AgentStatus::Working => (Color32::from_rgb(137, 180, 250), "working"),
+        AgentStatus::WaitingForApproval => (Color32::from_rgb(249, 226, 175), "approval"),
+        AgentStatus::WaitingForInput => (Color32::from_rgb(249, 226, 175), "input"),
+        AgentStatus::Idle => (Color32::from_rgb(166, 227, 161), "idle"),
+        AgentStatus::Exited => (theme::PALETTE_RED, "exited"),
+    }
 }
 
 pub(super) fn panel_title_content_rect(titlebar_rect: Rect, close_rect: Rect, has_workspace_accent: bool) -> Rect {

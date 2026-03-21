@@ -1,4 +1,4 @@
-use super::{AgentNotification, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
+use super::{AgentNotification, ColorLookup, ContextEvent, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
@@ -22,6 +22,11 @@ impl Terminal {
         self.pending_notification.take()
     }
 
+    /// Drain pending context events published by agents via OSC sequences.
+    pub fn take_context_events(&mut self) -> Vec<ContextEvent> {
+        std::mem::take(&mut self.pending_context_events)
+    }
+
     pub(super) fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
         if let Some(payload) = title.strip_prefix("HORIZON_NOTIFY:") {
             let Some((severity, message)) = payload.split_once(':') else {
@@ -36,6 +41,10 @@ impl Terminal {
             }));
         }
 
+        if let Some(payload) = title.strip_prefix("HORIZON_CONTEXT:") {
+            return Some(Self::parse_context_command(payload));
+        }
+
         let payload = title.strip_prefix("HORIZON_TITLE:")?;
 
         if payload == "clear" {
@@ -47,6 +56,26 @@ impl Terminal {
         }
 
         Some(HorizonOscTitle::Ignore)
+    }
+
+    /// Parse a `HORIZON_CONTEXT:publish:<key>:<value>` command.
+    ///
+    /// Values may contain colons, so we split on the first two colons only:
+    /// `publish` `:` `key` `:` `everything-else-is-value`.
+    fn parse_context_command(payload: &str) -> HorizonOscTitle {
+        let Some(rest) = payload.strip_prefix("publish:") else {
+            return HorizonOscTitle::Ignore;
+        };
+        let Some((key, value)) = rest.split_once(':') else {
+            return HorizonOscTitle::Ignore;
+        };
+        if key.is_empty() || value.is_empty() {
+            return HorizonOscTitle::Ignore;
+        }
+        HorizonOscTitle::ContextPublish {
+            key: key.to_string(),
+            value: value.to_string(),
+        }
     }
 
     #[must_use]
@@ -87,6 +116,9 @@ impl Terminal {
                 }
                 Some(HorizonOscTitle::ClearTitle) => {
                     self.title.clear();
+                }
+                Some(HorizonOscTitle::ContextPublish { key, value }) => {
+                    self.pending_context_events.push(ContextEvent { key, value });
                 }
                 Some(HorizonOscTitle::Ignore) => {}
                 None => {

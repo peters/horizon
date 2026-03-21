@@ -5,7 +5,7 @@ mod toolbar;
 use std::collections::HashMap;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2};
-use horizon_core::{WorkspaceId, WorkspaceLayout};
+use horizon_core::{AgentStatus, WorkspaceId, WorkspaceLayout};
 
 use super::util::{OverlayExclusion, workspace_label_width};
 use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
@@ -27,6 +27,13 @@ struct WorkspaceVisual {
     label_hidden: bool,
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
+    agent_summary: Option<AgentSummary>,
+}
+
+struct AgentSummary {
+    working: usize,
+    waiting: usize,
+    idle: usize,
 }
 
 struct WorkspaceInteraction {
@@ -246,6 +253,29 @@ impl HorizonApp {
                     self.canvas_to_screen(canvas_rect, toolbar_canvas_rect.min),
                     self.canvas_size_to_screen(toolbar_canvas_rect.size()),
                 );
+                let agent_summary = {
+                    let mut working = 0usize;
+                    let mut waiting = 0usize;
+                    let mut idle = 0usize;
+                    for &pid in &workspace.panels {
+                        if let Some(panel) = self.board.panel(pid)
+                            && let Some(snap) = &panel.agent_status
+                        {
+                            match snap.status {
+                                AgentStatus::Working | AgentStatus::Launching => working += 1,
+                                AgentStatus::WaitingForApproval | AgentStatus::WaitingForInput => waiting += 1,
+                                AgentStatus::Idle => idle += 1,
+                                AgentStatus::Exited => {}
+                            }
+                        }
+                    }
+                    if working + waiting + idle > 0 {
+                        Some(AgentSummary { working, waiting, idle })
+                    } else {
+                        None
+                    }
+                };
+
                 Some(WorkspaceVisual {
                     id: workspace.id,
                     name: workspace.name.clone(),
@@ -260,6 +290,7 @@ impl HorizonApp {
                     label_hidden: overlay_zones.intersects(label_screen_rect),
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
+                    agent_summary,
                 })
             })
             .collect()
@@ -288,6 +319,7 @@ mod tests {
             label_hidden: false,
             panel_count,
             layout: None,
+            agent_summary: None,
         }
     }
 

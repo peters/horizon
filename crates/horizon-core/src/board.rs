@@ -1,6 +1,8 @@
 mod arrangement;
 mod attention;
+mod context;
 mod geometry;
+mod orchestration;
 mod shutdown;
 mod workspaces;
 
@@ -214,6 +216,10 @@ impl Board {
         // idle frames is a significant CPU win.
         if self.attention_enabled && had_output {
             self.update_attention();
+        }
+        if had_output {
+            self.process_context_events();
+            self.tick_orchestration();
         }
         had_output
     }

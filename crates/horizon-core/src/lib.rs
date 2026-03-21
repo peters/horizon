@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent_status;
 mod attention;
 mod board;
 mod config;
@@ -13,6 +14,7 @@ pub mod git_watcher;
 mod horizon_home;
 mod layout;
 mod opencode_paths;
+mod orchestration;
 mod panel;
 mod remote_hosts;
 mod runtime_state;
@@ -26,9 +28,11 @@ mod usage_dashboard;
 mod usage_stats;
 mod view;
 mod workspace;
+mod workspace_context;
 
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
+pub use agent_status::{AgentStateSnapshot, AgentStatus, derive_agent_status};
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, ShutdownProgress, WorkspaceLayout};
 pub use config::{
@@ -59,4 +63,6 @@ pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
+pub use orchestration::{AgentChain, OrchestrationState};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
+pub use workspace_context::{ContextEvent, ContextItem, WorkspaceContext};

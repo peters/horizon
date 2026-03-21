@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::config::WorkspaceConfig;
 use crate::layout::{TILE_GAP, WS_INNER_PAD};
-use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
+use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState, WorkspaceTemplateRef};
 
 use super::super::*;
@@ -237,36 +237,21 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
             WorkspaceState {
                 local_id: "empty".to_string(),
                 name: "empty".to_string(),
-                cwd: None,
                 position: Some([0.0, 40.0]),
-                template: None,
-                layout: None,
-                panels: Vec::new(),
+                ..Default::default()
             },
             WorkspaceState {
                 local_id: "filled".to_string(),
                 name: "filled".to_string(),
-                cwd: None,
                 position: Some([640.0, 40.0]),
-                template: None,
-                layout: None,
                 panels: vec![PanelState {
                     local_id: "panel".to_string(),
                     name: "notes".to_string(),
                     kind: PanelKind::Editor,
-                    command: None,
-                    args: Vec::new(),
-                    cwd: None,
-                    ssh_connection: None,
-                    rows: 24,
-                    cols: 80,
-                    resume: PanelResume::Fresh,
                     position: Some([640.0, 40.0]),
-                    size: None,
-                    session_binding: None,
-                    template: None,
-                    editor_content: None,
+                    ..Default::default()
                 }],
+                ..Default::default()
             },
         ],
         ..RuntimeState::default()

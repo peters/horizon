@@ -25,6 +25,7 @@ use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
+use crate::workspace_context::ContextEvent;
 
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
@@ -71,6 +72,7 @@ enum HorizonOscTitle {
     Notification(AgentNotification),
     SetTitle(String),
     ClearTitle,
+    ContextPublish { key: String, value: String },
     Ignore,
 }
 
@@ -133,6 +135,7 @@ pub struct Terminal {
     child_exited: bool,
     bell_pending: bool,
     pending_notification: Option<AgentNotification>,
+    pending_context_events: Vec<ContextEvent>,
 }
 
 #[cfg(test)]
@@ -262,6 +265,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_context_publish() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_CONTEXT:publish:active-file:src/main.rs"),
+            Some(HorizonOscTitle::ContextPublish {
+                key: "active-file".to_string(),
+                value: "src/main.rs".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn parse_context_publish_value_with_colons() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_CONTEXT:publish:url:http://localhost:3000"),
+            Some(HorizonOscTitle::ContextPublish {
+                key: "url".to_string(),
+                value: "http://localhost:3000".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn parse_context_invalid_action_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_CONTEXT:subscribe:key"),
+            Some(HorizonOscTitle::Ignore),
+        );
+    }
+
+    #[test]
+    fn parse_context_publish_missing_value_ignored() {
+        assert_eq!(
+            Terminal::parse_horizon_title("HORIZON_CONTEXT:publish:key-only"),
+            Some(HorizonOscTitle::Ignore),
+        );
+    }
+
     fn spawn_test_terminal() -> Terminal {
         Terminal::spawn(TerminalSpawnOptions {
             program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
@@ -366,6 +407,23 @@ mod tests {
 
         assert_eq!(terminal.title(), "Build running");
         assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn context_publish_event_adds_pending_context_event() {
+        let mut terminal = spawn_test_terminal();
+        terminal.title = "Existing title".to_string();
+
+        terminal.handle_event(Event::Title(
+            "HORIZON_CONTEXT:publish:active-file:src/main.rs".to_string(),
+        ));
+
+        assert_eq!(terminal.title(), "Existing title");
+        let events = terminal.take_context_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].key, "active-file");
+        assert_eq!(events[0].value, "src/main.rs");
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 

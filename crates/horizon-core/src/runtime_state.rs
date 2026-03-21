@@ -10,10 +10,12 @@ use crate::board::{Board, WorkspaceLayout};
 use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
+use crate::orchestration::OrchestrationState;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::ssh::SshConnection;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
+use crate::workspace_context::WorkspaceContext;
 
 pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
 
@@ -240,6 +242,9 @@ impl RuntimeState {
                     })
                     .collect();
 
+                let mut context = workspace.context.clone();
+                context.retain_pinned_only();
+
                 WorkspaceState {
                     local_id: workspace.local_id.clone(),
                     name: workspace.name.clone(),
@@ -248,6 +253,8 @@ impl RuntimeState {
                     template: workspace.template.clone(),
                     layout: workspace.layout,
                     panels,
+                    context,
+                    orchestration: workspace.orchestration.clone(),
                 }
             })
             .collect();
@@ -308,6 +315,10 @@ pub struct WorkspaceState {
     )]
     pub layout: Option<WorkspaceLayout>,
     pub panels: Vec<PanelState>,
+    #[serde(default, skip_serializing_if = "WorkspaceContext::is_empty")]
+    pub context: WorkspaceContext,
+    #[serde(default, skip_serializing_if = "OrchestrationState::is_empty")]
+    pub orchestration: OrchestrationState,
 }
 
 fn deserialize_workspace_layout<'de, D>(deserializer: D) -> std::result::Result<Option<WorkspaceLayout>, D::Error>
@@ -363,6 +374,8 @@ impl WorkspaceState {
             }),
             layout: None,
             panels,
+            context: WorkspaceContext::default(),
+            orchestration: OrchestrationState::default(),
         }
     }
 }
