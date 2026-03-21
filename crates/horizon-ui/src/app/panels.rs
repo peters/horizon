@@ -88,21 +88,34 @@ impl PanelFrame {
     }
 }
 
+struct PanelBodyContext<'a> {
+    keyboard_events: &'a [egui::Event],
+    editor_save_shortcut: ShortcutBinding,
+    editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
+    terminal_grid_cache: Option<&'a mut TerminalGridCache>,
+}
+
 fn show_panel_body_contents(
     ui: &mut egui::Ui,
     panel: &mut Panel,
     is_focused: bool,
-    editor_save_shortcut: ShortcutBinding,
-    editor_preview_cache: Option<&mut MarkdownPreviewCache>,
-    terminal_grid_cache: Option<&mut TerminalGridCache>,
+    interactive: bool,
+    body_context: PanelBodyContext<'_>,
 ) -> bool {
     match panel.kind {
-        PanelKind::Editor => {
-            MarkdownEditorView::new(panel, editor_preview_cache).show(ui, is_focused, editor_save_shortcut)
-        }
+        PanelKind::Editor => MarkdownEditorView::new(panel, body_context.editor_preview_cache).show(
+            ui,
+            is_focused,
+            body_context.editor_save_shortcut,
+        ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
-        _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
+        _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
+            ui,
+            is_focused,
+            interactive,
+            body_context.keyboard_events,
+        ),
     }
 }
 
@@ -133,7 +146,18 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            show_panel_body_contents(ui, panel, true, self.shortcuts.save_editor, preview_cache, None);
+                            show_panel_body_contents(
+                                ui,
+                                panel,
+                                true,
+                                true,
+                                PanelBodyContext {
+                                    keyboard_events: &ui.input(|input| input.events.clone()),
+                                    editor_save_shortcut: self.shortcuts.save_editor,
+                                    editor_preview_cache: preview_cache,
+                                    terminal_grid_cache: None,
+                                },
+                            );
                         }
                     },
                 );
@@ -257,6 +281,7 @@ impl HorizonApp {
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
+        let interactive = !self.canvas_pan_input_claimed;
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
@@ -274,7 +299,7 @@ impl HorizonApp {
                 let drag_response = ui.interact(
                     rects.titlebar,
                     ui.make_persistent_id(("panel_drag", panel_id.0)),
-                    if snapshot.is_renaming {
+                    if !interactive || snapshot.is_renaming {
                         Sense::hover()
                     } else {
                         Sense::click_and_drag()
@@ -283,22 +308,28 @@ impl HorizonApp {
                 let close_response = ui.interact(
                     rects.close.expand2(Vec2::splat(4.0)),
                     ui.make_persistent_id(("panel_close", panel_id.0)),
-                    Sense::click(),
+                    if interactive { Sense::click() } else { Sense::hover() },
                 );
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
                     ui.make_persistent_id(("panel_resize", panel_id.0)),
-                    Sense::click_and_drag(),
+                    if interactive {
+                        Sense::click_and_drag()
+                    } else {
+                        Sense::hover()
+                    },
                 );
 
-                Self::update_panel_interactions(
-                    snapshot.is_renaming,
-                    &drag_response,
-                    &close_response,
-                    &resize_response,
-                    &mut outcome,
-                );
-                if !snapshot.is_renaming {
+                if interactive {
+                    Self::update_panel_interactions(
+                        snapshot.is_renaming,
+                        &drag_response,
+                        &close_response,
+                        &resize_response,
+                        &mut outcome,
+                    );
+                }
+                if interactive && !snapshot.is_renaming {
                     self.show_panel_context_menu(
                         &drag_response,
                         panel_id,
@@ -365,9 +396,13 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 snapshot.is_focused,
-                                self.shortcuts.save_editor,
-                                preview_cache,
-                                grid_cache,
+                                interactive,
+                                PanelBodyContext {
+                                    keyboard_events: &self.terminal_keyboard_events,
+                                    editor_save_shortcut: self.shortcuts.save_editor,
+                                    editor_preview_cache: preview_cache,
+                                    terminal_grid_cache: grid_cache,
+                                },
                             );
                         }
                     },
@@ -505,12 +540,12 @@ impl HorizonApp {
             RenameEditAction::None => {}
         }
 
-        if !self.is_panning && outcome.drag_delta != Vec2::ZERO {
+        if !self.canvas_pan_input_claimed && outcome.drag_delta != Vec2::ZERO {
             let new_position = snapshot.canvas_position + outcome.drag_delta;
             let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
             self.mark_runtime_dirty();
         }
-        if !self.is_panning && outcome.resize_delta != Vec2::ZERO {
+        if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
             let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
             self.mark_runtime_dirty();

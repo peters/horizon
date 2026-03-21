@@ -6,9 +6,10 @@ use egui::{Context, Id, Pos2, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
 use crate::app::attention_feed::estimated_outer_rect;
+use crate::app::root_chrome::effective_sidebar_width;
 use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
 use crate::app::util::{OverlayExclusion, viewport_local_rect};
-use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
+use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, TOOLBAR_HEIGHT};
 
 pub(super) fn panel_focus_target_at_pointer_press(
     panel_order: &[PanelId],
@@ -49,7 +50,12 @@ impl HorizonApp {
         let viewport = viewport_local_rect(ctx);
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
-        canvas_rect_for_layout(viewport, self.sidebar_visible, settings_panel_rect, settings_bar_rect)
+        let sidebar_width = if self.sidebar_visible {
+            effective_sidebar_width(viewport.width())
+        } else {
+            0.0
+        };
+        canvas_rect_for_layout(viewport, sidebar_width, settings_panel_rect, settings_bar_rect)
     }
 
     pub(in crate::app) fn fixed_overlays_visible(&self) -> bool {
@@ -78,11 +84,16 @@ impl HorizonApp {
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
         let viewport = viewport_local_rect(ctx);
         let mut zones = Vec::new();
+        let sidebar_width = if self.sidebar_visible {
+            effective_sidebar_width(viewport.width())
+        } else {
+            0.0
+        };
 
-        if self.sidebar_visible {
+        if sidebar_width > 0.0 {
             zones.push(Rect::from_min_max(
                 Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
-                Pos2::new(viewport.min.x + SIDEBAR_WIDTH, viewport.max.y),
+                Pos2::new(viewport.min.x + sidebar_width, viewport.max.y),
             ));
         }
 
@@ -154,15 +165,11 @@ impl HorizonApp {
 
 pub(super) fn canvas_rect_for_layout(
     viewport: Rect,
-    sidebar_visible: bool,
+    sidebar_width: f32,
     settings_panel_rect: Option<Rect>,
     settings_bar_rect: Option<Rect>,
 ) -> Rect {
-    let left = if sidebar_visible {
-        viewport.min.x + SIDEBAR_WIDTH
-    } else {
-        viewport.min.x
-    };
+    let left = viewport.min.x + sidebar_width;
     let right = settings_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
     let bottom = settings_bar_rect.map_or(viewport.max.y, |rect| rect.min.y);
 

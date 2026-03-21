@@ -1,10 +1,12 @@
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{
+    Config, insert_missing_gemini_presets, insert_missing_kilo_presets, insert_missing_opencode_presets,
+};
 use crate::error::{Error, Result};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 2;
+pub const CURRENT_CONFIG_VERSION: u32 = 4;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -22,9 +24,11 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
     while version < CURRENT_CONFIG_VERSION {
         match version {
             1 => migrate_v1_to_v2(config),
+            2 => migrate_v2_to_v3(config),
+            3 => migrate_v3_to_v4(config),
             _ => {
                 return Err(Error::Config(format!(
-                    "unknown config version {version}, expected 1..{CURRENT_CONFIG_VERSION}"
+                    "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
                 )));
             }
         }
@@ -58,6 +62,19 @@ fn migrate_v1_to_v2(config: &mut Config) {
     rewrite(&mut config.shortcuts.zoom_out, "Ctrl+Minus", "Ctrl+Shift+Minus");
     rewrite(&mut config.shortcuts.fullscreen_window, "Ctrl+F11", "Ctrl+Shift+F11");
     rewrite(&mut config.shortcuts.save_editor, "Ctrl+S", "Ctrl+Shift+S");
+}
+
+/// v2 -> v3: add default `OpenCode` presets when they are missing.
+///
+/// This migration is additive and preserves custom presets.
+fn migrate_v2_to_v3(config: &mut Config) {
+    insert_missing_opencode_presets(&mut config.presets);
+}
+
+/// v3 -> v4: add default Gemini CLI and `KiloCode` presets when they are missing.
+fn migrate_v3_to_v4(config: &mut Config) {
+    insert_missing_gemini_presets(&mut config.presets);
+    insert_missing_kilo_presets(&mut config.presets);
 }
 
 fn rewrite(field: &mut String, old_default: &str, new_default: &str) {
@@ -99,6 +116,20 @@ shortcuts:
   zoom_out: Ctrl+Minus
   fullscreen_window: Ctrl+F11
   save_editor: Ctrl+S
+";
+
+    const V2_YAML: &str = "\
+version: 2
+presets:
+  - name: Shell
+    alias: sh
+    kind: shell
+  - name: Codex
+    alias: cx
+    kind: codex
+    args:
+      - --no-alt-screen
+    resume: last
 ";
 
     #[test]
@@ -167,13 +198,84 @@ shortcuts:
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
         let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains("version: 2"));
+        assert!(reloaded.contains("version: 4"));
         assert!(reloaded.contains("Ctrl+Shift+K"));
     }
 
     #[test]
     fn serialized_config_includes_version() {
         let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains("version: 2"));
+        assert!(yaml.contains("version: 4"));
+    }
+
+    #[test]
+    fn migration_adds_missing_opencode_presets() {
+        let mut config: Config = serde_yaml::from_str(V2_YAML).expect("should deserialize");
+
+        migrate_v2_to_v3(&mut config);
+
+        assert!(config.presets.iter().any(|preset| preset.name == "OpenCode"));
+        assert!(config.presets.iter().any(|preset| preset.name == "OpenCode (Fresh)"));
+    }
+
+    #[test]
+    fn migration_does_not_duplicate_existing_opencode_presets() {
+        let mut config: Config = serde_yaml::from_str(
+            "\
+version: 2
+presets:
+  - name: My OpenCode
+    alias: custom-oc
+    kind: open_code
+    resume: last
+  - name: OpenCode (Fresh)
+    alias: ocf
+    kind: open_code
+    resume: fresh
+",
+        )
+        .expect("should deserialize");
+
+        migrate_v2_to_v3(&mut config);
+
+        assert_eq!(
+            config
+                .presets
+                .iter()
+                .filter(|preset| preset.kind == crate::panel::PanelKind::OpenCode)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn migration_adds_missing_gemini_and_kilo_presets() {
+        let mut config: Config = serde_yaml::from_str(
+            "\
+version: 3
+presets:
+  - name: Shell
+    alias: sh
+    kind: shell
+",
+        )
+        .expect("should deserialize");
+
+        migrate_v3_to_v4(&mut config);
+
+        assert!(
+            config
+                .presets
+                .iter()
+                .any(|preset| preset.kind == crate::panel::PanelKind::Gemini)
+        );
+        assert_eq!(
+            config
+                .presets
+                .iter()
+                .filter(|preset| preset.kind == crate::panel::PanelKind::KiloCode)
+                .count(),
+            2
+        );
     }
 }

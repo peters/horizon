@@ -2,6 +2,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::theme;
 
+#[profiling::function]
 pub(super) fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color32, is_active: bool) {
     let painter = ui.painter_at(rect);
     let corner_radius = CornerRadius::same(20);
@@ -18,6 +19,7 @@ pub(super) fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color3
     );
 }
 
+#[profiling::function]
 pub(super) fn paint_workspace_label_bg(
     ui: &mut egui::Ui,
     rect: Rect,
@@ -48,6 +50,7 @@ pub(super) fn paint_workspace_label_bg(
     );
 }
 
+#[profiling::function]
 pub(super) fn paint_workspace_label(
     ui: &mut egui::Ui,
     rect: Rect,
@@ -95,6 +98,7 @@ fn paint_workspace_grip(painter: &egui::Painter, center: Pos2, highlighted: bool
     }
 }
 
+#[profiling::function]
 pub(super) fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_rect: Rect, color: Color32) {
     let painter = ui.painter();
     let copy_pos = Pos2::new(rect.min.x + 18.0, label_rect.max.y + 22.0);

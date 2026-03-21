@@ -25,7 +25,7 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
     },
 ];
 
-const CODEX_PLUGIN_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+const TEXT_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
     content: include_str!(concat!(
         env!("OUT_DIR"),
@@ -49,11 +49,13 @@ fn install_agent_plugins_impl(horizon_home: &HorizonHome, user_home: Option<&Pat
     let mut updated_files = 0usize;
 
     updated_files += sync_plugin_files(&horizon_home.claude_plugin_dir(), CLAUDE_PLUGIN_FILES)?;
-    updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), CODEX_PLUGIN_FILES)?;
+    updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), TEXT_SKILL_FILES)?;
 
     if let Some(home) = user_home {
         let codex_export_dir = home.join(".agents").join("skills").join("horizon-notify");
-        updated_files += sync_plugin_files(&codex_export_dir, CODEX_PLUGIN_FILES)?;
+        updated_files += sync_plugin_files(&codex_export_dir, TEXT_SKILL_FILES)?;
+        let kilo_export_dir = home.join(".kilocode").join("skills").join("horizon-notify");
+        updated_files += sync_plugin_files(&kilo_export_dir, TEXT_SKILL_FILES)?;
     }
 
     Ok(updated_files)

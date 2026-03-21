@@ -106,8 +106,99 @@ impl Default for WindowConfig {
     }
 }
 
+pub(crate) fn default_opencode_presets() -> [PresetConfig; 2] {
+    [
+        PresetConfig {
+            name: "OpenCode".to_string(),
+            alias: Some("oc".to_string()),
+            kind: PanelKind::OpenCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Last,
+            ssh_connection: None,
+        },
+        PresetConfig {
+            name: "OpenCode (Fresh)".to_string(),
+            alias: Some("ocf".to_string()),
+            kind: PanelKind::OpenCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        },
+    ]
+}
+
+pub(crate) fn default_gemini_presets() -> [PresetConfig; 1] {
+    [PresetConfig {
+        name: "Gemini CLI".to_string(),
+        alias: Some("gm".to_string()),
+        kind: PanelKind::Gemini,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }]
+}
+
+pub(crate) fn default_kilo_presets() -> [PresetConfig; 2] {
+    [
+        PresetConfig {
+            name: "KiloCode".to_string(),
+            alias: Some("kc".to_string()),
+            kind: PanelKind::KiloCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Last,
+            ssh_connection: None,
+        },
+        PresetConfig {
+            name: "KiloCode (Fresh)".to_string(),
+            alias: Some("kcf".to_string()),
+            kind: PanelKind::KiloCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        },
+    ]
+}
+
+fn insert_missing_agent_presets(presets: &mut Vec<PresetConfig>, defaults: impl IntoIterator<Item = PresetConfig>) {
+    for default_preset in defaults {
+        let expected_name = default_preset.name.to_ascii_lowercase();
+        let expected_alias = default_preset.alias.as_deref().map(str::to_ascii_lowercase);
+        let exists = presets.iter().any(|preset| {
+            preset.name.eq_ignore_ascii_case(&default_preset.name)
+                || preset
+                    .alias
+                    .as_deref()
+                    .zip(expected_alias.as_deref())
+                    .is_some_and(|(alias, expected)| alias.eq_ignore_ascii_case(expected))
+                || (preset.kind == default_preset.kind && preset.resume == default_preset.resume)
+                || preset.name.to_ascii_lowercase() == expected_name
+        });
+
+        if !exists {
+            presets.push(default_preset);
+        }
+    }
+}
+
+pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_opencode_presets());
+}
+
+pub(crate) fn insert_missing_gemini_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_gemini_presets());
+}
+
+pub(crate) fn insert_missing_kilo_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_kilo_presets());
+}
+
 fn default_presets() -> Vec<PresetConfig> {
-    vec![
+    let mut presets = vec![
         PresetConfig {
             name: "Shell".to_string(),
             alias: Some("sh".to_string()),
@@ -153,6 +244,11 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
+    ];
+    presets.extend(default_opencode_presets());
+    presets.extend(default_gemini_presets());
+    presets.extend(default_kilo_presets());
+    presets.extend([
         PresetConfig {
             name: "Git Changes".to_string(),
             alias: Some("gc".to_string()),
@@ -180,7 +276,8 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
-    ]
+    ]);
+    presets
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -189,6 +286,8 @@ pub struct ShortcutsConfig {
     #[serde(alias = "quick_nav")]
     pub command_palette: String,
     pub new_terminal: String,
+    pub focus_active_workspace: String,
+    pub fit_active_workspace: String,
     pub open_remote_hosts: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
@@ -210,6 +309,8 @@ impl Default for ShortcutsConfig {
         Self {
             command_palette: "Ctrl+Shift+K".to_string(),
             new_terminal: "Ctrl+Shift+N".to_string(),
+            focus_active_workspace: "Ctrl+Shift+W".to_string(),
+            fit_active_workspace: "Ctrl+Shift+9".to_string(),
             open_remote_hosts: "Ctrl+Shift+H".to_string(),
             toggle_sidebar: "Ctrl+Shift+B".to_string(),
             toggle_hud: "Ctrl+Shift+U".to_string(),
@@ -238,6 +339,8 @@ impl ShortcutsConfig {
         let shortcuts = AppShortcuts {
             command_palette: parse_shortcut("command_palette", &self.command_palette)?,
             new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
+            focus_active_workspace: parse_shortcut("focus_active_workspace", &self.focus_active_workspace)?,
+            fit_active_workspace: parse_shortcut("fit_active_workspace", &self.fit_active_workspace)?,
             open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
@@ -260,6 +363,8 @@ impl ShortcutsConfig {
         validate_distinct_shortcuts([
             ("command_palette", shortcuts.command_palette),
             ("new_terminal", shortcuts.new_terminal),
+            ("focus_active_workspace", shortcuts.focus_active_workspace),
+            ("fit_active_workspace", shortcuts.fit_active_workspace),
             ("open_remote_hosts", shortcuts.open_remote_hosts),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
@@ -671,6 +776,23 @@ mod tests {
                 .expect("shortcuts should resolve")
                 .command_palette,
             crate::shortcuts::ShortcutBinding::parse("Alt+K").expect("shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn workspace_navigation_shortcuts_resolve() {
+        let config = Config::from_yaml("shortcuts:\n  focus_active_workspace: Alt+W\n  fit_active_workspace: Alt+9\n")
+            .expect("config should deserialize");
+
+        let shortcuts = config.shortcuts.resolve().expect("shortcuts should resolve");
+
+        assert_eq!(
+            shortcuts.focus_active_workspace,
+            crate::shortcuts::ShortcutBinding::parse("Alt+W").expect("shortcut should parse")
+        );
+        assert_eq!(
+            shortcuts.fit_active_workspace,
+            crate::shortcuts::ShortcutBinding::parse("Alt+9").expect("shortcut should parse")
         );
     }
 

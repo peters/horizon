@@ -14,3 +14,5 @@ crates/horizon-ui/publish-assets/
 .idea/dictionaries/
 .idea/httpRequests/
 .idea/caches/
+
+profiling-output/

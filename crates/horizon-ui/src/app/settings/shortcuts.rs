@@ -27,6 +27,18 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
         changed |= shortcut_row(ui, "New Terminal", &mut config.shortcuts.new_terminal, &mut all_valid);
         changed |= shortcut_row(
             ui,
+            "Focus Workspace",
+            &mut config.shortcuts.focus_active_workspace,
+            &mut all_valid,
+        );
+        changed |= shortcut_row(
+            ui,
+            "Fit Workspace",
+            &mut config.shortcuts.fit_active_workspace,
+            &mut all_valid,
+        );
+        changed |= shortcut_row(
+            ui,
             "Remote Hosts",
             &mut config.shortcuts.open_remote_hosts,
             &mut all_valid,

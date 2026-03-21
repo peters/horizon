@@ -8,7 +8,7 @@ use horizon_core::{AgentSessionBinding, AgentSessionCatalog, Board, PanelId, Pan
 use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
-use super::{ActiveSession, HorizonApp, ResolvedSession, StartupBootstrap};
+use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap};
 
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
@@ -49,7 +49,12 @@ impl HorizonApp {
             .detached_workspaces
             .iter()
             .filter(|workspace| !workspace.workspace_local_id.is_empty())
-            .map(|workspace| (workspace.workspace_local_id.clone(), workspace.window.clone()))
+            .map(|workspace| {
+                (
+                    workspace.workspace_local_id.clone(),
+                    DetachedWorkspaceViewportState::new(workspace.window.clone()),
+                )
+            })
             .collect();
         self.pending_detached_window_position_restore = self.detached_workspaces.keys().cloned().collect();
         self.pending_detached_reattach.clear();
@@ -79,12 +84,16 @@ impl HorizonApp {
             .iter()
             .flat_map(|workspace| &workspace.panels)
             .any(|panel| {
-                panel.kind.is_agent() && panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)
+                panel.kind.supports_session_binding()
+                    && panel.session_binding.is_none()
+                    && matches!(panel.resume, PanelResume::Last)
             })
     }
 
     fn panel_options_need_session_bootstrap(opts: &PanelOptions) -> bool {
-        opts.kind.is_agent() && opts.session_binding.is_none() && matches!(opts.resume, PanelResume::Last)
+        opts.kind.supports_session_binding()
+            && opts.session_binding.is_none()
+            && matches!(opts.resume, PanelResume::Last)
     }
 
     pub(super) fn spawn_startup_bootstrap(mut runtime_state: horizon_core::RuntimeState) -> Receiver<StartupBootstrap> {
@@ -231,7 +240,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
-            .any(|panel| panel.kind.is_agent() && panel.session_binding.is_none());
+            .any(|panel| panel.kind.supports_session_binding() && panel.session_binding.is_none());
         if !has_unbound_agent {
             return;
         }
@@ -255,7 +264,7 @@ impl HorizonApp {
         let mut pending_panels: HashMap<(PanelKind, String), Vec<(PanelId, i64)>> = HashMap::new();
 
         for panel in &self.board.panels {
-            if panel.kind.is_agent() && panel.session_binding.is_none() {
+            if panel.kind.supports_session_binding() && panel.session_binding.is_none() {
                 let cwd = panel
                     .launch_cwd
                     .as_ref()
@@ -301,7 +310,7 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return Vec::new();
         };
-        if !panel.kind.is_agent() {
+        if !panel.kind.supports_session_binding() {
             return Vec::new();
         }
 
@@ -394,6 +403,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_needs_bootstrap_for_unbound_last_opencode_panel() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                cwd: None,
+                position: None,
+                template: None,
+                layout: None,
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "OpenCode".to_string(),
+                    kind: PanelKind::OpenCode,
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                }],
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
     fn runtime_state_skips_bootstrap_for_fresh_or_bound_panels() {
         let state = RuntimeState {
             workspaces: vec![WorkspaceState {
@@ -423,6 +456,39 @@ mod tests {
                             None,
                             None,
                         )),
+                        ..PanelState::default()
+                    },
+                ],
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(!HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
+    fn runtime_state_skips_bootstrap_for_agents_without_exact_session_catalogs() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                cwd: None,
+                position: None,
+                template: None,
+                layout: None,
+                panels: vec![
+                    PanelState {
+                        local_id: "gemini".to_string(),
+                        name: "Gemini".to_string(),
+                        kind: PanelKind::Gemini,
+                        resume: PanelResume::Last,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "kilo".to_string(),
+                        name: "KiloCode".to_string(),
+                        kind: PanelKind::KiloCode,
+                        resume: PanelResume::Last,
                         ..PanelState::default()
                     },
                 ],

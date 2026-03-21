@@ -1,8 +1,11 @@
-use egui::{Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use egui::text::{LayoutJob, TextWrapping};
+use egui::{Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, TextFormat, Ui, Vec2};
 use horizon_core::{RemoteHost, RemoteHostStatus};
 
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
 use crate::theme;
+
+const COLUMN_GUTTER: f32 = 18.0;
 
 pub(super) fn render_column_headers(ui: &mut Ui, width: f32, columns: &Columns) {
     let rect = ui.allocate_space(Vec2::new(width, HEADER_ROW_HEIGHT)).1;
@@ -112,16 +115,17 @@ pub(super) fn render_host_row(
         Pos2::new(x + columns.tags, y),
         &host.tags,
         &mono_sm,
-        x + columns.hostname - 12.0,
+        x + columns.hostname - COLUMN_GUTTER,
     );
 
     let hostname = host.hostname.as_deref().unwrap_or("-");
-    painter.text(
+    render_truncated_text(
+        &painter,
         Pos2::new(x + columns.hostname, y),
-        egui::Align2::LEFT_CENTER,
         hostname,
-        mono_sm.clone(),
+        &mono_sm,
         theme::FG_DIM,
+        x + columns.status - COLUMN_GUTTER,
     );
 
     let (status_text, status_text_color) = status_text(host.status);
@@ -155,30 +159,82 @@ pub(super) fn paint_empty(ui: &mut Ui, message: &str) {
 }
 
 fn render_tags(painter: &egui::Painter, pos: Pos2, tags: &[String], font: &FontId, max_x: f32) {
-    let mut x = pos.x;
-    for (index, tag) in tags.iter().enumerate() {
-        if x >= max_x {
-            break;
-        }
-        if index > 0 {
-            let comma_rect = painter.text(
-                Pos2::new(x, pos.y),
-                egui::Align2::LEFT_CENTER,
-                ",",
-                font.clone(),
-                theme::FG_DIM,
-            );
-            x = comma_rect.max.x;
-        }
-        let text_rect = painter.text(
-            Pos2::new(x, pos.y),
-            egui::Align2::LEFT_CENTER,
-            tag,
-            font.clone(),
-            tag_color(tag),
-        );
-        x = text_rect.max.x;
+    if tags.is_empty() {
+        return;
     }
+
+    render_layout_job(painter, pos, tags_layout_job(tags, font, max_x - pos.x));
+}
+
+fn render_truncated_text(painter: &egui::Painter, pos: Pos2, text: &str, font: &FontId, color: Color32, max_x: f32) {
+    if text.is_empty() {
+        return;
+    }
+
+    let mut job = single_line_job(max_x - pos.x);
+    job.append(
+        text,
+        0.0,
+        TextFormat {
+            font_id: font.clone(),
+            color,
+            ..Default::default()
+        },
+    );
+    render_layout_job(painter, pos, job);
+}
+
+fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
+    let max_width = job.wrap.max_width.max(0.0);
+    if max_width <= 0.0 || job.text.is_empty() {
+        return;
+    }
+
+    let galley = painter.layout_job(job);
+    let text_pos = Pos2::new(pos.x, pos.y - galley.size().y * 0.5);
+    painter.galley(text_pos, galley, Color32::TRANSPARENT);
+}
+
+fn single_line_job(max_width: f32) -> LayoutJob {
+    LayoutJob {
+        break_on_newline: false,
+        wrap: TextWrapping {
+            max_width: max_width.max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
+        },
+        ..Default::default()
+    }
+}
+
+fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob {
+    let mut job = single_line_job(max_width);
+
+    for (index, tag) in tags.iter().enumerate() {
+        if index > 0 {
+            job.append(
+                ",",
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color: theme::FG_DIM,
+                    ..Default::default()
+                },
+            );
+        }
+        job.append(
+            tag,
+            0.0,
+            TextFormat {
+                font_id: font.clone(),
+                color: tag_color(tag),
+                ..Default::default()
+            },
+        );
+    }
+
+    job
 }
 
 fn format_relative_time(epoch_secs: i64, now_secs: i64) -> String {
@@ -236,5 +292,40 @@ fn status_text(status: RemoteHostStatus) -> (&'static str, Color32) {
         RemoteHostStatus::Online => ("yes", theme::PALETTE_GREEN),
         RemoteHostStatus::Offline => ("no", theme::PALETTE_RED),
         RemoteHostStatus::Unknown => ("-", theme::FG_DIM),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tags_layout_job_uses_single_line_ellipsis_and_preserves_tag_colors() {
+        let tags = vec!["tag:cuda".to_string(), "tag:node".to_string()];
+        let font = FontId::monospace(11.0);
+
+        let job = tags_layout_job(&tags, &font, 120.0);
+
+        assert_eq!(job.text, "tag:cuda,tag:node");
+        assert_eq!(job.sections.len(), 3);
+        assert_eq!(job.sections[0].format.color, tag_color("tag:cuda"));
+        assert_eq!(job.sections[1].format.color, theme::FG_DIM);
+        assert_eq!(job.sections[2].format.color, tag_color("tag:node"));
+        assert!(!job.break_on_newline);
+        assert!((job.wrap.max_width - 120.0).abs() < f32::EPSILON);
+        assert_eq!(job.wrap.max_rows, 1);
+        assert!(job.wrap.break_anywhere);
+        assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
+    }
+
+    #[test]
+    fn single_line_job_enables_ellipsis_wrapping() {
+        let job = single_line_job(96.0);
+
+        assert!(!job.break_on_newline);
+        assert!((job.wrap.max_width - 96.0).abs() < f32::EPSILON);
+        assert_eq!(job.wrap.max_rows, 1);
+        assert!(job.wrap.break_anywhere);
+        assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
     }
 }

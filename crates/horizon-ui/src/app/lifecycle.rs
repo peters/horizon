@@ -252,7 +252,7 @@ impl HorizonApp {
         let count_after = self.board.workspaces.len();
         let detached_before = self.detached_workspaces.len();
         self.detached_workspaces
-            .retain(|local_id, _| self.board.workspace_id_by_local_id(local_id).is_some());
+            .retain(|local_id, _state| self.board.workspace_id_by_local_id(local_id).is_some());
         if self.detached_workspaces.len() != detached_before {
             self.mark_runtime_dirty();
         }
@@ -314,6 +314,7 @@ impl HorizonApp {
         self.render_canvas(ctx);
         let overlay_zones = self.overlay_exclusion_zones(ctx);
         self.render_workspace_backgrounds(ctx, &workspace_bounds, &overlay_zones);
+        self.render_empty_state_card(ctx);
         self.handle_canvas_double_click(ctx);
         self.render_panels(ctx);
         self.render_preset_picker(ctx);

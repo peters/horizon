@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use horizon_core::{PanelOptions, PresetConfig, WorkspaceId};
 
 use self::support::detached_workspace_ids;
+use super::DetachedWorkspaceViewportState;
 
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
@@ -58,7 +59,7 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
 
 fn align_attached_workspaces(
     board: &mut horizon_core::Board,
-    detached_workspaces: &BTreeMap<String, horizon_core::WindowConfig>,
+    detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
 ) -> Option<WorkspaceId> {
     let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
     let workspace_ids: Vec<_> = board
@@ -86,9 +87,13 @@ mod tests {
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
         detached_workspace_ids,
     };
-    use super::{align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd, workspace_cwd};
+    use super::{
+        DetachedWorkspaceViewportState, align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd,
+        workspace_cwd,
+    };
+    use crate::app::TOOLBAR_HEIGHT;
+    use crate::app::root_chrome::effective_sidebar_width;
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
-    use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
     #[test]
     fn inherit_workspace_cwd_populates_missing_panel_cwd() {
@@ -211,10 +216,11 @@ mod tests {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
         let settings_panel = Rect::from_min_max(Pos2::new(840.0, TOOLBAR_HEIGHT), Pos2::new(1200.0, 752.0));
         let settings_bar = Rect::from_min_max(Pos2::new(0.0, 800.0 - SETTINGS_BAR_HEIGHT), Pos2::new(1200.0, 800.0));
+        let sidebar_width = effective_sidebar_width(viewport.width());
 
-        let rect = canvas_rect_for_layout(viewport, true, Some(settings_panel), Some(settings_bar));
+        let rect = canvas_rect_for_layout(viewport, sidebar_width, Some(settings_panel), Some(settings_bar));
 
-        assert_eq!(rect.min, Pos2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT));
+        assert_eq!(rect.min, Pos2::new(sidebar_width, TOOLBAR_HEIGHT));
         assert_eq!(rect.max, Pos2::new(840.0, 800.0 - SETTINGS_BAR_HEIGHT));
     }
 
@@ -226,7 +232,10 @@ mod tests {
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
 
         let mut detached_workspaces = BTreeMap::new();
-        detached_workspaces.insert(detached_local_id, WindowConfig::default());
+        detached_workspaces.insert(
+            detached_local_id,
+            DetachedWorkspaceViewportState::new(WindowConfig::default()),
+        );
 
         let ids = detached_workspace_ids(&board, &detached_workspaces);
 
@@ -294,7 +303,10 @@ mod tests {
 
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
         let detached_position = board.workspace(detached).expect("detached workspace").position;
-        let detached_workspaces = BTreeMap::from([(detached_local_id, WindowConfig::default())]);
+        let detached_workspaces = BTreeMap::from([(
+            detached_local_id,
+            DetachedWorkspaceViewportState::new(WindowConfig::default()),
+        )]);
 
         let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
 

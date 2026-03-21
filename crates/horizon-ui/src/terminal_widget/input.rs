@@ -291,15 +291,14 @@ fn handle_pointer_selection_drag(
     }
 }
 
-pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
-    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, events: &[egui::Event]) {
     let Some(terminal) = panel.terminal_mut() else {
         return;
     };
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
 
-    for event in &events {
+    for event in events {
         match event {
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 let emission = forwarder.on_text(text, mode);
@@ -684,6 +683,83 @@ mod tests {
         let bytes = forward_bytes(&events, TermMode::NONE);
 
         assert_eq!(bytes, b"@");
+    }
+
+    #[test]
+    fn legacy_c0_key_events_are_forwarded_in_legacy_mode() {
+        let cases: [(&str, Event, &[u8]); 6] = [
+            (
+                "shift enter",
+                Event::Key {
+                    key: Key::Enter,
+                    physical_key: Some(Key::Enter),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                },
+                b"\r",
+            ),
+            (
+                "alt escape",
+                Event::Key {
+                    key: Key::Escape,
+                    physical_key: Some(Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT,
+                },
+                b"\x1b\x1b",
+            ),
+            (
+                "ctrl backspace",
+                Event::Key {
+                    key: Key::Backspace,
+                    physical_key: Some(Key::Backspace),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::CTRL,
+                },
+                b"\x08",
+            ),
+            (
+                "alt backspace",
+                Event::Key {
+                    key: Key::Backspace,
+                    physical_key: Some(Key::Backspace),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT,
+                },
+                b"\x1b\x7f",
+            ),
+            (
+                "ctrl shift tab",
+                Event::Key {
+                    key: Key::Tab,
+                    physical_key: Some(Key::Tab),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::CTRL | Modifiers::SHIFT,
+                },
+                b"\x1b[Z",
+            ),
+            (
+                "alt shift tab",
+                Event::Key {
+                    key: Key::Tab,
+                    physical_key: Some(Key::Tab),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                },
+                b"\x1b\x1b[Z",
+            ),
+        ];
+
+        for (name, event, expected) in cases {
+            let bytes = forward_bytes(&[event], TermMode::NONE);
+            assert_eq!(bytes, expected, "{name}");
+        }
     }
 
     fn forward_bytes(events: &[Event], mode: TermMode) -> Vec<u8> {

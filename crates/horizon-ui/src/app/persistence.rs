@@ -28,9 +28,9 @@ impl HorizonApp {
             .detached_workspaces
             .iter()
             .filter(|(workspace_local_id, _)| !self.pending_detached_reattach.contains(*workspace_local_id))
-            .map(|(workspace_local_id, window)| DetachedWorkspaceState {
+            .map(|(workspace_local_id, state)| DetachedWorkspaceState {
                 workspace_local_id: workspace_local_id.clone(),
-                window: window.clone(),
+                window: state.window.clone(),
             })
             .collect();
 

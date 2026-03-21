@@ -3,11 +3,14 @@ mod attention_feed;
 mod canvas;
 mod detached_viewports;
 mod file_drop;
+mod frame_stats;
 mod lifecycle;
+mod minimap;
 mod panel_chrome;
 mod panels;
 mod persistence;
 mod remote_hosts;
+mod root_chrome;
 mod session;
 mod settings;
 pub(crate) mod shortcuts;
@@ -23,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui::{Context, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Event, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
@@ -63,6 +66,15 @@ enum RenameEditAction {
     Cancel,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::app) enum CanvasPanSpaceKeyState {
+    #[default]
+    Idle,
+    Pending(Vec<Event>),
+    Consumed,
+}
+
+use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
 
 struct StartupBootstrap {
@@ -83,6 +95,35 @@ struct StartupChooserState {
     error: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::app) struct DetachedWorkspaceViewportState {
+    window: WindowConfig,
+    canvas_view: CanvasViewState,
+    pan_target: Option<Vec2>,
+    is_panning: bool,
+    canvas_pan_input_claimed: bool,
+    pending_space_pan_key: CanvasPanSpaceKeyState,
+    initial_fit_pending: bool,
+    panel_screen_rects: HashMap<PanelId, Rect>,
+    panel_screen_order: Vec<PanelId>,
+}
+
+impl DetachedWorkspaceViewportState {
+    fn new(window: WindowConfig) -> Self {
+        Self {
+            window,
+            canvas_view: CanvasViewState::default(),
+            pan_target: None,
+            is_panning: false,
+            canvas_pan_input_claimed: false,
+            pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
+            initial_fit_pending: true,
+            panel_screen_rects: HashMap::new(),
+            panel_screen_order: Vec::new(),
+        }
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -94,11 +135,15 @@ pub struct HorizonApp {
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
+    canvas_pan_input_claimed: bool,
+    pending_space_pan_key: CanvasPanSpaceKeyState,
+    terminal_keyboard_events: Vec<Event>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
+    frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
@@ -117,7 +162,7 @@ pub struct HorizonApp {
     shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
-    detached_workspaces: BTreeMap<String, WindowConfig>,
+    detached_workspaces: BTreeMap<String, DetachedWorkspaceViewportState>,
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
@@ -198,6 +243,7 @@ impl HorizonApp {
             terminal_grid_cache: HashMap::new(),
             editor_preview_cache: HashMap::new(),
             canvas_grid_cache: CanvasGridCache::default(),
+            frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
@@ -242,6 +288,9 @@ impl HorizonApp {
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,
+            canvas_pan_input_claimed: false,
+            pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
+            terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
             config_last_mtime,
             config_last_check: None,
@@ -272,6 +321,11 @@ fn resolve_shortcuts(config: &Config) -> AppShortcuts {
 impl eframe::App for HorizonApp {
     #[profiling::function]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        let now = Instant::now();
+        self.frame_stats.record_frame(now);
+        if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
+            ctx.request_repaint_after(delay);
+        }
         self.exit_on_close_request(ctx);
 
         if self.shutdown_progress.is_some() {

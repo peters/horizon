@@ -15,6 +15,7 @@ pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) 
     workspace.panel_count > 0
 }
 
+#[profiling::function]
 pub(super) fn render_workspace_layout_toolbar(
     ctx: &Context,
     workspace: &WorkspaceVisual,
@@ -127,6 +128,23 @@ pub(super) fn show_workspace_context_menu(
 ) {
     response.context_menu(|ui| {
         ui.set_min_width(160.0);
+        ui.label(egui::RichText::new("Workspace").size(11.0).color(theme::FG_DIM));
+        if ui
+            .add(Button::new(egui::RichText::new("Focus Workspace").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .clicked()
+        {
+            interaction.action = Some(WorkspaceAction::Focus);
+            ui.close();
+        }
+        if ui
+            .add(Button::new(egui::RichText::new("Fit Workspace").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .clicked()
+        {
+            interaction.action = Some(WorkspaceAction::Fit);
+            ui.close();
+        }
+
+        ui.separator();
         ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
         if ui
             .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT)).frame(false))
