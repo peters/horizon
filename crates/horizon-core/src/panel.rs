@@ -843,7 +843,7 @@ mod tests {
         assert!(!kitty_keyboard_for_kind(PanelKind::Codex));
         assert!(kitty_keyboard_for_kind(PanelKind::Claude));
         assert!(kitty_keyboard_for_kind(PanelKind::OpenCode));
-        assert!(kitty_keyboard_for_kind(PanelKind::Gemini));
+        assert!(!kitty_keyboard_for_kind(PanelKind::Gemini));
         assert!(kitty_keyboard_for_kind(PanelKind::KiloCode));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
         assert!(kitty_keyboard_for_kind(PanelKind::Ssh));

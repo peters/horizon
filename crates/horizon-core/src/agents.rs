@@ -90,7 +90,7 @@ const GEMINI: AgentDefinition = AgentDefinition {
     default_command: "gemini",
     resume_mode: AgentResumeMode::None,
     integration: AgentIntegrationKind::None,
-    kitty_keyboard: true,
+    kitty_keyboard: false,
 };
 
 const KILO_CODE: AgentDefinition = AgentDefinition {
