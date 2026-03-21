@@ -91,8 +91,8 @@ mod tests {
         DetachedWorkspaceViewportState, align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd,
         workspace_cwd,
     };
-    use crate::app::root_chrome::effective_sidebar_width;
     use crate::app::TOOLBAR_HEIGHT;
+    use crate::app::root_chrome::effective_sidebar_width;
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
 
     #[test]

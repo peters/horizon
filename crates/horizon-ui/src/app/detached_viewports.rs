@@ -8,7 +8,7 @@ use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
-use super::util::viewport_local_rect;
+use super::util::{chrome_button, primary_shortcut_label, viewport_local_rect};
 use super::{DetachedWorkspaceViewportState, HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 const DETACHED_WINDOW_OFFSET: f32 = 48.0;
@@ -128,50 +128,6 @@ impl HorizonApp {
             return;
         };
 
-        TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
-            ui.set_height(TOOLBAR_HEIGHT);
-            ui.painter()
-                .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG);
-            ui.painter().line_segment(
-                [
-                    Pos2::new(ui.max_rect().min.x, ui.max_rect().max.y),
-                    Pos2::new(ui.max_rect().max.x, ui.max_rect().max.y),
-                ],
-                Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
-            );
-
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new(&workspace_name)
-                        .color(theme::FG)
-                        .size(13.5)
-                        .strong(),
-                );
-                ui.label(
-                    egui::RichText::new("Detached Workspace")
-                        .color(theme::FG_DIM)
-                        .size(10.5),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(
-                                egui::RichText::new("Attach to Main Window")
-                                    .size(11.5)
-                                    .color(theme::FG_SOFT),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
-                        self.schedule_detached_workspace_reattach(workspace_local_id);
-                        ctx.request_repaint_of(ViewportId::ROOT);
-                    }
-                });
-            });
-        });
-
         let saved_canvas_view = self.canvas_view;
         let saved_pan_target = self.pan_target;
         let saved_is_panning = self.is_panning;
@@ -189,12 +145,21 @@ impl HorizonApp {
             return;
         }
 
+        self.render_detached_toolbar(ctx, workspace_id, workspace_local_id, &workspace_name);
+
         let canvas_rect = detached_canvas_rect(ctx);
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan_in_rect(ctx, canvas_rect);
         self.render_canvas(ctx);
         self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.render_panels_for_workspace(ctx, workspace_id);
+        let _ = self.render_workspace_minimap(
+            ctx,
+            &workspace_bounds,
+            workspace_id,
+            canvas_rect,
+            egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
+        );
         self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
         if self.pan_target.is_some() {
             ctx.request_repaint();
@@ -224,6 +189,80 @@ impl HorizonApp {
         detached_state.pan_target = None;
         detached_state.is_panning = false;
         detached_state.initial_fit_pending = false;
+    }
+
+    fn render_detached_toolbar(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        workspace_local_id: &str,
+        workspace_name: &str,
+    ) {
+        let fit_shortcut = self
+            .shortcuts
+            .fit_active_workspace
+            .display_label(primary_shortcut_label());
+        let minimap_shortcut = self.shortcuts.toggle_minimap.display_label(primary_shortcut_label());
+        let minimap_label = if self.minimap_visible {
+            "Hide Minimap"
+        } else {
+            "Show Minimap"
+        };
+
+        TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
+            ui.set_height(TOOLBAR_HEIGHT);
+            ui.painter()
+                .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG);
+            ui.painter().line_segment(
+                [
+                    Pos2::new(ui.max_rect().min.x, ui.max_rect().max.y),
+                    Pos2::new(ui.max_rect().max.x, ui.max_rect().max.y),
+                ],
+                Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
+            );
+
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(workspace_name).color(theme::FG).size(13.5).strong());
+                ui.label(
+                    egui::RichText::new("Detached Workspace")
+                        .color(theme::FG_DIM)
+                        .size(10.5),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(
+                            Button::new(
+                                egui::RichText::new("Attach to Main Window")
+                                    .size(11.5)
+                                    .color(theme::FG_SOFT),
+                            )
+                            .frame(false),
+                        )
+                        .clicked()
+                    {
+                        self.schedule_detached_workspace_reattach(workspace_local_id);
+                        ctx.request_repaint_of(ViewportId::ROOT);
+                    }
+
+                    if ui
+                        .add(chrome_button("Fit Workspace").min_size(Vec2::new(126.0, 30.0)))
+                        .on_hover_text(fit_shortcut.as_str())
+                        .clicked()
+                    {
+                        let _ = self.fit_workspace_in_rect(workspace_id, detached_canvas_rect(ctx));
+                    }
+
+                    if ui
+                        .add(chrome_button(minimap_label).min_size(Vec2::new(124.0, 30.0)))
+                        .on_hover_text(minimap_shortcut.as_str())
+                        .clicked()
+                    {
+                        self.minimap_visible = !self.minimap_visible;
+                    }
+                });
+            });
+        });
     }
 
     fn restore_detached_viewport_state(&mut self, workspace_local_id: &str) -> bool {

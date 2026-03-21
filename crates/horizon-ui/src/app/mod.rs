@@ -5,6 +5,7 @@ mod detached_viewports;
 mod file_drop;
 mod frame_stats;
 mod lifecycle;
+mod minimap;
 mod panel_chrome;
 mod panels;
 mod persistence;
