@@ -27,7 +27,13 @@ impl<'a> TerminalView<'a> {
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
     #[profiling::function]
-    pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool, interactive: bool) -> bool {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        is_active_panel: bool,
+        interactive: bool,
+        keyboard_events: &[egui::Event],
+    ) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
         let line_height = metrics.line_height;
@@ -116,7 +122,7 @@ impl<'a> TerminalView<'a> {
         }
 
         if interactive && has_terminal_focus {
-            handle_terminal_keyboard_input(ui, self.panel);
+            handle_terminal_keyboard_input(ui, self.panel, keyboard_events);
         }
 
         interaction.body.clicked()

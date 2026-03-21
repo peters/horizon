@@ -221,7 +221,7 @@ impl HorizonApp {
             self.close_workspace_panels(workspace_id);
         }
 
-        if !self.is_panning {
+        if !self.canvas_pan_input_claimed {
             for (workspace_id, delta) in pending_workspace_moves {
                 let _ = self
                     .board

@@ -131,6 +131,9 @@ impl HorizonApp {
         let saved_canvas_view = self.canvas_view;
         let saved_pan_target = self.pan_target;
         let saved_is_panning = self.is_panning;
+        let saved_canvas_pan_input_claimed = self.canvas_pan_input_claimed;
+        let saved_pending_space_pan_key = self.pending_space_pan_key.clone();
+        let saved_terminal_keyboard_events = std::mem::take(&mut self.terminal_keyboard_events);
         // Detached rendering must not overwrite root-window hit-testing or
         // close requests that were collected earlier in the frame.
         let saved_panel_screen_rects = std::mem::take(&mut self.panel_screen_rects);
@@ -170,6 +173,9 @@ impl HorizonApp {
         self.canvas_view = saved_canvas_view;
         self.pan_target = saved_pan_target;
         self.is_panning = saved_is_panning;
+        self.canvas_pan_input_claimed = saved_canvas_pan_input_claimed;
+        self.pending_space_pan_key = saved_pending_space_pan_key;
+        self.terminal_keyboard_events = saved_terminal_keyboard_events;
         self.panels_to_close = saved_panels_to_close;
         self.panel_screen_rects = saved_panel_screen_rects;
         self.panel_screen_order = saved_panel_screen_order;
@@ -273,6 +279,9 @@ impl HorizonApp {
         self.canvas_view = detached_state.canvas_view;
         self.pan_target = detached_state.pan_target;
         self.is_panning = detached_state.is_panning;
+        self.canvas_pan_input_claimed = detached_state.canvas_pan_input_claimed;
+        self.pending_space_pan_key = detached_state.pending_space_pan_key.clone();
+        self.terminal_keyboard_events.clear();
         self.panel_screen_rects = std::mem::take(&mut detached_state.panel_screen_rects);
         self.panel_screen_order = std::mem::take(&mut detached_state.panel_screen_order);
         true
@@ -286,6 +295,8 @@ impl HorizonApp {
         detached_state.canvas_view = self.canvas_view;
         detached_state.pan_target = self.pan_target;
         detached_state.is_panning = self.is_panning;
+        detached_state.canvas_pan_input_claimed = self.canvas_pan_input_claimed;
+        detached_state.pending_space_pan_key = self.pending_space_pan_key.clone();
         detached_state.panel_screen_rects = std::mem::take(&mut self.panel_screen_rects);
         detached_state.panel_screen_order = std::mem::take(&mut self.panel_screen_order);
     }
