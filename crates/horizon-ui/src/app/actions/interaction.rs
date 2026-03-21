@@ -1,7 +1,112 @@
-use egui::{Context, Rect, Vec2};
+use std::mem;
 
-use crate::app::HorizonApp;
+use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
+
 use crate::app::shortcuts::shortcut_pressed;
+use crate::app::{CanvasPanSpaceKeyState, HorizonApp};
+
+impl CanvasPanSpaceKeyState {
+    fn filter_terminal_events(&mut self, events: &[Event], space_drag_claimed: bool) -> Vec<Event> {
+        let mut filtered = Vec::with_capacity(events.len());
+
+        if space_drag_claimed && matches!(self, Self::Pending(_)) {
+            *self = Self::Consumed;
+        }
+
+        for event in events {
+            if self.handle_space_event(event, space_drag_claimed, &mut filtered) {
+                continue;
+            }
+
+            if matches!(self, Self::Pending(_)) {
+                filtered.extend(self.flush_pending());
+            }
+
+            filtered.push(event.clone());
+        }
+
+        filtered
+    }
+
+    fn handle_space_event(&mut self, event: &Event, space_drag_claimed: bool, filtered: &mut Vec<Event>) -> bool {
+        match self {
+            Self::Idle => {
+                if is_space_pan_start_event(event) {
+                    if space_drag_claimed {
+                        *self = Self::Consumed;
+                    } else {
+                        *self = Self::Pending(vec![event.clone()]);
+                    }
+                    return true;
+                }
+            }
+            Self::Pending(pending) => {
+                if is_space_pan_related_event(event) {
+                    pending.push(event.clone());
+                    if space_drag_claimed {
+                        *self = Self::Consumed;
+                    } else if is_space_key_release(event) {
+                        filtered.extend(self.flush_pending());
+                    }
+                    return true;
+                }
+            }
+            Self::Consumed => {
+                if is_space_pan_related_event(event) {
+                    if is_space_key_release(event) {
+                        *self = Self::Idle;
+                    }
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn flush_pending(&mut self) -> Vec<Event> {
+        match mem::take(self) {
+            Self::Pending(events) => events,
+            state => {
+                *self = state;
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn is_space_pan_start_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key {
+            key: Key::Space,
+            pressed: true,
+            repeat: false,
+            modifiers,
+            ..
+        } if space_drag_modifier_active(*modifiers)
+    )
+}
+
+fn is_space_pan_related_event(event: &Event) -> bool {
+    matches!(event, Event::Key { key: Key::Space, .. })
+        || matches!(event, Event::Text(text) | Event::Ime(egui::ImeEvent::Commit(text)) if text == " ")
+}
+
+fn is_space_key_release(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key {
+            key: Key::Space,
+            pressed: false,
+            ..
+        }
+    )
+}
+
+fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
+    !modifiers.ctrl && !modifiers.command && !modifiers.alt
+}
 
 impl HorizonApp {
     pub(in crate::app) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
@@ -40,30 +145,49 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(in crate::app) fn handle_canvas_pan_in_rect(&mut self, ctx: &Context, canvas_rect: Rect) {
-        let (pointer_position, middle_down, primary_down, space_down, modifiers, scroll, pointer_delta, zoom_delta) =
-            ctx.input(|input| {
-                (
-                    input.pointer.hover_pos(),
-                    input.pointer.middle_down(),
-                    input.pointer.primary_down(),
-                    input.key_down(egui::Key::Space),
-                    input.modifiers,
-                    input.smooth_scroll_delta + input.raw_scroll_delta,
-                    input.pointer.delta(),
-                    input.zoom_delta(),
-                )
-            });
+        let (
+            events,
+            pointer_position,
+            middle_down,
+            primary_down,
+            space_down,
+            modifiers,
+            scroll,
+            pointer_delta,
+            zoom_delta,
+        ) = ctx.input(|input| {
+            (
+                input.events.clone(),
+                input.pointer.interact_pos().or_else(|| input.pointer.hover_pos()),
+                input.pointer.middle_down(),
+                input.pointer.primary_down(),
+                input.key_down(egui::Key::Space),
+                input.modifiers,
+                input.smooth_scroll_delta + input.raw_scroll_delta,
+                input.pointer.delta(),
+                input.zoom_delta(),
+            )
+        });
         let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
+        let space_drag_claimed =
+            pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
+        // Delay plain Space forwarding until we know whether the key becomes
+        // the canvas-pan modifier or an actual terminal keystroke.
+        self.terminal_keyboard_events = self
+            .pending_space_pan_key
+            .filter_terminal_events(&events, space_drag_claimed);
+        self.canvas_pan_input_claimed = pointer_in_canvas && (middle_down || space_drag_claimed);
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
             }
+            self.canvas_pan_input_claimed = false;
             self.is_panning = false;
             return;
         }
 
-        let drag_panning = pointer_in_canvas && (middle_down || (space_down && primary_down));
+        let drag_panning = self.canvas_pan_input_claimed;
         let pointer_over_panel = pointer_position.is_some_and(|position| {
             pointer_in_canvas
                 && !drag_panning
@@ -100,6 +224,93 @@ impl HorizonApp {
             if let Some(terminal) = panel.terminal() {
                 terminal.clear_selection();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Event, Key, Modifiers};
+
+    use crate::app::CanvasPanSpaceKeyState;
+
+    #[test]
+    fn plain_space_is_delayed_until_release() {
+        let mut state = CanvasPanSpaceKeyState::default();
+        let press = space_press();
+        let text = Event::Text(" ".to_owned());
+        let release = space_release();
+
+        assert!(
+            state
+                .filter_terminal_events(&[press.clone(), text.clone()], false)
+                .is_empty()
+        );
+
+        let filtered = state.filter_terminal_events(std::slice::from_ref(&release), false);
+        assert_eq!(filtered, vec![press, text, release]);
+        assert!(matches!(state, CanvasPanSpaceKeyState::Idle));
+    }
+
+    #[test]
+    fn space_candidate_is_dropped_once_drag_pan_claims_it() {
+        let mut state = CanvasPanSpaceKeyState::default();
+
+        assert!(
+            state
+                .filter_terminal_events(&[space_press(), Event::Text(" ".to_owned())], false)
+                .is_empty()
+        );
+        assert!(matches!(state, CanvasPanSpaceKeyState::Pending(_)));
+
+        assert!(state.filter_terminal_events(&[], true).is_empty());
+        assert!(matches!(state, CanvasPanSpaceKeyState::Consumed));
+
+        assert!(state.filter_terminal_events(&[space_release()], false).is_empty());
+        assert!(matches!(state, CanvasPanSpaceKeyState::Idle));
+    }
+
+    #[test]
+    fn pending_space_flushes_before_later_non_space_input() {
+        let mut state = CanvasPanSpaceKeyState::default();
+        let press = space_press();
+        let text = Event::Text(" ".to_owned());
+        let letter = Event::Key {
+            key: Key::A,
+            physical_key: Some(Key::A),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+
+        assert!(
+            state
+                .filter_terminal_events(&[press.clone(), text.clone()], false)
+                .is_empty()
+        );
+
+        let filtered = state.filter_terminal_events(std::slice::from_ref(&letter), false);
+        assert_eq!(filtered, vec![press, text, letter]);
+        assert!(matches!(state, CanvasPanSpaceKeyState::Idle));
+    }
+
+    fn space_press() -> Event {
+        Event::Key {
+            key: Key::Space,
+            physical_key: Some(Key::Space),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn space_release() -> Event {
+        Event::Key {
+            key: Key::Space,
+            physical_key: Some(Key::Space),
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
         }
     }
 }

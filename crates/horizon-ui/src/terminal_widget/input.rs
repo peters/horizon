@@ -291,15 +291,14 @@ fn handle_pointer_selection_drag(
     }
 }
 
-pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel) {
-    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, events: &[egui::Event]) {
     let Some(terminal) = panel.terminal_mut() else {
         return;
     };
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
 
-    for event in &events {
+    for event in events {
         match event {
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 let emission = forwarder.on_text(text, mode);

@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui::{Context, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Event, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
@@ -66,6 +66,14 @@ enum RenameEditAction {
     Cancel,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::app) enum CanvasPanSpaceKeyState {
+    #[default]
+    Idle,
+    Pending(Vec<Event>),
+    Consumed,
+}
+
 use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
 
@@ -93,6 +101,8 @@ pub(in crate::app) struct DetachedWorkspaceViewportState {
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
+    canvas_pan_input_claimed: bool,
+    pending_space_pan_key: CanvasPanSpaceKeyState,
     initial_fit_pending: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -105,6 +115,8 @@ impl DetachedWorkspaceViewportState {
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,
+            canvas_pan_input_claimed: false,
+            pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
             initial_fit_pending: true,
             panel_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
@@ -123,6 +135,9 @@ pub struct HorizonApp {
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
+    canvas_pan_input_claimed: bool,
+    pending_space_pan_key: CanvasPanSpaceKeyState,
+    terminal_keyboard_events: Vec<Event>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
@@ -273,6 +288,9 @@ impl HorizonApp {
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,
+            canvas_pan_input_claimed: false,
+            pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
+            terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
             config_last_mtime,
             config_last_check: None,
