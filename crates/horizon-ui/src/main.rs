@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use app::HorizonApp;
-use eframe::wgpu;
+use eframe::{egui_wgpu, wgpu};
 use horizon_core::{
     Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser, StartupDecision,
     WindowConfig,
@@ -67,6 +67,12 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         centered: !has_saved_position,
         run_and_return: false,
+        vsync: false,
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            desired_maximum_frame_latency: Some(1),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
