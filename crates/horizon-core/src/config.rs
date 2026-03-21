@@ -129,8 +129,43 @@ pub(crate) fn default_opencode_presets() -> [PresetConfig; 2] {
     ]
 }
 
-pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
-    for default_preset in default_opencode_presets() {
+pub(crate) fn default_gemini_presets() -> [PresetConfig; 1] {
+    [PresetConfig {
+        name: "Gemini CLI".to_string(),
+        alias: Some("gm".to_string()),
+        kind: PanelKind::Gemini,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }]
+}
+
+pub(crate) fn default_kilo_presets() -> [PresetConfig; 2] {
+    [
+        PresetConfig {
+            name: "KiloCode".to_string(),
+            alias: Some("kc".to_string()),
+            kind: PanelKind::KiloCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Last,
+            ssh_connection: None,
+        },
+        PresetConfig {
+            name: "KiloCode (Fresh)".to_string(),
+            alias: Some("kcf".to_string()),
+            kind: PanelKind::KiloCode,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        },
+    ]
+}
+
+fn insert_missing_agent_presets(presets: &mut Vec<PresetConfig>, defaults: impl IntoIterator<Item = PresetConfig>) {
+    for default_preset in defaults {
         let expected_name = default_preset.name.to_ascii_lowercase();
         let expected_alias = default_preset.alias.as_deref().map(str::to_ascii_lowercase);
         let exists = presets.iter().any(|preset| {
@@ -140,7 +175,7 @@ pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
                     .as_deref()
                     .zip(expected_alias.as_deref())
                     .is_some_and(|(alias, expected)| alias.eq_ignore_ascii_case(expected))
-                || (preset.kind == PanelKind::OpenCode && preset.resume == default_preset.resume)
+                || (preset.kind == default_preset.kind && preset.resume == default_preset.resume)
                 || preset.name.to_ascii_lowercase() == expected_name
         });
 
@@ -148,6 +183,18 @@ pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
             presets.push(default_preset);
         }
     }
+}
+
+pub(crate) fn insert_missing_opencode_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_opencode_presets());
+}
+
+pub(crate) fn insert_missing_gemini_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_gemini_presets());
+}
+
+pub(crate) fn insert_missing_kilo_presets(presets: &mut Vec<PresetConfig>) {
+    insert_missing_agent_presets(presets, default_kilo_presets());
 }
 
 fn default_presets() -> Vec<PresetConfig> {
@@ -199,6 +246,8 @@ fn default_presets() -> Vec<PresetConfig> {
         },
     ];
     presets.extend(default_opencode_presets());
+    presets.extend(default_gemini_presets());
+    presets.extend(default_kilo_presets());
     presets.extend([
         PresetConfig {
             name: "Git Changes".to_string(),

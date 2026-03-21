@@ -143,7 +143,7 @@ impl RuntimeState {
         let mut used_session_ids = HashSet::new();
 
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
-            if !panel.kind.is_agent() {
+            if !panel.kind.supports_session_binding() {
                 continue;
             }
 
@@ -166,7 +166,10 @@ impl RuntimeState {
 
         let mut pending_by_group: HashMap<(PanelKind, String), Vec<&mut PanelState>> = HashMap::new();
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
-            if !panel.kind.is_agent() || panel.session_binding.is_some() || !matches!(panel.resume, PanelResume::Last) {
+            if !panel.kind.supports_session_binding()
+                || panel.session_binding.is_some()
+                || !matches!(panel.resume, PanelResume::Last)
+            {
                 continue;
             }
             let cwd = normalize_cwd(panel.cwd.as_deref()).unwrap_or_default();

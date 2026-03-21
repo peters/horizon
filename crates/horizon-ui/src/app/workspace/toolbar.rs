@@ -15,6 +15,7 @@ pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) 
     workspace.panel_count > 0
 }
 
+#[profiling::function]
 pub(super) fn render_workspace_layout_toolbar(
     ctx: &Context,
     workspace: &WorkspaceVisual,

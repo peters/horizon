@@ -95,6 +95,7 @@ fn show_panel_body_contents(
     ui: &mut egui::Ui,
     panel: &mut Panel,
     is_focused: bool,
+    interactive: bool,
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&mut MarkdownPreviewCache>,
     terminal_grid_cache: Option<&mut TerminalGridCache>,
@@ -105,7 +106,7 @@ fn show_panel_body_contents(
         }
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
-        _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused),
+        _ => TerminalView::new(panel, terminal_grid_cache).show(ui, is_focused, interactive),
     }
 }
 
@@ -136,7 +137,15 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            show_panel_body_contents(ui, panel, true, self.shortcuts.save_editor, preview_cache, None);
+                            show_panel_body_contents(
+                                ui,
+                                panel,
+                                true,
+                                true,
+                                self.shortcuts.save_editor,
+                                preview_cache,
+                                None,
+                            );
                         }
                     },
                 );
@@ -261,6 +270,7 @@ impl HorizonApp {
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
+        let interactive = !self.is_panning;
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
@@ -278,7 +288,7 @@ impl HorizonApp {
                 let drag_response = ui.interact(
                     rects.titlebar,
                     ui.make_persistent_id(("panel_drag", panel_id.0)),
-                    if snapshot.is_renaming {
+                    if !interactive || snapshot.is_renaming {
                         Sense::hover()
                     } else {
                         Sense::click_and_drag()
@@ -287,22 +297,28 @@ impl HorizonApp {
                 let close_response = ui.interact(
                     rects.close.expand2(Vec2::splat(4.0)),
                     ui.make_persistent_id(("panel_close", panel_id.0)),
-                    Sense::click(),
+                    if interactive { Sense::click() } else { Sense::hover() },
                 );
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
                     ui.make_persistent_id(("panel_resize", panel_id.0)),
-                    Sense::click_and_drag(),
+                    if interactive {
+                        Sense::click_and_drag()
+                    } else {
+                        Sense::hover()
+                    },
                 );
 
-                Self::update_panel_interactions(
-                    snapshot.is_renaming,
-                    &drag_response,
-                    &close_response,
-                    &resize_response,
-                    &mut outcome,
-                );
-                if !snapshot.is_renaming {
+                if interactive {
+                    Self::update_panel_interactions(
+                        snapshot.is_renaming,
+                        &drag_response,
+                        &close_response,
+                        &resize_response,
+                        &mut outcome,
+                    );
+                }
+                if interactive && !snapshot.is_renaming {
                     self.show_panel_context_menu(
                         &drag_response,
                         panel_id,
@@ -370,6 +386,7 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 snapshot.is_focused,
+                                interactive,
                                 self.shortcuts.save_editor,
                                 preview_cache,
                                 grid_cache,

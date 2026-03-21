@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod agent_status;
+mod agents;
 mod attention;
 mod board;
 mod config;
@@ -30,9 +31,10 @@ mod view;
 mod workspace;
 mod workspace_context;
 
+pub use agent_status::{AgentStateSnapshot, AgentStatus, derive_agent_status};
+pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
-pub use agent_status::{AgentStateSnapshot, AgentStatus, derive_agent_status};
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, ShutdownProgress, WorkspaceLayout};
 pub use config::{
@@ -45,6 +47,7 @@ pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
+pub use orchestration::{AgentChain, OrchestrationState};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use remote_hosts::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, discover_remote_hosts};
 pub use runtime_state::{
@@ -63,6 +66,5 @@ pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
-pub use orchestration::{AgentChain, OrchestrationState};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
 pub use workspace_context::{ContextEvent, ContextItem, WorkspaceContext};

@@ -305,8 +305,11 @@ mod tests {
 
     fn spawn_test_terminal() -> Terminal {
         Terminal::spawn(TerminalSpawnOptions {
-            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
-            args: Vec::new(),
+            // These tests only exercise local event handling, so use a
+            // short-lived child process instead of an interactive shell.
+            // That keeps PTY teardown deterministic on macOS runners.
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            args: vec!["-c".to_string(), "exit".to_string()],
             cwd: None,
             rows: 24,
             cols: 80,
