@@ -2,7 +2,10 @@ mod toolbar;
 
 use std::collections::HashMap;
 
-use egui::{Button, Color32, Context, CornerRadius, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{
+    Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
+    Vec2,
+};
 use horizon_core::{AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -185,63 +188,67 @@ impl HorizonApp {
     ) {
         ui.add_space(4.0);
 
-        let workspace_response = ui.horizontal(|ui| {
-            ui.set_min_height(32.0);
-            ui.set_min_width(ui.available_width());
-            ui.add_space(14.0);
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
+        let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
+        let mut row_clicked = false;
+        paint_workspace_row_bg(ui, row_rect, workspace.color, workspace.is_active, click_target_hovered);
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(row_rect)
+                .layout(Layout::left_to_right(Align::Center)),
+            |ui| {
+                ui.add_space(14.0);
 
-            let bar_color = if workspace.attention_count > 0 {
-                theme::PALETTE_RED
-            } else {
-                theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
-            };
-            let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
-            ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
+                let bar_color = if workspace.attention_count > 0 {
+                    theme::PALETTE_RED
+                } else {
+                    theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
+                };
+                let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
+                ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
 
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new(&workspace.name)
-                    .color(if workspace.is_active { theme::FG } else { theme::FG_SOFT })
-                    .size(13.0)
-                    .strong(),
-            );
-            if workspace.detached {
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("NEW WINDOW")
-                        .color(theme::FG_DIM)
-                        .size(8.5)
-                        .strong(),
+                ui.add_space(8.0);
+                let name_response = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&workspace.name)
+                            .color(if workspace.is_active { theme::FG } else { theme::FG_SOFT })
+                            .size(13.0)
+                            .strong(),
+                    )
+                    .sense(Sense::click()),
                 );
-            }
-        });
-
-        Self::handle_workspace_click(ui, workspace, &workspace_response.response, actions);
-        Self::show_workspace_context_menu(&workspace_response.response, workspace, actions);
-        paint_workspace_row_bg(
-            ui,
-            workspace_response.response.rect,
-            workspace.color,
-            workspace.is_active,
-            workspace_response.response.hovered(),
+                click_target_hovered |= name_response.hovered();
+                row_clicked |= name_response.clicked();
+                if workspace.detached {
+                    ui.add_space(4.0);
+                    let detached_response = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("NEW WINDOW")
+                                .color(theme::FG_DIM)
+                                .size(8.5)
+                                .strong(),
+                        )
+                        .sense(Sense::click()),
+                    );
+                    click_target_hovered |= detached_response.hovered();
+                    row_clicked |= detached_response.clicked();
+                }
+            },
         );
 
-        ui.add_space(2.0);
-        for panel in &workspace.panels {
-            self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
-        }
-        ui.add_space(8.0);
-    }
+        let row_response = ui.interact(
+            row_rect,
+            ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
+            Sense::click(),
+        );
+        click_target_hovered |= row_response.hovered();
+        row_clicked |= row_response.clicked();
 
-    fn handle_workspace_click(
-        ui: &mut egui::Ui,
-        workspace: &WorkspaceSidebarEntry,
-        response: &egui::Response,
-        actions: &mut SidebarActions,
-    ) {
-        let interact_id = ui.make_persistent_id(("sidebar_ws", workspace.id.0));
-        let click = ui.interact(response.rect, interact_id, Sense::click());
-        if click.clicked() {
+        if click_target_hovered {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+
+        if row_clicked {
             if workspace.panels.len() == 1 {
                 actions.focus_panel = Some(workspace.panels[0].id);
                 actions.pan_to_panel = Some(workspace.panels[0].id);
@@ -249,6 +256,13 @@ impl HorizonApp {
                 actions.pan_to_workspace = Some(workspace.id);
             }
         }
+        Self::show_workspace_context_menu(&row_response, workspace, actions);
+
+        ui.add_space(2.0);
+        for panel in &workspace.panels {
+            self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
+        }
+        ui.add_space(8.0);
     }
 
     fn show_workspace_context_menu(
@@ -318,83 +332,108 @@ impl HorizonApp {
         panel: &SidebarPanelEntry,
         actions: &mut SidebarActions,
     ) {
-        let item_response = ui.vertical(|ui| {
-            ui.set_min_height(if panel.attention.is_some() { 46.0 } else { 30.0 });
-            ui.set_min_width(ui.available_width());
+        let row_height = if panel.attention.is_some() { 46.0 } else { 30.0 };
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), row_height)).1;
+        let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
+        let mut row_clicked = false;
+        paint_panel_row_bg(ui, row_rect, workspace.color, panel.is_focused, click_target_hovered);
 
-            ui.horizontal(|ui| {
-                ui.set_min_height(30.0);
-                ui.add_space(30.0);
-
-                let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, panel.is_focused);
-                ui.label(
-                    egui::RichText::new(icon)
-                        .color(icon_color)
-                        .size(10.0)
-                        .monospace()
-                        .strong(),
-                );
-                ui.add_space(4.0);
-
-                let title_width = (ui.available_width() - 28.0).max(48.0);
-                ui.add_sized(
-                    Vec2::new(title_width, 18.0),
-                    egui::Label::new(
-                        egui::RichText::new(&panel.title)
-                            .color(if panel.is_focused { theme::FG } else { theme::FG_SOFT })
-                            .size(12.5),
-                    )
-                    .truncate(),
-                );
-
-                let close =
-                    ui.add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
-                if close.clicked() {
-                    actions.close_panel = Some(panel.id);
-                }
-            });
-
-            if let Some(attention_item) = &panel.attention {
-                let (label, color) = sidebar_attention_tag(attention_item.severity);
+        let mut close_clicked = false;
+        ui.scope_builder(
+            UiBuilder::new().max_rect(row_rect).layout(Layout::top_down(Align::Min)),
+            |ui| {
                 ui.horizontal(|ui| {
-                    ui.add_space(56.0);
-                    ui.label(egui::RichText::new(label).size(8.5).color(color).strong());
-                    ui.add_space(4.0);
-                    ui.add_sized(
-                        Vec2::new(ui.available_width(), 14.0),
-                        egui::Label::new(
-                            egui::RichText::new(&attention_item.summary)
-                                .size(9.0)
-                                .color(theme::alpha(color, 180)),
-                        )
-                        .truncate(),
-                    );
-                });
-            }
-        });
+                    ui.set_min_height(30.0);
+                    ui.add_space(30.0);
 
-        let row_clicked =
-            item_response.response.interact(Sense::click()).clicked() && actions.close_panel != Some(panel.id);
+                    let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, panel.is_focused);
+                    let icon_response = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(icon)
+                                .color(icon_color)
+                                .size(10.0)
+                                .monospace()
+                                .strong(),
+                        )
+                        .sense(Sense::click()),
+                    );
+                    click_target_hovered |= icon_response.hovered();
+                    row_clicked |= icon_response.clicked();
+                    ui.add_space(4.0);
+
+                    let title_width = (ui.available_width() - 28.0).max(48.0);
+                    let title_response = ui.add_sized(
+                        Vec2::new(title_width, 18.0),
+                        egui::Label::new(
+                            egui::RichText::new(&panel.title)
+                                .color(if panel.is_focused { theme::FG } else { theme::FG_SOFT })
+                                .size(12.5),
+                        )
+                        .truncate()
+                        .sense(Sense::click()),
+                    );
+                    click_target_hovered |= title_response.hovered();
+                    row_clicked |= title_response.clicked();
+
+                    let close = ui
+                        .add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
+                    if close.clicked() {
+                        close_clicked = true;
+                    }
+                });
+
+                if let Some(attention_item) = &panel.attention {
+                    let (label, color) = sidebar_attention_tag(attention_item.severity);
+                    ui.horizontal(|ui| {
+                        ui.add_space(56.0);
+                        let tag_response = ui.add(
+                            egui::Label::new(egui::RichText::new(label).size(8.5).color(color).strong())
+                                .sense(Sense::click()),
+                        );
+                        click_target_hovered |= tag_response.hovered();
+                        row_clicked |= tag_response.clicked();
+                        ui.add_space(4.0);
+                        let summary_response = ui.add_sized(
+                            Vec2::new(ui.available_width(), 14.0),
+                            egui::Label::new(
+                                egui::RichText::new(&attention_item.summary)
+                                    .size(9.0)
+                                    .color(theme::alpha(color, 180)),
+                            )
+                            .truncate()
+                            .sense(Sense::click()),
+                        );
+                        click_target_hovered |= summary_response.hovered();
+                        row_clicked |= summary_response.clicked();
+                    });
+                }
+            },
+        );
+
+        let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(row_rect.max.x - 28.0, row_rect.max.y));
+        let row_response = ui.interact(
+            row_click_rect,
+            ui.make_persistent_id(("sidebar_panel_click", panel.id.0)),
+            Sense::click(),
+        );
+        click_target_hovered |= row_response.hovered();
+        row_clicked |= row_response.clicked();
+
+        if click_target_hovered {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+
+        if close_clicked {
+            actions.close_panel = Some(panel.id);
+        }
+
+        let row_clicked = row_clicked && !close_clicked;
         if row_clicked {
             actions.focus_panel = Some(panel.id);
             actions.pan_to_panel = Some(panel.id);
         }
 
-        self.show_sidebar_panel_context_menu(
-            &item_response.response,
-            workspace,
-            workspace_data,
-            panel.id,
-            panel.kind,
-            actions,
-        );
-        paint_panel_row_bg(
-            ui,
-            item_response.response.rect,
-            workspace.color,
-            panel.is_focused,
-            item_response.response.hovered(),
-        );
+        self.show_sidebar_panel_context_menu(&row_response, workspace, workspace_data, panel.id, panel.kind, actions);
         ui.add_space(1.0);
     }
 
