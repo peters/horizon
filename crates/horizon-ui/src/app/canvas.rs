@@ -8,8 +8,9 @@ use horizon_core::WorkspaceId;
 
 use crate::theme;
 
-use super::util::{format_grid_position, paint_canvas_glow, rounded_i32};
-use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
+use super::root_chrome::effective_sidebar_width;
+use super::util::{format_grid_position, paint_canvas_glow, rounded_i32, viewport_local_rect};
+use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
 
 const GRID_SPACING: f32 = 22.0;
 const GRID_DOT_DIAMETER: f32 = 2.3;
@@ -245,7 +246,7 @@ impl HorizonApp {
             );
 
         let hud_left = if self.sidebar_visible {
-            SIDEBAR_WIDTH + 16.0
+            effective_sidebar_width(viewport_local_rect(ctx).width()) + 16.0
         } else {
             16.0
         };
