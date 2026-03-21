@@ -27,7 +27,7 @@ impl<'a> TerminalView<'a> {
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
     #[profiling::function]
-    pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool) -> bool {
+    pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool, interactive: bool) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
         let line_height = metrics.line_height;
@@ -39,16 +39,18 @@ impl<'a> TerminalView<'a> {
         self.panel
             .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
 
-        let interaction = terminal_interaction(ui, layout, self.panel.id.0);
-        handle_terminal_pointer_input(
-            ui,
-            self.panel,
-            &interaction,
-            is_active_panel,
-            &metrics,
-            new_rows,
-            new_cols,
-        );
+        let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);
+        if interactive {
+            handle_terminal_pointer_input(
+                ui,
+                self.panel,
+                &interaction,
+                is_active_panel,
+                &metrics,
+                new_rows,
+                new_cols,
+            );
+        }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
             .memory(egui::Memory::focused)
@@ -57,7 +59,7 @@ impl<'a> TerminalView<'a> {
             window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
         self.panel.set_focused(has_terminal_focus);
 
-        if has_terminal_focus {
+        if interactive && has_terminal_focus {
             ui.memory_mut(|mem| {
                 mem.set_focus_lock_filter(
                     interaction.body.id,
@@ -113,7 +115,7 @@ impl<'a> TerminalView<'a> {
             self.grid_cache = grid_cache;
         }
 
-        if has_terminal_focus {
+        if interactive && has_terminal_focus {
             handle_terminal_keyboard_input(ui, self.panel);
         }
 
