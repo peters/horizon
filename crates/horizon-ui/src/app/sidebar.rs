@@ -1,7 +1,9 @@
 mod toolbar;
 
+use std::collections::HashMap;
+
 use egui::{Button, Color32, Context, CornerRadius, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, WorkspaceId, WorkspaceLayout};
+use horizon_core::{AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
 
@@ -16,8 +18,17 @@ struct WorkspaceSidebarEntry {
     color: Color32,
     is_active: bool,
     detached: bool,
-    panel_ids: Vec<PanelId>,
+    panels: Vec<SidebarPanelEntry>,
     attention_count: usize,
+}
+
+#[derive(Clone)]
+struct SidebarPanelEntry {
+    id: PanelId,
+    title: String,
+    kind: PanelKind,
+    is_focused: bool,
+    attention: Option<AttentionItem>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -67,20 +78,40 @@ impl HorizonApp {
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
         let attention_enabled = self.template_config.features.attention_feed;
+        let panel_data = self
+            .board
+            .panels
+            .iter()
+            .map(|panel| {
+                let attention = if attention_enabled {
+                    self.board.unresolved_attention_for_panel(panel.id).cloned()
+                } else {
+                    None
+                };
+                (
+                    panel.id,
+                    SidebarPanelEntry {
+                        id: panel.id,
+                        title: panel.display_title().into_owned(),
+                        kind: panel.kind,
+                        is_focused: self.board.focused == Some(panel.id),
+                        attention,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
                 let (r, g, b) = workspace.accent();
-                let panel_ids = workspace.panels.clone();
-                let attention_count = if attention_enabled {
-                    panel_ids
-                        .iter()
-                        .filter(|panel_id| self.board.unresolved_attention_for_panel(**panel_id).is_some())
-                        .count()
-                } else {
-                    0
-                };
+                let panels = workspace
+                    .panels
+                    .iter()
+                    .filter_map(|panel_id| panel_data.get(panel_id).cloned())
+                    .collect::<Vec<_>>();
+                let attention_count = panels.iter().filter(|panel| panel.attention.is_some()).count();
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
@@ -88,7 +119,7 @@ impl HorizonApp {
                     color: Color32::from_rgb(r, g, b),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),
-                    panel_ids,
+                    panels,
                     attention_count,
                 }
             })
@@ -196,8 +227,8 @@ impl HorizonApp {
         );
 
         ui.add_space(2.0);
-        for panel_id in workspace.panel_ids.iter().copied() {
-            self.render_sidebar_panel(ui, workspace, workspace_data, panel_id, actions);
+        for panel in &workspace.panels {
+            self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
         }
         ui.add_space(8.0);
     }
@@ -211,9 +242,9 @@ impl HorizonApp {
         let interact_id = ui.make_persistent_id(("sidebar_ws", workspace.id.0));
         let click = ui.interact(response.rect, interact_id, Sense::click());
         if click.clicked() {
-            if workspace.panel_ids.len() == 1 {
-                actions.focus_panel = Some(workspace.panel_ids[0]);
-                actions.pan_to_panel = Some(workspace.panel_ids[0]);
+            if workspace.panels.len() == 1 {
+                actions.focus_panel = Some(workspace.panels[0].id);
+                actions.pan_to_panel = Some(workspace.panels[0].id);
             } else {
                 actions.pan_to_workspace = Some(workspace.id);
             }
@@ -284,30 +315,18 @@ impl HorizonApp {
         ui: &mut egui::Ui,
         workspace: &WorkspaceSidebarEntry,
         workspace_data: &[WorkspaceSidebarEntry],
-        panel_id: PanelId,
+        panel: &SidebarPanelEntry,
         actions: &mut SidebarActions,
     ) {
-        let Some(panel) = self.board.panel(panel_id) else {
-            return;
-        };
-        let title = panel.display_title().into_owned();
-        let kind = panel.kind;
-        let is_focused = self.board.focused == Some(panel_id);
-        let attention = if self.template_config.features.attention_feed {
-            self.board.unresolved_attention_for_panel(panel_id).cloned()
-        } else {
-            None
-        };
-
         let item_response = ui.vertical(|ui| {
-            ui.set_min_height(if attention.is_some() { 46.0 } else { 30.0 });
+            ui.set_min_height(if panel.attention.is_some() { 46.0 } else { 30.0 });
             ui.set_min_width(ui.available_width());
 
             ui.horizontal(|ui| {
                 ui.set_min_height(30.0);
                 ui.add_space(30.0);
 
-                let (icon, icon_color) = panel_kind_icon(kind, workspace.color, is_focused);
+                let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, panel.is_focused);
                 ui.label(
                     egui::RichText::new(icon)
                         .color(icon_color)
@@ -321,8 +340,8 @@ impl HorizonApp {
                 ui.add_sized(
                     Vec2::new(title_width, 18.0),
                     egui::Label::new(
-                        egui::RichText::new(&title)
-                            .color(if is_focused { theme::FG } else { theme::FG_SOFT })
+                        egui::RichText::new(&panel.title)
+                            .color(if panel.is_focused { theme::FG } else { theme::FG_SOFT })
                             .size(12.5),
                     )
                     .truncate(),
@@ -331,11 +350,11 @@ impl HorizonApp {
                 let close =
                     ui.add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
                 if close.clicked() {
-                    actions.close_panel = Some(panel_id);
+                    actions.close_panel = Some(panel.id);
                 }
             });
 
-            if let Some(attention_item) = &attention {
+            if let Some(attention_item) = &panel.attention {
                 let (label, color) = sidebar_attention_tag(attention_item.severity);
                 ui.horizontal(|ui| {
                     ui.add_space(56.0);
@@ -355,25 +374,25 @@ impl HorizonApp {
         });
 
         let row_clicked =
-            item_response.response.interact(Sense::click()).clicked() && actions.close_panel != Some(panel_id);
+            item_response.response.interact(Sense::click()).clicked() && actions.close_panel != Some(panel.id);
         if row_clicked {
-            actions.focus_panel = Some(panel_id);
-            actions.pan_to_panel = Some(panel_id);
+            actions.focus_panel = Some(panel.id);
+            actions.pan_to_panel = Some(panel.id);
         }
 
         self.show_sidebar_panel_context_menu(
             &item_response.response,
             workspace,
             workspace_data,
-            panel_id,
-            kind,
+            panel.id,
+            panel.kind,
             actions,
         );
         paint_panel_row_bg(
             ui,
             item_response.response.rect,
             workspace.color,
-            is_focused,
+            panel.is_focused,
             item_response.response.hovered(),
         );
         ui.add_space(1.0);
