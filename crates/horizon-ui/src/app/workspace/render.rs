@@ -12,6 +12,7 @@ use super::toolbar::{
 };
 use super::{WorkspaceInteraction, WorkspaceVisual};
 
+#[profiling::function]
 pub(super) fn render_workspace_visual(
     ctx: &Context,
     workspace: &WorkspaceVisual,
