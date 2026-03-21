@@ -96,9 +96,9 @@ impl HorizonApp {
     fn render_toolbar_fps_meter(&self, ui: &mut egui::Ui) {
         let stats = self.frame_stats.snapshot();
         let value = if stats.sample_count == 0 {
-            "--".to_string()
+            "0".to_string()
         } else {
-            format!("{:>3.0}", stats.fps)
+            format!("{:.0}", stats.fps)
         };
         let accent = if stats.sample_count == 0 {
             theme::BORDER_SUBTLE
@@ -139,7 +139,7 @@ impl HorizonApp {
         );
 
         let tooltip = if stats.sample_count == 0 {
-            "Collecting frame samples...".to_string()
+            "Idle. The meter resumes once Horizon redraws again.".to_string()
         } else {
             format!(
                 "{:.0} FPS average over {} frames ({:.2} ms/frame)",

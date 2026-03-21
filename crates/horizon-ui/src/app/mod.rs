@@ -277,7 +277,11 @@ fn resolve_shortcuts(config: &Config) -> AppShortcuts {
 impl eframe::App for HorizonApp {
     #[profiling::function]
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        self.frame_stats.record_frame(Instant::now());
+        let now = Instant::now();
+        self.frame_stats.record_frame(now);
+        if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
+            ctx.request_repaint_after(delay);
+        }
         self.exit_on_close_request(ctx);
 
         if self.shutdown_progress.is_some() {

@@ -42,6 +42,17 @@ impl FrameStats {
         self.last_frame_at = Some(now);
     }
 
+    pub(super) fn idle_refresh_after(&self, now: Instant) -> Option<Duration> {
+        if self.frame_times_ms.is_empty() {
+            return None;
+        }
+
+        let last_frame_at = self.last_frame_at?;
+        STALE_SAMPLE_CUTOFF
+            .checked_sub(now.saturating_duration_since(last_frame_at))
+            .filter(|delay| !delay.is_zero())
+    }
+
     pub(super) fn snapshot(&self) -> FrameStatsSnapshot {
         let sample_count = self.frame_times_ms.len();
         if sample_count == 0 {
@@ -125,5 +136,20 @@ mod tests {
 
         frame_stats.record_frame(start + Duration::from_secs(2) + Duration::from_millis(10));
         assert_eq!(frame_stats.snapshot().sample_count, 1);
+    }
+
+    #[test]
+    fn frame_stats_request_one_idle_refresh_before_samples_go_stale() {
+        let mut frame_stats = FrameStats::default();
+        let start = Instant::now();
+
+        frame_stats.record_frame(start);
+        frame_stats.record_frame(start + Duration::from_millis(16));
+
+        assert_eq!(
+            frame_stats.idle_refresh_after(start + Duration::from_millis(116)),
+            Some(Duration::from_millis(400))
+        );
+        assert_eq!(frame_stats.idle_refresh_after(start + Duration::from_millis(516)), None);
     }
 }
