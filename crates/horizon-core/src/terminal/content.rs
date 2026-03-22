@@ -271,6 +271,40 @@ mod tests {
     }
 
     #[test]
+    fn combining_marks_stay_attached_to_base_cell() {
+        let mut base_cell = Cell {
+            c: 'e',
+            ..Cell::default()
+        };
+        base_cell.push_zerowidth('\u{0301}');
+        let x_cell = Cell {
+            c: 'x',
+            ..Cell::default()
+        };
+
+        let line = reconstruct_line(&[(0, base_cell), (1, x_cell)]);
+
+        assert_eq!(line, "e\u{0301}x");
+    }
+
+    #[test]
+    fn variation_selectors_stay_attached_to_base_cell() {
+        let mut base_cell = Cell {
+            c: '✈',
+            ..Cell::default()
+        };
+        base_cell.push_zerowidth('\u{fe0f}');
+        let x_cell = Cell {
+            c: 'x',
+            ..Cell::default()
+        };
+
+        let line = reconstruct_line(&[(0, base_cell), (1, x_cell)]);
+
+        assert_eq!(line, "✈\u{fe0f}x");
+    }
+
+    #[test]
     fn wide_glyphs_consume_two_terminal_columns() {
         let wide_cell = Cell {
             c: '你',

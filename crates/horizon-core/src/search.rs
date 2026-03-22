@@ -1,5 +1,7 @@
-use crate::board::Board;
-use crate::panel::PanelId;
+use regex::RegexBuilder;
+
+use super::board::Board;
+use super::panel::PanelId;
 
 /// A single match within a terminal panel.
 #[derive(Clone, Debug)]
@@ -117,31 +119,43 @@ fn search_lines(lines: &[String], query: &str, options: &SearchOptions) -> Vec<S
 }
 
 fn search_lines_literal(lines: &[String], query: &str, case_sensitive: bool, matches: &mut Vec<SearchMatch>) {
-    let query_lower = if case_sensitive {
-        String::new()
-    } else {
-        query.to_ascii_lowercase()
-    };
-    let needle = if case_sensitive { query } else { &query_lower };
+    if case_sensitive {
+        for (line_index, line) in lines.iter().enumerate() {
+            let mut start = 0;
+            while let Some(pos) = line[start..].find(query) {
+                let byte_offset = start + pos;
+                matches.push(SearchMatch {
+                    line_index,
+                    byte_offset,
+                    byte_len: query.len(),
+                });
+                start = byte_offset + query.len().max(1);
+                if matches.len() >= MAX_MATCHES_PER_PANEL {
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
+    let folded_query = lowercase_with_byte_offsets(query).folded;
 
     for (line_index, line) in lines.iter().enumerate() {
-        let haystack;
-        let search_in = if case_sensitive {
-            line.as_str()
-        } else {
-            haystack = line.to_ascii_lowercase();
-            haystack.as_str()
-        };
-
+        let folded_line = lowercase_with_byte_offsets(line);
         let mut start = 0;
-        while let Some(pos) = search_in[start..].find(needle) {
-            let byte_offset = start + pos;
+
+        while let Some(pos) = folded_line.folded[start..].find(&folded_query) {
+            let folded_start = start + pos;
+            let folded_end = folded_start + folded_query.len();
+            let byte_offset = folded_line.start_offsets[folded_start];
+            let byte_end = folded_line.end_offsets[folded_end - 1];
+
             matches.push(SearchMatch {
                 line_index,
                 byte_offset,
-                byte_len: query.len(),
+                byte_len: byte_end.saturating_sub(byte_offset),
             });
-            start = byte_offset + needle.len().max(1);
+            start = folded_end.max(folded_start + 1);
             if matches.len() >= MAX_MATCHES_PER_PANEL {
                 return;
             }
@@ -150,13 +164,7 @@ fn search_lines_literal(lines: &[String], query: &str, case_sensitive: bool, mat
 }
 
 fn search_lines_regex(lines: &[String], pattern: &str, case_sensitive: bool, matches: &mut Vec<SearchMatch>) {
-    let full_pattern = if case_sensitive {
-        pattern.to_string()
-    } else {
-        format!("(?i){pattern}")
-    };
-
-    let Ok(re) = regex_lite::Regex::new(&full_pattern) else {
+    let Ok(re) = RegexBuilder::new(pattern).case_insensitive(!case_sensitive).build() else {
         return;
     };
 
@@ -171,6 +179,35 @@ fn search_lines_regex(lines: &[String], pattern: &str, case_sensitive: bool, mat
                 return;
             }
         }
+    }
+}
+
+struct LowercasedWithOffsets {
+    folded: String,
+    start_offsets: Vec<usize>,
+    end_offsets: Vec<usize>,
+}
+
+fn lowercase_with_byte_offsets(input: &str) -> LowercasedWithOffsets {
+    let mut folded = String::new();
+    let mut start_offsets = Vec::new();
+    let mut end_offsets = Vec::new();
+
+    for (byte_offset, ch) in input.char_indices() {
+        let char_end = byte_offset + ch.len_utf8();
+        for lowered in ch.to_lowercase() {
+            let mut utf8 = [0; 4];
+            let lowered = lowered.encode_utf8(&mut utf8);
+            start_offsets.extend(std::iter::repeat_n(byte_offset, lowered.len()));
+            end_offsets.extend(std::iter::repeat_n(char_end, lowered.len()));
+            folded.push_str(lowered);
+        }
+    }
+
+    LowercasedWithOffsets {
+        folded,
+        start_offsets,
+        end_offsets,
     }
 }
 
@@ -207,6 +244,18 @@ mod tests {
     }
 
     #[test]
+    fn literal_case_insensitive_matches_unicode_letters() {
+        let text = lines(&["åäö", "ÅÄÖ", "no match"]);
+        let results = search_lines(&text, "å", &SearchOptions::default());
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].line_index, 0);
+        assert_eq!(results[0].byte_offset, 0);
+        assert_eq!(results[1].line_index, 1);
+        assert_eq!(results[1].byte_offset, 0);
+    }
+
+    #[test]
     fn regex_search_finds_pattern() {
         let text = lines(&["error: file not found", "warning: deprecated", "info: ok"]);
         let opts = SearchOptions {
@@ -216,6 +265,30 @@ mod tests {
         let results = search_lines(&text, r"error|warning", &opts);
 
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn regex_case_insensitive_matches_unicode_letters() {
+        let text = lines(&["build Å done", "build å done"]);
+        let opts = SearchOptions {
+            regex: true,
+            ..SearchOptions::default()
+        };
+        let results = search_lines(&text, "å", &opts);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].byte_offset, "build ".len());
+        assert_eq!(results[1].byte_offset, "build ".len());
+    }
+
+    #[test]
+    fn literal_search_matches_variation_selector_sequences() {
+        let text = lines(&["symbols: ✈️ ♥ ©", "symbols: ✈ ♥ ©"]);
+        let results = search_lines(&text, "✈️", &SearchOptions::default());
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].line_index, 0);
+        assert_eq!(results[0].byte_offset, "symbols: ".len());
     }
 
     #[test]
