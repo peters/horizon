@@ -70,10 +70,13 @@ impl HorizonApp {
 
         let screen_pos = self.file_hover_positions.remove(&viewport_id).or(pointer_pos);
 
-        if let Some(panel_id) = self.terminal_drop_target(fullscreen_panel, screen_pos, scope)
-            && self.paste_dropped_paths_into_terminal(panel_id, &dropped)
-        {
-            return;
+        if let Some(panel_id) = self.terminal_drop_target(fullscreen_panel, screen_pos, scope) {
+            if self.maybe_start_ssh_file_drop(panel_id, &dropped) {
+                return;
+            }
+            if self.paste_dropped_paths_into_terminal(panel_id, &dropped) {
+                return;
+            }
         }
 
         self.open_dropped_editor_files(ctx, canvas_rect, workspace_id, screen_pos, &dropped);

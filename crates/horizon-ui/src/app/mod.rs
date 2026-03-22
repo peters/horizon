@@ -15,6 +15,7 @@ mod session;
 mod settings;
 pub(crate) mod shortcuts;
 mod sidebar;
+mod ssh_upload;
 mod startup_session;
 pub(crate) mod util;
 mod view;
@@ -202,6 +203,8 @@ pub struct HorizonApp {
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_positions: HashMap<ViewportId, Pos2>,
+    ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
+    ssh_upload_destinations: HashMap<String, String>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
@@ -281,6 +284,8 @@ impl HorizonApp {
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_positions: HashMap::new(),
+            ssh_upload_flow: None,
+            ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,

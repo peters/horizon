@@ -34,10 +34,38 @@ impl SshConnection {
 
     #[must_use]
     pub fn to_command_args(&self) -> Vec<String> {
+        let mut args = self.base_transport_args("-p", false);
+        args.push(self.transport_target());
+
+        if let Some(remote_command) = non_empty(self.remote_command.as_deref()) {
+            args.push(remote_command.to_string());
+        }
+
+        args
+    }
+
+    #[must_use]
+    pub fn ssh_transport_args(&self) -> Vec<String> {
+        let mut args = self.base_transport_args("-p", true);
+        args.push(self.transport_target());
+        args
+    }
+
+    #[must_use]
+    pub fn scp_transport_args(&self) -> Vec<String> {
+        self.base_transport_args("-P", true)
+    }
+
+    #[must_use]
+    pub fn transport_target(&self) -> String {
+        self.display_label()
+    }
+
+    fn base_transport_args(&self, port_flag: &str, batch_mode: bool) -> Vec<String> {
         let mut args = Vec::new();
 
         if let Some(port) = self.port {
-            args.extend(["-p".to_string(), port.to_string()]);
+            args.extend([port_flag.to_string(), port.to_string()]);
         }
         if let Some(identity_file) = self.identity_file.as_deref() {
             args.extend(["-i".to_string(), expand_tilde(identity_file)]);
@@ -45,14 +73,11 @@ impl SshConnection {
         if let Some(proxy_jump) = non_empty(self.proxy_jump.as_deref()) {
             args.extend(["-J".to_string(), proxy_jump.to_string()]);
         }
-
-        args.extend(self.extra_args.iter().cloned());
-        args.push(self.display_label());
-
-        if let Some(remote_command) = non_empty(self.remote_command.as_deref()) {
-            args.push(remote_command.to_string());
+        if batch_mode {
+            args.extend(["-o".to_string(), "BatchMode=yes".to_string()]);
         }
 
+        args.extend(self.extra_args.iter().cloned());
         args
     }
 }
@@ -114,6 +139,40 @@ mod tests {
                 "StrictHostKeyChecking=no".to_string(),
                 "deploy@prod".to_string(),
                 "tmux attach".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ssh_transport_args_force_batch_mode_without_remote_command() {
+        let connection = SshConnection {
+            host: "prod".to_string(),
+            user: Some("deploy".to_string()),
+            remote_command: Some("tmux attach".to_string()),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            connection.ssh_transport_args(),
+            vec!["-o".to_string(), "BatchMode=yes".to_string(), "deploy@prod".to_string(),]
+        );
+    }
+
+    #[test]
+    fn scp_transport_args_use_uppercase_port_flag() {
+        let connection = SshConnection {
+            host: "prod".to_string(),
+            port: Some(2222),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            connection.scp_transport_args(),
+            vec![
+                "-P".to_string(),
+                "2222".to_string(),
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
             ]
         );
     }

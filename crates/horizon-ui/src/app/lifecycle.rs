@@ -138,6 +138,7 @@ impl HorizonApp {
         self.poll_primary_selection_paste();
         self.maybe_refresh_session_catalog();
         self.poll_remote_hosts_refresh();
+        self.poll_ssh_upload_flow();
         self.poll_git_watchers();
         self.poll_config_reload();
 
@@ -365,6 +366,7 @@ impl HorizonApp {
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);
+        self.render_ssh_upload_flow(ctx);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 
