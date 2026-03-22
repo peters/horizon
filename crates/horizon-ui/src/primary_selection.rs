@@ -4,7 +4,7 @@ use horizon_core::PanelId;
 #[cfg(target_os = "linux")]
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 #[cfg(target_os = "linux")]
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 
 pub struct PrimarySelectionPaste {
     pub panel_id: PanelId,
@@ -84,9 +84,8 @@ impl PrimarySelection {
 
     pub fn try_recv_paste(&mut self) -> Option<PrimarySelectionPaste> {
         #[cfg(target_os = "linux")]
-        match self.paste_rx.try_recv() {
-            Ok(result) => Some(result),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+        {
+            self.paste_rx.try_recv().ok()
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -120,7 +119,7 @@ fn spawn_owner_worker() -> Sender<OwnerCommand> {
 fn run_owner_worker(rx: Receiver<OwnerCommand>) {
     let mut clipboard = None;
 
-    while let Ok(command) = rx.recv() {
+    for command in rx {
         match command {
             OwnerCommand::Set(text) => set_primary_text(&mut clipboard, &text),
         }
