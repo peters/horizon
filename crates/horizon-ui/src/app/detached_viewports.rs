@@ -167,6 +167,7 @@ impl HorizonApp {
             egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
         );
         self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
+        self.render_ssh_upload_flow(ctx);
         if self.pan_target.is_some() {
             ctx.request_repaint();
         }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use horizon_core::SshConnection;
 
 const SSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const SSH_PROBE_CONNECT_TIMEOUT_SECS: u16 = 5;
 
 const RESOLVE_REMOTE_DIR_SCRIPT: &str = r#"
 path=$1
@@ -80,7 +81,8 @@ impl LocalUploadFile {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PreparationResult {
-    pub suggested_destination: String,
+    pub suggested_destination: Option<String>,
+    pub ssh_upload_error: Option<String>,
     pub taildrop_target: Option<String>,
 }
 
@@ -162,14 +164,33 @@ pub(super) fn spawn_preparation(
 ) -> Receiver<Result<PreparationResult, String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let taildrop_target = detect_taildrop_target(&connection.host).unwrap_or(None);
-        let suggested_destination = match last_destination {
-            Some(path) if !path.trim().is_empty() => path,
-            _ => probe_remote_directory(&connection).unwrap_or_else(|_| "~".to_string()),
+        let host = connection.host.clone();
+        let taildrop_target = match detect_taildrop_target(&host) {
+            Ok(target) => target,
+            Err(error) => {
+                tracing::warn!(host = %host, %error, "failed to detect Taildrop target");
+                None
+            }
+        };
+        let (suggested_destination, ssh_upload_error) = match probe_remote_directory(&connection) {
+            Ok(probed_directory) => {
+                let suggested_destination = match last_destination {
+                    Some(path) if !path.trim().is_empty() => path,
+                    _ => probed_directory,
+                };
+                tracing::debug!(host = %host, destination = %suggested_destination, "ssh upload available");
+                (Some(suggested_destination), None)
+            }
+            Err(error) => {
+                let ssh_upload_error = classify_ssh_probe_error(&error);
+                tracing::warn!(host = %host, %error, "ssh upload unavailable");
+                (None, Some(ssh_upload_error))
+            }
         };
 
         let _ = tx.send(Ok(PreparationResult {
             suggested_destination,
+            ssh_upload_error,
             taildrop_target,
         }));
     });
@@ -182,7 +203,12 @@ pub(super) fn spawn_remote_directory_listing(
 ) -> Receiver<Result<RemoteDirectoryListing, String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(list_remote_directories(&connection, &requested_path));
+        let host = connection.host.clone();
+        let result = list_remote_directories(&connection, &requested_path);
+        if let Err(error) = &result {
+            tracing::warn!(host = %host, path = %requested_path, %error, "remote directory listing failed");
+        }
+        let _ = tx.send(result);
     });
     rx
 }
@@ -210,6 +236,12 @@ fn run_upload_worker(
     control_rx: &Receiver<UploadControl>,
     progress_tx: &Sender<UploadMessage>,
 ) {
+    tracing::debug!(
+        host = %connection.host,
+        file_count = files.len(),
+        transport = ?transport,
+        "starting upload worker",
+    );
     let total_bytes = files.iter().map(|file| file.size_bytes).sum();
     let total_files = files.len();
     let mut completed_files = 0;
@@ -219,6 +251,7 @@ fn run_upload_worker(
         UploadTransport::Ssh { destination_dir } => match resolve_remote_directory(connection, destination_dir) {
             Ok(path) => Some(path),
             Err(error) => {
+                tracing::warn!(host = %connection.host, destination = %destination_dir, %error, "ssh upload setup failed");
                 let _ = progress_tx.send(UploadMessage::Finished(Err(error)));
                 return;
             }
@@ -254,6 +287,7 @@ fn run_upload_worker(
                 completed_bytes += file.size_bytes;
             }
             Err(WorkerExit::Cancelled) => {
+                tracing::debug!(host = %connection.host, file = %file.name, "upload cancelled");
                 let _ = progress_tx.send(UploadMessage::Finished(Ok(UploadOutcome {
                     cancelled: true,
                     completed_files,
@@ -265,12 +299,14 @@ fn run_upload_worker(
                 return;
             }
             Err(WorkerExit::Failed(error)) => {
+                tracing::warn!(host = %connection.host, file = %file.name, %error, "upload command failed");
                 let _ = progress_tx.send(UploadMessage::Finished(Err(error)));
                 return;
             }
         }
     }
 
+    tracing::debug!(host = %connection.host, completed_files, "upload worker finished");
     let _ = progress_tx.send(UploadMessage::Finished(Ok(UploadOutcome {
         cancelled: false,
         completed_files,
@@ -366,7 +402,7 @@ fn list_remote_directories(connection: &SshConnection, requested_path: &str) -> 
 fn run_ssh_script(connection: &SshConnection, script: &str, arg: &str) -> Result<String, String> {
     let remote_command = build_remote_shell_command(script, arg);
     let output = Command::new("ssh")
-        .args(connection.ssh_transport_args())
+        .args(connection.ssh_probe_transport_args(SSH_PROBE_CONNECT_TIMEOUT_SECS))
         .arg(remote_command)
         .output()
         .map_err(|error| format!("failed to launch ssh probe: {error}"))?;
@@ -381,7 +417,7 @@ fn run_ssh_script(connection: &SshConnection, script: &str, arg: &str) -> Result
 }
 
 fn build_remote_shell_command(script: &str, arg: &str) -> String {
-    format!("sh -lc {} -- {}", shell_escape(script.trim()), shell_escape(arg),)
+    format!("sh -c {} -- {}", shell_escape(script.trim()), shell_escape(arg),)
 }
 
 fn parse_remote_directory_listing(output: &str) -> Result<RemoteDirectoryListing, String> {
@@ -413,17 +449,15 @@ fn sort_remote_entries(left: &str, right: &str) -> std::cmp::Ordering {
 }
 
 fn detect_taildrop_target(host: &str) -> Result<Option<String>, String> {
-    let ip_output = Command::new("tailscale").args(["ip", "-4", host]).output();
-
-    let ip_output = match ip_output {
+    let ip_output = match Command::new("tailscale").args(["ip", host]).output() {
         Ok(output) if output.status.success() => output,
         Ok(_) => return Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("failed to run tailscale ip: {error}")),
     };
 
-    let ip = String::from_utf8_lossy(&ip_output.stdout).trim().to_string();
-    if ip.is_empty() {
+    let ips = parse_tailscale_ips(&String::from_utf8_lossy(&ip_output.stdout));
+    if ips.is_empty() {
         return Ok(None);
     }
 
@@ -439,8 +473,17 @@ fn detect_taildrop_target(host: &str) -> Result<Option<String>, String> {
     let targets = parse_taildrop_targets(&String::from_utf8_lossy(&targets_output.stdout));
     Ok(targets
         .into_iter()
-        .find(|target| target.ip == ip)
+        .find(|target| ips.iter().any(|ip| ip == &target.ip))
         .map(|target| target.name.unwrap_or(target.ip)))
+}
+
+fn parse_tailscale_ips(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn parse_taildrop_targets(output: &str) -> Vec<TaildropTarget> {
@@ -491,7 +534,7 @@ fn run_taildrop_upload(file: &LocalUploadFile, target: &str) -> Result<std::proc
 fn scp_destination(connection: &SshConnection, destination_dir: &str) -> String {
     format!(
         "{}:{}",
-        connection.transport_target(),
+        connection.scp_transport_target(),
         scp_quote_path(Path::new(destination_dir)),
     )
 }
@@ -504,11 +547,42 @@ fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+fn classify_ssh_probe_error(error: &str) -> String {
+    if requires_interactive_ssh_auth(error) {
+        return "SSH upload requires non-interactive authentication for new SSH/SCP commands. This session appears to need a password, OTP, or hardware-key prompt, so drag-and-drop SSH upload is unavailable.".to_string();
+    }
+
+    format!("SSH upload is unavailable for this session: {error}")
+}
+
+fn requires_interactive_ssh_auth(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    [
+        "permission denied",
+        "keyboard-interactive",
+        "password:",
+        "passphrase",
+        "verification code",
+        "one-time password",
+        "confirm user presence",
+        "agent refused operation",
+        "sign_and_send_pubkey",
+        "batchmode",
+        "no tty present",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 #[cfg(test)]
 mod tests {
+    use horizon_core::SshConnection;
     use std::path::Path;
 
-    use super::{build_remote_shell_command, parse_remote_directory_listing, parse_taildrop_targets, scp_quote_path};
+    use super::{
+        build_remote_shell_command, classify_ssh_probe_error, parse_remote_directory_listing, parse_taildrop_targets,
+        parse_tailscale_ips, scp_destination, scp_quote_path,
+    };
 
     #[test]
     fn parse_taildrop_targets_reads_ip_and_name() {
@@ -532,11 +606,39 @@ mod tests {
     fn build_remote_shell_command_quotes_script_and_argument() {
         let command = build_remote_shell_command("printf '%s' \"$1\"", "/tmp/with space");
 
-        assert_eq!(command, "sh -lc 'printf '\"'\"'%s'\"'\"' \"$1\"' -- '/tmp/with space'");
+        assert_eq!(command, "sh -c 'printf '\"'\"'%s'\"'\"' \"$1\"' -- '/tmp/with space'");
     }
 
     #[test]
     fn scp_quote_path_wraps_spaces_in_single_quotes() {
         assert_eq!(scp_quote_path(Path::new("/tmp/with space")), "'/tmp/with space'");
+    }
+
+    #[test]
+    fn parse_tailscale_ips_reads_ipv4_and_ipv6_lines() {
+        let ips = parse_tailscale_ips("100.70.83.123\nfd7a:115c:a1e0::123\n");
+
+        assert_eq!(ips, vec!["100.70.83.123", "fd7a:115c:a1e0::123"]);
+    }
+
+    #[test]
+    fn classify_ssh_probe_error_marks_permission_denied_as_interactive_auth() {
+        let error = classify_ssh_probe_error("Permission denied (publickey,keyboard-interactive).");
+
+        assert!(error.contains("requires non-interactive authentication"));
+    }
+
+    #[test]
+    fn scp_destination_brackets_ipv6_literals() {
+        let connection = SshConnection {
+            host: "2001:db8::5".to_string(),
+            user: Some("deploy".to_string()),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            scp_destination(&connection, "/srv/uploads"),
+            "deploy@[2001:db8::5]:'/srv/uploads'"
+        );
     }
 }

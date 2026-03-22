@@ -52,8 +52,24 @@ impl SshConnection {
     }
 
     #[must_use]
+    pub fn ssh_probe_transport_args(&self, connect_timeout_secs: u16) -> Vec<String> {
+        let mut args = self.base_transport_args("-p", true);
+        args.extend(["-o".to_string(), format!("ConnectTimeout={connect_timeout_secs}")]);
+        args.push(self.transport_target());
+        args
+    }
+
+    #[must_use]
     pub fn scp_transport_args(&self) -> Vec<String> {
         self.base_transport_args("-P", true)
+    }
+
+    #[must_use]
+    pub fn scp_transport_target(&self) -> String {
+        self.user.as_deref().filter(|user| !user.trim().is_empty()).map_or_else(
+            || scp_host(&self.host),
+            |user| format!("{user}@{}", scp_host(&self.host)),
+        )
     }
 
     #[must_use]
@@ -97,6 +113,15 @@ fn expand_tilde(path: &str) -> String {
     }
 
     path.to_string()
+}
+
+fn scp_host(host: &str) -> String {
+    let trimmed = host.trim();
+    if trimmed.contains(':') && !trimmed.starts_with('[') && !trimmed.ends_with(']') {
+        return format!("[{trimmed}]");
+    }
+
+    trimmed.to_string()
 }
 
 #[cfg(test)]
@@ -159,6 +184,25 @@ mod tests {
     }
 
     #[test]
+    fn ssh_probe_transport_args_add_connect_timeout_before_target() {
+        let connection = SshConnection {
+            host: "prod".to_string(),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            connection.ssh_probe_transport_args(5),
+            vec![
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "ConnectTimeout=5".to_string(),
+                "prod".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn scp_transport_args_use_uppercase_port_flag() {
         let connection = SshConnection {
             host: "prod".to_string(),
@@ -175,5 +219,16 @@ mod tests {
                 "BatchMode=yes".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn scp_transport_target_brackets_ipv6_literals() {
+        let connection = SshConnection {
+            host: "2001:db8::5".to_string(),
+            user: Some("deploy".to_string()),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(connection.scp_transport_target(), "deploy@[2001:db8::5]");
     }
 }
