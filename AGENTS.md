@@ -172,6 +172,7 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
 - For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
+- Unless release-specific behavior is the thing under test, prefer `target/debug/horizon` for smoke testing so iteration stays fast while validating UI and interaction correctness
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
 - Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
 
