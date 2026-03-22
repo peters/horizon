@@ -181,13 +181,34 @@ impl HorizonApp {
         let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
+        let ctrl_or_cmd = modifiers.ctrl || modifiers.command;
+        let pointer_over_terminal_body = primary_selection_routing_active()
+            && pointer_position.is_some_and(|position| {
+                self.terminal_body_screen_rects
+                    .values()
+                    .any(|rect| rect.contains(position))
+            });
         let terminal_events = self.terminal_events_for_viewport(ctx.viewport_id(), &events);
         // Delay plain Space forwarding until we know whether the key becomes
         // the canvas-pan modifier or an actual terminal keystroke.
         self.terminal_keyboard_events = self
             .pending_space_pan_key
             .filter_terminal_events(&terminal_events, space_drag_claimed);
-        self.canvas_pan_input_claimed = pointer_in_canvas && (middle_down || space_drag_claimed);
+        let target = if !pointer_in_canvas {
+            MiddlePanTarget::OutsideCanvas
+        } else if pointer_over_terminal_body {
+            MiddlePanTarget::TerminalBody
+        } else {
+            MiddlePanTarget::EmptyCanvas
+        };
+        let mode = if ctrl_or_cmd {
+            MiddlePanMode::Forced
+        } else {
+            MiddlePanMode::Default
+        };
+        self.middle_pan_active =
+            next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
+        self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
@@ -203,13 +224,12 @@ impl HorizonApp {
             pointer_in_canvas
                 && !drag_panning
                 && scroll != Vec2::ZERO
-                && !modifiers.ctrl
-                && !modifiers.command
+                && !ctrl_or_cmd
                 && self.panel_screen_rects.values().any(|rect| rect.contains(position))
         });
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if pointer_in_canvas && !pointer_over_panel && !modifiers.ctrl && !modifiers.command {
+        } else if pointer_in_canvas && !pointer_over_panel && !ctrl_or_cmd {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
             } else {
@@ -248,12 +268,55 @@ impl HorizonApp {
     }
 }
 
+#[derive(Clone, Copy)]
+enum MiddlePanTarget {
+    OutsideCanvas,
+    EmptyCanvas,
+    TerminalBody,
+}
+
+#[derive(Clone, Copy)]
+enum MiddlePanMode {
+    Default,
+    Forced,
+}
+
+fn next_middle_pan_active(
+    was_active: bool,
+    middle_down: bool,
+    target: MiddlePanTarget,
+    mode: MiddlePanMode,
+    pointer_delta: Vec2,
+) -> bool {
+    if !middle_down {
+        return false;
+    }
+
+    if was_active {
+        return true;
+    }
+
+    if pointer_delta == Vec2::ZERO {
+        return false;
+    }
+
+    match (target, mode) {
+        (MiddlePanTarget::OutsideCanvas, _) | (MiddlePanTarget::TerminalBody, MiddlePanMode::Default) => false,
+        (MiddlePanTarget::EmptyCanvas, _) | (MiddlePanTarget::TerminalBody, MiddlePanMode::Forced) => true,
+    }
+}
+
+fn primary_selection_routing_active() -> bool {
+    cfg!(target_os = "linux")
+}
+
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Key, Modifiers};
+    use egui::{Event, Key, Modifiers, Vec2};
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
+    use super::{MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active};
 
     #[test]
     fn plain_space_is_delayed_until_release() {
@@ -329,6 +392,73 @@ mod tests {
             vec![terminal_event(press), terminal_event(text), terminal_event(letter)]
         );
         assert!(matches!(state, CanvasPanSpaceKeyState::Idle));
+    }
+
+    #[test]
+    fn middle_pan_starts_on_empty_canvas() {
+        assert!(next_middle_pan_active(
+            false,
+            true,
+            MiddlePanTarget::EmptyCanvas,
+            MiddlePanMode::Default,
+            Vec2::new(4.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn middle_pan_does_not_start_on_terminal_body_without_modifier() {
+        assert!(!next_middle_pan_active(
+            false,
+            true,
+            MiddlePanTarget::TerminalBody,
+            MiddlePanMode::Default,
+            Vec2::new(4.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn middle_pan_overrides_terminal_body_with_ctrl_or_cmd() {
+        assert!(next_middle_pan_active(
+            false,
+            true,
+            MiddlePanTarget::TerminalBody,
+            MiddlePanMode::Forced,
+            Vec2::new(4.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn middle_pan_stays_active_until_button_release() {
+        assert!(next_middle_pan_active(
+            true,
+            true,
+            MiddlePanTarget::OutsideCanvas,
+            MiddlePanMode::Default,
+            Vec2::ZERO
+        ));
+        assert!(!next_middle_pan_active(
+            true,
+            false,
+            MiddlePanTarget::EmptyCanvas,
+            MiddlePanMode::Default,
+            Vec2::ZERO
+        ));
+    }
+
+    #[test]
+    fn middle_pan_waits_for_motion_before_claiming_press() {
+        assert!(!next_middle_pan_active(
+            false,
+            true,
+            MiddlePanTarget::EmptyCanvas,
+            MiddlePanMode::Default,
+            Vec2::ZERO
+        ));
+    }
+
+    #[test]
+    fn primary_selection_routing_matches_linux_only_behavior() {
+        assert_eq!(primary_selection_routing_active(), cfg!(target_os = "linux"));
     }
 
     fn terminal_event(event: Event) -> TerminalInputEvent {

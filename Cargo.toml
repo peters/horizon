@@ -40,6 +40,7 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 uuid = { version = "1.22.0", features = ["serde", "v4"] }
 git2 = { version = "0.20", default-features = false }
 regex = "1.12.3"
+arboard = "3.6.1"
 
 [profile.release]
 lto = true

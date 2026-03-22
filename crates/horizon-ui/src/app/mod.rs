@@ -39,6 +39,7 @@ use super::command_registry::CommandEntry;
 use super::dir_picker::DirPicker;
 use super::editor_widget::MarkdownPreviewCache;
 use super::input;
+use super::primary_selection::PrimarySelection;
 use super::remote_hosts_overlay::RemoteHostsOverlay;
 use super::search_overlay::SearchOverlay;
 use super::terminal_widget::TerminalGridCache;
@@ -101,15 +102,22 @@ struct StartupChooserState {
 }
 
 #[derive(Clone, Default)]
+struct DetachedCanvasInteractionState {
+    is_panning: bool,
+    middle_pan_active: bool,
+    canvas_pan_input_claimed: bool,
+    pending_space_pan_key: CanvasPanSpaceKeyState,
+}
+
+#[derive(Clone, Default)]
 struct DetachedWorkspaceViewportState {
     window: WindowConfig,
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
-    is_panning: bool,
-    canvas_pan_input_claimed: bool,
-    pending_space_pan_key: CanvasPanSpaceKeyState,
+    interaction: DetachedCanvasInteractionState,
     initial_fit_pending: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
+    terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
 }
 
@@ -119,11 +127,10 @@ impl DetachedWorkspaceViewportState {
             window,
             canvas_view: CanvasViewState::default(),
             pan_target: None,
-            is_panning: false,
-            canvas_pan_input_claimed: false,
-            pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
+            interaction: DetachedCanvasInteractionState::default(),
             initial_fit_pending: true,
             panel_screen_rects: HashMap::new(),
+            terminal_body_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
         }
     }
@@ -140,13 +147,16 @@ pub struct HorizonApp {
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
+    middle_pan_active: bool,
     canvas_pan_input_claimed: bool,
     pending_space_pan_key: CanvasPanSpaceKeyState,
     observed_keyboard_inputs: input::ObservedKeyboardInputs,
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     panel_screen_rects: HashMap<PanelId, Rect>,
+    terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
+    primary_selection: PrimarySelection,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
@@ -274,12 +284,15 @@ impl HorizonApp {
             canvas_view: CanvasViewState::default(),
             pan_target: None,
             is_panning: false,
+            middle_pan_active: false,
             canvas_pan_input_claimed: false,
             pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
             observed_keyboard_inputs,
             frame_keyboard_events: HashMap::new(),
             terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
+            terminal_body_screen_rects: HashMap::new(),
+            primary_selection: PrimarySelection::new(),
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,

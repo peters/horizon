@@ -67,6 +67,7 @@ impl HorizonApp {
         let closed_panel_ids = self.board.close_panels_in_workspace(workspace_id);
         for panel_id in &closed_panel_ids {
             self.panel_screen_rects.remove(panel_id);
+            self.terminal_body_screen_rects.remove(panel_id);
             self.terminal_grid_cache.remove(panel_id);
             self.editor_preview_cache.remove(panel_id);
         }
