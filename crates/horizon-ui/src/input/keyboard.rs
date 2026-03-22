@@ -1,7 +1,43 @@
 use alacritty_terminal::term::TermMode;
 use egui::{Key, Modifiers};
 
-use super::sequence::build_sequence;
+use super::sequence::{SequenceRequest, build_sequence};
+
+#[derive(Clone, Copy)]
+pub struct KeyIdentity<'a> {
+    pub key: Key,
+    pub physical_key: Option<Key>,
+    pub key_without_modifiers_text: Option<&'a str>,
+}
+
+impl<'a> KeyIdentity<'a> {
+    pub fn new(key: Key, physical_key: Option<Key>, key_without_modifiers_text: Option<&'a str>) -> Self {
+        Self {
+            key,
+            physical_key,
+            key_without_modifiers_text,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct KeyEventContext {
+    pub pressed: bool,
+    pub repeat: bool,
+    pub modifiers: Modifiers,
+    pub mode: TermMode,
+}
+
+impl KeyEventContext {
+    pub fn new(pressed: bool, repeat: bool, modifiers: Modifiers, mode: TermMode) -> Self {
+        Self {
+            pressed,
+            repeat,
+            modifiers,
+            mode,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct KeyTranslation {
@@ -10,47 +46,53 @@ pub struct KeyTranslation {
 }
 
 pub fn translate_key_event_with_physical(
-    key: Key,
-    physical_key: Option<Key>,
-    pressed: bool,
-    repeat: bool,
-    modifiers: Modifiers,
-    mode: TermMode,
+    key_identity: KeyIdentity<'_>,
+    context: KeyEventContext,
 ) -> Option<KeyTranslation> {
-    if !pressed && !mode.contains(TermMode::REPORT_EVENT_TYPES) {
+    if !context.pressed && !context.mode.contains(TermMode::REPORT_EVENT_TYPES) {
         return None;
     }
 
-    let text = printable_text(key, modifiers);
-    let control = control_modifier(modifiers);
-    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+    let text = printable_text(key_identity.key, context.modifiers);
+    let control = control_modifier(context.modifiers);
+    let kitty = context.mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
 
     if kitty {
-        let bytes = build_sequence(key, physical_key, modifiers, mode, pressed, repeat, text.as_deref())?;
-        let suppress_text = pressed
+        let bytes = build_sequence(SequenceRequest {
+            key: key_identity.key,
+            physical_key: key_identity.physical_key,
+            key_without_modifiers_text: key_identity.key_without_modifiers_text,
+            modifiers: context.modifiers,
+            mode: context.mode,
+            pressed: context.pressed,
+            repeat: context.repeat,
+            text: text.as_deref(),
+        })?;
+        let suppress_text = context
+            .pressed
             .then_some(text.as_deref())
             .flatten()
-            .filter(|_| should_suppress_text_for_key(key, modifiers, mode))
+            .filter(|_| should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode))
             .map(ToOwned::to_owned);
         return Some(KeyTranslation { bytes, suppress_text });
     }
 
-    if !pressed {
+    if !context.pressed {
         return None;
     }
 
-    if let Some(bytes) = named_key_sequence(key, modifiers, mode) {
+    if let Some(bytes) = named_key_sequence(key_identity.key, context.modifiers, context.mode) {
         return Some(KeyTranslation {
             bytes,
-            suppress_text: should_suppress_text_for_key(key, modifiers, mode)
+            suppress_text: should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
                 .then_some(text)
                 .flatten(),
         });
     }
 
-    if control && let Some(byte) = control_character(key) {
+    if control && let Some(byte) = control_character(key_identity.key) {
         let mut bytes = Vec::with_capacity(2);
-        if modifiers.alt {
+        if context.modifiers.alt {
             bytes.push(b'\x1b');
         }
         bytes.push(byte);
@@ -60,7 +102,7 @@ pub fn translate_key_event_with_physical(
         });
     }
 
-    if modifiers.alt
+    if context.modifiers.alt
         && let Some(text) = text
     {
         let mut bytes = Vec::with_capacity(text.len() + 1);
@@ -76,19 +118,24 @@ pub fn translate_key_event_with_physical(
 }
 
 pub fn translate_text_event(
-    key: Key,
-    physical_key: Option<Key>,
+    key_identity: KeyIdentity<'_>,
     text: &str,
-    pressed: bool,
-    repeat: bool,
-    modifiers: Modifiers,
-    mode: TermMode,
+    context: KeyEventContext,
 ) -> Option<KeyTranslation> {
-    if !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+    if !context.mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
         return None;
     }
 
-    let bytes = build_sequence(key, physical_key, modifiers, mode, pressed, repeat, Some(text))?;
+    let bytes = build_sequence(SequenceRequest {
+        key: key_identity.key,
+        physical_key: key_identity.physical_key,
+        key_without_modifiers_text: key_identity.key_without_modifiers_text,
+        modifiers: context.modifiers,
+        mode: context.mode,
+        pressed: context.pressed,
+        repeat: context.repeat,
+        text: Some(text),
+    })?;
     Some(KeyTranslation {
         bytes,
         suppress_text: None,
@@ -202,7 +249,16 @@ fn named_key_sequence(key: Key, modifiers: Modifiers, mode: TermMode) -> Option<
         return Some(sequence);
     }
 
-    build_sequence(key, None, modifiers, TermMode::NONE, true, false, None)
+    build_sequence(SequenceRequest {
+        key,
+        physical_key: None,
+        key_without_modifiers_text: None,
+        modifiers,
+        mode: TermMode::NONE,
+        pressed: true,
+        repeat: false,
+        text: None,
+    })
 }
 
 fn legacy_c0_sequence(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {

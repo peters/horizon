@@ -1,12 +1,12 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
 
-use crate::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
-use crate::git_changes_widget::GitChangesView;
-use crate::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
-use crate::theme;
-use crate::usage_widget::UsageDashboardView;
-
+use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
+use super::super::git_changes_widget::GitChangesView;
+use super::super::input::TerminalInputEvent;
+use super::super::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
+use super::super::theme;
+use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
@@ -89,7 +89,7 @@ impl PanelFrame {
 }
 
 struct PanelBodyContext<'a> {
-    keyboard_events: &'a [egui::Event],
+    keyboard_events: &'a [TerminalInputEvent],
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
@@ -152,7 +152,7 @@ impl HorizonApp {
                                 true,
                                 true,
                                 PanelBodyContext {
-                                    keyboard_events: &ui.input(|input| input.events.clone()),
+                                    keyboard_events: &self.terminal_keyboard_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
                                     terminal_grid_cache: None,

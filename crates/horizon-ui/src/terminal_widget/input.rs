@@ -5,7 +5,7 @@ use egui::emath::TSTransform;
 use egui::{Key, Pos2, Rect, Vec2};
 use horizon_core::{Panel, SelectionType, TerminalSide};
 
-use crate::input;
+use super::super::input::{self, TerminalInputEvent};
 
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
@@ -291,7 +291,7 @@ fn handle_pointer_selection_drag(
     }
 }
 
-pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, events: &[egui::Event]) {
+pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, events: &[TerminalInputEvent]) {
     let Some(terminal) = panel.terminal_mut() else {
         return;
     };
@@ -299,7 +299,7 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, e
     let mut forwarder = KeyboardInputForwarder::default();
 
     for event in events {
-        match event {
+        match &event.event {
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 let emission = forwarder.on_text(text, mode);
                 if emission.clears_selection {
@@ -329,15 +329,8 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, e
                 }
                 terminal.write_input(&[24]);
             }
-            egui::Event::Key {
-                key,
-                physical_key,
-                pressed,
-                repeat,
-                modifiers,
-                ..
-            } => {
-                let emission = forwarder.on_key(*key, *physical_key, *pressed, *repeat, *modifiers, mode);
+            egui::Event::Key { .. } => {
+                let emission = forwarder.on_key(event, mode);
                 if !emission.bytes.is_empty() {
                     terminal.write_input(&emission.bytes);
                 }
@@ -384,53 +377,68 @@ impl KeyboardInputForwarder {
         InputEmission::raw_text(text)
     }
 
-    fn on_key(
-        &mut self,
-        key: Key,
-        physical_key: Option<Key>,
-        pressed: bool,
-        repeat: bool,
-        modifiers: egui::Modifiers,
-        mode: TermMode,
-    ) -> InputEmission {
+    fn on_key(&mut self, input_event: &TerminalInputEvent, mode: TermMode) -> InputEmission {
+        let egui::Event::Key {
+            key,
+            physical_key,
+            pressed,
+            repeat,
+            modifiers,
+            ..
+        } = &input_event.event
+        else {
+            return InputEmission::default();
+        };
+
+        let key_identity =
+            input::KeyIdentity::new(*key, *physical_key, input_event.key_without_modifiers_text.as_deref());
+        let context = input::KeyEventContext::new(*pressed, *repeat, *modifiers, mode);
         let mut emission = InputEmission::default();
 
         if let Some(deferred) = self.deferred_text_key.as_mut() {
             if let Some(actual_text) = deferred.synthetic_text.as_deref() {
-                if !pressed && deferred.matches(key, physical_key) {
-                    if let Some(translation) =
-                        input::translate_text_event(key, physical_key, actual_text, false, repeat, modifiers, mode)
-                    {
+                if !pressed && deferred.matches(*key, *physical_key) {
+                    if let Some(translation) = input::translate_text_event(
+                        input::KeyIdentity::new(*key, *physical_key, deferred.key_without_modifiers_text.as_deref()),
+                        actual_text,
+                        input::KeyEventContext::new(false, *repeat, *modifiers, mode),
+                    ) {
                         emission.bytes.extend_from_slice(&translation.bytes);
                     }
                     self.deferred_text_key = None;
                     return emission;
                 }
 
-                if !deferred.matches(key, physical_key) {
+                if !deferred.matches(*key, *physical_key) {
                     self.deferred_text_key = None;
                 }
-            } else if !pressed && deferred.matches(key, physical_key) {
+            } else if !pressed && deferred.matches(*key, *physical_key) {
                 deferred.release_seen = true;
-                deferred.release_translation =
-                    input::translate_key_event_with_physical(key, physical_key, false, repeat, modifiers, mode);
+                deferred.release_translation = input::translate_key_event_with_physical(
+                    key_identity,
+                    input::KeyEventContext::new(false, *repeat, *modifiers, mode),
+                );
                 return emission;
-            } else if !deferred.matches(key, physical_key) {
+            } else if !deferred.matches(*key, *physical_key) {
                 emission.bytes.extend_from_slice(&deferred.flush_fallback());
                 self.deferred_text_key = None;
             }
         }
 
-        if let Some(translation) =
-            input::translate_key_event_with_physical(key, physical_key, pressed, repeat, modifiers, mode)
-        {
-            if pressed
+        if let Some(translation) = input::translate_key_event_with_physical(key_identity, context) {
+            if *pressed
                 && translation.suppress_text.is_some()
                 && (modifiers.alt
                     || mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
-                    || input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode))
+                    || input::should_defer_textual_key(*key, *physical_key, *pressed, *modifiers, mode))
             {
-                self.deferred_text_key = Some(DeferredTextKey::new(key, physical_key, modifiers, Some(translation)));
+                self.deferred_text_key = Some(DeferredTextKey::new(
+                    *key,
+                    *physical_key,
+                    input_event.key_without_modifiers_text.as_deref(),
+                    *modifiers,
+                    Some(translation),
+                ));
                 return emission;
             }
 
@@ -441,8 +449,14 @@ impl KeyboardInputForwarder {
             return emission;
         }
 
-        if input::should_defer_textual_key(key, physical_key, pressed, modifiers, mode) {
-            self.deferred_text_key = Some(DeferredTextKey::new(key, physical_key, modifiers, None));
+        if input::should_defer_textual_key(*key, *physical_key, *pressed, *modifiers, mode) {
+            self.deferred_text_key = Some(DeferredTextKey::new(
+                *key,
+                *physical_key,
+                input_event.key_without_modifiers_text.as_deref(),
+                *modifiers,
+                None,
+            ));
         }
 
         emission
@@ -464,6 +478,7 @@ impl KeyboardInputForwarder {
 struct DeferredTextKey {
     key: Key,
     physical_key: Option<Key>,
+    key_without_modifiers_text: Option<String>,
     modifiers: egui::Modifiers,
     press_translation: Option<input::KeyTranslation>,
     release_translation: Option<input::KeyTranslation>,
@@ -475,12 +490,14 @@ impl DeferredTextKey {
     fn new(
         key: Key,
         physical_key: Option<Key>,
+        key_without_modifiers_text: Option<&str>,
         modifiers: egui::Modifiers,
         press_translation: Option<input::KeyTranslation>,
     ) -> Self {
         Self {
             key,
             physical_key,
+            key_without_modifiers_text: key_without_modifiers_text.map(ToOwned::to_owned),
             modifiers,
             press_translation,
             release_translation: None,
@@ -503,16 +520,20 @@ impl DeferredTextKey {
             return InputEmission::pty(self.flush_fallback());
         }
 
-        if let Some(translation) =
-            input::translate_text_event(self.key, self.physical_key, text, true, false, self.modifiers, mode)
-        {
+        if let Some(translation) = input::translate_text_event(
+            input::KeyIdentity::new(self.key, self.physical_key, self.key_without_modifiers_text.as_deref()),
+            text,
+            input::KeyEventContext::new(true, false, self.modifiers, mode),
+        ) {
             let mut bytes = translation.bytes;
-            if self.release_seen {
-                if let Some(release) =
-                    input::translate_text_event(self.key, self.physical_key, text, false, false, self.modifiers, mode)
-                {
-                    bytes.extend_from_slice(&release.bytes);
-                }
+            if self.release_seen
+                && let Some(release) = input::translate_text_event(
+                    input::KeyIdentity::new(self.key, self.physical_key, self.key_without_modifiers_text.as_deref()),
+                    text,
+                    input::KeyEventContext::new(false, false, self.modifiers, mode),
+                )
+            {
+                bytes.extend_from_slice(&release.bytes);
             } else {
                 self.synthetic_text = Some(text.to_owned());
             }
@@ -560,28 +581,16 @@ impl InputEmission {
 
 #[cfg(test)]
 mod tests {
-    use super::KeyboardInputForwarder;
+    use super::{KeyboardInputForwarder, TerminalInputEvent};
     use alacritty_terminal::term::TermMode;
     use egui::{Event, Key, Modifiers};
 
     #[test]
     fn altgr_text_after_release_emits_only_kitty_sequences() {
         let events = vec![
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::ALT,
-            },
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: false,
-                repeat: false,
-                modifiers: Modifiers::ALT,
-            },
-            Event::Text("@".to_owned()),
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::ALT),
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::ALT),
+            text_event("@"),
         ];
 
         let bytes = forward_bytes(
@@ -595,21 +604,9 @@ mod tests {
     #[test]
     fn shifted_symbol_uses_text_reconciliation_for_release_order() {
         let events = vec![
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::SHIFT,
-            },
-            Event::Text("@".to_owned()),
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: false,
-                repeat: false,
-                modifiers: Modifiers::SHIFT,
-            },
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::SHIFT),
+            text_event("@"),
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::SHIFT),
         ];
 
         let bytes = forward_bytes(
@@ -629,21 +626,9 @@ mod tests {
     #[test]
     fn altgr_without_alt_modifier_in_kitty_mode_does_not_leak_base_key() {
         let events = vec![
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            },
-            Event::Text("@".to_owned()),
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: false,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            },
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::NONE),
+            text_event("@"),
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::NONE),
         ];
 
         let bytes = forward_bytes(
@@ -663,21 +648,9 @@ mod tests {
     #[test]
     fn altgr_without_alt_modifier_in_legacy_mode_emits_only_text() {
         let events = vec![
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            },
-            Event::Text("@".to_owned()),
-            Event::Key {
-                key: Key::Num2,
-                physical_key: Some(Key::Num2),
-                pressed: false,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            },
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::NONE),
+            text_event("@"),
+            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::NONE),
         ];
 
         let bytes = forward_bytes(&events, TermMode::NONE);
@@ -686,72 +659,80 @@ mod tests {
     }
 
     #[test]
+    fn shifted_international_key_uses_observed_unshifted_text_for_primary_code() {
+        let events = vec![
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                true,
+                false,
+                Modifiers::SHIFT,
+            ),
+            text_event("Å"),
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                false,
+                false,
+                Modifiers::SHIFT,
+            ),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b"\x1b[229:197:91;2u\x1b[229:197:91;2:3u");
+    }
+
+    #[test]
     fn legacy_c0_key_events_are_forwarded_in_legacy_mode() {
-        let cases: [(&str, Event, &[u8]); 6] = [
+        let cases: [(&str, TerminalInputEvent, &[u8]); 6] = [
             (
                 "shift enter",
-                Event::Key {
-                    key: Key::Enter,
-                    physical_key: Some(Key::Enter),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::SHIFT,
-                },
+                key_event(Key::Enter, Some(Key::Enter), None, true, false, Modifiers::SHIFT),
                 b"\r",
             ),
             (
                 "alt escape",
-                Event::Key {
-                    key: Key::Escape,
-                    physical_key: Some(Key::Escape),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::ALT,
-                },
+                key_event(Key::Escape, Some(Key::Escape), None, true, false, Modifiers::ALT),
                 b"\x1b\x1b",
             ),
             (
                 "ctrl backspace",
-                Event::Key {
-                    key: Key::Backspace,
-                    physical_key: Some(Key::Backspace),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::CTRL,
-                },
+                key_event(Key::Backspace, Some(Key::Backspace), None, true, false, Modifiers::CTRL),
                 b"\x08",
             ),
             (
                 "alt backspace",
-                Event::Key {
-                    key: Key::Backspace,
-                    physical_key: Some(Key::Backspace),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::ALT,
-                },
+                key_event(Key::Backspace, Some(Key::Backspace), None, true, false, Modifiers::ALT),
                 b"\x1b\x7f",
             ),
             (
                 "ctrl shift tab",
-                Event::Key {
-                    key: Key::Tab,
-                    physical_key: Some(Key::Tab),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::CTRL | Modifiers::SHIFT,
-                },
+                key_event(
+                    Key::Tab,
+                    Some(Key::Tab),
+                    None,
+                    true,
+                    false,
+                    Modifiers::CTRL | Modifiers::SHIFT,
+                ),
                 b"\x1b[Z",
             ),
             (
                 "alt shift tab",
-                Event::Key {
-                    key: Key::Tab,
-                    physical_key: Some(Key::Tab),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::ALT | Modifiers::SHIFT,
-                },
+                key_event(
+                    Key::Tab,
+                    Some(Key::Tab),
+                    None,
+                    true,
+                    false,
+                    Modifiers::ALT | Modifiers::SHIFT,
+                ),
                 b"\x1b\x1b[Z",
             ),
         ];
@@ -762,20 +743,14 @@ mod tests {
         }
     }
 
-    fn forward_bytes(events: &[Event], mode: TermMode) -> Vec<u8> {
+    fn forward_bytes(events: &[TerminalInputEvent], mode: TermMode) -> Vec<u8> {
         let mut forwarder = KeyboardInputForwarder::default();
         let mut bytes = Vec::new();
 
         for event in events {
-            let emission = match event {
+            let emission = match &event.event {
                 Event::Text(text) | Event::Ime(egui::ImeEvent::Commit(text)) => forwarder.on_text(text, mode),
-                Event::Key {
-                    key,
-                    physical_key,
-                    pressed,
-                    repeat,
-                    modifiers,
-                } => forwarder.on_key(*key, *physical_key, *pressed, *repeat, *modifiers, mode),
+                Event::Key { .. } => forwarder.on_key(event, mode),
                 _ => continue,
             };
             bytes.extend_from_slice(&emission.bytes);
@@ -783,5 +758,32 @@ mod tests {
 
         bytes.extend_from_slice(&forwarder.finish().bytes);
         bytes
+    }
+
+    fn key_event(
+        key: Key,
+        physical_key: Option<Key>,
+        key_without_modifiers_text: Option<&str>,
+        pressed: bool,
+        repeat: bool,
+        modifiers: Modifiers,
+    ) -> TerminalInputEvent {
+        TerminalInputEvent {
+            event: Event::Key {
+                key,
+                physical_key,
+                pressed,
+                repeat,
+                modifiers,
+            },
+            key_without_modifiers_text: key_without_modifiers_text.map(ToOwned::to_owned),
+        }
+    }
+
+    fn text_event(text: &str) -> TerminalInputEvent {
+        TerminalInputEvent {
+            event: Event::Text(text.to_owned()),
+            key_without_modifiers_text: None,
+        }
     }
 }

@@ -21,6 +21,7 @@ workspace = true
 horizon-core.workspace = true
 eframe.workspace = true
 egui.workspace = true
+winit.workspace = true
 # Pulls the backend feature set into eframe's transitive wgpu dependency.
 wgpu.workspace = true
 tracing.workspace = true

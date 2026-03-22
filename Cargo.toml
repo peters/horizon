@@ -34,6 +34,7 @@ egui = "0.33.3"
 # unify the native backend features here when eframe default features are disabled.
 wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
 egui_commonmark = { version = "0.22.0", default-features = false, features = ["pulldown_cmark"] }
+winit = "0.30.13"
 tempfile = "3.20.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 uuid = { version = "1.22.0", features = ["serde", "v4"] }
