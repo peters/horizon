@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
-use egui::{Key, Pos2, Rect, Vec2};
+use egui::{Key, PointerButton, Pos2, Rect, Vec2};
 use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use super::super::input::{self, TerminalInputEvent};
@@ -47,12 +47,34 @@ pub(super) fn handle_terminal_pointer_input(
         interaction.body.request_focus();
     }
 
-    let should_handle_pointer = interaction.body.hovered()
-        || interaction.body.dragged()
-        || interaction.body.clicked()
-        || interaction.body.drag_started()
-        || interaction.scrollbar.hovered()
-        || interaction.scrollbar.dragged()
+    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
+    let body_pointer_pos = response_pointer_pos(&interaction.body);
+    let scrollbar_pointer_pos = response_pointer_pos(&interaction.scrollbar);
+    let body_primary_press_pos = pointer_button_event_pos(
+        &events,
+        from_global,
+        PointerButton::Primary,
+        true,
+        interaction.layout.body,
+    );
+    let body_middle_press_pos = pointer_button_event_pos(
+        &events,
+        from_global,
+        PointerButton::Middle,
+        true,
+        interaction.layout.body,
+    );
+    let should_handle_pointer = body_pointer_pos.is_some()
+        || scrollbar_pointer_pos.is_some()
+        || pointer_event_targets_rect(&events, from_global, interaction.layout.body)
+        || pointer_event_targets_rect(&events, from_global, interaction.layout.scrollbar)
+        || interaction.body.is_pointer_button_down_on()
+        || interaction.scrollbar.is_pointer_button_down_on()
+        || interaction.body.drag_stopped_by(PointerButton::Primary)
+        || interaction.body.double_clicked()
+        || interaction.body.triple_clicked()
+        || interaction.body.clicked_by(PointerButton::Middle)
         || interaction.scrollbar.clicked();
     if !should_handle_pointer {
         return;
@@ -61,17 +83,15 @@ pub(super) fn handle_terminal_pointer_input(
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;
     };
-    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
     let pointer_buttons = ui.input(|input| input::PointerButtons {
         primary: input.pointer.primary_down(),
         middle: input.pointer.middle_down(),
         secondary: input.pointer.secondary_down(),
     });
-    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
     let current_modifiers = ui.input(|input| input.modifiers);
-    let hovered_point = ui
-        .input(|input| input.pointer.hover_pos())
-        .map(|position| transform_pos(from_global, position))
+    let hovered_point = interaction
+        .body
+        .hover_pos()
         .filter(|position| interaction.layout.body.contains(*position))
         .and_then(|position| {
             grid_point_from_position(
@@ -96,6 +116,9 @@ pub(super) fn handle_terminal_pointer_input(
         ui_ctx: ui.ctx().clone(),
     };
 
+    if !mouse_mode_active(terminal_mode, current_modifiers) {
+        handle_terminal_body_pointer_actions(panel, &pointer_context, body_primary_press_pos, body_middle_press_pos);
+    }
     handle_pointer_events(&events, panel, &pointer_context);
     maybe_copy_selection_to_primary(panel, interaction, support.primary_selection);
 
@@ -124,6 +147,9 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 pressed,
                 modifiers,
             } => {
+                if !mouse_mode_active(pointer.terminal_mode, *modifiers) {
+                    continue;
+                }
                 let pos = transform_pos(pointer.from_global, *pos);
                 if !pointer.interaction.layout.body.contains(pos) {
                     continue;
@@ -136,32 +162,24 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
             egui::Event::PointerMoved(pos) => {
                 let pos = transform_pos(pointer.from_global, *pos);
                 let inside = pointer.interaction.layout.body.contains(pos);
-                if inside && mouse_mode_active(pointer.terminal_mode, pointer.current_modifiers) {
-                    if let Some(point) = grid_point_from_position(
+                if inside
+                    && mouse_mode_active(pointer.terminal_mode, pointer.current_modifiers)
+                    && let Some(point) = grid_point_from_position(
                         pointer.interaction.layout.body,
                         pos,
                         pointer.metrics,
                         pointer.visible_rows,
                         pointer.visible_cols,
-                    ) && let Some(bytes) = input::mouse_motion_report(
+                    )
+                    && let Some(bytes) = input::mouse_motion_report(
                         pointer.pointer_buttons,
                         pointer.current_modifiers,
                         pointer.terminal_mode,
                         point,
-                    ) && !bytes.is_empty()
-                    {
-                        panel.write_input(&bytes);
-                    }
-                } else if pointer.interaction.body.dragged() && panel.terminal_mut().is_some_and(|t| t.has_selection())
+                    )
+                    && !bytes.is_empty()
                 {
-                    handle_pointer_selection_drag(
-                        panel,
-                        pos,
-                        pointer.interaction.layout.body,
-                        pointer.metrics,
-                        pointer.visible_rows,
-                        pointer.visible_cols,
-                    );
+                    panel.write_input(&bytes);
                 }
             }
             egui::Event::MouseWheel { delta, unit, modifiers } => {
@@ -187,6 +205,64 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
             }
             _ => {}
         }
+    }
+}
+
+fn handle_terminal_body_pointer_actions(
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    body_primary_press_pos: Option<Pos2>,
+    body_middle_press_pos: Option<Pos2>,
+) {
+    let body_pointer_pos = response_pointer_pos(&pointer.interaction.body);
+
+    if (pointer.current_modifiers.ctrl || pointer.current_modifiers.command)
+        && let Some(pos) = body_primary_press_pos
+    {
+        handle_pointer_button(
+            panel,
+            pointer,
+            pos,
+            PointerButton::Primary,
+            true,
+            pointer.current_modifiers,
+        );
+        return;
+    }
+
+    if body_middle_press_pos.is_some()
+        && should_request_primary_paste(PointerButton::Middle, true, pointer.current_modifiers)
+    {
+        pointer
+            .primary_selection
+            .request_paste(panel.id, pointer.ui_ctx.clone());
+        return;
+    }
+
+    if let Some(pos) = body_primary_press_pos {
+        handle_pointer_button(
+            panel,
+            pointer,
+            pos,
+            PointerButton::Primary,
+            true,
+            pointer.current_modifiers,
+        );
+    }
+
+    if pointer.pointer_buttons.primary
+        && pointer.interaction.body.is_pointer_button_down_on()
+        && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
+        && let Some(pos) = body_pointer_pos
+    {
+        handle_pointer_selection_drag(
+            panel,
+            pos,
+            pointer.interaction.layout.body,
+            pointer.metrics,
+            pointer.visible_rows,
+            pointer.visible_cols,
+        );
     }
 }
 
@@ -228,10 +304,6 @@ fn handle_pointer_button(
         {
             panel.write_input(&bytes);
         }
-    } else if should_request_primary_paste(button, pressed, modifiers) {
-        pointer
-            .primary_selection
-            .request_paste(panel.id, pointer.ui_ctx.clone());
     } else if button == egui::PointerButton::Primary
         && pressed
         && let Some(point) = grid_point_from_position(
@@ -261,7 +333,7 @@ fn maybe_copy_selection_to_primary(
     primary_selection: &PrimarySelection,
 ) {
     if !selection_copy_completed(
-        interaction.body.drag_stopped(),
+        interaction.body.drag_stopped_by(PointerButton::Primary),
         interaction.body.double_clicked(),
         interaction.body.triple_clicked(),
     ) {
@@ -305,6 +377,40 @@ fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &Ter
 
 fn transform_pos(from_global: Option<TSTransform>, pos: Pos2) -> Pos2 {
     from_global.map_or(pos, |transform| transform * pos)
+}
+
+fn pointer_event_targets_rect(events: &[egui::Event], from_global: Option<TSTransform>, rect: Rect) -> bool {
+    events.iter().any(|event| match event {
+        egui::Event::PointerButton { pos, .. } | egui::Event::PointerMoved(pos) => {
+            rect.contains(transform_pos(from_global, *pos))
+        }
+        _ => false,
+    })
+}
+
+fn pointer_button_event_pos(
+    events: &[egui::Event],
+    from_global: Option<TSTransform>,
+    button: PointerButton,
+    pressed: bool,
+    rect: Rect,
+) -> Option<Pos2> {
+    events.iter().rev().find_map(|event| match event {
+        egui::Event::PointerButton {
+            pos,
+            button: event_button,
+            pressed: event_pressed,
+            ..
+        } if *event_button == button && *event_pressed == pressed => {
+            let pos = transform_pos(from_global, *pos);
+            rect.contains(pos).then_some(pos)
+        }
+        _ => None,
+    })
+}
+
+fn response_pointer_pos(response: &egui::Response) -> Option<Pos2> {
+    response.interact_pointer_pos().or_else(|| response.hover_pos())
 }
 
 fn handle_pointer_selection_drag(
@@ -640,9 +746,12 @@ impl InputEmission {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyboardInputForwarder, TerminalInputEvent, selection_copy_completed, should_request_primary_paste};
+    use super::{
+        KeyboardInputForwarder, TerminalInputEvent, pointer_button_event_pos, pointer_event_targets_rect,
+        selection_copy_completed, should_request_primary_paste,
+    };
     use alacritty_terminal::term::TermMode;
-    use egui::{Event, Key, Modifiers, PointerButton};
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
 
     #[test]
     fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
@@ -672,6 +781,30 @@ mod tests {
         assert!(selection_copy_completed(false, true, false));
         assert!(selection_copy_completed(false, false, true));
         assert!(!selection_copy_completed(false, false, false));
+    }
+
+    #[test]
+    fn pointer_button_event_uses_press_position_inside_rect() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
+        let events = vec![Event::PointerButton {
+            pos: Pos2::new(12.0, 6.0),
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }];
+
+        assert_eq!(
+            pointer_button_event_pos(&events, None, PointerButton::Primary, true, rect),
+            Some(Pos2::new(12.0, 6.0))
+        );
+    }
+
+    #[test]
+    fn pointer_events_detect_positions_inside_rect() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
+        let events = vec![Event::PointerMoved(Pos2::new(12.0, 6.0))];
+
+        assert!(pointer_event_targets_rect(&events, None, rect));
     }
 
     #[test]

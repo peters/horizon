@@ -206,7 +206,8 @@ impl HorizonApp {
         } else {
             MiddlePanMode::Default
         };
-        self.middle_pan_active = next_middle_pan_active(self.middle_pan_active, middle_down, target, mode);
+        self.middle_pan_active =
+            next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
@@ -280,13 +281,23 @@ enum MiddlePanMode {
     Forced,
 }
 
-fn next_middle_pan_active(was_active: bool, middle_down: bool, target: MiddlePanTarget, mode: MiddlePanMode) -> bool {
+fn next_middle_pan_active(
+    was_active: bool,
+    middle_down: bool,
+    target: MiddlePanTarget,
+    mode: MiddlePanMode,
+    pointer_delta: Vec2,
+) -> bool {
     if !middle_down {
         return false;
     }
 
     if was_active {
         return true;
+    }
+
+    if pointer_delta == Vec2::ZERO {
+        return false;
     }
 
     match (target, mode) {
@@ -301,7 +312,7 @@ fn primary_selection_routing_active() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Key, Modifiers};
+    use egui::{Event, Key, Modifiers, Vec2};
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
@@ -389,7 +400,8 @@ mod tests {
             false,
             true,
             MiddlePanTarget::EmptyCanvas,
-            MiddlePanMode::Default
+            MiddlePanMode::Default,
+            Vec2::new(4.0, 0.0)
         ));
     }
 
@@ -399,7 +411,8 @@ mod tests {
             false,
             true,
             MiddlePanTarget::TerminalBody,
-            MiddlePanMode::Default
+            MiddlePanMode::Default,
+            Vec2::new(4.0, 0.0)
         ));
     }
 
@@ -409,7 +422,8 @@ mod tests {
             false,
             true,
             MiddlePanTarget::TerminalBody,
-            MiddlePanMode::Forced
+            MiddlePanMode::Forced,
+            Vec2::new(4.0, 0.0)
         ));
     }
 
@@ -419,13 +433,26 @@ mod tests {
             true,
             true,
             MiddlePanTarget::OutsideCanvas,
-            MiddlePanMode::Default
+            MiddlePanMode::Default,
+            Vec2::ZERO
         ));
         assert!(!next_middle_pan_active(
             true,
             false,
             MiddlePanTarget::EmptyCanvas,
-            MiddlePanMode::Default
+            MiddlePanMode::Default,
+            Vec2::ZERO
+        ));
+    }
+
+    #[test]
+    fn middle_pan_waits_for_motion_before_claiming_press() {
+        assert!(!next_middle_pan_active(
+            false,
+            true,
+            MiddlePanTarget::EmptyCanvas,
+            MiddlePanMode::Default,
+            Vec2::ZERO
         ));
     }
 
