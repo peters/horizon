@@ -129,11 +129,11 @@ fn run_owner_worker(rx: Receiver<OwnerCommand>) {
 
 #[cfg(target_os = "linux")]
 fn set_primary_text(clipboard: &mut Option<Clipboard>, text: &str) {
-    let Some(clipboard) = ensure_clipboard(clipboard, "set") else {
+    let Some(primary_clipboard) = ensure_clipboard(clipboard, "set") else {
         return;
     };
 
-    if let Err(error) = clipboard
+    if let Err(error) = primary_clipboard
         .set()
         .clipboard(LinuxClipboardKind::Primary)
         .text(text.to_owned())
