@@ -9,6 +9,7 @@ mod editor_widget;
 mod git_changes_widget;
 mod input;
 mod loading_spinner;
+mod native_app;
 mod plugin_install;
 mod remote_hosts_overlay;
 mod search_overlay;
@@ -76,7 +77,9 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let observed_keyboard_inputs = input::ObservedKeyboardInputs::default();
+    let app_keyboard_inputs = observed_keyboard_inputs.clone();
+    native_app::run_native_with_keyboard_observer(
         branding::APP_NAME,
         options,
         Box::new(move |cc| {
@@ -87,8 +90,10 @@ fn main() -> eframe::Result {
                 resolved_config_path.clone(),
                 session_store.clone(),
                 startup.clone(),
+                app_keyboard_inputs.clone(),
             )))
         }),
+        observed_keyboard_inputs,
     )
 }
 
@@ -136,6 +141,7 @@ fn summarize_adapter(info: &wgpu::AdapterInfo) -> String {
     }
     summary
 }
+
 fn startup_window_config(startup: &StartupDecision, fallback: &WindowConfig) -> WindowConfig {
     match startup {
         StartupDecision::Open { session, .. } => session.runtime_state.window_or(fallback).clone(),
@@ -167,6 +173,7 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
         y: None,
     }
 }
+
 fn load_config_or_default(config_path: &std::path::Path) -> Config {
     if !config_path.exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());

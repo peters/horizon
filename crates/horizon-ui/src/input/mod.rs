@@ -1,11 +1,14 @@
 mod keyboard;
 mod mouse;
 mod sequence;
+mod winit_keyboard;
 
 pub use keyboard::{
-    KeyTranslation, paste_bytes, should_defer_textual_key, translate_key_event_with_physical, translate_text_event,
+    KeyEventContext, KeyIdentity, KeyTranslation, paste_bytes, should_defer_textual_key,
+    translate_key_event_with_physical, translate_text_event,
 };
 pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, wheel_action};
+pub(crate) use winit_keyboard::{FrameKeyEvent, ObservedKeyboardInputs, TerminalInputEvent, terminal_input_events};
 
 #[derive(Clone, Copy)]
 pub struct GridPoint {
@@ -36,7 +39,10 @@ mod tests {
         modifiers: Modifiers,
         mode: TermMode,
     ) -> Option<super::KeyTranslation> {
-        translate_key_event_with_physical(key, None, pressed, repeat, modifiers, mode)
+        translate_key_event_with_physical(
+            super::KeyIdentity::new(key, None, None),
+            super::KeyEventContext::new(pressed, repeat, modifiers, mode),
+        )
     }
 
     #[test]
@@ -280,13 +286,14 @@ mod tests {
     #[test]
     fn kitty_text_translation_uses_physical_digit_for_shifted_symbol() {
         let translation = translate_text_event(
-            Key::Num2,
-            Some(Key::Num2),
+            super::KeyIdentity::new(Key::Num2, Some(Key::Num2), Some("2")),
             "@",
-            true,
-            false,
-            Modifiers::SHIFT,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+            super::KeyEventContext::new(
+                true,
+                false,
+                Modifiers::SHIFT,
+                TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+            ),
         )
         .expect("shifted symbol");
 
@@ -296,16 +303,120 @@ mod tests {
     #[test]
     fn kitty_text_translation_reports_associated_text_for_altgr_symbol() {
         let translation = translate_text_event(
-            Key::Num2,
-            Some(Key::Num2),
+            super::KeyIdentity::new(Key::Num2, Some(Key::Num2), Some("2")),
             "@",
-            true,
-            false,
-            Modifiers::ALT,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS | TermMode::REPORT_ASSOCIATED_TEXT,
+            super::KeyEventContext::new(
+                true,
+                false,
+                Modifiers::ALT,
+                TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS | TermMode::REPORT_ASSOCIATED_TEXT,
+            ),
         )
         .expect("altgr symbol");
 
         assert_eq!(translation.bytes, b"\x1b[50:64;3;64u");
+    }
+
+    #[test]
+    fn kitty_text_translation_uses_unshifted_international_primary_key() {
+        let translation = translate_text_event(
+            super::KeyIdentity::new(Key::OpenBracket, Some(Key::OpenBracket), Some("å")),
+            "å",
+            super::KeyEventContext::new(
+                true,
+                false,
+                Modifiers::NONE,
+                TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+            ),
+        )
+        .expect("international text");
+
+        assert_eq!(translation.bytes, b"\x1b[229::91u");
+    }
+
+    #[test]
+    fn kitty_text_translation_keeps_shifted_international_key_unshifted_in_primary_slot() {
+        let translation = translate_text_event(
+            super::KeyIdentity::new(Key::OpenBracket, Some(Key::OpenBracket), Some("å")),
+            "Å",
+            super::KeyEventContext::new(
+                true,
+                false,
+                Modifiers::SHIFT,
+                TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+            ),
+        )
+        .expect("shifted international text");
+
+        assert_eq!(translation.bytes, b"\x1b[229:197:91;2u");
+    }
+
+    #[test]
+    fn kitty_text_translation_covers_norwegian_swedish_and_us_layouts() {
+        type LayoutCase<'a> = (&'a str, Key, &'a str, &'a str, Modifiers, &'a [u8]);
+
+        let cases: [LayoutCase<'_>; 10] = [
+            ("norwegian æ", Key::Quote, "æ", "æ", Modifiers::NONE, b"\x1b[230::39u"),
+            (
+                "norwegian Æ",
+                Key::Quote,
+                "æ",
+                "Æ",
+                Modifiers::SHIFT,
+                b"\x1b[230:198:39;2u",
+            ),
+            (
+                "norwegian ø",
+                Key::Semicolon,
+                "ø",
+                "ø",
+                Modifiers::NONE,
+                b"\x1b[248::59u",
+            ),
+            (
+                "norwegian Ø",
+                Key::Semicolon,
+                "ø",
+                "Ø",
+                Modifiers::SHIFT,
+                b"\x1b[248:216:59;2u",
+            ),
+            ("swedish ä", Key::Quote, "ä", "ä", Modifiers::NONE, b"\x1b[228::39u"),
+            (
+                "swedish Ä",
+                Key::Quote,
+                "ä",
+                "Ä",
+                Modifiers::SHIFT,
+                b"\x1b[228:196:39;2u",
+            ),
+            ("swedish ö", Key::Semicolon, "ö", "ö", Modifiers::NONE, b"\x1b[246::59u"),
+            (
+                "swedish Ö",
+                Key::Semicolon,
+                "ö",
+                "Ö",
+                Modifiers::SHIFT,
+                b"\x1b[246:214:59;2u",
+            ),
+            ("us semicolon", Key::Semicolon, ";", ";", Modifiers::NONE, b"\x1b[59u"),
+            ("us colon", Key::Semicolon, ";", ":", Modifiers::SHIFT, b"\x1b[59:58;2u"),
+        ];
+
+        for (name, key, unshifted, text, modifiers, expected) in cases {
+            let translation = translate_text_event(
+                super::KeyIdentity::new(key, Some(key), Some(unshifted)),
+                text,
+                super::KeyEventContext::new(
+                    true,
+                    false,
+                    modifiers,
+                    TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+                ),
+            )
+            .unwrap_or_else(|| panic!("{name}"));
+
+            assert_eq!(translation.bytes, expected, "{name}");
+        }
     }
 }

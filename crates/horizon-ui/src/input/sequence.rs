@@ -6,15 +6,29 @@ use egui::{Key, Modifiers};
 
 use super::keyboard::{KeyExt, base_key_text, control_modifier, is_control_character};
 
-pub(super) fn build_sequence(
-    key: Key,
-    physical_key: Option<Key>,
-    modifiers: Modifiers,
-    mode: TermMode,
-    pressed: bool,
-    repeat: bool,
-    text: Option<&str>,
-) -> Option<Vec<u8>> {
+#[derive(Clone, Copy)]
+pub(super) struct SequenceRequest<'a> {
+    pub(super) key: Key,
+    pub(super) physical_key: Option<Key>,
+    pub(super) key_without_modifiers_text: Option<&'a str>,
+    pub(super) modifiers: Modifiers,
+    pub(super) mode: TermMode,
+    pub(super) pressed: bool,
+    pub(super) repeat: bool,
+    pub(super) text: Option<&'a str>,
+}
+
+pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
+    let SequenceRequest {
+        key,
+        physical_key,
+        key_without_modifiers_text,
+        modifiers,
+        mode,
+        pressed,
+        repeat,
+        text,
+    } = request;
     let kitty_sequence = mode.intersects(
         TermMode::REPORT_ALL_KEYS_AS_ESC
             | TermMode::DISAMBIGUATE_ESC_CODES
@@ -41,7 +55,7 @@ pub(super) fn build_sequence(
         .try_build_named_kitty(key)
         .or_else(|| builder.try_build_named_normal(key, associated_text.is_some()))
         .or_else(|| builder.try_build_control_char_or_modifier(key))
-        .or_else(|| builder.try_build_textual(key, physical_key, text, associated_text));
+        .or_else(|| builder.try_build_textual(key, physical_key, key_without_modifiers_text, text, associated_text));
 
     let SequenceBase { payload, terminator } = sequence_base?;
     let mut payload = format!("\x1b[{payload}");
@@ -86,6 +100,7 @@ impl SequenceBuilder {
         &self,
         key: Key,
         physical_key: Option<Key>,
+        key_without_modifiers_text: Option<&str>,
         text: Option<&str>,
         associated_text: Option<&str>,
     ) -> Option<SequenceBase> {
@@ -95,9 +110,9 @@ impl SequenceBuilder {
 
         if text.chars().count() == 1 {
             let ch = text.chars().next()?;
-            let unshifted = base_key_text(key, physical_key)
-                .as_deref()
+            let unshifted = key_without_modifiers_text
                 .and_then(single_char)
+                .or_else(|| base_key_text(key, physical_key).as_deref().and_then(single_char))
                 .unwrap_or_else(|| {
                     if self.modifiers.contains(SequenceModifiers::SHIFT) && key.alpha_key() {
                         ch.to_ascii_lowercase()
@@ -107,8 +122,13 @@ impl SequenceBuilder {
                 });
             let alternate = u32::from(ch);
             let unicode = u32::from(unshifted);
-            let payload = if self.mode.contains(TermMode::REPORT_ALTERNATE_KEYS) && alternate != unicode {
-                format!("{unicode}:{alternate}")
+            let payload = if self.mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+                let base_layout = base_key_text(key, physical_key)
+                    .as_deref()
+                    .and_then(single_char)
+                    .map(u32::from)
+                    .filter(|base| *base != unicode && *base != alternate);
+                format_textual_payload(unicode, (alternate != unicode).then_some(alternate), base_layout)
             } else {
                 unicode.to_string()
             };
@@ -238,6 +258,15 @@ impl SequenceBuilder {
         }
 
         Some(SequenceBase::new(base.into(), SequenceTerminator::Kitty))
+    }
+}
+
+fn format_textual_payload(unicode: u32, alternate: Option<u32>, base_layout: Option<u32>) -> String {
+    match (alternate, base_layout) {
+        (None, None) => unicode.to_string(),
+        (Some(alternate), None) => format!("{unicode}:{alternate}"),
+        (None, Some(base_layout)) => format!("{unicode}::{base_layout}"),
+        (Some(alternate), Some(base_layout)) => format!("{unicode}:{alternate}:{base_layout}"),
     }
 }
 

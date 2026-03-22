@@ -32,7 +32,7 @@ impl<'a> TerminalView<'a> {
         ui: &mut egui::Ui,
         is_active_panel: bool,
         interactive: bool,
-        keyboard_events: &[egui::Event],
+        keyboard_events: &[super::input::TerminalInputEvent],
     ) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;

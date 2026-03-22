@@ -26,22 +26,23 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui::{Context, Event, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
     StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
-use crate::app::canvas::CanvasGridCache;
-use crate::command_palette::CommandPalette;
-use crate::command_registry::CommandEntry;
-use crate::dir_picker::DirPicker;
-use crate::editor_widget::MarkdownPreviewCache;
-use crate::remote_hosts_overlay::RemoteHostsOverlay;
-use crate::search_overlay::SearchOverlay;
-use crate::terminal_widget::TerminalGridCache;
-use crate::theme;
+use self::canvas::CanvasGridCache;
+use super::command_palette::CommandPalette;
+use super::command_registry::CommandEntry;
+use super::dir_picker::DirPicker;
+use super::editor_widget::MarkdownPreviewCache;
+use super::input;
+use super::remote_hosts_overlay::RemoteHostsOverlay;
+use super::search_overlay::SearchOverlay;
+use super::terminal_widget::TerminalGridCache;
+use super::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
 const SIDEBAR_WIDTH: f32 = 210.0;
@@ -67,10 +68,10 @@ enum RenameEditAction {
 }
 
 #[derive(Clone, Default)]
-pub(in crate::app) enum CanvasPanSpaceKeyState {
+enum CanvasPanSpaceKeyState {
     #[default]
     Idle,
-    Pending(Vec<Event>),
+    Pending(Vec<input::TerminalInputEvent>),
     Consumed,
 }
 
@@ -96,7 +97,7 @@ struct StartupChooserState {
 }
 
 #[derive(Clone, Default)]
-pub(in crate::app) struct DetachedWorkspaceViewportState {
+struct DetachedWorkspaceViewportState {
     window: WindowConfig,
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
@@ -137,7 +138,9 @@ pub struct HorizonApp {
     is_panning: bool,
     canvas_pan_input_claimed: bool,
     pending_space_pan_key: CanvasPanSpaceKeyState,
-    terminal_keyboard_events: Vec<Event>,
+    observed_keyboard_inputs: input::ObservedKeyboardInputs,
+    frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
+    terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
@@ -199,10 +202,11 @@ impl HorizonApp {
         config_path: PathBuf,
         session_store: SessionStore,
         startup: StartupDecision,
+        observed_keyboard_inputs: input::ObservedKeyboardInputs,
     ) -> Self {
         let shortcuts = resolve_shortcuts(config);
         let action_commands_cache =
-            crate::command_registry::action_commands(&shortcuts, crate::app::util::primary_shortcut_label());
+            super::command_registry::action_commands(&shortcuts, self::util::primary_shortcut_label());
         let mut fonts = egui::FontDefinitions::default();
 
         fonts.font_data.insert(
@@ -290,6 +294,8 @@ impl HorizonApp {
             is_panning: false,
             canvas_pan_input_claimed: false,
             pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
+            observed_keyboard_inputs,
+            frame_keyboard_events: HashMap::new(),
             terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
             config_last_mtime,
@@ -354,6 +360,16 @@ impl eframe::App for HorizonApp {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         theme::BG.to_normalized_gamma_f32()
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let viewport_id = raw_input.viewport_id;
+        let frame_keyboard_events = self.observed_keyboard_inputs.take_frame_key_events(raw_input);
+        if frame_keyboard_events.is_empty() {
+            self.frame_keyboard_events.remove(&viewport_id);
+        } else {
+            self.frame_keyboard_events.insert(viewport_id, frame_keyboard_events);
+        }
     }
 
     fn on_exit(&mut self) {
