@@ -58,6 +58,10 @@ const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;
 const MINIMAP_MARGIN: f32 = 16.0;
 const MINIMAP_PAD: f32 = 6.0;
+const FONT_INTER: &str = "inter";
+const FONT_JETBRAINS_MONO: &str = "jetbrains-mono";
+const FONT_NOTO_CJK: &str = "noto-sans-cjk-sc";
+const FONT_NOTO_SYMBOLS: &str = "noto-sans-symbols-2";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum RenameEditAction {
@@ -207,29 +211,7 @@ impl HorizonApp {
         let shortcuts = resolve_shortcuts(config);
         let action_commands_cache =
             super::command_registry::action_commands(&shortcuts, self::util::primary_shortcut_label());
-        let mut fonts = egui::FontDefinitions::default();
-
-        fonts.font_data.insert(
-            "inter".to_owned(),
-            egui::FontData::from_static(include_bytes!("../../assets/fonts/InterVariable.ttf")).into(),
-        );
-        fonts.font_data.insert(
-            "jetbrains-mono".to_owned(),
-            egui::FontData::from_static(include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf")).into(),
-        );
-
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "inter".to_owned());
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .insert(0, "jetbrains-mono".to_owned());
-
-        cc.egui_ctx.set_fonts(fonts);
+        cc.egui_ctx.set_fonts(configure_fonts());
         let mut board = Board::new();
         board.attention_enabled = config.features.attention_feed;
 
@@ -314,6 +296,52 @@ impl HorizonApp {
     }
 }
 
+fn configure_fonts() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+
+    insert_font_data(
+        &mut fonts,
+        FONT_INTER,
+        include_bytes!("../../assets/fonts/InterVariable.ttf"),
+    );
+    insert_font_data(
+        &mut fonts,
+        FONT_JETBRAINS_MONO,
+        include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"),
+    );
+    // Keep JetBrains Mono as the metrics source for the terminal grid, then
+    // fall back to broader Unicode coverage for glyphs it does not contain.
+    insert_font_data(
+        &mut fonts,
+        FONT_NOTO_CJK,
+        include_bytes!("../../assets/fonts/NotoSansCJKsc-Regular.otf"),
+    );
+    insert_font_data(
+        &mut fonts,
+        FONT_NOTO_SYMBOLS,
+        include_bytes!("../../assets/fonts/NotoSansSymbols2-Regular.ttf"),
+    );
+
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, FONT_INTER.to_owned());
+
+    let monospace = fonts.families.entry(egui::FontFamily::Monospace).or_default();
+    monospace.insert(0, FONT_JETBRAINS_MONO.to_owned());
+    monospace.insert(1, FONT_NOTO_CJK.to_owned());
+    monospace.insert(2, FONT_NOTO_SYMBOLS.to_owned());
+
+    fonts
+}
+
+fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'static [u8]) {
+    fonts
+        .font_data
+        .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+}
+
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {
     match config.shortcuts.resolve() {
         Ok(shortcuts) => shortcuts,
@@ -388,5 +416,32 @@ impl StartupChooserState {
             selected_session_id,
             error: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::FontFamily;
+
+    use super::{FONT_INTER, FONT_JETBRAINS_MONO, FONT_NOTO_CJK, FONT_NOTO_SYMBOLS, configure_fonts};
+
+    #[test]
+    fn configure_fonts_registers_terminal_fallback_stack() {
+        let fonts = configure_fonts();
+        let proportional = fonts
+            .families
+            .get(&FontFamily::Proportional)
+            .expect("proportional font family");
+        let monospace = fonts
+            .families
+            .get(&FontFamily::Monospace)
+            .expect("monospace font family");
+
+        assert_eq!(proportional.first().map(String::as_str), Some(FONT_INTER));
+        assert_eq!(monospace.first().map(String::as_str), Some(FONT_JETBRAINS_MONO));
+        assert_eq!(monospace.get(1).map(String::as_str), Some(FONT_NOTO_CJK));
+        assert_eq!(monospace.get(2).map(String::as_str), Some(FONT_NOTO_SYMBOLS));
+        assert!(fonts.font_data.contains_key(FONT_NOTO_CJK));
+        assert!(fonts.font_data.contains_key(FONT_NOTO_SYMBOLS));
     }
 }

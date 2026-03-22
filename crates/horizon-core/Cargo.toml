@@ -25,7 +25,7 @@ rusqlite.workspace = true
 uuid.workspace = true
 comrak = { version = "0.51", default-features = false }
 git2.workspace = true
-regex-lite.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

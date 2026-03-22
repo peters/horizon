@@ -150,6 +150,7 @@ mod tests {
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::selection::SelectionType;
     use alacritty_terminal::sync::FairMutex;
     use alacritty_terminal::term::{self, Term, TermMode};
     use std::sync::Arc;
@@ -357,6 +358,36 @@ mod tests {
 
         assert_eq!(terminal.title(), "cargo test");
         assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn full_text_lines_preserve_unicode_matrix() {
+        let mut terminal = spawn_test_terminal();
+
+        replay_terminal_bytes(
+            &terminal.term,
+            "ascii æøå åäö\r\nmixed 你 e\u{0301} ✈\u{fe0f}\r\n".as_bytes(),
+        );
+
+        let (lines, total_lines) = terminal.full_text_lines(terminal.rows().into());
+
+        assert_eq!(total_lines, usize::from(terminal.rows()));
+        assert_eq!(lines, vec!["ascii æøå åäö", "mixed 你 e\u{0301} ✈\u{fe0f}"]);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn line_selection_preserves_unicode_content() {
+        let mut terminal = spawn_test_terminal();
+
+        replay_terminal_bytes(&terminal.term, "æøå åäö 你 e\u{0301} ✈\u{fe0f}".as_bytes());
+        terminal.start_selection(SelectionType::Lines, 0, 0);
+
+        assert_eq!(
+            terminal.selection_to_string(),
+            Some("æøå åäö 你 e\u{0301} ✈\u{fe0f}\n".to_string())
+        );
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
