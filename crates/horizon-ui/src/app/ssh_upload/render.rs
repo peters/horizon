@@ -12,9 +12,9 @@ pub(super) fn render_backdrop(ctx: &Context) {
     egui::Area::new(Id::new("ssh_upload_backdrop"))
         .fixed_pos(screen_rect.min)
         .order(egui::Order::Foreground)
-        .interactable(true)
+        .interactable(false)
         .show(ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
+            let (rect, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::hover());
             ui.painter_at(rect)
                 .rect_filled(rect, 0.0, Color32::from_black_alpha(150));
         });

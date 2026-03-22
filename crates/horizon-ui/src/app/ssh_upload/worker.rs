@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
@@ -532,15 +532,10 @@ fn run_taildrop_upload(file: &LocalUploadFile, target: &str) -> Result<std::proc
 }
 
 fn scp_destination(connection: &SshConnection, destination_dir: &str) -> String {
-    format!(
-        "{}:{}",
-        connection.scp_transport_target(),
-        scp_quote_path(Path::new(destination_dir)),
-    )
-}
-
-fn scp_quote_path(path: &Path) -> String {
-    shell_escape(&path.display().to_string())
+    // `scp` receives this as one argv entry, so the destination path should stay
+    // raw. Shell-quoting it makes the quotes part of the remote path under
+    // OpenSSH's default SFTP mode.
+    format!("{}:{}", connection.scp_transport_target(), destination_dir)
 }
 
 fn shell_escape(value: &str) -> String {
@@ -577,11 +572,10 @@ fn requires_interactive_ssh_auth(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use horizon_core::SshConnection;
-    use std::path::Path;
 
     use super::{
         build_remote_shell_command, classify_ssh_probe_error, parse_remote_directory_listing, parse_taildrop_targets,
-        parse_tailscale_ips, scp_destination, scp_quote_path,
+        parse_tailscale_ips, scp_destination,
     };
 
     #[test]
@@ -610,8 +604,17 @@ mod tests {
     }
 
     #[test]
-    fn scp_quote_path_wraps_spaces_in_single_quotes() {
-        assert_eq!(scp_quote_path(Path::new("/tmp/with space")), "'/tmp/with space'");
+    fn scp_destination_keeps_spaces_unquoted() {
+        let connection = SshConnection {
+            host: "prod".to_string(),
+            user: Some("deploy".to_string()),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            scp_destination(&connection, "/tmp/with space"),
+            "deploy@prod:/tmp/with space"
+        );
     }
 
     #[test]
@@ -638,7 +641,7 @@ mod tests {
 
         assert_eq!(
             scp_destination(&connection, "/srv/uploads"),
-            "deploy@[2001:db8::5]:'/srv/uploads'"
+            "deploy@[2001:db8::5]:/srv/uploads"
         );
     }
 }
