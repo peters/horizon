@@ -4,6 +4,7 @@ use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
+use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
@@ -15,6 +16,7 @@ use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE
 
 struct PanelSnapshot {
     screen_rect: Rect,
+    terminal_body_screen_rect: Option<Rect>,
     canvas_position: Pos2,
     canvas_size: Vec2,
     current_workspace_id: WorkspaceId,
@@ -92,6 +94,7 @@ struct PanelBodyContext<'a> {
     keyboard_events: &'a [TerminalInputEvent],
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
+    primary_selection: &'a PrimarySelection,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
 }
 
@@ -115,6 +118,7 @@ fn show_panel_body_contents(
             is_focused,
             interactive,
             body_context.keyboard_events,
+            body_context.primary_selection,
         ),
     }
 }
@@ -155,6 +159,7 @@ impl HorizonApp {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
+                                    primary_selection: &self.primary_selection,
                                     terminal_grid_cache: None,
                                 },
                             );
@@ -167,6 +172,7 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_panels(&mut self, ctx: &Context) {
         self.panel_screen_rects.clear();
+        self.terminal_body_screen_rects.clear();
         self.panel_screen_order.clear();
 
         let workspaces: Vec<(WorkspaceId, String, Color32)> = self
@@ -233,6 +239,15 @@ impl HorizonApp {
                 self.canvas_to_screen(canvas_rect, canvas_position),
                 self.canvas_size_to_screen(canvas_size),
             );
+            let terminal_body_screen_rect = terminal.and_then(|_| {
+                let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
+                let body_rect = PanelFrame::new(panel_rect).body;
+                let screen_body_rect = Rect::from_min_size(
+                    self.canvas_to_screen(canvas_rect, body_rect.min),
+                    self.canvas_size_to_screen(body_rect.size()),
+                );
+                screen_body_rect.is_positive().then_some(screen_body_rect)
+            });
 
             // Cull off-screen panels — skip chrome, snapshot, and rendering.
             if !canvas_rect.intersects(screen_rect) {
@@ -254,6 +269,7 @@ impl HorizonApp {
 
             Some(PanelSnapshot {
                 screen_rect,
+                terminal_body_screen_rect,
                 canvas_position,
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
@@ -401,6 +417,7 @@ impl HorizonApp {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
+                                    primary_selection: &self.primary_selection,
                                     terminal_grid_cache: grid_cache,
                                 },
                             );
@@ -514,6 +531,9 @@ impl HorizonApp {
         outcome: &PanelUiOutcome,
     ) -> bool {
         self.panel_screen_rects.insert(panel_id, snapshot.screen_rect);
+        if let Some(body_rect) = snapshot.terminal_body_screen_rect {
+            self.terminal_body_screen_rects.insert(panel_id, body_rect);
+        }
         self.panel_screen_order.push(panel_id);
 
         if matches!(outcome.command, Some(PanelCommand::StartRename)) {

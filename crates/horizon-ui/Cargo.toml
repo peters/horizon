@@ -31,3 +31,4 @@ serde_yaml.workspace = true
 tempfile.workspace = true
 alacritty_terminal.workspace = true
 egui_commonmark.workspace = true
+arboard.workspace = true

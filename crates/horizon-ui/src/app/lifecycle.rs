@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use egui::Context;
 use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
 
+use super::super::input;
 use crate::{loading_spinner, theme};
 
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
@@ -134,12 +135,26 @@ impl HorizonApp {
         }
 
         self.animate_pan(ctx);
+        self.poll_primary_selection_paste();
         self.maybe_refresh_session_catalog();
         self.poll_remote_hosts_refresh();
         self.poll_git_watchers();
         self.poll_config_reload();
 
         had_terminal_output
+    }
+
+    fn poll_primary_selection_paste(&mut self) {
+        while let Some(paste) = self.primary_selection.try_recv_paste() {
+            let Some(panel) = self.board.panel_mut(paste.panel_id) else {
+                continue;
+            };
+            let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+                continue;
+            };
+            let bytes = input::paste_bytes(&paste.text, mode, true);
+            panel.write_input(&bytes);
+        }
     }
 
     #[profiling::function]
@@ -228,6 +243,7 @@ impl HorizonApp {
         for panel_id in panels_to_close {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
+            self.terminal_body_screen_rects.remove(&panel_id);
             self.terminal_grid_cache.remove(&panel_id);
             self.editor_preview_cache.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {

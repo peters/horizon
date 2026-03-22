@@ -6,9 +6,18 @@ use egui::{Key, Pos2, Rect, Vec2};
 use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use super::super::input::{self, TerminalInputEvent};
+use super::super::primary_selection::PrimarySelection;
 
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
+
+#[derive(Clone, Copy)]
+pub(super) struct PointerSupport<'a> {
+    pub metrics: &'a GridMetrics,
+    pub visible_rows: u16,
+    pub visible_cols: u16,
+    pub primary_selection: &'a PrimarySelection,
+}
 
 struct PointerContext<'a> {
     interaction: &'a TerminalInteraction,
@@ -20,6 +29,8 @@ struct PointerContext<'a> {
     current_modifiers: egui::Modifiers,
     hovered_point: Option<input::GridPoint>,
     from_global: Option<TSTransform>,
+    primary_selection: &'a PrimarySelection,
+    ui_ctx: egui::Context,
 }
 
 pub(super) fn handle_terminal_pointer_input(
@@ -27,9 +38,7 @@ pub(super) fn handle_terminal_pointer_input(
     panel: &mut Panel,
     interaction: &TerminalInteraction,
     is_active_panel: bool,
-    metrics: &GridMetrics,
-    visible_rows: u16,
-    visible_cols: u16,
+    support: PointerSupport<'_>,
 ) {
     if interaction.body.clicked() {
         interaction.body.request_focus();
@@ -65,23 +74,32 @@ pub(super) fn handle_terminal_pointer_input(
         .map(|position| transform_pos(from_global, position))
         .filter(|position| interaction.layout.body.contains(*position))
         .and_then(|position| {
-            grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
+            grid_point_from_position(
+                interaction.layout.body,
+                position,
+                support.metrics,
+                support.visible_rows,
+                support.visible_cols,
+            )
         });
     let pointer_context = PointerContext {
         interaction,
-        metrics,
-        visible_rows,
-        visible_cols,
+        metrics: support.metrics,
+        visible_rows: support.visible_rows,
+        visible_cols: support.visible_cols,
         terminal_mode,
         pointer_buttons,
         current_modifiers,
         hovered_point,
         from_global,
+        primary_selection: support.primary_selection,
+        ui_ctx: ui.ctx().clone(),
     };
 
     handle_pointer_events(&events, panel, &pointer_context);
+    maybe_copy_selection_to_primary(panel, interaction, support.primary_selection);
 
-    handle_scrollbar_drag(ui, panel, interaction, visible_rows);
+    handle_scrollbar_drag(ui, panel, interaction, support.visible_rows);
 
     // Show pointing hand when Ctrl/Cmd hovering over clickable content.
     if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
@@ -210,6 +228,10 @@ fn handle_pointer_button(
         {
             panel.write_input(&bytes);
         }
+    } else if should_request_primary_paste(button, pressed, modifiers) {
+        pointer
+            .primary_selection
+            .request_paste(panel.id, pointer.ui_ctx.clone());
     } else if button == egui::PointerButton::Primary
         && pressed
         && let Some(point) = grid_point_from_position(
@@ -231,6 +253,36 @@ fn handle_pointer_button(
             terminal.start_selection(sel_type, point.line, point.column);
         }
     }
+}
+
+fn maybe_copy_selection_to_primary(
+    panel: &Panel,
+    interaction: &TerminalInteraction,
+    primary_selection: &PrimarySelection,
+) {
+    if !selection_copy_completed(
+        interaction.body.drag_stopped(),
+        interaction.body.double_clicked(),
+        interaction.body.triple_clicked(),
+    ) {
+        return;
+    }
+
+    if let Some(text) = panel.terminal().and_then(horizon_core::Terminal::selection_to_string) {
+        primary_selection.copy(&text);
+    }
+}
+
+fn selection_copy_completed(drag_stopped: bool, double_clicked: bool, triple_clicked: bool) -> bool {
+    drag_stopped || double_clicked || triple_clicked
+}
+
+fn should_request_primary_paste(button: egui::PointerButton, pressed: bool, modifiers: egui::Modifiers) -> bool {
+    cfg!(target_os = "linux")
+        && button == egui::PointerButton::Middle
+        && pressed
+        && !modifiers.ctrl
+        && !modifiers.command
 }
 
 fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &TerminalInteraction, visible_rows: u16) {
@@ -291,7 +343,12 @@ fn handle_pointer_selection_drag(
     }
 }
 
-pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, events: &[TerminalInputEvent]) {
+pub(super) fn handle_terminal_keyboard_input(
+    ui: &egui::Ui,
+    panel: &mut Panel,
+    events: &[TerminalInputEvent],
+    primary_selection: &PrimarySelection,
+) {
     let Some(terminal) = panel.terminal_mut() else {
         return;
     };
@@ -316,6 +373,7 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, e
             }
             egui::Event::Copy => {
                 if let Some(text) = terminal.selection_to_string() {
+                    primary_selection.copy(&text);
                     ui.ctx().copy_text(text);
                     terminal.clear_selection();
                 } else {
@@ -324,6 +382,7 @@ pub(super) fn handle_terminal_keyboard_input(ui: &egui::Ui, panel: &mut Panel, e
             }
             egui::Event::Cut => {
                 if let Some(text) = terminal.selection_to_string() {
+                    primary_selection.copy(&text);
                     ui.ctx().copy_text(text);
                     terminal.clear_selection();
                 }
@@ -581,9 +640,39 @@ impl InputEmission {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyboardInputForwarder, TerminalInputEvent};
+    use super::{KeyboardInputForwarder, TerminalInputEvent, selection_copy_completed, should_request_primary_paste};
     use alacritty_terminal::term::TermMode;
-    use egui::{Event, Key, Modifiers};
+    use egui::{Event, Key, Modifiers, PointerButton};
+
+    #[test]
+    fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
+        assert_eq!(
+            should_request_primary_paste(PointerButton::Middle, true, Modifiers::NONE),
+            cfg!(target_os = "linux")
+        );
+    }
+
+    #[test]
+    fn middle_click_does_not_request_primary_paste_with_ctrl_or_cmd() {
+        assert!(!should_request_primary_paste(
+            PointerButton::Middle,
+            true,
+            Modifiers::CTRL
+        ));
+        assert!(!should_request_primary_paste(
+            PointerButton::Middle,
+            true,
+            Modifiers::COMMAND
+        ));
+    }
+
+    #[test]
+    fn selection_completion_triggers_primary_copy() {
+        assert!(selection_copy_completed(true, false, false));
+        assert!(selection_copy_completed(false, true, false));
+        assert!(selection_copy_completed(false, false, true));
+        assert!(!selection_copy_completed(false, false, false));
+    }
 
     #[test]
     fn altgr_text_after_release_emits_only_kitty_sequences() {

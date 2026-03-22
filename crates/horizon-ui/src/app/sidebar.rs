@@ -531,6 +531,7 @@ impl HorizonApp {
         if let Some(panel_id) = actions.close_panel {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
+            self.terminal_body_screen_rects.remove(&panel_id);
         }
         if let Some(workspace_id) = actions.close_all_in_workspace {
             self.close_workspace_panels(workspace_id);

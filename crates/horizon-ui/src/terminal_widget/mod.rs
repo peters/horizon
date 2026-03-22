@@ -6,11 +6,12 @@ mod scrollbar;
 use egui::{Context, FontId, Vec2};
 use horizon_core::Panel;
 
-use self::input::{handle_terminal_keyboard_input, handle_terminal_pointer_input};
+use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
 use self::scrollbar::render_scrollbar;
+use super::primary_selection::PrimarySelection;
 
 const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT_FACTOR: f32 = 1.3;
@@ -33,6 +34,7 @@ impl<'a> TerminalView<'a> {
         is_active_panel: bool,
         interactive: bool,
         keyboard_events: &[super::input::TerminalInputEvent],
+        primary_selection: &PrimarySelection,
     ) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
@@ -52,9 +54,12 @@ impl<'a> TerminalView<'a> {
                 self.panel,
                 &interaction,
                 is_active_panel,
-                &metrics,
-                new_rows,
-                new_cols,
+                PointerSupport {
+                    metrics: &metrics,
+                    visible_rows: new_rows,
+                    visible_cols: new_cols,
+                    primary_selection,
+                },
             );
         }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
@@ -122,7 +127,7 @@ impl<'a> TerminalView<'a> {
         }
 
         if interactive && has_terminal_focus {
-            handle_terminal_keyboard_input(ui, self.panel, keyboard_events);
+            handle_terminal_keyboard_input(ui, self.panel, keyboard_events, primary_selection);
         }
 
         interaction.body.clicked()
