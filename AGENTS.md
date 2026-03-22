@@ -189,9 +189,14 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 
 - Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket
 - Start with `cargo build --profile profiling --features trace-profiling`, then use `HORIZON_TRACE_SPANS=1 RUST_LOG=info target/profiling/horizon` or `scripts/profile.sh <seconds>`; the script already falls back to traced spans when `perf` is blocked
-- Keep before/after comparisons workload-matched: same board layout, same interaction script, same binary profile, same tracing mode
-- When profiling pointer-driven regressions, automate the interaction with `xdotool` so hover paths can be compared consistently instead of relying on manual movement
+- Keep before/after comparisons workload-matched: same board layout, same interaction script, same binary profile, same tracing mode, and the same isolated runtime state (`HOME`, config, and session inputs)
+- Compare normalized span costs, not just total wall time: use per-call `avg_us` for key spans such as `horizon::app::update`, `horizon::app::lifecycle::render_active_view`, `horizon::app::panels::render_panels`, and `egui::context::pass` when frame counts differ between runs
+- When profiling pointer-driven regressions, automate the interaction with native tooling on the host OS instead of relying on manual movement: `xdotool` on X11, AppleScript/Quartz or equivalent on macOS, and Win32/UIA tooling on Windows
+- Scope automation and inspection to the exact PID under test when multiple Horizon processes may exist; avoid targeting windows by application name alone
+- Keep interaction workloads separate from terminal-output workloads so PTY redraw noise does not mask pointer or layout regressions
+- Treat short motion traces as provisional. If a resize or pointer regression only appears in a small sample, rerun it with a denser or longer scripted interaction before changing code
 - For UI perf changes, capture a live screenshot after the profiled interaction as well as at launch; some "wins" are just incorrect culling
+- Keep temporary perf harnesses, generated configs, and trace logs outside the repo unless the user explicitly asks to preserve them
 
 ### Typical Hotspots
 
@@ -213,7 +218,7 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 ### UI Feature Perf Checklist
 
 - Any new UI feature must identify its redraw surface up front: what pointer movement, hover state, animation, terminal output, or config changes will cause it to update
-- Treat pointer-only frames as a first-class perf budget; if a feature adds hover behavior, compare idle vs scripted mouse-move before and after, including a pass over empty canvas outside any workspace
+- Treat pointer-only frames as a first-class perf budget; if a feature adds hover behavior, compare idle vs scripted mouse-move before and after, including a pass over empty canvas outside any workspace and a pass over visible panel chrome
 - Do not add unconditional per-frame work across every panel or workspace for convenience. Compute lazily on interaction, gate by on-screen visibility, or cache by stable keys
 - Prefer cached meshes or cached shapes for repeated static decoration such as grids, minimaps, badges, panel chrome, and other geometry that does not semantically change every frame
 - Avoid broad `request_repaint` or animation loops for passive UI polish. Repaint continuously only when there is active interaction, active animation, or real terminal/output change
