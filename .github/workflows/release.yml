@@ -156,6 +156,18 @@ jobs:
           git add -f crates/horizon-ui/publish-assets
       - name: Publish horizon-core to crates.io
         run: cargo publish -p horizon-core --allow-dirty
+      - name: Publish horizon-cursor to crates.io
+        run: |
+          for attempt in $(seq 1 10); do
+            if cargo publish -p horizon-cursor --allow-dirty --no-verify; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 10 ]; then
+              echo "Failed to publish horizon-cursor after waiting for horizon-core to sync on crates.io."
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
       - name: Publish horizon-ui to crates.io
         run: |
           for attempt in $(seq 1 10); do
@@ -163,7 +175,7 @@ jobs:
               exit 0
             fi
             if [ "${attempt}" -eq 10 ]; then
-              echo "Failed to publish horizon-ui after waiting for horizon-core to sync on crates.io."
+              echo "Failed to publish horizon-ui after waiting for dependencies to sync on crates.io."
               exit 1
             fi
             sleep $((attempt * 5))
