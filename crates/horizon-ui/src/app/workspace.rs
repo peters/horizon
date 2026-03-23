@@ -224,14 +224,11 @@ impl HorizonApp {
 
         if !self.canvas_pan_input_claimed {
             for (workspace_id, delta) in pending_workspace_moves {
-                let outcome = self.board.translate_workspace_with_push_in_scope(
+                let _ = self.board.translate_workspace_with_push_in_scope(
                     workspace_id,
                     [delta.x, delta.y],
                     &workspace_collision_ids,
                 );
-                if visible_detached_workspace.is_none() {
-                    self.auto_pan_workspace_drag_chain(canvas_rect, &outcome.affected_workspaces, delta);
-                }
                 self.mark_runtime_dirty();
             }
         }

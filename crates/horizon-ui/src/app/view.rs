@@ -3,8 +3,6 @@ use horizon_core::{PanelId, WorkspaceId};
 
 use super::{HorizonApp, PANEL_PADDING, WS_BG_PAD, WS_TITLE_HEIGHT};
 
-const WORKSPACE_DRAG_AUTO_PAN_MARGIN: f32 = 64.0;
-
 impl HorizonApp {
     pub(super) fn ensure_workspace_visible(&mut self, ctx: &Context) -> WorkspaceId {
         let workspace_count_before = self.board.workspaces.len();
@@ -194,31 +192,6 @@ impl HorizonApp {
         true
     }
 
-    pub(super) fn auto_pan_workspace_drag_chain(
-        &mut self,
-        canvas_rect: Rect,
-        workspace_ids: &[WorkspaceId],
-        drag_delta: Vec2,
-    ) {
-        if workspace_ids.len() <= 1 {
-            return;
-        }
-
-        let Some(chain_rect) = self.workspace_chain_screen_rect(canvas_rect, workspace_ids) else {
-            return;
-        };
-        let pan_delta =
-            workspace_drag_autopan_delta(canvas_rect, chain_rect, drag_delta, WORKSPACE_DRAG_AUTO_PAN_MARGIN);
-        if pan_delta == Vec2::ZERO {
-            return;
-        }
-
-        self.pan_target = None;
-        let current = Vec2::new(self.canvas_view.pan_offset[0], self.canvas_view.pan_offset[1]);
-        let next = current + pan_delta;
-        self.canvas_view.set_pan_offset([next.x, next.y]);
-    }
-
     fn reveal_initial_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId, workspace_count_before: usize) {
         if workspace_count_before != 0 {
             return;
@@ -261,22 +234,6 @@ impl HorizonApp {
             .panel(panel_id)
             .map(|panel| panel_focus_frame(panel.layout.position, panel.layout.size))
     }
-
-    fn workspace_chain_screen_rect(&self, canvas_rect: Rect, workspace_ids: &[WorkspaceId]) -> Option<Rect> {
-        workspace_ids
-            .iter()
-            .copied()
-            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
-            .filter_map(|workspace_id| {
-                self.workspace_focus_frame(workspace_id).map(|(pos, size)| {
-                    Rect::from_min_size(
-                        self.canvas_to_screen(canvas_rect, pos),
-                        self.canvas_size_to_screen(size),
-                    )
-                })
-            })
-            .reduce(Rect::union)
-    }
 }
 
 fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
@@ -310,31 +267,6 @@ fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zo
     Vec2::new(x, y)
 }
 
-fn workspace_drag_autopan_delta(canvas_rect: Rect, chain_rect: Rect, drag_delta: Vec2, margin: f32) -> Vec2 {
-    let left_limit = canvas_rect.min.x + margin;
-    let right_limit = canvas_rect.max.x - margin;
-    let top_limit = canvas_rect.min.y + margin;
-    let bottom_limit = canvas_rect.max.y - margin;
-
-    let x = if drag_delta.x > 0.0 && chain_rect.max.x > right_limit {
-        right_limit - chain_rect.max.x
-    } else if drag_delta.x < 0.0 && chain_rect.min.x < left_limit {
-        left_limit - chain_rect.min.x
-    } else {
-        0.0
-    };
-
-    let y = if drag_delta.y > 0.0 && chain_rect.max.y > bottom_limit {
-        bottom_limit - chain_rect.max.y
-    } else if drag_delta.y < 0.0 && chain_rect.min.y < top_limit {
-        top_limit - chain_rect.min.y
-    } else {
-        0.0
-    };
-
-    Vec2::new(x, y)
-}
-
 #[must_use]
 pub(super) fn canvas_scene_transform(canvas_rect: Rect, canvas_view: horizon_core::CanvasViewState) -> TSTransform {
     TSTransform::from_translation(
@@ -352,9 +284,7 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
-    use super::{
-        aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame, workspace_drag_autopan_delta,
-    };
+    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame};
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -414,25 +344,5 @@ mod tests {
 
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn workspace_drag_autopan_follows_rightward_chain_at_visible_edge() {
-        let canvas_rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(1200.0, 800.0));
-        let chain_rect = Rect::from_min_max(Pos2::new(420.0, 120.0), Pos2::new(1180.0, 520.0));
-
-        let pan_delta = workspace_drag_autopan_delta(canvas_rect, chain_rect, Vec2::new(48.0, 0.0), 64.0);
-
-        assert_eq!(pan_delta, Vec2::new(-44.0, 0.0));
-    }
-
-    #[test]
-    fn workspace_drag_autopan_ignores_opposite_edge_when_drag_direction_changes() {
-        let canvas_rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(1200.0, 800.0));
-        let chain_rect = Rect::from_min_max(Pos2::new(20.0, 120.0), Pos2::new(760.0, 520.0));
-
-        let pan_delta = workspace_drag_autopan_delta(canvas_rect, chain_rect, Vec2::new(36.0, 0.0), 64.0);
-
-        assert_eq!(pan_delta, Vec2::ZERO);
     }
 }

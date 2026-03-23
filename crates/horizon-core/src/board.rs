@@ -53,12 +53,6 @@ impl WorkspaceLayout {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct WorkspaceTranslationOutcome {
-    pub moved: bool,
-    pub affected_workspaces: Vec<WorkspaceId>,
-}
-
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
