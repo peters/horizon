@@ -18,6 +18,7 @@ pub(crate) mod shortcuts;
 mod sidebar;
 mod ssh_upload;
 mod startup_session;
+mod updates;
 pub(crate) mod util;
 mod view;
 mod workspace;
@@ -30,9 +31,9 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
-    StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
+    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
+    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -84,6 +85,7 @@ enum CanvasPanSpaceKeyState {
 
 use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
+use self::updates::{AvailableUpdatePrompt, UpdateCheckMessage};
 
 struct StartupBootstrap {
     runtime_state: RuntimeState,
@@ -196,6 +198,9 @@ pub struct HorizonApp {
     last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
+    managed_install: Option<ManagedInstall>,
+    surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
+    surge_update_prompt: Option<AvailableUpdatePrompt>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
@@ -278,6 +283,11 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),
             settings: None,
+            managed_install: std::env::current_exe()
+                .ok()
+                .and_then(|current_exe| ManagedInstall::discover(&current_exe)),
+            surge_update_check_rx: None,
+            surge_update_prompt: None,
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
@@ -312,6 +322,8 @@ impl HorizonApp {
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
             StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
+
+        app.maybe_start_update_check();
 
         app
     }

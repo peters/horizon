@@ -145,6 +145,7 @@ impl HorizonApp {
         self.poll_ssh_upload_flow();
         self.poll_git_watchers();
         self.poll_config_reload();
+        self.poll_update_check();
 
         had_terminal_output
     }
@@ -357,6 +358,7 @@ impl HorizonApp {
             }
         }
         self.render_canvas_hud(ctx);
+        self.render_update_prompt(ctx);
         self.render_detached_viewports(ctx);
     }
 

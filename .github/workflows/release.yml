@@ -11,6 +11,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  SURGE_VERSION: v0.4.0-preview.236
 
 permissions:
   contents: write
@@ -82,27 +83,47 @@ jobs:
           - os: ubuntu-latest
             name: Linux x64
             cache_key: linux-release-artifacts
+            rid: linux-x64
             release_asset: horizon-linux-x64.tar.gz
             binary_path: target/release/horizon
             asset_kind: tar
+            surge_app_id: horizon-linux-x64
+            surge_main_exe: horizon
+            surge_installer_asset: horizon-installer-linux-x64.bin
+            surge_installer_ext: bin
           - os: macos-latest
             name: macOS arm64
             cache_key: macos-release-artifacts
+            rid: osx-arm64
             release_asset: horizon-osx-arm64.tar.gz
             binary_path: target/release/horizon
             asset_kind: tar
+            surge_app_id: horizon-osx-arm64
+            surge_main_exe: horizon
+            surge_installer_asset: horizon-installer-osx-arm64.bin
+            surge_installer_ext: bin
           - os: macos-15-intel
             name: macOS x64
             cache_key: macos-intel-release-artifacts
+            rid: osx-x64
             release_asset: horizon-osx-x64.tar.gz
             binary_path: target/release/horizon
             asset_kind: tar
+            surge_app_id: horizon-osx-x64
+            surge_main_exe: horizon
+            surge_installer_asset: horizon-installer-osx-x64.bin
+            surge_installer_ext: bin
           - os: windows-latest
             name: Windows x64
             cache_key: windows-release-artifacts
+            rid: win-x64
             release_asset: horizon-windows-x64.exe
             binary_path: target/release/horizon.exe
             asset_kind: file
+            surge_app_id: horizon-win-x64
+            surge_main_exe: horizon.exe
+            surge_installer_asset: horizon-installer-win-x64.exe
+            surge_installer_ext: exe
     steps:
       - uses: actions/checkout@v6
         with:
@@ -127,6 +148,62 @@ jobs:
         with:
           name: ${{ matrix.release_asset }}
           path: ${{ matrix.release_asset }}
+      - name: Build Surge toolchain
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          ./scripts/build-surge-toolchain.sh \
+            --version "${SURGE_VERSION}" \
+            --output-dir "$RUNNER_TEMP/surge-toolchain"
+          printf '%s\n' "$RUNNER_TEMP/surge-toolchain" >> "$GITHUB_PATH"
+      - name: Stage Surge artifacts
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          ./scripts/stage-surge-artifacts.sh \
+            --app-id "${{ matrix.surge_app_id }}" \
+            --rid "${{ matrix.rid }}" \
+            --version "${{ needs.validate-release.outputs.release_version }}" \
+            --binary "${{ matrix.binary_path }}" \
+            --main-exe "${{ matrix.surge_main_exe }}"
+      - name: Pack Surge release bundle
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          surge --manifest-path .surge/surge.yml pack \
+            --app-id "${{ matrix.surge_app_id }}" \
+            --rid "${{ matrix.rid }}" \
+            --version "${{ needs.validate-release.outputs.release_version }}"
+      - name: Collect Surge installer asset
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          mkdir -p surge-release-assets
+          cp \
+            ".surge/installers/${{ matrix.surge_app_id }}/${{ matrix.rid }}/Setup-${{ matrix.rid }}-${{ matrix.surge_app_id }}-stable-online-gui.${{ matrix.surge_installer_ext }}" \
+            "surge-release-assets/${{ matrix.surge_installer_asset }}"
+      - name: Upload Surge installer asset
+        if: ${{ !github.event.release.prerelease }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: surge-release-assets-${{ matrix.rid }}
+          path: surge-release-assets/*
+      - name: Collect Surge publish packages
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          mkdir -p surge-push-packages
+          cp ".surge/packages/${{ matrix.surge_app_id }}-${{ needs.validate-release.outputs.release_version }}-${{ matrix.rid }}-full.tar.zst" surge-push-packages/
+          delta=".surge/packages/${{ matrix.surge_app_id }}-${{ needs.validate-release.outputs.release_version }}-${{ matrix.rid }}-delta.tar.zst"
+          if [ -f "$delta" ]; then
+            cp "$delta" surge-push-packages/
+          fi
+      - name: Upload Surge publish packages
+        if: ${{ !github.event.release.prerelease }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: surge-push-packages-${{ matrix.rid }}
+          path: surge-push-packages/*
 
   upload-release-assets:
     name: Upload Release Assets
@@ -145,7 +222,15 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p release-assets
-          find artifacts -maxdepth 2 -type f -exec cp {} release-assets/ \;
+          find artifacts -maxdepth 2 -type f \
+            \( \
+              -name 'horizon-linux-x64.tar.gz' \
+              -o -name 'horizon-osx-arm64.tar.gz' \
+              -o -name 'horizon-osx-x64.tar.gz' \
+              -o -name 'horizon-windows-x64.exe' \
+              -o -name 'horizon-installer-*' \
+            \) \
+            -exec cp {} release-assets/ \;
 
       - id: checksums
         name: Generate release checksums
@@ -167,7 +252,23 @@ jobs:
             fi
           done
 
-          sha256sum "${required_assets[@]}" | tee SHA256SUMS.txt
+          if [[ "${{ github.event.release.prerelease }}" == "false" ]]; then
+            required_installers=(
+              horizon-installer-linux-x64.bin
+              horizon-installer-osx-arm64.bin
+              horizon-installer-osx-x64.bin
+              horizon-installer-win-x64.exe
+            )
+
+            for asset in "${required_installers[@]}"; do
+              if [ ! -f "$asset" ]; then
+                echo "::error::Missing required Surge installer asset: $asset"
+                exit 1
+              fi
+            done
+          fi
+
+          sha256sum -- * | tee SHA256SUMS.txt
 
           linux_x64_sha256="$(awk '$2 == "horizon-linux-x64.tar.gz" { print $1 }' SHA256SUMS.txt)"
           macos_arm64_sha256="$(awk '$2 == "horizon-osx-arm64.tar.gz" { print $1 }' SHA256SUMS.txt)"
@@ -184,6 +285,69 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" release-assets/* \
             --repo "${{ github.repository }}" \
             --clobber
+
+  publish-surge-release-index:
+    name: Publish Surge Release Index
+    if: ${{ !github.event.release.prerelease }}
+    needs: [validate-release, build-artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          lfs: true
+
+      - name: Build Surge toolchain
+        shell: bash
+        run: |
+          ./scripts/build-surge-toolchain.sh \
+            --version "${SURGE_VERSION}" \
+            --output-dir "$RUNNER_TEMP/surge-toolchain"
+          printf '%s\n' "$RUNNER_TEMP/surge-toolchain" >> "$GITHUB_PATH"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Collect Surge packages
+        shell: bash
+        run: |
+          mkdir -p .surge/packages
+          find artifacts -maxdepth 2 -type f -name '*.tar.zst' -exec cp {} .surge/packages/ \;
+
+          required_packages=(
+            horizon-linux-x64-${{ needs.validate-release.outputs.release_version }}-linux-x64-full.tar.zst
+            horizon-osx-arm64-${{ needs.validate-release.outputs.release_version }}-osx-arm64-full.tar.zst
+            horizon-osx-x64-${{ needs.validate-release.outputs.release_version }}-osx-x64-full.tar.zst
+            horizon-win-x64-${{ needs.validate-release.outputs.release_version }}-win-x64-full.tar.zst
+          )
+
+          for package in "${required_packages[@]}"; do
+            if [ ! -f ".surge/packages/$package" ]; then
+              echo "::error::Missing required Surge package: $package"
+              exit 1
+            fi
+          done
+
+      - name: Push stable Surge releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          while read -r app_id rid; do
+            surge --manifest-path .surge/surge.yml push \
+              --app-id "$app_id" \
+              --rid "$rid" \
+              --version "${{ needs.validate-release.outputs.release_version }}" \
+              --channel stable \
+              --packages-dir .surge/packages
+          done <<'EOF'
+          horizon-linux-x64 linux-x64
+          horizon-osx-arm64 osx-arm64
+          horizon-osx-x64 osx-x64
+          horizon-win-x64 win-x64
+          EOF
 
   update-homebrew-tap:
     name: Update Homebrew Tap
