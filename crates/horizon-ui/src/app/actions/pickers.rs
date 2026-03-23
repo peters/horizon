@@ -8,7 +8,7 @@ use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::theme;
 
 use super::PresetPickerAction;
-use super::support::{preset_picker_heading, render_preset_picker_row};
+use super::support::{preset_picker_heading, render_grouped_preset_rows};
 
 impl HorizonApp {
     pub(in crate::app) fn render_dir_picker(&mut self, ctx: &Context) {
@@ -137,10 +137,10 @@ impl HorizonApp {
                         );
                         ui.add_space(4.0);
 
-                        for preset in &self.presets {
-                            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset) {
-                                selected_action = Some(action);
-                            }
+                        if let Some(action) =
+                            render_grouped_preset_rows(ui, target_workspace, canvas_pos, &self.presets)
+                        {
+                            selected_action = Some(action);
                         }
                     });
             });

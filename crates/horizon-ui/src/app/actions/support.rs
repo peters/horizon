@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 
-use egui::{Button, Color32, Ui};
-use horizon_core::{PresetConfig, WorkspaceId};
+use egui::text::{LayoutJob, TextFormat};
+use egui::{Button, Color32, FontId, Ui};
+use horizon_core::{PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
 use crate::theme;
@@ -17,21 +18,121 @@ pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'
     }
 }
 
-pub(super) fn render_preset_picker_row(
+pub(super) fn render_grouped_preset_rows(
+    ui: &mut Ui,
+    target_workspace: Option<WorkspaceId>,
+    canvas_pos: [f32; 2],
+    presets: &[PresetConfig],
+) -> Option<PresetPickerAction> {
+    let mut selected_action = None;
+    let mut any_group_rendered = false;
+
+    for &category in &CATEGORY_ORDER {
+        let mut group_started = false;
+
+        for preset in presets {
+            if preset_category(preset) != category {
+                continue;
+            }
+
+            if !group_started {
+                if any_group_rendered {
+                    ui.add_space(2.0);
+                    ui.separator();
+                    ui.add_space(2.0);
+                }
+                if category != PresetCategory::Shell {
+                    ui.label(egui::RichText::new(category.label()).size(10.0).color(theme::FG_DIM));
+                    ui.add_space(1.0);
+                }
+                group_started = true;
+            }
+
+            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset) {
+                selected_action = Some(action);
+            }
+        }
+
+        if group_started {
+            any_group_rendered = true;
+        }
+    }
+
+    selected_action
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PresetCategory {
+    Shell,
+    Agent,
+    Tool,
+    Remote,
+}
+
+const CATEGORY_ORDER: [PresetCategory; 4] = [
+    PresetCategory::Shell,
+    PresetCategory::Agent,
+    PresetCategory::Tool,
+    PresetCategory::Remote,
+];
+
+impl PresetCategory {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Shell => "Shell",
+            Self::Agent => "Agents",
+            Self::Tool => "Tools",
+            Self::Remote => "Remote",
+        }
+    }
+}
+
+fn preset_category(preset: &PresetConfig) -> PresetCategory {
+    if preset.ssh_connection.is_some() || preset.kind == PanelKind::Ssh {
+        PresetCategory::Remote
+    } else if preset.kind.is_agent() {
+        PresetCategory::Agent
+    } else if matches!(preset.kind, PanelKind::Shell) {
+        PresetCategory::Shell
+    } else {
+        PresetCategory::Tool
+    }
+}
+
+fn preset_button_label(preset: &PresetConfig) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    job.append(
+        &preset.name,
+        0.0,
+        TextFormat {
+            font_id: FontId::proportional(12.5),
+            color: theme::FG_SOFT,
+            ..Default::default()
+        },
+    );
+    if let Some(alias) = &preset.alias {
+        job.append(
+            &format!("  {alias}"),
+            0.0,
+            TextFormat {
+                font_id: FontId::monospace(10.0),
+                color: theme::FG_DIM,
+                ..Default::default()
+            },
+        );
+    }
+    job
+}
+
+fn render_preset_picker_row(
     ui: &mut Ui,
     target_workspace: Option<WorkspaceId>,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
 ) -> Option<PresetPickerAction> {
-    let label = if let Some(alias) = &preset.alias {
-        format!("{} ({})", preset.name, alias)
-    } else {
-        preset.name.clone()
-    };
-
     match target_workspace {
-        Some(workspace_id) => render_panel_preset_picker_row(ui, workspace_id, canvas_pos, preset, label),
-        None => render_workspace_preset_picker_row(ui, canvas_pos, preset, label),
+        Some(workspace_id) => render_panel_preset_picker_row(ui, workspace_id, canvas_pos, preset),
+        None => render_workspace_preset_picker_row(ui, canvas_pos, preset),
     }
 }
 
@@ -40,12 +141,10 @@ fn render_panel_preset_picker_row(
     workspace_id: WorkspaceId,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
-    label: String,
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
     ui.horizontal(|ui| {
-        let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-        if ui.add(Button::new(create_text).frame(false)).clicked() {
+        if ui.add(Button::new(preset_button_label(preset)).frame(false)).clicked() {
             selected_action = Some(PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset: preset.clone(),
@@ -69,10 +168,8 @@ fn render_workspace_preset_picker_row(
     ui: &mut Ui,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
-    label: String,
 ) -> Option<PresetPickerAction> {
-    let create_text = egui::RichText::new(label).size(12.5).color(theme::FG_SOFT);
-    if !ui.add(Button::new(create_text).frame(false)).clicked() {
+    if !ui.add(Button::new(preset_button_label(preset)).frame(false)).clicked() {
         return None;
     }
 
