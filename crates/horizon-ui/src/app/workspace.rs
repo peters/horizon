@@ -102,6 +102,7 @@ impl HorizonApp {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
         let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
+        let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
         let mut pending_workspace_moves = Vec::new();
@@ -223,9 +224,11 @@ impl HorizonApp {
 
         if !self.canvas_pan_input_claimed {
             for (workspace_id, delta) in pending_workspace_moves {
-                let _ = self
-                    .board
-                    .translate_workspace_with_push(workspace_id, [delta.x, delta.y]);
+                let _ = self.board.translate_workspace_with_push_in_scope(
+                    workspace_id,
+                    [delta.x, delta.y],
+                    &workspace_collision_ids,
+                );
                 self.mark_runtime_dirty();
             }
         }

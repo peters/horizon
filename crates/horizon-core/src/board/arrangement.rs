@@ -9,9 +9,9 @@ use super::{Board, WorkspaceLayout, vec2_eq};
 
 impl Board {
     /// After a panel is resized, push every overlapping sibling panel
-    /// within the same workspace along `resize_dir`, cascading until
-    /// nothing overlaps.
-    fn resolve_panel_collisions(&mut self, source: PanelId, workspace_id: WorkspaceId, resize_dir: [f32; 2]) {
+    /// within the same workspace along the dominant resize-growth axis,
+    /// cascading until nothing overlaps.
+    fn resolve_panel_collisions(&mut self, source: PanelId, workspace_id: WorkspaceId, resize_delta: [f32; 2]) {
         let Some(sibling_ids) = self.workspace(workspace_id).map(|ws| ws.panels.clone()) else {
             return;
         };
@@ -37,7 +37,7 @@ impl Board {
                 let os = other_panel.layout.size;
                 let other_rect = [op[0], op[1], op[0] + os[0], op[1] + os[1]];
 
-                let push = collision_push(check_rect, other_rect, resize_dir, TILE_GAP);
+                let push = resize_collision_push(check_rect, other_rect, resize_delta, TILE_GAP);
                 if push[0] != 0.0 || push[1] != 0.0 {
                     if let Some(panel) = self.panel_mut(other_id) {
                         panel.move_to([op[0] + push[0], op[1] + push[1]]);
@@ -52,6 +52,36 @@ impl Board {
     /// After the workspace `source` was moved, push every overlapping
     /// workspace along `drag_dir`, cascading until nothing overlaps.
     pub(super) fn resolve_workspace_collisions(&mut self, source: WorkspaceId, drag_dir: [f32; 2]) {
+        let workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.resolve_workspace_collisions_with_push(source, drag_dir, &workspace_ids, collision_push);
+    }
+
+    /// Resolve collisions for `source` against an explicit workspace scope.
+    pub(super) fn resolve_workspace_collisions_in_scope(
+        &mut self,
+        source: WorkspaceId,
+        drag_dir: [f32; 2],
+        workspace_ids: &[WorkspaceId],
+    ) {
+        self.resolve_workspace_collisions_with_push(source, drag_dir, workspace_ids, collision_push);
+    }
+
+    fn resolve_workspace_resize_collisions_in_scope(
+        &mut self,
+        source: WorkspaceId,
+        resize_delta: [f32; 2],
+        workspace_ids: &[WorkspaceId],
+    ) {
+        self.resolve_workspace_collisions_with_push(source, resize_delta, workspace_ids, resize_collision_push);
+    }
+
+    fn resolve_workspace_collisions_with_push(
+        &mut self,
+        source: WorkspaceId,
+        delta: [f32; 2],
+        workspace_ids: &[WorkspaceId],
+        push_fn: RectCollisionPush,
+    ) {
         let mut queue = vec![source];
         let mut settled = vec![source];
 
@@ -60,10 +90,9 @@ impl Board {
                 continue;
             };
 
-            let candidates: Vec<WorkspaceId> = self
-                .workspaces
+            let candidates: Vec<WorkspaceId> = workspace_ids
                 .iter()
-                .map(|ws| ws.id)
+                .copied()
                 .filter(|id| !settled.contains(id))
                 .collect();
 
@@ -71,7 +100,7 @@ impl Board {
                 let Some(other_rect) = self.workspace_frame_rect(other_id) else {
                     continue;
                 };
-                let push = collision_push(check_rect, other_rect, drag_dir, WS_COLLISION_GAP);
+                let push = push_fn(check_rect, other_rect, delta, WS_COLLISION_GAP);
                 if push[0] != 0.0 || push[1] != 0.0 {
                     self.translate_workspace(other_id, push);
                     settled.push(other_id);
@@ -100,6 +129,16 @@ impl Board {
     }
 
     pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
+        let workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.resize_panel_with_workspace_scope(id, size, &workspace_ids)
+    }
+
+    pub fn resize_panel_with_workspace_scope(
+        &mut self,
+        id: PanelId,
+        size: [f32; 2],
+        workspace_collision_ids: &[WorkspaceId],
+    ) -> bool {
         if self.panel(id).is_some_and(|panel| vec2_eq(panel.layout.size, size)) {
             return false;
         }
@@ -111,8 +150,8 @@ impl Board {
             self.apply_workspace_layout_with_panel_size(workspace_id, layout, size);
             if let Some(old) = old_size {
                 let delta = [size[0] - old[0], size[1] - old[1]];
-                if delta[0] != 0.0 || delta[1] != 0.0 {
-                    self.resolve_workspace_collisions(workspace_id, delta);
+                if resize_expands(delta) {
+                    self.resolve_workspace_resize_collisions_in_scope(workspace_id, delta, workspace_collision_ids);
                 }
             }
             return true;
@@ -131,9 +170,9 @@ impl Board {
                 Some(old) => [size[0] - old[0], size[1] - old[1]],
                 None => size,
             };
-            if delta[0] != 0.0 || delta[1] != 0.0 {
+            if resize_expands(delta) {
                 self.resolve_panel_collisions(id, ws_id, delta);
-                self.resolve_workspace_collisions(ws_id, delta);
+                self.resolve_workspace_resize_collisions_in_scope(ws_id, delta, workspace_collision_ids);
             }
         }
         true
@@ -456,12 +495,23 @@ fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
         .any(|pos| (pos[0] - candidate[0]).abs() < 1.0 && (pos[1] - candidate[1]).abs() < 1.0)
 }
 
+#[derive(Clone, Copy)]
+enum ResizeCollisionAxis {
+    Horizontal,
+    Vertical,
+}
+
+type RectCollisionPush = fn([f32; 4], [f32; 4], [f32; 2], f32) -> [f32; 2];
+
+fn resize_expands(delta: [f32; 2]) -> bool {
+    delta[0] > f32::EPSILON || delta[1] > f32::EPSILON
+}
+
 /// Compute the translation needed to push rect `b` away from rect `a` along
 /// `drag_dir` so they no longer overlap, maintaining `gap` pixels of space.
 /// Both rects are `[min_x, min_y, max_x, max_y]`.
 fn collision_push(a: [f32; 4], b: [f32; 4], drag_dir: [f32; 2], gap: f32) -> [f32; 2] {
-    // No overlap -> no push.
-    if a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1] {
+    if !rects_overlap(a, b) {
         return [0.0, 0.0];
     }
 
@@ -508,4 +558,55 @@ fn collision_push(a: [f32; 4], b: [f32; 4], drag_dir: [f32; 2], gap: f32) -> [f3
     } else {
         [0.0, 0.0]
     }
+}
+
+fn resize_collision_push(a: [f32; 4], b: [f32; 4], resize_delta: [f32; 2], gap: f32) -> [f32; 2] {
+    if !rects_overlap(a, b) {
+        return [0.0, 0.0];
+    }
+
+    for axis in preferred_resize_axes(resize_delta).into_iter().flatten() {
+        let push = resize_axis_push(a, b, axis, gap);
+        if push[0] != 0.0 || push[1] != 0.0 {
+            return push;
+        }
+    }
+
+    [0.0, 0.0]
+}
+
+fn preferred_resize_axes(delta: [f32; 2]) -> [Option<ResizeCollisionAxis>; 2] {
+    let horizontal = delta[0] > f32::EPSILON;
+    let vertical = delta[1] > f32::EPSILON;
+
+    match (horizontal, vertical) {
+        (true, true) if delta[0] >= delta[1] => [
+            Some(ResizeCollisionAxis::Horizontal),
+            Some(ResizeCollisionAxis::Vertical),
+        ],
+        (true, true) => [
+            Some(ResizeCollisionAxis::Vertical),
+            Some(ResizeCollisionAxis::Horizontal),
+        ],
+        (true, false) => [Some(ResizeCollisionAxis::Horizontal), None],
+        (false, true) => [Some(ResizeCollisionAxis::Vertical), None],
+        (false, false) => [None, None],
+    }
+}
+
+fn resize_axis_push(a: [f32; 4], b: [f32; 4], axis: ResizeCollisionAxis, gap: f32) -> [f32; 2] {
+    match axis {
+        ResizeCollisionAxis::Horizontal => {
+            let push = a[2] + gap - b[0];
+            if push > 0.0 { [push, 0.0] } else { [0.0, 0.0] }
+        }
+        ResizeCollisionAxis::Vertical => {
+            let push = a[3] + gap - b[1];
+            if push > 0.0 { [0.0, push] } else { [0.0, 0.0] }
+        }
+    }
+}
+
+fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    !(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1])
 }

@@ -174,6 +174,7 @@ impl HorizonApp {
         self.panel_screen_rects.clear();
         self.terminal_body_screen_rects.clear();
         self.panel_screen_order.clear();
+        let workspace_collision_ids = self.workspace_collision_scope(None);
 
         let workspaces: Vec<(WorkspaceId, String, Color32)> = self
             .board
@@ -200,7 +201,14 @@ impl HorizonApp {
         let mut panels_to_close = Vec::new();
 
         for (panel_id, fallback_index) in panel_order {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspaces,
+                &workspace_collision_ids,
+            ) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -216,12 +224,13 @@ impl HorizonApp {
         panel_id: PanelId,
         _fallback_index: usize,
         workspaces: &[(WorkspaceId, String, Color32)],
+        workspace_collision_ids: &[WorkspaceId],
     ) -> bool {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
             return false;
         };
         let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces);
-        self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome)
+        self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
     #[profiling::function]
@@ -529,6 +538,7 @@ impl HorizonApp {
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
         outcome: &PanelUiOutcome,
+        workspace_collision_ids: &[WorkspaceId],
     ) -> bool {
         self.panel_screen_rects.insert(panel_id, snapshot.screen_rect);
         if let Some(body_rect) = snapshot.terminal_body_screen_rect {
@@ -567,7 +577,11 @@ impl HorizonApp {
         }
         if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
-            let _ = self.board.resize_panel(panel_id, [new_size.x, new_size.y]);
+            let _ = self.board.resize_panel_with_workspace_scope(
+                panel_id,
+                [new_size.x, new_size.y],
+                workspace_collision_ids,
+            );
             self.mark_runtime_dirty();
         }
         if outcome.commit_terminal_resize {
