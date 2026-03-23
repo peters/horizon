@@ -149,6 +149,9 @@ function Assert-HorizonLaunches {
     Start-Sleep -Seconds 5
 
     if ($process.HasExited) {
+        $process.WaitForExit()
+        $process.Refresh()
+
         $diagnostics = @()
 
         $stdout = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
