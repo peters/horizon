@@ -122,6 +122,29 @@ Grab the latest binary from [**Releases**](https://github.com/peters/horizon/rel
 | **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract, `chmod +x`, run |
 | **Windows** x64 | `horizon-windows-x64.exe` | Download and run |
 
+### Homebrew
+
+Stable releases are available through the `peters/horizon` tap on macOS and Linux x64:
+
+```bash
+brew install peters/horizon/horizon
+```
+
+If you prefer to add the tap explicitly first:
+
+```bash
+brew tap peters/horizon
+brew install horizon
+```
+
+To update or remove it later:
+
+```bash
+brew upgrade horizon
+brew uninstall horizon
+brew untap peters/horizon
+```
+
 ### Build from source
 
 ```bash

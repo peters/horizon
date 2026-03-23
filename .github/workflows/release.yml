@@ -131,6 +131,10 @@ jobs:
   upload-release-assets:
     name: Upload Release Assets
     needs: [build-artifacts]
+    outputs:
+      linux_x64_sha256: ${{ steps.checksums.outputs.linux_x64_sha256 }}
+      macos_arm64_sha256: ${{ steps.checksums.outputs.macos_arm64_sha256 }}
+      macos_x64_sha256: ${{ steps.checksums.outputs.macos_x64_sha256 }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -143,6 +147,36 @@ jobs:
           mkdir -p release-assets
           find artifacts -maxdepth 2 -type f -exec cp {} release-assets/ \;
 
+      - id: checksums
+        name: Generate release checksums
+        shell: bash
+        run: |
+          cd release-assets
+
+          required_assets=(
+            horizon-linux-x64.tar.gz
+            horizon-osx-arm64.tar.gz
+            horizon-osx-x64.tar.gz
+            horizon-windows-x64.exe
+          )
+
+          for asset in "${required_assets[@]}"; do
+            if [ ! -f "$asset" ]; then
+              echo "::error::Missing required release asset: $asset"
+              exit 1
+            fi
+          done
+
+          sha256sum "${required_assets[@]}" | tee SHA256SUMS.txt
+
+          linux_x64_sha256="$(awk '$2 == "horizon-linux-x64.tar.gz" { print $1 }' SHA256SUMS.txt)"
+          macos_arm64_sha256="$(awk '$2 == "horizon-osx-arm64.tar.gz" { print $1 }' SHA256SUMS.txt)"
+          macos_x64_sha256="$(awk '$2 == "horizon-osx-x64.tar.gz" { print $1 }' SHA256SUMS.txt)"
+
+          echo "linux_x64_sha256=${linux_x64_sha256}" >> "$GITHUB_OUTPUT"
+          echo "macos_arm64_sha256=${macos_arm64_sha256}" >> "$GITHUB_OUTPUT"
+          echo "macos_x64_sha256=${macos_x64_sha256}" >> "$GITHUB_OUTPUT"
+
       - name: Upload assets to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,3 +184,56 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" release-assets/* \
             --repo "${{ github.repository }}" \
             --clobber
+
+  update-homebrew-tap:
+    name: Update Homebrew Tap
+    if: ${{ !github.event.release.prerelease }}
+    needs: [validate-release, upload-release-assets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Homebrew tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN secret is required for stable release packaging."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          lfs: true
+
+      - name: Checkout Homebrew tap repository
+        uses: actions/checkout@v6
+        with:
+          repository: peters/homebrew-horizon
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-horizon
+
+      - name: Update Homebrew tap files
+        shell: bash
+        run: |
+          ./scripts/update-homebrew-tap.sh \
+            --tap-dir homebrew-horizon \
+            --version "${{ needs.validate-release.outputs.release_version }}" \
+            --macos-arm64-sha "${{ needs.upload-release-assets.outputs.macos_arm64_sha256 }}" \
+            --macos-x64-sha "${{ needs.upload-release-assets.outputs.macos_x64_sha256 }}" \
+            --linux-x64-sha "${{ needs.upload-release-assets.outputs.linux_x64_sha256 }}"
+
+      - name: Commit and push Homebrew tap update
+        working-directory: homebrew-horizon
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if git diff --quiet; then
+            echo "Homebrew tap already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/horizon.rb README.md
+          git commit -m "horizon ${RELEASE_TAG}"
+          git push

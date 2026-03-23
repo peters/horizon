@@ -5,6 +5,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which publishes to crates.io and uploads the platform binaries to the same GitHub Release.
+- Stable releases also publish `SHA256SUMS.txt` and update the `peters/homebrew-horizon` tap.
 
 ## Source Of Truth
 
@@ -62,7 +63,8 @@ Then it:
 
 - rewrites the workspace version to the exact tag version in CI
 - builds the release binaries for Linux, macOS, and Windows
-- uploads those assets to the GitHub Release you just published
+- uploads those assets plus `SHA256SUMS.txt` to the GitHub Release you just published
+- for stable releases only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 
 ## CLI Alternative
 
@@ -80,3 +82,17 @@ gh release create "$TAG" \
 `--target` accepts any branch, tag, or commit SHA. For beta or stable releases from a specific commit, replace `main` with the desired ref.
 
 For a stable release, omit `--prerelease`.
+
+## Stable Packaging Requirements
+
+Stable-release packaging assumes:
+
+- the release assets keep their current names:
+  - `horizon-linux-x64.tar.gz`
+  - `horizon-osx-arm64.tar.gz`
+  - `horizon-osx-x64.tar.gz`
+  - `horizon-windows-x64.exe`
+- the stable release uploads all four assets before the tap update runs
+- `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
+
+If a stable release is missing one of those assets or the tap token secret, the release workflow fails instead of publishing a partial Homebrew update.
