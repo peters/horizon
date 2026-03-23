@@ -1,3 +1,5 @@
+mod ssh;
+
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -10,47 +12,6 @@ use horizon_core::SshConnection;
 
 const SSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SSH_PROBE_CONNECT_TIMEOUT_SECS: u16 = 5;
-
-const RESOLVE_REMOTE_DIR_SCRIPT: &str = r#"
-path=$1
-if [ -z "$path" ]; then
-  path=$HOME
-fi
-case "$path" in
-  "~")
-    path=$HOME
-    ;;
-  "~/"*)
-    path=$HOME/${path#~/}
-    ;;
-esac
-cd -- "$path" 2>/dev/null || exit 1
-pwd -P
-"#;
-
-const LIST_REMOTE_DIRS_SCRIPT: &str = r#"
-path=$1
-if [ -z "$path" ]; then
-  path=$HOME
-fi
-case "$path" in
-  "~")
-    path=$HOME
-    ;;
-  "~/"*)
-    path=$HOME/${path#~/}
-    ;;
-esac
-cd -- "$path" 2>/dev/null || exit 1
-printf '__PWD__%s\n' "$PWD"
-if [ "$PWD" != "/" ]; then
-  printf '__DIR__..\n'
-fi
-for entry in * .[!.]* ..?*; do
-  [ -d "$entry" ] || continue
-  printf '__DIR__%s\n' "$entry"
-done
-"#;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LocalUploadFile {
@@ -128,6 +89,30 @@ enum UploadControl {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UploadProgressContext {
+    completed_files: usize,
+    total_files: usize,
+    completed_bytes: u64,
+    total_bytes: u64,
+}
+
+impl UploadProgressContext {
+    fn snapshot_for(self, file: &LocalUploadFile, current_file_bytes: u64, detail: &str) -> UploadSnapshot {
+        UploadSnapshot {
+            completed_files: self.completed_files,
+            total_files: self.total_files,
+            completed_bytes: self
+                .completed_bytes
+                .saturating_add(current_file_bytes.min(file.size_bytes)),
+            total_bytes: self.total_bytes,
+            current_file_name: Some(file.name.clone()),
+            current_file_size: Some(file.size_bytes),
+            detail: detail.to_string(),
+        }
+    }
+}
+
 pub(super) struct UploadWorkerHandle {
     pub progress_rx: Receiver<UploadMessage>,
     control_tx: Sender<UploadControl>,
@@ -172,7 +157,7 @@ pub(super) fn spawn_preparation(
                 None
             }
         };
-        let (suggested_destination, ssh_upload_error) = match probe_remote_directory(&connection) {
+        let (suggested_destination, ssh_upload_error) = match ssh::probe_remote_directory(&connection) {
             Ok(probed_directory) => {
                 let suggested_destination = match last_destination {
                     Some(path) if !path.trim().is_empty() => path,
@@ -204,7 +189,7 @@ pub(super) fn spawn_remote_directory_listing(
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let host = connection.host.clone();
-        let result = list_remote_directories(&connection, &requested_path);
+        let result = ssh::list_remote_directories(&connection, &requested_path);
         if let Err(error) = &result {
             tracing::warn!(host = %host, path = %requested_path, %error, "remote directory listing failed");
         }
@@ -248,7 +233,7 @@ fn run_upload_worker(
     let mut completed_bytes = 0;
 
     let resolved_destination = match &transport {
-        UploadTransport::Ssh { destination_dir } => match resolve_remote_directory(connection, destination_dir) {
+        UploadTransport::Ssh { destination_dir } => match ssh::resolve_remote_directory(connection, destination_dir) {
             Ok(path) => Some(path),
             Err(error) => {
                 tracing::warn!(host = %connection.host, destination = %destination_dir, %error, "ssh upload setup failed");
@@ -260,28 +245,31 @@ fn run_upload_worker(
     };
 
     for file in files {
-        let snapshot = UploadSnapshot {
+        let progress = UploadProgressContext {
             completed_files,
             total_files,
             completed_bytes,
             total_bytes,
-            current_file_name: Some(file.name.clone()),
-            current_file_size: Some(file.size_bytes),
-            detail: match &transport {
-                UploadTransport::Ssh { .. } => format!("Uploading {} over SSH", file.name),
-                UploadTransport::Taildrop { .. } => format!("Sending {} with Taildrop", file.name),
-            },
         };
-        let _ = progress_tx.send(UploadMessage::Snapshot(snapshot));
-
-        let command_result = match &transport {
-            UploadTransport::Ssh { .. } => {
-                run_scp_upload(connection, file, resolved_destination.as_deref().unwrap_or(""))
+        let upload_result = match &transport {
+            UploadTransport::Ssh { .. } => ssh::run_ssh_upload(
+                connection,
+                file,
+                resolved_destination.as_deref().unwrap_or(""),
+                progress,
+                control_rx,
+                progress_tx,
+            ),
+            UploadTransport::Taildrop { target } => {
+                send_upload_snapshot(
+                    progress_tx,
+                    progress.snapshot_for(file, 0, &format!("Sending {} with Taildrop", file.name)),
+                );
+                wait_for_command(run_taildrop_upload(file, target), control_rx)
             }
-            UploadTransport::Taildrop { target } => run_taildrop_upload(file, target),
         };
 
-        match wait_for_command(command_result, control_rx) {
+        match upload_result {
             Ok(()) => {
                 completed_files += 1;
                 completed_bytes += file.size_bytes;
@@ -317,6 +305,10 @@ fn run_upload_worker(
     })));
 }
 
+fn send_upload_snapshot(progress_tx: &Sender<UploadMessage>, snapshot: UploadSnapshot) {
+    let _ = progress_tx.send(UploadMessage::Snapshot(snapshot));
+}
+
 enum WorkerExit {
     Cancelled,
     Failed(String),
@@ -328,32 +320,44 @@ fn wait_for_command(
 ) -> Result<(), WorkerExit> {
     let mut child = spawn_result.map_err(WorkerExit::Failed)?;
 
+    wait_for_child(&mut child, control_rx)
+}
+
+fn wait_for_child(child: &mut std::process::Child, control_rx: &Receiver<UploadControl>) -> Result<(), WorkerExit> {
     loop {
-        match control_rx.try_recv() {
-            Ok(UploadControl::Cancel) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(WorkerExit::Cancelled);
-            }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => return Err(WorkerExit::Cancelled),
-        }
+        poll_upload_control(child, control_rx)?;
 
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child_output(&mut child);
-                if status.success() {
-                    return Ok(());
-                }
-
-                let detail =
-                    non_empty_output(&output).unwrap_or_else(|| format!("command exited with status {status}"));
-                return Err(WorkerExit::Failed(detail));
-            }
+            Ok(Some(status)) => return finish_child(child, status),
             Ok(None) => thread::sleep(SSH_POLL_INTERVAL),
             Err(error) => return Err(WorkerExit::Failed(format!("failed to wait for upload: {error}"))),
         }
     }
+}
+
+fn poll_upload_control(
+    child: &mut std::process::Child,
+    control_rx: &Receiver<UploadControl>,
+) -> Result<(), WorkerExit> {
+    match control_rx.try_recv() {
+        Ok(UploadControl::Cancel) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(WorkerExit::Cancelled)
+        }
+        Err(TryRecvError::Empty) => Ok(()),
+        Err(TryRecvError::Disconnected) => Err(WorkerExit::Cancelled),
+    }
+}
+
+fn finish_child(child: &mut std::process::Child, status: std::process::ExitStatus) -> Result<(), WorkerExit> {
+    let output = child_output(child);
+    if status.success() {
+        return Ok(());
+    }
+
+    let detail = non_empty_output(&output).unwrap_or_else(|| format!("command exited with status {status}"));
+    Err(WorkerExit::Failed(detail))
 }
 
 fn child_output(child: &mut std::process::Child) -> String {
@@ -379,73 +383,6 @@ fn child_output(child: &mut std::process::Child) -> String {
 fn non_empty_output(output: &str) -> Option<String> {
     let trimmed = output.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-fn probe_remote_directory(connection: &SshConnection) -> Result<String, String> {
-    resolve_remote_directory(connection, "")
-}
-
-fn resolve_remote_directory(connection: &SshConnection, requested_path: &str) -> Result<String, String> {
-    let output = run_ssh_script(connection, RESOLVE_REMOTE_DIR_SCRIPT, requested_path)?;
-    let resolved = output.trim();
-    if resolved.is_empty() {
-        return Err("remote directory probe returned an empty path".to_string());
-    }
-    Ok(resolved.to_string())
-}
-
-fn list_remote_directories(connection: &SshConnection, requested_path: &str) -> Result<RemoteDirectoryListing, String> {
-    let output = run_ssh_script(connection, LIST_REMOTE_DIRS_SCRIPT, requested_path)?;
-    parse_remote_directory_listing(&output)
-}
-
-fn run_ssh_script(connection: &SshConnection, script: &str, arg: &str) -> Result<String, String> {
-    let remote_command = build_remote_shell_command(script, arg);
-    let output = Command::new("ssh")
-        .args(connection.ssh_probe_transport_args(SSH_PROBE_CONNECT_TIMEOUT_SECS))
-        .arg(remote_command)
-        .output()
-        .map_err(|error| format!("failed to launch ssh probe: {error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = non_empty_output(stderr.as_ref()).unwrap_or_else(|| "ssh probe failed".to_string());
-        return Err(detail);
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn build_remote_shell_command(script: &str, arg: &str) -> String {
-    format!("sh -c {} -- {}", shell_escape(script.trim()), shell_escape(arg),)
-}
-
-fn parse_remote_directory_listing(output: &str) -> Result<RemoteDirectoryListing, String> {
-    let mut current_dir = None;
-    let mut entries = Vec::new();
-
-    for line in output.lines() {
-        if let Some(path) = line.strip_prefix("__PWD__") {
-            current_dir = Some(path.to_string());
-        } else if let Some(entry) = line.strip_prefix("__DIR__") {
-            entries.push(entry.to_string());
-        }
-    }
-
-    let current_dir =
-        current_dir.ok_or_else(|| "remote directory listing did not include a working directory".to_string())?;
-    entries.sort_by(|left, right| sort_remote_entries(left, right));
-    entries.dedup();
-
-    Ok(RemoteDirectoryListing { current_dir, entries })
-}
-
-fn sort_remote_entries(left: &str, right: &str) -> std::cmp::Ordering {
-    match (left == "..", right == "..") {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase()),
-    }
 }
 
 fn detect_taildrop_target(host: &str) -> Result<Option<String>, String> {
@@ -503,22 +440,6 @@ fn parse_taildrop_targets(output: &str) -> Vec<TaildropTarget> {
         .collect()
 }
 
-fn run_scp_upload(
-    connection: &SshConnection,
-    file: &LocalUploadFile,
-    destination_dir: &str,
-) -> Result<std::process::Child, String> {
-    Command::new("scp")
-        .args(connection.scp_transport_args())
-        .arg(&file.path)
-        .arg(scp_destination(connection, destination_dir))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to start scp upload: {error}"))
-}
-
 fn run_taildrop_upload(file: &LocalUploadFile, target: &str) -> Result<std::process::Child, String> {
     Command::new("tailscale")
         .args(["file", "cp"])
@@ -531,20 +452,9 @@ fn run_taildrop_upload(file: &LocalUploadFile, target: &str) -> Result<std::proc
         .map_err(|error| format!("failed to start Taildrop upload: {error}"))
 }
 
-fn scp_destination(connection: &SshConnection, destination_dir: &str) -> String {
-    // `scp` receives this as one argv entry, so the destination path should stay
-    // raw. Shell-quoting it makes the quotes part of the remote path under
-    // OpenSSH's default SFTP mode.
-    format!("{}:{}", connection.scp_transport_target(), destination_dir)
-}
-
-fn shell_escape(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
 fn classify_ssh_probe_error(error: &str) -> String {
     if requires_interactive_ssh_auth(error) {
-        return "SSH upload requires non-interactive authentication for new SSH/SCP commands. This session appears to need a password, OTP, or hardware-key prompt, so drag-and-drop SSH upload is unavailable.".to_string();
+        return "SSH upload requires non-interactive authentication for new SSH upload commands. This session appears to need a password, OTP, or hardware-key prompt, so drag-and-drop SSH upload is unavailable.".to_string();
     }
 
     format!("SSH upload is unavailable for this session: {error}")
@@ -571,12 +481,9 @@ fn requires_interactive_ssh_auth(error: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::SshConnection;
-
-    use super::{
-        build_remote_shell_command, classify_ssh_probe_error, parse_remote_directory_listing, parse_taildrop_targets,
-        parse_tailscale_ips, scp_destination,
-    };
+    use super::{UploadProgressContext, classify_ssh_probe_error, parse_taildrop_targets, parse_tailscale_ips};
+    use crate::app::ssh_upload::worker::LocalUploadFile;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_taildrop_targets_reads_ip_and_name() {
@@ -588,33 +495,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_remote_directory_listing_sorts_parent_first() {
-        let listing =
-            parse_remote_directory_listing("__PWD__/srv\n__DIR__logs\n__DIR__..\n__DIR__.cache\n").expect("listing");
-
-        assert_eq!(listing.current_dir, "/srv");
-        assert_eq!(listing.entries, vec!["..", ".cache", "logs"]);
-    }
-
-    #[test]
-    fn build_remote_shell_command_quotes_script_and_argument() {
-        let command = build_remote_shell_command("printf '%s' \"$1\"", "/tmp/with space");
-
-        assert_eq!(command, "sh -c 'printf '\"'\"'%s'\"'\"' \"$1\"' -- '/tmp/with space'");
-    }
-
-    #[test]
-    fn scp_destination_keeps_spaces_unquoted() {
-        let connection = SshConnection {
-            host: "prod".to_string(),
-            user: Some("deploy".to_string()),
-            ..SshConnection::default()
+    fn progress_context_clamps_current_file_bytes_to_file_size() {
+        let file = LocalUploadFile {
+            path: PathBuf::from("large.bin"),
+            name: "large.bin".to_string(),
+            size_bytes: 1024,
+        };
+        let progress = UploadProgressContext {
+            completed_files: 1,
+            total_files: 3,
+            completed_bytes: 512,
+            total_bytes: 4096,
         };
 
-        assert_eq!(
-            scp_destination(&connection, "/tmp/with space"),
-            "deploy@prod:/tmp/with space"
-        );
+        let snapshot = progress.snapshot_for(&file, 4096, "Uploading large.bin over SSH");
+
+        assert_eq!(snapshot.completed_bytes, 1536);
+        assert_eq!(snapshot.current_file_name.as_deref(), Some("large.bin"));
     }
 
     #[test]
@@ -629,19 +526,5 @@ mod tests {
         let error = classify_ssh_probe_error("Permission denied (publickey,keyboard-interactive).");
 
         assert!(error.contains("requires non-interactive authentication"));
-    }
-
-    #[test]
-    fn scp_destination_brackets_ipv6_literals() {
-        let connection = SshConnection {
-            host: "2001:db8::5".to_string(),
-            user: Some("deploy".to_string()),
-            ..SshConnection::default()
-        };
-
-        assert_eq!(
-            scp_destination(&connection, "/srv/uploads"),
-            "deploy@[2001:db8::5]:/srv/uploads"
-        );
     }
 }
