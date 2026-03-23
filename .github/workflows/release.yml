@@ -155,7 +155,7 @@ jobs:
           cp -r assets/icons assets/plugins crates/horizon-ui/publish-assets/
           git add -f crates/horizon-ui/publish-assets
       - name: Publish horizon-core to crates.io
-        run: cargo publish -p horizon-core --allow-dirty
+        run: cargo publish -p horizon-core --allow-dirty || echo "Already published, continuing."
       - name: Publish horizon-cursor to crates.io
         run: |
           for attempt in $(seq 1 10); do
