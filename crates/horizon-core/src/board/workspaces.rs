@@ -62,6 +62,7 @@ impl Board {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
         let workspace_layout = self.workspace_layout_value(workspace);
+        let previous_frame = self.workspace_frame_rect(workspace);
 
         // Inherit workspace cwd if the panel doesn't specify one.
         if opts.cwd.is_none()
@@ -86,6 +87,7 @@ impl Board {
         if let Some(layout) = workspace_layout {
             self.apply_workspace_layout(workspace, layout);
         }
+        self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
 
         Ok(id)
     }
@@ -191,6 +193,7 @@ impl Board {
             return;
         }
 
+        let previous_target_frame = self.workspace_frame_rect(workspace_id);
         for ws in &mut self.workspaces {
             ws.remove_panel(panel_id);
         }
@@ -212,6 +215,7 @@ impl Board {
                 panel.move_to(new_position);
             }
         }
+        self.resolve_workspace_collisions_after_frame_growth(workspace_id, previous_target_frame);
 
         self.reflow_workspace_layout(source_workspace_id);
     }
