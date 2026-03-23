@@ -232,6 +232,40 @@ fn adding_panel_preserves_live_rows_panel_size() {
 }
 
 #[test]
+fn resizing_rows_layout_pushes_neighbor_workspace_horizontally_when_width_growth_dominates() {
+    let mut board = Board::new();
+    let rows = board.create_workspace_at("rows", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [630.0, 40.0]);
+
+    let first = board
+        .create_panel(editor_panel_options(), rows)
+        .expect("first panel should spawn");
+    board.arrange_workspace(rows, WorkspaceLayout::Rows);
+    board
+        .create_panel(editor_panel_options(), rows)
+        .expect("second panel should spawn");
+    board
+        .create_panel(editor_panel_options(), beta)
+        .expect("beta panel should spawn");
+
+    let beta_before = board.workspace(beta).expect("beta workspace").position;
+
+    assert!(board.resize_panel(first, [640.0, 420.0]));
+
+    let beta_after = board.workspace(beta).expect("beta workspace").position;
+    assert!(
+        beta_after[0] > beta_before[0],
+        "expected beta to move right from {beta_before:?}, got {beta_after:?}"
+    );
+    assert!(
+        (beta_after[1] - beta_before[1]).abs() <= f32::EPSILON,
+        "expected beta y to stay at {}, got {}",
+        beta_before[1],
+        beta_after[1],
+    );
+}
+
+#[test]
 fn manual_panel_move_returns_workspace_to_freeform() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("rows");

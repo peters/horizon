@@ -315,6 +315,21 @@ impl Board {
         true
     }
 
+    /// Translate a workspace and push colliding workspaces within an explicit
+    /// scope along the same drag direction.
+    pub fn translate_workspace_with_push_in_scope(
+        &mut self,
+        id: WorkspaceId,
+        delta: [f32; 2],
+        workspace_ids: &[WorkspaceId],
+    ) -> bool {
+        if !self.translate_workspace(id, delta) {
+            return false;
+        }
+        self.resolve_workspace_collisions_in_scope(id, delta, workspace_ids);
+        true
+    }
+
     pub(super) fn create_workspace_record(&mut self, workspace_state: &WorkspaceState) -> WorkspaceId {
         let id = self.create_workspace(&workspace_state.name);
         if let Some(workspace) = self.workspace_mut(id) {

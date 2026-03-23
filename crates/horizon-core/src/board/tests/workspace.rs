@@ -79,6 +79,41 @@ fn translating_workspace_moves_workspace_origin_and_panels() {
 }
 
 #[test]
+fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [500.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [980.0, 40.0]);
+
+    board
+        .create_panel(editor_panel_options(), alpha)
+        .expect("alpha panel should spawn");
+    board
+        .create_panel(editor_panel_options(), beta)
+        .expect("beta panel should spawn");
+    board
+        .create_panel(editor_panel_options(), gamma)
+        .expect("gamma panel should spawn");
+
+    let beta_before = board.workspace(beta).expect("beta workspace").position;
+    let gamma_before = board.workspace(gamma).expect("gamma workspace").position;
+
+    assert!(board.translate_workspace_with_push_in_scope(alpha, [500.0, 0.0], &[alpha, beta]));
+
+    let beta_after = board.workspace(beta).expect("beta workspace").position;
+    let gamma_after = board.workspace(gamma).expect("gamma workspace").position;
+
+    assert!(
+        beta_after[0] > beta_before[0],
+        "expected beta to move right from {beta_before:?}, got {beta_after:?}"
+    );
+    assert!(
+        vec2_eq(gamma_after, gamma_before),
+        "expected out-of-scope gamma workspace to stay at {gamma_before:?}, got {gamma_after:?}"
+    );
+}
+
+#[test]
 fn sync_workspace_metadata_updates_only_templated_workspaces() {
     let mut board = Board::new();
     let templated_workspace = board.create_workspace("stale");
@@ -434,5 +469,178 @@ fn resize_panel_pushes_sibling() {
         panel_b_position[0] >= 300.0 + TILE_GAP - 1.0,
         "panel B should be pushed right, got x={}",
         panel_b_position[0],
+    );
+}
+
+#[test]
+fn resize_panel_with_workspace_scope_ignores_out_of_scope_workspaces() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [500.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [980.0, 40.0]);
+
+    board
+        .create_panel(
+            PanelOptions {
+                position: Some([20.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            alpha,
+        )
+        .expect("alpha panel should spawn");
+    board
+        .create_panel(
+            PanelOptions {
+                position: Some([520.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            beta,
+        )
+        .expect("beta panel should spawn");
+    let gamma_panel = board
+        .create_panel(
+            PanelOptions {
+                position: Some([1000.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            gamma,
+        )
+        .expect("gamma panel should spawn");
+
+    let alpha_panel = board.workspace(alpha).expect("alpha workspace").panels[0];
+    let beta_before = board.workspace(beta).expect("beta workspace").position;
+    let gamma_before = board.workspace(gamma).expect("gamma workspace").position;
+    let gamma_panel_before = board.panel(gamma_panel).expect("gamma panel").layout.position;
+
+    assert!(board.resize_panel_with_workspace_scope(alpha_panel, [650.0, 360.0], &[alpha, beta]));
+
+    let beta_after = board.workspace(beta).expect("beta workspace").position;
+    let gamma_after = board.workspace(gamma).expect("gamma workspace").position;
+    let gamma_panel_after = board.panel(gamma_panel).expect("gamma panel").layout.position;
+
+    assert!(
+        beta_after[0] > beta_before[0],
+        "expected beta to move right from {beta_before:?}, got {beta_after:?}"
+    );
+    assert!(
+        vec2_eq(gamma_after, gamma_before),
+        "expected out-of-scope gamma workspace to stay at {gamma_before:?}, got {gamma_after:?}"
+    );
+    assert!(
+        vec2_eq(gamma_panel_after, gamma_panel_before),
+        "expected out-of-scope gamma panel to stay at {gamma_panel_before:?}, got {gamma_panel_after:?}"
+    );
+}
+
+#[test]
+fn resize_panel_pushes_sibling_vertically_when_height_growth_dominates() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("test");
+
+    let panel_a = board
+        .create_panel(
+            PanelOptions {
+                position: Some([0.0, 0.0]),
+                size: Some([200.0, 200.0]),
+                ..editor_panel_options()
+            },
+            workspace_id,
+        )
+        .expect("panel A should spawn");
+    let panel_b = board
+        .create_panel(
+            PanelOptions {
+                position: Some([0.0, 220.0]),
+                size: Some([200.0, 200.0]),
+                ..editor_panel_options()
+            },
+            workspace_id,
+        )
+        .expect("panel B should spawn");
+
+    let panel_b_before = board.panel(panel_b).expect("panel B").layout.position;
+
+    board.resize_panel(panel_a, [240.0, 340.0]);
+
+    let panel_b_after = board.panel(panel_b).expect("panel B").layout.position;
+    assert!(
+        panel_b_after[1] >= 340.0 + TILE_GAP - 1.0,
+        "panel B should be pushed down, got {panel_b_after:?}"
+    );
+    assert!(
+        (panel_b_after[0] - panel_b_before[0]).abs() <= f32::EPSILON,
+        "panel B x should stay at {}, got {}",
+        panel_b_before[0],
+        panel_b_after[0],
+    );
+}
+
+#[test]
+fn resize_panel_pushes_neighbor_workspaces_horizontally_when_width_growth_dominates() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [500.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [980.0, 40.0]);
+
+    let alpha_panel = board
+        .create_panel(
+            PanelOptions {
+                position: Some([20.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            alpha,
+        )
+        .expect("alpha panel should spawn");
+    board
+        .create_panel(
+            PanelOptions {
+                position: Some([520.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            beta,
+        )
+        .expect("beta panel should spawn");
+    board
+        .create_panel(
+            PanelOptions {
+                position: Some([1000.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            gamma,
+        )
+        .expect("gamma panel should spawn");
+
+    let beta_before = board.workspace(beta).expect("beta workspace").position;
+    let gamma_before = board.workspace(gamma).expect("gamma workspace").position;
+
+    board.resize_panel(alpha_panel, [650.0, 360.0]);
+
+    let beta_after = board.workspace(beta).expect("beta workspace").position;
+    let gamma_after = board.workspace(gamma).expect("gamma workspace").position;
+    assert!(
+        beta_after[0] > beta_before[0],
+        "expected beta to move right from {beta_before:?}, got {beta_after:?}"
+    );
+    assert!(
+        gamma_after[0] > gamma_before[0],
+        "expected gamma to move right from {gamma_before:?}, got {gamma_after:?}"
+    );
+    assert!(
+        (beta_after[1] - beta_before[1]).abs() <= f32::EPSILON,
+        "expected beta y to stay at {}, got {}",
+        beta_before[1],
+        beta_after[1],
+    );
+    assert!(
+        (gamma_after[1] - gamma_before[1]).abs() <= f32::EPSILON,
+        "expected gamma y to stay at {}, got {}",
+        gamma_before[1],
+        gamma_after[1],
     );
 }

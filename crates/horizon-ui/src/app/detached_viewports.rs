@@ -20,6 +20,23 @@ impl HorizonApp {
             .is_some_and(|workspace| self.detached_workspaces.contains_key(&workspace.local_id))
     }
 
+    pub(super) fn workspace_collision_scope(
+        &self,
+        visible_detached_workspace: Option<WorkspaceId>,
+    ) -> Vec<WorkspaceId> {
+        visible_detached_workspace.map_or_else(
+            || {
+                self.board
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| !self.workspace_is_detached(workspace.id))
+                    .map(|workspace| workspace.id)
+                    .collect()
+            },
+            |workspace_id| vec![workspace_id],
+        )
+    }
+
     pub(super) fn detach_workspace(&mut self, workspace_id: WorkspaceId) {
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return;
@@ -315,6 +332,7 @@ impl HorizonApp {
         self.panel_screen_rects.clear();
         self.terminal_body_screen_rects.clear();
         self.panel_screen_order.clear();
+        let workspace_collision_ids = self.workspace_collision_scope(Some(workspace_id));
 
         let workspaces: Vec<_> = self
             .board
@@ -337,7 +355,14 @@ impl HorizonApp {
         let canvas_rect = detached_canvas_rect(ctx);
         self.panels_to_close.clear();
         for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspaces) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspaces,
+                &workspace_collision_ids,
+            ) {
                 self.panels_to_close.push(panel_id);
             }
         }
