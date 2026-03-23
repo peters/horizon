@@ -40,6 +40,24 @@ workspace_horizon_core_version() {
   ' "$cargo_file"
 }
 
+workspace_horizon_cursor_version() {
+  local cargo_file
+  cargo_file="$(version_repo_root)/Cargo.toml"
+
+  awk '
+    /^\[workspace\.dependencies\]$/ { in_section = 1; next }
+    /^\[/ { in_section = 0 }
+    in_section && $1 == "horizon-cursor" {
+      if (match($0, /version[[:space:]]*=[[:space:]]*"[^"]+"/)) {
+        value = substr($0, RSTART, RLENGTH)
+        split(value, parts, "\"")
+        print parts[2]
+      }
+      exit
+    }
+  ' "$cargo_file"
+}
+
 rewrite_workspace_versions() {
   local version="$1"
   local repo_root cargo_file temp_file
@@ -71,6 +89,10 @@ rewrite_workspace_versions() {
     }
     in_workspace_dependencies && $1 == "horizon-core" {
       print "horizon-core = { path = \"crates/horizon-core\", version = \"" version "\" }"
+      next
+    }
+    in_workspace_dependencies && $1 == "horizon-cursor" {
+      print "horizon-cursor = { path = \"crates/horizon-cursor\", version = \"" version "\" }"
       next
     }
     {
