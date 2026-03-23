@@ -22,6 +22,8 @@ pub const CANVAS_WARM_GLOW: Color32 = Color32::from_rgba_unmultiplied_const(255,
 pub const BTN_CLOSE: Color32 = Color32::from_rgb(235, 96, 88);
 pub const PALETTE_GREEN: Color32 = Color32::from_rgb(166, 227, 161);
 pub const PALETTE_RED: Color32 = Color32::from_rgb(243, 139, 168);
+pub const PALETTE_YELLOW: Color32 = Color32::from_rgb(233, 190, 109);
+pub const PALETTE_CYAN: Color32 = Color32::from_rgb(102, 212, 214);
 
 const PALETTE: [Color32; 16] = [
     Color32::from_rgb(45, 49, 62),
