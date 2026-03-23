@@ -128,7 +128,11 @@ impl HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
-        let had_terminal_output = self.board.process_output();
+        let panel_output = self.board.process_output();
+        if panel_output.cwd_changed {
+            self.mark_runtime_dirty();
+        }
+        let had_terminal_output = panel_output.had_terminal_output;
 
         for panel_id in self.board.exited_panels() {
             self.panels_to_close.push(panel_id);

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::attention::AttentionItem;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::panel::{Panel, PanelId};
+use crate::panel::{Panel, PanelId, PanelProcessOutput};
 use crate::runtime_state::RuntimeState;
 use crate::workspace::{Workspace, WorkspaceId};
 
@@ -65,6 +65,12 @@ pub struct Board {
     next_panel_id: u64,
     next_workspace_id: u64,
     next_attention_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoardProcessOutput {
+    pub had_terminal_output: bool,
+    pub cwd_changed: bool,
 }
 
 impl Board {
@@ -203,19 +209,21 @@ impl Board {
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     #[profiling::function]
-    pub fn process_output(&mut self) -> bool {
-        let mut had_output = false;
+    pub fn process_output(&mut self) -> BoardProcessOutput {
+        let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
-            had_output |= panel.process_output();
+            let panel_output: PanelProcessOutput = panel.process_output();
+            output.had_terminal_output |= panel_output.had_output;
+            output.cwd_changed |= panel_output.cwd_changed;
         }
         // Only run attention detection when terminals actually produced new
         // output.  The expensive path — `detect_attention()` — locks the
         // terminal mutex and iterates the full display, so skipping it on
         // idle frames is a significant CPU win.
-        if self.attention_enabled && had_output {
+        if self.attention_enabled && output.had_terminal_output {
             self.update_attention();
         }
-        had_output
+        output
     }
 
     /// Returns IDs of panels whose child process has exited.
