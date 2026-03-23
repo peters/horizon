@@ -139,6 +139,7 @@ fn lsof_cwd_for_pid(pid: u32) -> Option<PathBuf> {
     parse_lsof_cwd(std::str::from_utf8(&output.stdout).ok()?)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_lsof_cwd(output: &str) -> Option<PathBuf> {
     let mut in_cwd_entry = false;
 
@@ -168,6 +169,7 @@ fn direct_child_pid(pid: u32) -> Option<u32> {
     parse_pgrep_pid(std::str::from_utf8(&output.stdout).ok()?)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_pgrep_pid(output: &str) -> Option<u32> {
     output.lines().find_map(|line| line.trim().parse().ok())
 }
