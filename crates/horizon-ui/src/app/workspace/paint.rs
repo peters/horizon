@@ -1,3 +1,4 @@
+use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::theme;
@@ -71,12 +72,27 @@ pub(super) fn paint_workspace_label(
         theme::alpha(color, if is_active { 220 } else { 150 }),
     );
 
-    painter.text(
-        Pos2::new(rect.min.x + 26.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        name,
-        egui::FontId::proportional(12.5),
-        if is_active { theme::FG } else { theme::FG_SOFT },
+    let text_x = rect.min.x + 26.0;
+    let max_text_width = (grip_center.x - 8.0 - text_x).max(0.0);
+    let mut job = LayoutJob::single_section(
+        name.to_string(),
+        TextFormat {
+            font_id: egui::FontId::proportional(12.5),
+            color: if is_active { theme::FG } else { theme::FG_SOFT },
+            ..Default::default()
+        },
+    );
+    job.wrap = TextWrapping {
+        max_width: max_text_width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('\u{2026}'),
+    };
+    let galley = painter.layout_job(job);
+    painter.galley(
+        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        Color32::TRANSPARENT,
     );
 
     paint_workspace_grip(painter, grip_center, dragging || hovered);
