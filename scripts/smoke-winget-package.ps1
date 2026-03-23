@@ -137,17 +137,36 @@ function Assert-HorizonLaunches {
         $runningProcesses | Stop-Process -Force
     }
 
-    $launchCommand = "start `"`" /b `"$binaryPath`""
-    & $env:ComSpec /c $launchCommand | Out-Null
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    $process = Start-Process `
+        -FilePath $binaryPath `
+        -PassThru `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath
 
     Start-Sleep -Seconds 5
 
-    $process = Get-Process -Name "horizon" -ErrorAction SilentlyContinue |
-        Sort-Object StartTime -Descending |
-        Select-Object -First 1
+    if ($process.HasExited) {
+        $diagnostics = @()
 
-    if (-not $process) {
-        throw "Installed Horizon process was not observed after launch."
+        $stdout = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
+        if ($stdout) {
+            $diagnostics += "stdout:`n$($stdout.Trim())"
+        }
+
+        $stderr = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
+        if ($stderr) {
+            $diagnostics += "stderr:`n$($stderr.Trim())"
+        }
+
+        $details = ""
+        if ($diagnostics.Count -gt 0) {
+            $details = "`n" + ($diagnostics -join "`n`n")
+        }
+
+        throw "Installed Horizon process exited immediately with code $($process.ExitCode).$details"
     }
 
     $process | Stop-Process -Force
