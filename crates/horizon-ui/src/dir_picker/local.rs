@@ -142,6 +142,11 @@ impl DirPicker {
     }
 
     fn confirm_selection(&mut self) -> DirPickerAction {
+        let expanded = expand_tilde_simple(self.modal.query());
+        if !self.modal.query().is_empty() && expanded.is_dir() {
+            return self.select(Some(expanded));
+        }
+
         if let Some(path) = self.results.get(self.modal.selected_index()).cloned() {
             return self.select(Some(path));
         }
@@ -150,12 +155,7 @@ impl DirPicker {
             return self.select(None);
         }
 
-        let expanded = expand_tilde_simple(self.modal.query());
-        if expanded.is_dir() {
-            self.select(Some(expanded))
-        } else {
-            DirPickerAction::None
-        }
+        DirPickerAction::None
     }
 
     fn take_purpose(&mut self) -> Option<DirPickerPurpose> {
@@ -266,7 +266,12 @@ fn seed_query(path: Option<&Path>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::seed_query;
+    use std::fs;
+
+    use horizon_core::{PanelKind, PanelResume, PresetConfig, WorkspaceId};
+    use tempfile::TempDir;
+
+    use super::{DirPicker, DirPickerAction, DirPickerPurpose, PickerModalState, seed_query};
 
     #[test]
     fn seed_query_appends_trailing_separator() {
@@ -276,5 +281,45 @@ mod tests {
     #[test]
     fn seed_query_is_empty_without_workspace_directory() {
         assert!(seed_query(None).is_empty());
+    }
+
+    #[test]
+    fn confirm_selection_prefers_typed_directory_over_selected_child() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let current_dir = temp_dir.path().join("current");
+        let child_dir = current_dir.join("child");
+        fs::create_dir_all(&child_dir).expect("child directory");
+
+        let mut picker = DirPicker {
+            modal: PickerModalState::new(format!("{}/", current_dir.display())),
+            results: vec![child_dir],
+            selected_purpose: Some(DirPickerPurpose::AddPanel {
+                workspace_id: WorkspaceId(1),
+                preset: shell_preset(),
+                canvas_pos: None,
+            }),
+            search_rx: None,
+            last_query_sent: String::new(),
+            last_query_time: std::time::Instant::now(),
+            initial_results_loaded: true,
+        };
+
+        let DirPickerAction::Selected(Some(path), _) = picker.confirm_selection() else {
+            panic!("expected typed directory selection");
+        };
+
+        assert_eq!(path, current_dir);
+    }
+
+    fn shell_preset() -> PresetConfig {
+        PresetConfig {
+            name: "Shell".to_string(),
+            alias: Some("sh".to_string()),
+            kind: PanelKind::Shell,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        }
     }
 }

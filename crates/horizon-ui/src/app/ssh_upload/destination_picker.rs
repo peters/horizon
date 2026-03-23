@@ -19,7 +19,7 @@ pub(super) struct RemoteDestinationPicker {
     results: Vec<RemoteDestinationEntry>,
     current_dir: String,
     error: Option<String>,
-    listing_rx: Option<mpsc::Receiver<Result<RemoteDirectoryListing, String>>>,
+    pending_listing: Option<PendingRemoteListing>,
     last_query_sent: String,
     last_query_time: Instant,
     initial_results_loaded: bool,
@@ -36,6 +36,11 @@ struct RemoteDestinationEntry {
     resolved_path: String,
 }
 
+struct PendingRemoteListing {
+    requested_list_path: String,
+    rx: mpsc::Receiver<Result<RemoteDirectoryListing, String>>,
+}
+
 struct RemoteQueryRequest {
     list_path: String,
     prefix: String,
@@ -50,7 +55,7 @@ impl RemoteDestinationPicker {
             results: Vec::new(),
             current_dir: String::new(),
             error: None,
-            listing_rx: Some(spawn_remote_directory_listing(connection.clone(), request.list_path)),
+            pending_listing: Some(PendingRemoteListing::spawn(connection, request.list_path)),
             last_query_sent: query,
             last_query_time: Instant::now(),
             initial_results_loaded: false,
@@ -107,26 +112,31 @@ impl RemoteDestinationPicker {
     }
 
     fn update_search(&mut self, connection: &SshConnection) {
-        if let Some(rx) = &self.listing_rx {
-            match rx.try_recv() {
+        if let Some(pending) = self.pending_listing.take() {
+            match pending.rx.try_recv() {
                 Ok(Ok(listing)) => {
-                    self.apply_listing(listing);
-                    self.listing_rx = None;
-                    self.error = None;
-                    self.initial_results_loaded = true;
+                    if pending.matches_query(self.modal.query()) {
+                        self.apply_listing(listing);
+                        self.error = None;
+                        self.initial_results_loaded = true;
+                    }
                 }
                 Ok(Err(error)) => {
-                    self.results.clear();
-                    self.error = Some(error);
-                    self.listing_rx = None;
-                    self.initial_results_loaded = true;
+                    if pending.matches_query(self.modal.query()) {
+                        self.results.clear();
+                        self.error = Some(error);
+                        self.initial_results_loaded = true;
+                    }
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.pending_listing = Some(pending);
+                }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.results.clear();
-                    self.error = Some("remote directory picker disconnected".to_string());
-                    self.listing_rx = None;
-                    self.initial_results_loaded = true;
+                    if pending.matches_query(self.modal.query()) {
+                        self.results.clear();
+                        self.error = Some("remote directory picker disconnected".to_string());
+                        self.initial_results_loaded = true;
+                    }
                 }
             }
         }
@@ -139,7 +149,7 @@ impl RemoteDestinationPicker {
             self.last_query_sent.push_str(self.modal.query());
             self.last_query_time = Instant::now();
             self.error = None;
-            self.listing_rx = Some(spawn_remote_directory_listing(connection.clone(), request.list_path));
+            self.pending_listing = Some(PendingRemoteListing::spawn(connection, request.list_path));
         }
     }
 
@@ -168,11 +178,15 @@ impl RemoteDestinationPicker {
     }
 
     fn confirm_selection(&mut self) -> RemoteDestinationPickerAction {
+        let query = self.modal.query().trim();
+        if query_targets_current_dir(query, &self.current_dir) {
+            return RemoteDestinationPickerAction::Selected(self.current_dir.clone());
+        }
+
         if let Some(entry) = self.results.get(self.modal.selected_index()) {
             return RemoteDestinationPickerAction::Selected(entry.resolved_path.clone());
         }
 
-        let query = self.modal.query().trim();
         if !query.is_empty() {
             return RemoteDestinationPickerAction::Selected(query.to_string());
         }
@@ -182,6 +196,19 @@ impl RemoteDestinationPicker {
         }
 
         RemoteDestinationPickerAction::None
+    }
+}
+
+impl PendingRemoteListing {
+    fn spawn(connection: &SshConnection, requested_list_path: String) -> Self {
+        Self {
+            rx: spawn_remote_directory_listing(connection.clone(), requested_list_path.clone()),
+            requested_list_path,
+        }
+    }
+
+    fn matches_query(&self, query: &str) -> bool {
+        self.requested_list_path == remote_query_request(query).list_path
     }
 }
 
@@ -245,6 +272,10 @@ fn remote_entry_matches(entry: &str, prefix: &str) -> bool {
     }
 
     entry.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase())
+}
+
+fn query_targets_current_dir(query: &str, current_dir: &str) -> bool {
+    !current_dir.is_empty() && (query == current_dir || query == browse_query_for(current_dir))
 }
 
 fn render_remote_result_row(
@@ -313,7 +344,15 @@ fn render_remote_result_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{browse_query_for, remote_entry_matches, remote_query_request};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    use horizon_core::SshConnection;
+
+    use super::{
+        PendingRemoteListing, RemoteDestinationEntry, RemoteDestinationPicker, RemoteDirectoryListing,
+        browse_query_for, query_targets_current_dir, remote_entry_matches, remote_query_request,
+    };
 
     #[test]
     fn remote_query_request_uses_parent_for_partial_leaf() {
@@ -339,5 +378,88 @@ mod tests {
     fn browse_query_for_preserves_root() {
         assert_eq!(browse_query_for("/"), "/");
         assert_eq!(browse_query_for("/srv/logs"), "/srv/logs/");
+    }
+
+    #[test]
+    fn query_targets_current_dir_accepts_trailing_slash() {
+        assert!(query_targets_current_dir("/srv/logs/", "/srv/logs"));
+        assert!(query_targets_current_dir("/srv/logs", "/srv/logs"));
+        assert!(!query_targets_current_dir("/srv", "/srv/logs"));
+    }
+
+    #[test]
+    fn pending_listing_matches_prefix_changes_within_same_directory() {
+        let pending = PendingRemoteListing {
+            requested_list_path: "/srv".to_string(),
+            rx: mpsc::channel().1,
+        };
+
+        assert!(pending.matches_query("/srv/log"));
+    }
+
+    #[test]
+    fn pending_listing_rejects_stale_directory_changes() {
+        let pending = PendingRemoteListing {
+            requested_list_path: "/srv".to_string(),
+            rx: mpsc::channel().1,
+        };
+
+        assert!(!pending.matches_query("/tmp/log"));
+    }
+
+    #[test]
+    fn update_search_discards_stale_remote_listing_results() {
+        let (tx, rx) = mpsc::channel();
+        let mut picker = RemoteDestinationPicker {
+            modal: super::PickerModalState::new("/tmp/log"),
+            results: vec![super::RemoteDestinationEntry {
+                name: "kept".to_string(),
+                resolved_path: "/tmp/kept".to_string(),
+            }],
+            current_dir: "/tmp".to_string(),
+            error: None,
+            pending_listing: Some(PendingRemoteListing {
+                requested_list_path: "/srv".to_string(),
+                rx,
+            }),
+            last_query_sent: "/srv/log".to_string(),
+            last_query_time: Instant::now(),
+            initial_results_loaded: false,
+        };
+
+        tx.send(Ok(RemoteDirectoryListing {
+            current_dir: "/srv".to_string(),
+            entries: vec!["logs".to_string()],
+        }))
+        .expect("test listing should send");
+
+        picker.update_search(&SshConnection::default());
+
+        assert_eq!(picker.current_dir, "/tmp");
+        assert_eq!(picker.results.len(), 1);
+        assert_eq!(picker.results[0].name, "kept");
+        assert!(!picker.initial_results_loaded);
+    }
+
+    #[test]
+    fn confirm_selection_prefers_current_directory_after_completion() {
+        let mut picker = RemoteDestinationPicker {
+            modal: super::PickerModalState::new("/srv/logs/nested/"),
+            results: vec![RemoteDestinationEntry {
+                name: "..".to_string(),
+                resolved_path: "/srv/logs".to_string(),
+            }],
+            current_dir: "/srv/logs/nested".to_string(),
+            error: None,
+            pending_listing: None,
+            last_query_sent: "/srv/logs/nested/".to_string(),
+            last_query_time: Instant::now(),
+            initial_results_loaded: true,
+        };
+
+        assert!(matches!(
+            picker.confirm_selection(),
+            super::RemoteDestinationPickerAction::Selected(path) if path == "/srv/logs/nested"
+        ));
     }
 }
