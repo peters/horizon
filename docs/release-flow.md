@@ -61,7 +61,6 @@ The release workflow validates:
 Then it:
 
 - rewrites the workspace version to the exact tag version in CI
-- publishes `horizon-core` and `horizon-ui` to crates.io
 - builds the release binaries for Linux, macOS, and Windows
 - uploads those assets to the GitHub Release you just published
 

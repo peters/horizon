@@ -158,7 +158,7 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 - Use `./scripts/next-version.sh alpha`, `./scripts/next-version.sh beta`, or `./scripts/next-version.sh stable` to suggest the next tag for the current release line
 - Publish from **GitHub → Releases** using tags like `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, or `vX.Y.Z`
 - Mark alpha and beta tags as prereleases in GitHub; leave stable tags as normal releases
-- Publishing the GitHub Release triggers CI to publish the crates and upload the release binaries
+- Publishing the GitHub Release triggers CI to build and upload the release binaries
 - After a stable release, bump `Cargo.toml` to the next release line in a normal PR before cutting more prereleases
 
 ### Release Notes
