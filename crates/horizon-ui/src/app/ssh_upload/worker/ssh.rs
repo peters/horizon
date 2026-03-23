@@ -102,6 +102,9 @@ pub(super) fn run_ssh_upload(
     let detail = format!("Uploading {} over SSH", file.name);
     send_upload_snapshot(progress_tx, progress.snapshot_for(file, 0, &detail));
 
+    let mut local_file = File::open(&file.path)
+        .map_err(|error| WorkerExit::Failed(format!("failed to read {}: {error}", file.path.display())))?;
+
     let remote_command = build_remote_upload_command(destination_dir, &file.name);
     let mut child = Command::new("ssh")
         .args(connection.ssh_transport_args())
@@ -112,12 +115,11 @@ pub(super) fn run_ssh_upload(
         .spawn()
         .map_err(|error| WorkerExit::Failed(format!("failed to start SSH upload: {error}")))?;
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| WorkerExit::Failed("failed to capture SSH upload stdin".to_string()))?;
-    let mut local_file = File::open(&file.path)
-        .map_err(|error| WorkerExit::Failed(format!("failed to read {}: {error}", file.path.display())))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        WorkerExit::Failed("failed to capture SSH upload stdin".to_string())
+    })?;
 
     let mut buffer = vec![0_u8; SSH_UPLOAD_CHUNK_SIZE].into_boxed_slice();
     let mut current_file_bytes = 0_u64;
