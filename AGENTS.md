@@ -141,6 +141,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 - Concise imperative messages, optionally scoped: `feat(board):`, `fix(render):`, `ci:`
 - One logical change per commit
+- Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
 - Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
 
