@@ -141,29 +141,33 @@ fn render_body(
     }
 }
 
-fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) {
-    let Some(editor) = panel.content.editor_mut() else {
-        return;
-    };
+fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
+    let editor = panel.content.editor_mut()?;
 
     let output = ScrollArea::vertical()
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+        .auto_shrink([false, false])
         .id_salt(("editor_edit", panel.id.0))
-        .show(ui, |ui| {
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut editor.text)
-                    .font(FontId::monospace(FONT_SIZE))
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(1)
-                    .frame(false)
-                    .text_color(theme::FG)
-                    .lock_focus(true),
-            );
+        .show_viewport(ui, |ui, viewport| {
+            let response = ui.add(markdown_text_edit(&mut editor.text, viewport.size()));
             if response.changed() {
                 editor.dirty = true;
             }
+            response.rect
         });
     forward_scroll_to_scroll_area(ui, output.id, output.inner_rect, output.content_size.y);
+    Some(output.inner)
+}
+
+fn markdown_text_edit(text: &mut String, min_size: Vec2) -> egui::TextEdit<'_> {
+    egui::TextEdit::multiline(text)
+        .font(FontId::monospace(FONT_SIZE))
+        .desired_width(f32::INFINITY)
+        .desired_rows(1)
+        .min_size(min_size)
+        .frame(false)
+        .text_color(theme::FG)
+        .lock_focus(true)
 }
 
 fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Option<&mut MarkdownPreviewCache>) {
@@ -220,6 +224,80 @@ fn forward_scroll_to_scroll_area(ui: &egui::Ui, scroll_id: Id, inner_rect: Rect,
             state.store(ui.ctx(), scroll_id);
             ui.ctx().input_mut(|i| i.smooth_scroll_delta.y = 0.0);
             ui.ctx().request_repaint();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use egui::{Align, Context, Layout, Pos2, Rect, UiBuilder, Vec2};
+    use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+
+    use super::render_edit_pane;
+    use crate::theme;
+
+    fn test_editor_panel(text: &str) -> Panel {
+        let scratch = tempfile::NamedTempFile::new().expect("temp markdown file");
+        std::fs::write(scratch.path(), text).expect("seed markdown file");
+        Panel::spawn(
+            PanelId(7),
+            WorkspaceId(1),
+            PanelOptions {
+                kind: PanelKind::Editor,
+                command: Some(scratch.path().display().to_string()),
+                cwd: Some(
+                    scratch
+                        .path()
+                        .parent()
+                        .map_or_else(|| PathBuf::from("."), PathBuf::from),
+                ),
+                ..PanelOptions::default()
+            },
+        )
+        .expect("spawn editor panel")
+    }
+
+    #[test]
+    fn edit_text_hitbox_fills_visible_body() {
+        let ctx = Context::default();
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0))),
+            ..egui::RawInput::default()
+        };
+        input.viewport_id = egui::ViewportId::ROOT;
+
+        let body_rect = Rect::from_min_size(Pos2::new(20.0, 24.0), Vec2::new(320.0, 200.0));
+        let mut panel = test_editor_panel("");
+
+        theme::apply(&ctx);
+        ctx.begin_pass(input);
+        let text_rect = egui::CentralPanel::default()
+            .show(&ctx, |ui| {
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(body_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| render_edit_pane(ui, &mut panel).expect("editor response"),
+                )
+                .inner
+            })
+            .inner;
+        let _ = ctx.end_pass();
+
+        let probe_points = [
+            Pos2::new(body_rect.left() + 8.0, body_rect.top() + 8.0),
+            body_rect.center(),
+            Pos2::new(body_rect.left() + 8.0, body_rect.bottom() - 8.0),
+            Pos2::new(body_rect.center().x, body_rect.bottom() - 8.0),
+        ];
+
+        for point in probe_points {
+            assert!(
+                text_rect.contains(point),
+                "expected editor hitbox {text_rect:?} to contain {point:?}"
+            );
         }
     }
 }
