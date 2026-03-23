@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use egui::{Color32, Context, CornerRadius, Id, Order, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use egui::{
+    Align2, Color32, Context, CornerRadius, FontId, Id, Order, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
 use horizon_core::WorkspaceId;
 
 use crate::theme;
@@ -192,7 +194,34 @@ fn paint_minimap_workspaces(
             Stroke::new(0.8, theme::alpha(workspace_color, if is_active { 140 } else { 80 })),
             StrokeKind::Outside,
         );
+
+        paint_workspace_label(painter, workspace_rect, &workspace.name, workspace_color, is_active);
     }
+}
+
+fn paint_workspace_label(
+    painter: &Painter,
+    workspace_rect: Rect,
+    name: &str,
+    workspace_color: Color32,
+    is_active: bool,
+) {
+    const MIN_LABEL_DIM: f32 = 18.0;
+    if workspace_rect.width() < MIN_LABEL_DIM || workspace_rect.height() < MIN_LABEL_DIM {
+        return;
+    }
+
+    let font_size = (workspace_rect.height() * 0.28).clamp(7.0, 12.0);
+    let font = FontId::proportional(font_size);
+    let color = theme::alpha(workspace_color, if is_active { 200 } else { 140 });
+    let clipped = painter.with_clip_rect(workspace_rect);
+    clipped.text(
+        workspace_rect.center_top() + Vec2::new(0.0, 1.0),
+        Align2::CENTER_TOP,
+        name,
+        font,
+        color,
+    );
 }
 
 fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model: &MinimapModel, scope: MinimapScope) {
