@@ -86,13 +86,34 @@ fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
     let gamma = board.create_workspace_at("gamma", [980.0, 40.0]);
 
     board
-        .create_panel(editor_panel_options(), alpha)
+        .create_panel(
+            PanelOptions {
+                position: Some([20.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            alpha,
+        )
         .expect("alpha panel should spawn");
     board
-        .create_panel(editor_panel_options(), beta)
+        .create_panel(
+            PanelOptions {
+                position: Some([520.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            beta,
+        )
         .expect("beta panel should spawn");
     board
-        .create_panel(editor_panel_options(), gamma)
+        .create_panel(
+            PanelOptions {
+                position: Some([1000.0, 60.0]),
+                size: Some([420.0, 300.0]),
+                ..editor_panel_options()
+            },
+            gamma,
+        )
         .expect("gamma panel should spawn");
 
     let beta_before = board.workspace(beta).expect("beta workspace").position;
