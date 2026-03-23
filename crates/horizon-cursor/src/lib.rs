@@ -43,6 +43,18 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    fn screen_coordinate(value: f64) -> Option<i32> {
+        if !value.is_finite() {
+            return None;
+        }
+
+        let rounded = value.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX));
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            Some(rounded as i32)
+        }
+    }
+
     pub(crate) fn cursor_position() -> Option<(i32, i32)> {
         use core_graphics::event::CGEvent;
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
@@ -50,7 +62,21 @@ mod platform {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
         let event = CGEvent::new(source).ok()?;
         let point = event.location();
-        Some((point.x as i32, point.y as i32))
+        Some((screen_coordinate(point.x)?, screen_coordinate(point.y)?))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::screen_coordinate;
+
+        #[test]
+        fn screen_coordinate_rounds_and_clamps_finite_values() {
+            assert_eq!(screen_coordinate(12.6), Some(13));
+            assert_eq!(screen_coordinate(-12.4), Some(-12));
+            assert_eq!(screen_coordinate(f64::INFINITY), None);
+            assert_eq!(screen_coordinate(f64::from(i32::MAX) + 512.0), Some(i32::MAX));
+            assert_eq!(screen_coordinate(f64::from(i32::MIN) - 512.0), Some(i32::MIN));
+        }
     }
 }
 
