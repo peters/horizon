@@ -161,6 +161,10 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 - Publishing the GitHub Release triggers CI to publish the crates and upload the release binaries
 - After a stable release, bump `Cargo.toml` to the next release line in a normal PR before cutting more prereleases
 
+### Release Notes
+
+When cutting a new release, generate concise release notes from the commits since the last tag (`git log <prev-tag>..HEAD --oneline --no-merges`). Group into **What's new** (features) and **Fixes** (bug fixes). Keep it scannable -- one line per item, no commit hashes. Pass the notes to `gh release create --notes`.
+
 ### Dependencies
 
 - Always check crates.io for the latest stable version before adding
