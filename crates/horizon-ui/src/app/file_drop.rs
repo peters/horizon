@@ -28,6 +28,12 @@ enum TerminalDropHit {
     Body,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FileDropHighlight {
+    Panel(PanelId),
+    Workspace(WorkspaceId),
+}
+
 impl HorizonApp {
     pub(super) fn handle_root_file_drop(&mut self, ctx: &Context) {
         let workspace_id = self.board.active_workspace;
@@ -85,6 +91,12 @@ impl HorizonApp {
         if hovered && let Some(pos) = hover_pos {
             self.file_hover_positions.insert(viewport_id, pos);
         }
+
+        self.file_drop_highlight = if hovered {
+            self.compute_file_drop_highlight(ctx, hover_pos, fullscreen_panel, scope)
+        } else {
+            None
+        };
 
         if dropped.is_empty() {
             return;
@@ -166,6 +178,57 @@ impl HorizonApp {
             Some(panel) if panel.terminal().is_some() => TerminalDropHit::Body,
             _ => TerminalDropHit::Ignore,
         }
+    }
+
+    fn compute_file_drop_highlight(
+        &self,
+        ctx: &Context,
+        hover_pos: Option<Pos2>,
+        fullscreen_panel: Option<PanelId>,
+        scope: FileDropScope,
+    ) -> Option<FileDropHighlight> {
+        let hover_pos = hover_pos?;
+
+        let all_editor = ctx.input(|input| {
+            let paths: Vec<_> = input.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect();
+            !paths.is_empty() && paths.iter().all(|p| is_editor_drop_path(p))
+        });
+
+        // Fullscreen: only highlight if it is a droppable panel.
+        if let Some(panel_id) = fullscreen_panel {
+            return match self.panel_drop_hit(panel_id, scope) {
+                TerminalDropHit::Panel => Some(FileDropHighlight::Panel(panel_id)),
+                TerminalDropHit::Body if !all_editor => Some(FileDropHighlight::Panel(panel_id)),
+                _ => None,
+            };
+        }
+
+        // Find topmost panel under cursor.
+        let hovered_panel = self
+            .panel_screen_order
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| self.panel_screen_rects.get(id).is_some_and(|r| r.contains(hover_pos)));
+
+        if let Some(panel_id) = hovered_panel {
+            match self.panel_drop_hit(panel_id, scope) {
+                TerminalDropHit::Panel => return Some(FileDropHighlight::Panel(panel_id)),
+                TerminalDropHit::Body if !all_editor => return Some(FileDropHighlight::Panel(panel_id)),
+                _ => {}
+            }
+        }
+
+        // Editor files over a workspace highlight the workspace.
+        if all_editor {
+            for &(ws_id, rect) in self.workspace_screen_rects.iter().rev() {
+                if rect.contains(hover_pos) {
+                    return Some(FileDropHighlight::Workspace(ws_id));
+                }
+            }
+        }
+
+        None
     }
 
     fn paste_dropped_paths_into_terminal(&mut self, panel_id: PanelId, dropped: &[egui::DroppedFile]) -> bool {

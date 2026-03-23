@@ -3,6 +3,7 @@ mod attention_feed;
 mod canvas;
 mod detached_viewports;
 mod file_drop;
+mod file_drop_highlight;
 mod frame_stats;
 mod lifecycle;
 mod minimap;
@@ -203,6 +204,7 @@ pub struct HorizonApp {
     runtime_dirty_since: Option<Instant>,
     initial_pan_done: bool,
     file_hover_positions: HashMap<ViewportId, Pos2>,
+    file_drop_highlight: Option<file_drop::FileDropHighlight>,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
@@ -284,6 +286,7 @@ impl HorizonApp {
             runtime_dirty_since: None,
             initial_pan_done: false,
             file_hover_positions: HashMap::new(),
+            file_drop_highlight: None,
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),

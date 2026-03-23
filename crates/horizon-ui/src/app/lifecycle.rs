@@ -338,6 +338,7 @@ impl HorizonApp {
         self.render_empty_state_card(ctx);
         self.handle_canvas_double_click(ctx);
         self.render_panels(ctx);
+        self.render_file_drop_highlight(ctx);
         self.render_preset_picker(ctx);
         let minimap_height = self.render_minimap(ctx, &workspace_bounds);
         if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
