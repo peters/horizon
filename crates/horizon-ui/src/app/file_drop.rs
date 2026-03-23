@@ -286,6 +286,15 @@ impl HorizonApp {
         screen_pos: Option<Pos2>,
         dropped: &[egui::DroppedFile],
     ) {
+        if let Some(pos) = screen_pos {
+            for &(ws_id, rect) in self.workspace_screen_rects.iter().rev() {
+                if rect.contains(pos) {
+                    workspace_id = Some(ws_id);
+                    break;
+                }
+            }
+        }
+
         let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
 
         for file in dropped {
