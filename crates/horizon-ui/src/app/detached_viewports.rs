@@ -176,6 +176,7 @@ impl HorizonApp {
         self.render_canvas(ctx);
         self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.render_panels_for_workspace(ctx, workspace_id);
+        self.render_file_drop_highlight(ctx);
         let _ = self.render_workspace_minimap(
             ctx,
             &workspace_bounds,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/horizon-core", "crates/horizon-ui"]
+members = ["crates/horizon-core", "crates/horizon-cursor", "crates/horizon-ui"]
 
 [workspace.package]
 version = "0.1.1"
@@ -20,6 +20,7 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 horizon-core = { path = "crates/horizon-core", version = "0.1.1" }
+horizon-cursor = { path = "crates/horizon-cursor", version = "0.1.1" }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

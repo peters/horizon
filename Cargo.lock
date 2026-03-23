@@ -1218,6 +1218,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-cursor"
+version = "0.1.1"
+dependencies = [
+ "core-graphics",
+ "windows-sys 0.59.0",
+ "x11rb",
+]
+
+[[package]]
 name = "horizon-ui"
 version = "0.1.1"
 dependencies = [
@@ -1227,6 +1236,7 @@ dependencies = [
  "egui",
  "egui_commonmark",
  "horizon-core",
+ "horizon-cursor",
  "profiling",
  "serde_yaml",
  "tempfile",
