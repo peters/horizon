@@ -137,7 +137,8 @@ function Assert-HorizonLaunches {
         $runningProcesses | Stop-Process -Force
     }
 
-    Start-Process -FilePath $binaryPath -WindowStyle Hidden
+    $launchCommand = "start `"`" /b `"$binaryPath`""
+    & $env:ComSpec /c $launchCommand | Out-Null
 
     Start-Sleep -Seconds 5
 
