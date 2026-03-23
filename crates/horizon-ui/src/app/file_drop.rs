@@ -29,6 +29,24 @@ enum TerminalDropHit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalDropTarget {
+    Explicit(PanelId),
+    Fallback(PanelId),
+}
+
+impl TerminalDropTarget {
+    const fn panel_id(self) -> PanelId {
+        match self {
+            Self::Explicit(panel_id) | Self::Fallback(panel_id) => panel_id,
+        }
+    }
+
+    const fn is_explicit(self) -> bool {
+        matches!(self, Self::Explicit(_))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FileDropHighlight {
     Panel(PanelId),
     Workspace(WorkspaceId),
@@ -105,22 +123,25 @@ impl HorizonApp {
         let screen_pos = native_pointer_pos
             .or_else(|| self.file_hover_positions.remove(&viewport_id))
             .or(pointer_pos);
-        let allow_terminal_fallback = !dropped
-            .iter()
-            .filter_map(|file| file.path.as_deref())
-            .any(is_editor_drop_path);
+        let (editor_drops, non_editor_drops) = partition_dropped_files(&dropped);
 
-        if let Some(panel_id) = self.terminal_drop_target(fullscreen_panel, screen_pos, scope, allow_terminal_fallback)
+        if let Some(target) =
+            self.terminal_drop_target(fullscreen_panel, screen_pos, scope, !non_editor_drops.is_empty())
         {
-            if self.maybe_start_ssh_file_drop(panel_id, &dropped, viewport_id) {
-                return;
-            }
-            if self.paste_dropped_paths_into_terminal(panel_id, &dropped) {
+            let terminal_drops = match target {
+                TerminalDropTarget::Explicit(_) => dropped.as_slice(),
+                TerminalDropTarget::Fallback(_) => non_editor_drops.as_slice(),
+            };
+            let panel_id = target.panel_id();
+            let handled_terminal_drop = !terminal_drops.is_empty()
+                && (self.maybe_start_ssh_file_drop(panel_id, terminal_drops, viewport_id)
+                    || self.paste_dropped_paths_into_terminal(panel_id, terminal_drops));
+            if handled_terminal_drop && (target.is_explicit() || editor_drops.is_empty()) {
                 return;
             }
         }
 
-        self.open_dropped_editor_files(ctx, canvas_rect, workspace_id, screen_pos, &dropped);
+        self.open_dropped_editor_files(ctx, canvas_rect, workspace_id, screen_pos, &editor_drops);
     }
 
     fn panel_is_in_root_viewport(&self, panel_id: PanelId) -> bool {
@@ -148,7 +169,7 @@ impl HorizonApp {
         screen_pos: Option<Pos2>,
         scope: FileDropScope,
         allow_fallback: bool,
-    ) -> Option<PanelId> {
+    ) -> Option<TerminalDropTarget> {
         let focused_terminal = self
             .board
             .focused
@@ -305,9 +326,10 @@ fn select_terminal_drop_target(
     rects: TerminalDropRects<'_>,
     allow_fallback: bool,
     mut panel_drop_hit: impl FnMut(PanelId) -> TerminalDropHit,
-) -> Option<PanelId> {
+) -> Option<TerminalDropTarget> {
     if let Some(panel_id) = fullscreen_panel {
-        return (!matches!(panel_drop_hit(panel_id), TerminalDropHit::Ignore)).then_some(panel_id);
+        return (!matches!(panel_drop_hit(panel_id), TerminalDropHit::Ignore))
+            .then_some(TerminalDropTarget::Explicit(panel_id));
     }
 
     if let Some(screen_pos) = screen_pos {
@@ -320,15 +342,22 @@ fn select_terminal_drop_target(
         let panel_id = hovered_panel?;
         match panel_drop_hit(panel_id) {
             TerminalDropHit::Ignore => return None,
-            TerminalDropHit::Panel => return Some(panel_id),
+            TerminalDropHit::Panel => return Some(TerminalDropTarget::Explicit(panel_id)),
             TerminalDropHit::Body => {}
         }
 
-        return rects
+        let body_hit = rects
             .terminal_bodies
             .get(&panel_id)
-            .is_some_and(|rect| rect.contains(screen_pos))
-            .then_some(panel_id);
+            .is_some_and(|rect| rect.contains(screen_pos));
+        if body_hit {
+            return Some(TerminalDropTarget::Explicit(panel_id));
+        }
+        if allow_fallback {
+            return Some(TerminalDropTarget::Fallback(panel_id));
+        }
+
+        return None;
     }
 
     if !allow_fallback {
@@ -338,7 +367,7 @@ fn select_terminal_drop_target(
     if let Some(panel_id) = focused_terminal
         && !matches!(panel_drop_hit(panel_id), TerminalDropHit::Ignore)
     {
-        return Some(panel_id);
+        return Some(TerminalDropTarget::Fallback(panel_id));
     }
 
     panel_screen_order
@@ -346,6 +375,21 @@ fn select_terminal_drop_target(
         .rev()
         .copied()
         .find(|panel_id| !matches!(panel_drop_hit(*panel_id), TerminalDropHit::Ignore))
+        .map(TerminalDropTarget::Fallback)
+}
+
+fn partition_dropped_files(dropped: &[egui::DroppedFile]) -> (Vec<egui::DroppedFile>, Vec<egui::DroppedFile>) {
+    let mut editor_drops = Vec::new();
+    let mut non_editor_drops = Vec::new();
+
+    for file in dropped {
+        match file.path.as_deref() {
+            Some(path) if is_editor_drop_path(path) => editor_drops.push(file.clone()),
+            _ => non_editor_drops.push(file.clone()),
+        }
+    }
+
+    (editor_drops, non_editor_drops)
 }
 
 fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFile]) -> Option<String> {
@@ -407,6 +451,15 @@ fn path_needs_windows_quotes(path: &str) -> bool {
 fn native_file_drop_position(ctx: &Context) -> Option<Pos2> {
     let inner_rect = ctx.input(|input| input.viewport().inner_rect)?;
     let global_pos = native_cursor_position()?;
+    native_file_drop_local_pos(inner_rect, ctx.pixels_per_point(), global_pos)
+}
+
+fn native_file_drop_local_pos(inner_rect: Rect, pixels_per_point: f32, global_pos: Pos2) -> Option<Pos2> {
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return None;
+    }
+
+    let global_pos = Pos2::new(global_pos.x / pixels_per_point, global_pos.y / pixels_per_point);
     let local_pos = global_pos - inner_rect.min.to_vec2();
 
     Rect::from_min_size(Pos2::ZERO, inner_rect.size())
@@ -430,8 +483,8 @@ mod tests {
     use horizon_core::PanelId;
 
     use super::{
-        TerminalDropHit, TerminalDropRects, format_dropped_paths_for_terminal, is_editor_drop_path,
-        native_cursor_position, select_terminal_drop_target,
+        TerminalDropHit, TerminalDropRects, TerminalDropTarget, format_dropped_paths_for_terminal, is_editor_drop_path,
+        native_cursor_position, native_file_drop_local_pos, partition_dropped_files, select_terminal_drop_target,
     };
 
     #[test]
@@ -505,7 +558,7 @@ mod tests {
             hit_fn(&[middle, top]),
         );
 
-        assert_eq!(target, Some(top));
+        assert_eq!(target, Some(TerminalDropTarget::Explicit(top)));
     }
 
     #[test]
@@ -525,7 +578,7 @@ mod tests {
             hit_fn(&[fullscreen]),
         );
 
-        assert_eq!(target, Some(fullscreen));
+        assert_eq!(target, Some(TerminalDropTarget::Explicit(fullscreen)));
     }
 
     #[test]
@@ -570,7 +623,7 @@ mod tests {
             hit_fn(&[focused, other]),
         );
 
-        assert_eq!(target, Some(focused));
+        assert_eq!(target, Some(TerminalDropTarget::Fallback(focused)));
     }
 
     #[test]
@@ -592,7 +645,7 @@ mod tests {
             hit_fn(&[bottom, top]),
         );
 
-        assert_eq!(target, Some(top));
+        assert_eq!(target, Some(TerminalDropTarget::Fallback(top)));
     }
 
     #[test]
@@ -646,6 +699,35 @@ mod tests {
     }
 
     #[test]
+    fn target_selection_routes_non_editor_drops_on_terminal_chrome_to_the_panel() {
+        let terminal = PanelId(10);
+        let order = vec![terminal];
+        let panel_rects = HashMap::from([(
+            terminal,
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(200.0, 200.0)),
+        )]);
+        let body_rects = HashMap::from([(
+            terminal,
+            Rect::from_min_max(Pos2::new(20.0, 40.0), Pos2::new(180.0, 180.0)),
+        )]);
+
+        let target = select_terminal_drop_target(
+            None,
+            Some(Pos2::new(12.0, 12.0)),
+            Some(terminal),
+            &order,
+            TerminalDropRects {
+                panels: &panel_rects,
+                terminal_bodies: &body_rects,
+            },
+            true,
+            hit_fn(&[terminal]),
+        );
+
+        assert_eq!(target, Some(TerminalDropTarget::Fallback(terminal)));
+    }
+
+    #[test]
     fn target_selection_disables_terminal_fallback_for_editor_drops() {
         let terminal = PanelId(11);
         let order = vec![terminal];
@@ -661,6 +743,35 @@ mod tests {
         let target = select_terminal_drop_target(
             None,
             None,
+            Some(terminal),
+            &order,
+            TerminalDropRects {
+                panels: &panel_rects,
+                terminal_bodies: &body_rects,
+            },
+            false,
+            hit_fn(&[terminal]),
+        );
+
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn target_selection_keeps_editor_drops_off_terminal_chrome() {
+        let terminal = PanelId(11);
+        let order = vec![terminal];
+        let panel_rects = HashMap::from([(
+            terminal,
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(200.0, 200.0)),
+        )]);
+        let body_rects = HashMap::from([(
+            terminal,
+            Rect::from_min_max(Pos2::new(20.0, 40.0), Pos2::new(180.0, 180.0)),
+        )]);
+
+        let target = select_terminal_drop_target(
+            None,
+            Some(Pos2::new(12.0, 12.0)),
             Some(terminal),
             &order,
             TerminalDropRects {
@@ -700,7 +811,7 @@ mod tests {
             hit_fn(&[terminal]),
         );
 
-        assert_eq!(target, Some(terminal));
+        assert_eq!(target, Some(TerminalDropTarget::Explicit(terminal)));
     }
 
     #[test]
@@ -729,7 +840,42 @@ mod tests {
             },
         );
 
-        assert_eq!(target, Some(ssh));
+        assert_eq!(target, Some(TerminalDropTarget::Explicit(ssh)));
+    }
+
+    #[test]
+    fn partitioning_keeps_mixed_drops_available_for_editor_and_terminal_paths() {
+        let dropped = [
+            egui::DroppedFile {
+                path: Some(PathBuf::from("/tmp/note.md")),
+                ..egui::DroppedFile::default()
+            },
+            egui::DroppedFile {
+                path: Some(PathBuf::from("/tmp/image.png")),
+                ..egui::DroppedFile::default()
+            },
+        ];
+
+        let (editor_drops, non_editor_drops) = partition_dropped_files(&dropped);
+
+        assert_eq!(editor_drops.len(), 1);
+        assert_eq!(
+            editor_drops[0].path.as_deref(),
+            Some(std::path::Path::new("/tmp/note.md"))
+        );
+        assert_eq!(non_editor_drops.len(), 1);
+        assert_eq!(
+            non_editor_drops[0].path.as_deref(),
+            Some(std::path::Path::new("/tmp/image.png"))
+        );
+    }
+
+    #[test]
+    fn native_file_drop_position_converts_native_pixels_to_points() {
+        let inner_rect = Rect::from_min_size(Pos2::new(100.0, 50.0), egui::vec2(200.0, 100.0));
+        let local_pos = native_file_drop_local_pos(inner_rect, 2.0, Pos2::new(260.0, 140.0));
+
+        assert_eq!(local_pos, Some(Pos2::new(30.0, 20.0)));
     }
 
     #[test]
