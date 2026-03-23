@@ -180,30 +180,39 @@ function Assert-HorizonLaunches {
     }
 }
 
-Write-Host "INSTALL_START"
+function Write-StepMarker {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Marker
+    )
+
+    Write-Output $Marker
+}
+
+Write-StepMarker "INSTALL_START"
 Enable-LocalManifestSupport
 
 Invoke-Winget -Arguments @("install", "--manifest", $InstallManifestDir, "--scope", "machine", "--silent")
-Write-Host "INSTALL_OK"
+Write-StepMarker "INSTALL_OK"
 
 Assert-HorizonBinaryMatchesManifest -ManifestDir $InstallManifestDir | Out-Null
-Write-Host "INSTALL_HASH_OK"
+Write-StepMarker "INSTALL_HASH_OK"
 
-Write-Host "INSTALL_LAUNCH_START"
+Write-StepMarker "INSTALL_LAUNCH_START"
 Assert-HorizonLaunches
-Write-Host "INSTALL_LAUNCH_OK"
+Write-StepMarker "INSTALL_LAUNCH_OK"
 
 if ($UpgradeManifestDir) {
-    Write-Host "UPGRADE_START"
+    Write-StepMarker "UPGRADE_START"
     Invoke-Winget -Arguments @("upgrade", "--manifest", $UpgradeManifestDir, "--scope", "machine", "--silent")
-    Write-Host "UPGRADE_OK"
+    Write-StepMarker "UPGRADE_OK"
 
     Assert-HorizonBinaryMatchesManifest -ManifestDir $UpgradeManifestDir | Out-Null
-    Write-Host "UPGRADE_HASH_OK"
+    Write-StepMarker "UPGRADE_HASH_OK"
 
-    Write-Host "UPGRADE_LAUNCH_START"
+    Write-StepMarker "UPGRADE_LAUNCH_START"
     Assert-HorizonLaunches
-    Write-Host "UPGRADE_LAUNCH_OK"
+    Write-StepMarker "UPGRADE_LAUNCH_OK"
 }
 
 $uninstallManifestDir = $InstallManifestDir
@@ -211,7 +220,7 @@ if ($UpgradeManifestDir) {
     $uninstallManifestDir = $UpgradeManifestDir
 }
 
-Write-Host "UNINSTALL_START"
+Write-StepMarker "UNINSTALL_START"
 Invoke-Winget -Arguments @("uninstall", "--manifest", $uninstallManifestDir, "--scope", "machine", "--silent", "--purge")
 Assert-HorizonMissing
-Write-Host "UNINSTALL_OK"
+Write-StepMarker "UNINSTALL_OK"

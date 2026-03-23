@@ -101,3 +101,33 @@ Stable-release packaging assumes:
 WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
 
 If a stable release is missing one of those assets, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial packaging update.
+
+## Interactive WinGet Smoke
+
+For full install, upgrade, launch, and uninstall validation on a disposable Windows 11 VM, use `scripts/run-winget-azure-smoke.sh`.
+
+The runner:
+
+- creates a Windows 11 VM with `az`
+- stages the local WinGet manifest renderer and smoke script onto the VM
+- opens an RDP session so the smoke runs from a PowerShell window in the logged-in desktop session
+- polls smoke status and collects the final logs
+- deletes the Azure resource group by default when it exits
+
+Example:
+
+```bash
+./scripts/run-winget-azure-smoke.sh \
+  --install-version 0.1.1 \
+  --install-sha 23fda14bc79aaca79e3a5fbd52c3501c11b4971d69b7a28f2f69bba94bd566e1 \
+  --install-release-date 2026-03-21 \
+  --upgrade-version 0.2.0 \
+  --upgrade-sha b7c1632f077067106883302b6936e720998ab53a2f5331511306bff8280fe5d5 \
+  --upgrade-release-date 2026-03-23
+```
+
+Host prerequisites:
+
+- `az` authenticated for the target subscription
+- `xfreerdp` available on `PATH`
+- `xvfb-run` available when running headless without an existing `DISPLAY`
