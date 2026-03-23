@@ -145,6 +145,16 @@ brew uninstall horizon
 brew untap peters/horizon
 ```
 
+### WinGet
+
+Stable releases are submitted to the official Windows Package Manager catalog. After a release's manifest PR is approved, install, upgrade, or remove Horizon with:
+
+```powershell
+winget install Peters.Horizon
+winget upgrade Peters.Horizon
+winget uninstall Peters.Horizon
+```
+
 ### Build from source
 
 ```bash
