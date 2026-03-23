@@ -132,7 +132,10 @@ function Assert-HorizonLaunches {
         throw "Expected Horizon to be installed before launch validation."
     }
 
-    taskkill /IM horizon.exe /F /T 2>$null | Out-Null
+    $runningProcesses = Get-Process -Name "horizon" -ErrorAction SilentlyContinue
+    if ($runningProcesses) {
+        $runningProcesses | Stop-Process -Force
+    }
 
     Start-Process -FilePath $binaryPath -WindowStyle Hidden
 
@@ -146,7 +149,7 @@ function Assert-HorizonLaunches {
         throw "Installed Horizon process was not observed after launch."
     }
 
-    taskkill /PID $process.Id /F /T | Out-Null
+    $process | Stop-Process -Force
     Start-Sleep -Seconds 2
 
     if (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) {
