@@ -237,6 +237,32 @@ impl Board {
         }
     }
 
+    pub(super) fn resolve_workspace_collisions_after_frame_growth(
+        &mut self,
+        id: WorkspaceId,
+        previous_frame: Option<[f32; 4]>,
+    ) {
+        let Some(before) = previous_frame else {
+            return;
+        };
+        let Some(after) = self.workspace_frame_rect(id) else {
+            return;
+        };
+
+        if after[0] < before[0] - f32::EPSILON {
+            self.resolve_workspace_collisions(id, [-1.0, 0.0]);
+        }
+        if after[1] < before[1] - f32::EPSILON {
+            self.resolve_workspace_collisions(id, [0.0, -1.0]);
+        }
+        if after[2] > before[2] + f32::EPSILON {
+            self.resolve_workspace_collisions(id, [1.0, 0.0]);
+        }
+        if after[3] > before[3] + f32::EPSILON {
+            self.resolve_workspace_collisions(id, [0.0, 1.0]);
+        }
+    }
+
     pub(super) fn apply_workspace_layout(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
         let Some(count) = self.workspace(id).map(|workspace| workspace.panels.len()) else {
             return;
@@ -343,7 +369,7 @@ impl Board {
 
     /// Returns the visual frame rect `[min_x, min_y, max_x, max_y]` for a
     /// workspace, including the title area and background padding.
-    fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
+    pub(super) fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
         let workspace = self.workspace(id)?;
         if let Some((min, max)) = self.workspace_bounds(id) {
             Some([

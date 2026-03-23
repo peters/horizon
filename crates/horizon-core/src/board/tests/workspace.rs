@@ -231,6 +231,78 @@ fn align_workspaces_horizontally_only_moves_selected_workspaces() {
 }
 
 #[test]
+fn adding_panel_pushes_colliding_workspace() {
+    let mut board = Board::new();
+    let expanding_workspace = board.create_workspace("expanding");
+    let colliding_workspace = board.create_workspace("colliding");
+
+    board
+        .create_panel(editor_panel_options(), expanding_workspace)
+        .expect("first panel should spawn");
+    board.arrange_workspace(expanding_workspace, WorkspaceLayout::Columns);
+
+    board
+        .create_panel(editor_panel_options(), colliding_workspace)
+        .expect("colliding panel should spawn");
+    assert!(board.move_workspace(colliding_workspace, [620.0, 40.0]));
+
+    let initial_position = board
+        .workspace(colliding_workspace)
+        .expect("colliding workspace")
+        .position;
+
+    board
+        .create_panel(editor_panel_options(), expanding_workspace)
+        .expect("second panel should spawn");
+
+    let moved_position = board
+        .workspace(colliding_workspace)
+        .expect("colliding workspace")
+        .position;
+    assert!(
+        moved_position[0] > initial_position[0],
+        "expected workspace to move right from {initial_position:?}, got {moved_position:?}"
+    );
+}
+
+#[test]
+fn assigning_panel_pushes_colliding_workspace() {
+    let mut board = Board::new();
+    let source_workspace = board.create_workspace("source");
+    let target_workspace = board.create_workspace("target");
+    let colliding_workspace = board.create_workspace("colliding");
+
+    let moved_panel = board
+        .create_panel(editor_panel_options(), source_workspace)
+        .expect("source panel should spawn");
+    board
+        .create_panel(editor_panel_options(), target_workspace)
+        .expect("target panel should spawn");
+    board.arrange_workspace(target_workspace, WorkspaceLayout::Columns);
+
+    board
+        .create_panel(editor_panel_options(), colliding_workspace)
+        .expect("colliding panel should spawn");
+    assert!(board.move_workspace(colliding_workspace, [620.0, 40.0]));
+
+    let initial_position = board
+        .workspace(colliding_workspace)
+        .expect("colliding workspace")
+        .position;
+
+    board.assign_panel_to_workspace(moved_panel, target_workspace);
+
+    let moved_position = board
+        .workspace(colliding_workspace)
+        .expect("colliding workspace")
+        .position;
+    assert!(
+        moved_position[0] > initial_position[0],
+        "expected workspace to move right from {initial_position:?}, got {moved_position:?}"
+    );
+}
+
+#[test]
 fn restored_empty_workspaces_are_removed_during_cleanup() {
     let state = RuntimeState {
         active_workspace_local_id: Some("empty".to_string()),
