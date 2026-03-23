@@ -172,6 +172,12 @@ pub struct Panel {
     pub ssh_status: Option<SshConnectionStatus>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PanelProcessOutput {
+    pub had_output: bool,
+    pub cwd_changed: bool,
+}
+
 impl Panel {
     /// Convenience accessor for the terminal content (if this panel holds one).
     #[must_use]
@@ -229,16 +235,23 @@ impl Panel {
 
     /// Drain pending terminal events. Returns `true` if any output was processed.
     #[profiling::function]
-    pub fn process_output(&mut self) -> bool {
+    pub fn process_output(&mut self) -> PanelProcessOutput {
+        let should_track_live_cwd = matches!(self.kind, PanelKind::Shell | PanelKind::Command);
         let Some(terminal) = self.content.terminal_mut() else {
             self.had_recent_output = false;
-            return false;
+            return PanelProcessOutput::default();
         };
         let had_output = terminal.process_events();
+        let terminal_title = had_output.then(|| terminal.title().to_string());
+        let current_cwd = if had_output && should_track_live_cwd {
+            terminal.current_cwd()
+        } else {
+            None
+        };
         self.had_recent_output = had_output;
 
-        if had_output {
-            self.terminal_title = terminal.title().to_string();
+        if let Some(title) = terminal_title {
+            self.terminal_title = title;
         }
         if self.kind == PanelKind::Ssh {
             if terminal.child_exited() {
@@ -247,7 +260,11 @@ impl Panel {
                 self.ssh_status = Some(SshConnectionStatus::Connected);
             }
         }
-        had_output
+
+        PanelProcessOutput {
+            had_output,
+            cwd_changed: self.update_tracked_cwd(current_cwd),
+        }
     }
 
     #[must_use]
@@ -522,10 +539,32 @@ impl Panel {
         }
         None
     }
+
+    fn should_track_live_cwd(&self) -> bool {
+        matches!(self.kind, PanelKind::Shell | PanelKind::Command)
+    }
+
+    fn update_tracked_cwd(&mut self, current_cwd: Option<PathBuf>) -> bool {
+        if !self.should_track_live_cwd() {
+            return false;
+        }
+
+        let Some(current_cwd) = current_cwd else {
+            return false;
+        };
+        if self.launch_cwd.as_ref() == Some(&current_cwd) {
+            return false;
+        }
+
+        self.launch_cwd = Some(current_cwd);
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent,
         PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind,
@@ -597,6 +636,26 @@ mod tests {
         panel.kind = PanelKind::Ssh;
 
         assert!(!panel.should_close_after_exit());
+    }
+
+    #[test]
+    fn shell_panels_track_latest_live_cwd() {
+        let mut panel = test_panel("Shell", "", false);
+        panel.kind = PanelKind::Shell;
+        panel.launch_cwd = Some(PathBuf::from("/workspace"));
+
+        assert!(panel.update_tracked_cwd(Some(PathBuf::from("/workspace/subdir"))));
+        assert_eq!(panel.launch_cwd, Some(PathBuf::from("/workspace/subdir")));
+    }
+
+    #[test]
+    fn agent_panels_keep_original_launch_cwd() {
+        let mut panel = test_panel("Codex", "", false);
+        panel.kind = PanelKind::Codex;
+        panel.launch_cwd = Some(PathBuf::from("/workspace"));
+
+        assert!(!panel.update_tracked_cwd(Some(PathBuf::from("/workspace/subdir"))));
+        assert_eq!(panel.launch_cwd, Some(PathBuf::from("/workspace")));
     }
 
     #[test]
