@@ -96,11 +96,80 @@ pub(super) fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        current_cwd_for_pid_via_lsof(pid)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = pid;
         None
     }
+}
+
+#[cfg(target_os = "macos")]
+fn current_cwd_for_pid_via_lsof(pid: u32) -> Option<PathBuf> {
+    let target_pid = deepest_child_pid(pid).unwrap_or(pid);
+    lsof_cwd_for_pid(target_pid).or_else(|| lsof_cwd_for_pid(pid))
+}
+
+#[cfg(target_os = "macos")]
+fn deepest_child_pid(mut pid: u32) -> Option<u32> {
+    let mut saw_child = false;
+
+    while let Some(child_pid) = direct_child_pid(pid) {
+        saw_child = true;
+        pid = child_pid;
+    }
+
+    saw_child.then_some(pid)
+}
+
+#[cfg(target_os = "macos")]
+fn lsof_cwd_for_pid(pid: u32) -> Option<PathBuf> {
+    let output = std::process::Command::new("lsof")
+        .args(["-a", "-d", "cwd", "-p", &pid.to_string(), "-Fn"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_lsof_cwd(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+fn parse_lsof_cwd(output: &str) -> Option<PathBuf> {
+    let mut in_cwd_entry = false;
+
+    for line in output.lines() {
+        if let Some(descriptor) = line.strip_prefix('f') {
+            in_cwd_entry = descriptor == "cwd";
+            continue;
+        }
+        if in_cwd_entry && let Some(path) = line.strip_prefix('n') {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn direct_child_pid(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_pgrep_pid(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+fn parse_pgrep_pid(output: &str) -> Option<u32> {
+    output.lines().find_map(|line| line.trim().parse().ok())
 }
 
 const TERMINAL_BASE_COLORS: [Rgb; 16] = [
@@ -253,5 +322,33 @@ pub fn open_url(url: &str) {
         .spawn();
     if let Err(error) = result {
         tracing::warn!("failed to open URL {url}: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::parse_lsof_cwd;
+
+    #[test]
+    fn parse_lsof_cwd_extracts_working_directory() {
+        let output = "p1234\nfcwd\nn/tmp/project\n";
+
+        assert_eq!(parse_lsof_cwd(output), Some(PathBuf::from("/tmp/project")));
+    }
+
+    #[test]
+    fn parse_lsof_cwd_returns_none_without_cwd_entry() {
+        let output = "p1234\nf1\nn/tmp/project/file.txt\n";
+
+        assert_eq!(parse_lsof_cwd(output), None);
+    }
+
+    #[test]
+    fn parse_pgrep_pid_extracts_first_child_pid() {
+        let output = "12027\n12099\n";
+
+        assert_eq!(super::parse_pgrep_pid(output), Some(12027));
     }
 }
