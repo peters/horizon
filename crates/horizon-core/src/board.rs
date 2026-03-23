@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::attention::AttentionItem;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::panel::{Panel, PanelId, PanelProcessOutput};
+use crate::panel::{Panel, PanelId, PanelKind, PanelProcessOutput};
 use crate::runtime_state::RuntimeState;
 use crate::workspace::{Workspace, WorkspaceId};
 
@@ -122,6 +122,8 @@ impl Board {
             for panel_state in &workspace_state.panels {
                 let mut options = panel_state.to_panel_options();
                 options.transcript_root = transcript_root.map(Path::to_path_buf);
+                options.restore_as_disconnected_snapshot =
+                    transcript_root.is_some() && panel_state.kind == PanelKind::Ssh;
                 board.create_panel(options, ws_id)?;
             }
         }

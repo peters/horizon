@@ -119,6 +119,7 @@ pub struct PanelOptions {
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub transcript_root: Option<PathBuf>,
+    pub restore_as_disconnected_snapshot: bool,
 }
 
 impl Default for PanelOptions {
@@ -139,6 +140,7 @@ impl Default for PanelOptions {
             session_binding: None,
             template: None,
             transcript_root: None,
+            restore_as_disconnected_snapshot: false,
         }
     }
 }

@@ -4,6 +4,7 @@ use crate::config::WorkspaceConfig;
 use crate::layout::{TILE_GAP, WS_INNER_PAD};
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState, WorkspaceTemplateRef};
+use crate::ssh::{SshConnection, SshConnectionStatus};
 
 use super::super::*;
 use super::editor_panel_options;
@@ -279,6 +280,53 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
     assert_eq!(board.workspaces.len(), 1);
     assert_eq!(board.workspaces[0].local_id, "filled");
     assert_eq!(board.active_workspace, Some(board.workspaces[0].id));
+}
+
+#[test]
+fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
+    let transcript_root = tempfile::tempdir().expect("tempdir");
+    std::fs::write(transcript_root.path().join("ssh-panel.bin"), b"restored ssh prompt\r\n").expect("write transcript");
+    let state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "remote".to_string(),
+            name: "Remote".to_string(),
+            cwd: None,
+            position: Some([0.0, 40.0]),
+            template: None,
+            layout: None,
+            panels: vec![PanelState {
+                local_id: "ssh-panel".to_string(),
+                name: "prod".to_string(),
+                kind: PanelKind::Ssh,
+                command: None,
+                args: Vec::new(),
+                cwd: None,
+                ssh_connection: Some(SshConnection {
+                    host: "prod".to_string(),
+                    user: Some("deploy".to_string()),
+                    ..SshConnection::default()
+                }),
+                rows: 24,
+                cols: 80,
+                resume: PanelResume::Fresh,
+                position: Some([0.0, 40.0]),
+                size: None,
+                session_binding: None,
+                template: None,
+                editor_content: None,
+            }],
+        }],
+        ..RuntimeState::default()
+    };
+
+    let board = Board::from_runtime_state_with_transcripts(&state, Some(transcript_root.path())).expect("board");
+    let panel = board.panels.first().expect("panel");
+
+    assert_eq!(panel.ssh_status(), Some(SshConnectionStatus::Disconnected));
+    assert_eq!(
+        panel.terminal().expect("terminal").last_lines_text(1),
+        "restored ssh prompt"
+    );
 }
 
 #[test]

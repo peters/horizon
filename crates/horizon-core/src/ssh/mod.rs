@@ -93,9 +93,19 @@ impl SshConnection {
             args.extend(["-o".to_string(), "BatchMode=yes".to_string()]);
         }
 
+        args.extend(default_keepalive_args());
         args.extend(self.extra_args.iter().cloned());
         args
     }
+}
+
+fn default_keepalive_args() -> impl IntoIterator<Item = String> {
+    [
+        "-o".to_string(),
+        "ServerAliveInterval=15".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=1".to_string(),
+    ]
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -161,9 +171,42 @@ mod tests {
                 "-J".to_string(),
                 "bastion".to_string(),
                 "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "-o".to_string(),
                 "StrictHostKeyChecking=no".to_string(),
                 "deploy@prod".to_string(),
                 "tmux attach".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn to_command_args_places_user_extra_args_after_keepalive_defaults() {
+        let connection = SshConnection {
+            host: "prod".to_string(),
+            extra_args: vec![
+                "-o".to_string(),
+                "ServerAliveInterval=60".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=4".to_string(),
+            ],
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            connection.to_command_args(),
+            vec![
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=60".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=4".to_string(),
+                "prod".to_string(),
             ]
         );
     }
@@ -179,7 +222,15 @@ mod tests {
 
         assert_eq!(
             connection.ssh_transport_args(),
-            vec!["-o".to_string(), "BatchMode=yes".to_string(), "deploy@prod".to_string(),]
+            vec![
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "deploy@prod".to_string(),
+            ]
         );
     }
 
@@ -195,6 +246,10 @@ mod tests {
             vec![
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
                 "-o".to_string(),
                 "ConnectTimeout=5".to_string(),
                 "prod".to_string(),
@@ -217,6 +272,10 @@ mod tests {
                 "2222".to_string(),
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
             ]
         );
     }

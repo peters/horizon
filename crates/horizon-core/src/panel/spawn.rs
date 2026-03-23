@@ -40,6 +40,30 @@ struct TerminalLaunchTrace<'a> {
     cmd: String,
 }
 
+struct ResolvedTerminalLaunch {
+    session_binding: Option<AgentSessionBinding>,
+    program: String,
+    launch_args: Vec<String>,
+}
+
+struct TerminalPanelBuildArgs {
+    id: PanelId,
+    local_id: String,
+    title: String,
+    kind: PanelKind,
+    resume: PanelResume,
+    position: Option<[f32; 2]>,
+    size: Option<[f32; 2]>,
+    workspace_id: WorkspaceId,
+    session_binding: Option<AgentSessionBinding>,
+    template: Option<PanelTemplateRef>,
+    has_custom_name: bool,
+    launch_command: Option<String>,
+    launch_args: Vec<String>,
+    launch_cwd: Option<PathBuf>,
+    ssh_connection: Option<SshConnection>,
+}
+
 impl StaticPanelSeed {
     fn new(
         id: PanelId,
@@ -161,6 +185,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         session_binding,
         template,
         transcript_root,
+        restore_as_disconnected_snapshot,
         ..
     } = opts;
 
@@ -169,41 +194,50 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     let saved_args = args.clone();
     let saved_cwd = cwd.clone();
     let saved_ssh_connection = ssh_connection.clone();
-    let saved_cwd_string = saved_cwd.as_ref().map(|path| path.display().to_string());
-    let (session_binding, should_resume_binding) = resolve_session_binding(
+    let resolved_launch = resolve_terminal_launch(
+        id,
         kind,
         &resume,
-        session_binding,
-        saved_cwd_string.as_deref(),
         name.as_deref(),
-    );
-    let (program, launch_args) = resolve_launch_command(
         command,
         args,
-        ssh_connection.clone(),
-        kind,
-        &resume,
-        session_binding.as_ref(),
-        should_resume_binding,
+        ssh_connection,
+        session_binding,
+        saved_cwd.as_ref(),
+        transcript.as_ref(),
     );
-
-    let launch_trace = TerminalLaunchTrace {
-        kind,
-        resume: &resume,
-        session_binding: session_binding.as_ref(),
-        should_resume_binding,
-        cwd: saved_cwd_string.as_deref(),
-        cmd: format!("{program} {}", launch_args.join(" ")),
-    };
-    log_terminal_launch(id, &launch_trace);
-
-    let (program, launch_args) = if let Some(transcript) = transcript.as_ref() {
-        transcript.wrap_launch_command(program, launch_args)
-    } else {
-        (program, launch_args)
-    };
+    let ResolvedTerminalLaunch {
+        session_binding,
+        program,
+        launch_args,
+    } = resolved_launch;
     let has_custom_name = name.is_some();
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
+    let initial_ssh_status = if kind == PanelKind::Ssh {
+        Some(SshConnectionStatus::Connecting)
+    } else {
+        None
+    };
+    let panel_args = TerminalPanelBuildArgs {
+        id,
+        local_id,
+        title,
+        kind,
+        resume,
+        position,
+        size,
+        workspace_id,
+        session_binding,
+        template,
+        has_custom_name,
+        launch_command: saved_command,
+        launch_args: saved_args,
+        launch_cwd: saved_cwd,
+        ssh_connection: saved_ssh_connection,
+    };
+    if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh {
+        return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
+    }
     let terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args: launch_args,
@@ -218,10 +252,130 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         env: agent_env(kind),
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
+    tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
+    Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
+}
 
-    tracing::info!("created panel '{}' (id={})", title, id.0);
+fn spawn_disconnected_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {
+    let (program, args) = disconnected_snapshot_launch_command();
+    Terminal::spawn(TerminalSpawnOptions {
+        program,
+        args,
+        cwd: None,
+        rows,
+        cols,
+        cell_width: DEFAULT_CELL_WIDTH,
+        cell_height: DEFAULT_CELL_HEIGHT,
+        scrollback_limit: scrollback_limit_for_kind(PanelKind::Ssh),
+        window_id: id.0,
+        replay_bytes,
+        env: HashMap::new(),
+        kitty_keyboard: kitty_keyboard_for_kind(PanelKind::Ssh),
+    })
+}
 
-    Ok(Panel {
+fn disconnected_snapshot_launch_command() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        ("cmd.exe".to_string(), vec!["/C".to_string(), "exit".to_string()])
+    } else {
+        (default_shell(), vec!["-c".to_string(), "exit".to_string()])
+    }
+}
+
+fn spawn_disconnected_ssh_snapshot_panel(
+    panel_args: TerminalPanelBuildArgs,
+    rows: u16,
+    cols: u16,
+    replay_bytes: Vec<u8>,
+) -> Result<Panel> {
+    let terminal = spawn_disconnected_snapshot_terminal(panel_args.id, rows, cols, replay_bytes)?;
+    tracing::info!(
+        "restored disconnected ssh snapshot '{}' (id={})",
+        panel_args.title,
+        panel_args.id.0
+    );
+    Ok(build_terminal_panel(
+        panel_args,
+        terminal,
+        Some(SshConnectionStatus::Disconnected),
+    ))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "terminal launch resolution needs the saved runtime-state metadata plus transcript context"
+)]
+fn resolve_terminal_launch(
+    id: PanelId,
+    kind: PanelKind,
+    resume: &PanelResume,
+    name: Option<&str>,
+    command: Option<String>,
+    args: Vec<String>,
+    ssh_connection: Option<SshConnection>,
+    session_binding: Option<AgentSessionBinding>,
+    saved_cwd: Option<&PathBuf>,
+    transcript: Option<&PanelTranscript>,
+) -> ResolvedTerminalLaunch {
+    let saved_cwd_string = saved_cwd.map(|path| path.display().to_string());
+    let (session_binding, should_resume_binding) =
+        resolve_session_binding(kind, resume, session_binding, saved_cwd_string.as_deref(), name);
+    let (program, launch_args) = resolve_launch_command(
+        command,
+        args,
+        ssh_connection,
+        kind,
+        resume,
+        session_binding.as_ref(),
+        should_resume_binding,
+    );
+
+    let launch_trace = TerminalLaunchTrace {
+        kind,
+        resume,
+        session_binding: session_binding.as_ref(),
+        should_resume_binding,
+        cwd: saved_cwd_string.as_deref(),
+        cmd: format!("{program} {}", launch_args.join(" ")),
+    };
+    log_terminal_launch(id, &launch_trace);
+
+    let (program, launch_args) = if let Some(transcript) = transcript {
+        transcript.wrap_launch_command(program, launch_args)
+    } else {
+        (program, launch_args)
+    };
+
+    ResolvedTerminalLaunch {
+        session_binding,
+        program,
+        launch_args,
+    }
+}
+
+fn build_terminal_panel(
+    panel_args: TerminalPanelBuildArgs,
+    terminal: Terminal,
+    ssh_status: Option<SshConnectionStatus>,
+) -> Panel {
+    let TerminalPanelBuildArgs {
+        id,
+        local_id,
+        title,
+        kind,
+        resume,
+        position,
+        size,
+        workspace_id,
+        session_binding,
+        template,
+        has_custom_name,
+        launch_command,
+        launch_args,
+        launch_cwd,
+        ssh_connection,
+    } = panel_args;
+    Panel {
         id,
         local_id,
         title,
@@ -239,16 +393,12 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         has_custom_name,
         had_recent_output: false,
         terminal_title: String::new(),
-        launch_command: saved_command,
-        launch_args: saved_args,
-        launch_cwd: saved_cwd,
-        ssh_connection: saved_ssh_connection,
-        ssh_status: if kind == PanelKind::Ssh {
-            Some(SshConnectionStatus::Connecting)
-        } else {
-            None
-        },
-    })
+        launch_command,
+        launch_args,
+        launch_cwd,
+        ssh_connection,
+        ssh_status,
+    }
 }
 
 fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -> String {
@@ -597,6 +747,19 @@ mod tests {
     }
 
     #[test]
+    fn disconnected_snapshot_launch_command_exits_without_reconnecting() {
+        let (program, args) = disconnected_snapshot_launch_command();
+
+        if cfg!(windows) {
+            assert_eq!(program, "cmd.exe");
+            assert_eq!(args, vec!["/C".to_string(), "exit".to_string()]);
+        } else {
+            assert_eq!(program, default_shell());
+            assert_eq!(args, vec!["-c".to_string(), "exit".to_string()]);
+        }
+    }
+
+    #[test]
     fn resolve_launch_command_preserves_custom_shell_without_args() {
         let (program, args) = resolve_launch_command(
             Some("/usr/local/bin/custom-shell".to_string()),
@@ -654,7 +817,15 @@ mod tests {
         assert_eq!(program, "ssh");
         assert_eq!(
             args,
-            vec!["-p".to_string(), "2222".to_string(), "deploy@prod-api".to_string(),]
+            vec![
+                "-p".to_string(),
+                "2222".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "deploy@prod-api".to_string(),
+            ]
         );
     }
 }
