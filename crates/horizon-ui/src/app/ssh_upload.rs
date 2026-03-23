@@ -1,3 +1,4 @@
+mod destination_picker;
 mod render;
 mod worker;
 
@@ -8,11 +9,11 @@ use std::time::{Duration, Instant};
 use egui::{Context, ViewportId};
 use horizon_core::{PanelId, PanelKind, SshConnection};
 
+use self::destination_picker::{RemoteDestinationPicker, RemoteDestinationPickerAction};
 use self::render::{render_backdrop, render_upload_window};
 use self::worker::{
-    LocalUploadFile, PreparationResult, RemoteDirectoryListing, UploadMessage, UploadOutcome, UploadSnapshot,
-    UploadTransport, UploadWorkerHandle, build_local_upload_files, spawn_preparation, spawn_remote_directory_listing,
-    start_upload,
+    LocalUploadFile, PreparationResult, UploadMessage, UploadOutcome, UploadSnapshot, UploadTransport,
+    UploadWorkerHandle, build_local_upload_files, spawn_preparation, start_upload,
 };
 use super::HorizonApp;
 
@@ -37,16 +38,6 @@ impl UploadMode {
     }
 }
 
-#[derive(Default)]
-struct RemoteDirectoryBrowser {
-    open: bool,
-    loading: bool,
-    current_dir: String,
-    entries: Vec<String>,
-    error: Option<String>,
-    listing_rx: Option<Receiver<Result<RemoteDirectoryListing, String>>>,
-}
-
 pub(super) struct SshUploadFlow {
     target_viewport_id: ViewportId,
     host_label: String,
@@ -57,7 +48,7 @@ pub(super) struct SshUploadFlow {
     taildrop_target: Option<String>,
     transport_choice: UploadTransportChoice,
     mode: UploadMode,
-    browser: RemoteDirectoryBrowser,
+    destination_picker: Option<RemoteDestinationPicker>,
     preparation_rx: Option<Receiver<Result<PreparationResult, String>>>,
     upload_handle: Option<UploadWorkerHandle>,
     upload_snapshot: Option<UploadSnapshot>,
@@ -68,6 +59,7 @@ pub(super) struct SshUploadFlow {
 enum UploadUiAction {
     Close,
     BackToReady,
+    OpenDestinationPicker,
     StartUpload,
     CancelUpload,
 }
@@ -91,7 +83,7 @@ impl SshUploadFlow {
             taildrop_target: None,
             transport_choice: UploadTransportChoice::Ssh,
             mode: UploadMode::Preparing,
-            browser: RemoteDirectoryBrowser::default(),
+            destination_picker: None,
             upload_handle: None,
             upload_snapshot: None,
             upload_started_at: None,
@@ -140,7 +132,7 @@ impl HorizonApp {
                     taildrop_target: None,
                     transport_choice: UploadTransportChoice::Ssh,
                     mode: UploadMode::Failed(error),
-                    browser: RemoteDirectoryBrowser::default(),
+                    destination_picker: None,
                     preparation_rx: None,
                     upload_handle: None,
                     upload_snapshot: None,
@@ -188,29 +180,6 @@ impl HorizonApp {
                     }
                     Err(TryRecvError::Disconnected) => {
                         flow.mode = UploadMode::Failed("upload preparation worker disconnected".to_string());
-                    }
-                }
-            }
-
-            if let Some(rx) = flow.browser.listing_rx.take() {
-                match rx.try_recv() {
-                    Ok(Ok(listing)) => {
-                        flow.browser.loading = false;
-                        flow.browser.error = None;
-                        flow.browser.current_dir = listing.current_dir.clone();
-                        flow.browser.entries = listing.entries;
-                        flow.destination_input = listing.current_dir;
-                    }
-                    Ok(Err(error)) => {
-                        flow.browser.loading = false;
-                        flow.browser.error = Some(error);
-                    }
-                    Err(TryRecvError::Empty) => {
-                        flow.browser.listing_rx = Some(rx);
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        flow.browser.loading = false;
-                        flow.browser.error = Some("remote directory browser disconnected".to_string());
                     }
                 }
             }
@@ -272,6 +241,9 @@ impl HorizonApp {
             return;
         }
         if let Some(flow) = self.ssh_upload_flow.as_mut() {
+            if actions.contains(&UploadUiAction::OpenDestinationPicker) && flow.destination_picker.is_none() {
+                flow.destination_picker = Some(RemoteDestinationPicker::new(&flow.destination_input, &flow.connection));
+            }
             if actions.contains(&UploadUiAction::CancelUpload)
                 && let Some(handle) = &flow.upload_handle
             {
@@ -285,6 +257,19 @@ impl HorizonApp {
             }
             if actions.contains(&UploadUiAction::StartUpload) {
                 start_flow_upload(flow);
+            }
+
+            if let Some(picker) = flow.destination_picker.as_mut() {
+                match picker.show(ctx, &flow.connection) {
+                    RemoteDestinationPickerAction::None => {}
+                    RemoteDestinationPickerAction::Cancelled => {
+                        flow.destination_picker = None;
+                    }
+                    RemoteDestinationPickerAction::Selected(path) => {
+                        flow.destination_input = path;
+                        flow.destination_picker = None;
+                    }
+                }
             }
         }
     }
@@ -332,12 +317,6 @@ fn start_flow_upload(flow: &mut SshUploadFlow) {
     flow.upload_started_at = Some(Instant::now());
     flow.upload_handle = Some(start_upload(flow.connection.clone(), flow.files.clone(), transport));
     flow.mode = UploadMode::Uploading;
-}
-
-fn request_directory_listing(flow: &mut SshUploadFlow, requested_path: String) {
-    flow.browser.loading = true;
-    flow.browser.error = None;
-    flow.browser.listing_rx = Some(spawn_remote_directory_listing(flow.connection.clone(), requested_path));
 }
 
 fn join_remote_browser_path(current_dir: &str, entry: &str) -> String {
