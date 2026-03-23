@@ -75,6 +75,11 @@ impl PanelTranscript {
     }
 
     #[must_use]
+    pub(crate) fn has_persisted_state(&self) -> bool {
+        self.history_path().exists() || self.session_path().exists()
+    }
+
+    #[must_use]
     pub fn wrap_launch_command(&self, program: String, args: Vec<String>) -> (String, Vec<String>) {
         wrap_launch_command_with_support(script_support(), &self.session_path(), program, args)
     }

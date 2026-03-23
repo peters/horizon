@@ -461,6 +461,7 @@ impl PanelState {
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             transcript_root: None,
+            restore_as_disconnected_snapshot: false,
         }
     }
 }
