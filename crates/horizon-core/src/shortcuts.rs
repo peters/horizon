@@ -225,7 +225,7 @@ pub struct AppShortcuts {
     pub toggle_minimap: ShortcutBinding,
     pub align_workspaces_horizontally: ShortcutBinding,
     pub toggle_settings: ShortcutBinding,
-    pub reset_view: ShortcutBinding,
+    pub zoom_reset: ShortcutBinding,
     pub zoom_in: ShortcutBinding,
     pub zoom_out: ShortcutBinding,
     pub fullscreen_panel: ShortcutBinding,
@@ -249,9 +249,9 @@ impl Default for AppShortcuts {
             toggle_minimap: ShortcutBinding::new(ps, ShortcutKey::Letter('M')),
             align_workspaces_horizontally: ShortcutBinding::new(ps, ShortcutKey::Letter('A')),
             toggle_settings: ShortcutBinding::new(ps, ShortcutKey::Comma),
-            reset_view: ShortcutBinding::new(ps, ShortcutKey::Digit(0)),
-            zoom_in: ShortcutBinding::new(ps, ShortcutKey::Plus),
-            zoom_out: ShortcutBinding::new(ps, ShortcutKey::Minus),
+            zoom_reset: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0)),
+            zoom_in: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus),
+            zoom_out: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus),
             fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
             exit_fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape),
             fullscreen_window: ShortcutBinding::new(ps, ShortcutKey::Function(11)),
@@ -476,6 +476,7 @@ mod tests {
     fn app_shortcuts_default_matches_documented_bindings() {
         let shortcuts = AppShortcuts::default();
         let ps = ShortcutModifiers::PRIMARY_SHIFT;
+        let primary = ShortcutModifiers::PRIMARY;
 
         assert_eq!(
             shortcuts.command_palette,
@@ -498,6 +499,12 @@ mod tests {
             shortcuts.save_editor,
             ShortcutBinding::new(ps, ShortcutKey::Letter('S'))
         );
+        assert_eq!(
+            shortcuts.zoom_reset,
+            ShortcutBinding::new(primary, ShortcutKey::Digit(0))
+        );
+        assert_eq!(shortcuts.zoom_in, ShortcutBinding::new(primary, ShortcutKey::Plus));
+        assert_eq!(shortcuts.zoom_out, ShortcutBinding::new(primary, ShortcutKey::Minus));
     }
 
     #[test]

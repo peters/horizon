@@ -15,7 +15,7 @@ pub enum CommandId {
     ToggleMinimap,
     ToggleFullscreenWindow,
     ToggleFullscreenPanel,
-    ResetView,
+    ZoomReset,
     ZoomIn,
     ZoomOut,
     AlignWorkspacesHorizontally,
@@ -125,10 +125,10 @@ pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Com
             keywords: vec!["maximize".into(), "panel".into(), "fullscreen".into(), "focus".into()],
         },
         CommandEntry {
-            id: CommandId::ResetView,
-            label: "Reset View".into(),
-            shortcut: Some(shortcuts.reset_view.display_label(primary_label)),
-            keywords: vec!["zoom".into(), "reset".into(), "fit".into()],
+            id: CommandId::ZoomReset,
+            label: "Reset Zoom".into(),
+            shortcut: Some(shortcuts.zoom_reset.display_label(primary_label)),
+            keywords: vec!["zoom".into(), "reset".into(), "100".into(), "percent".into()],
         },
         CommandEntry {
             id: CommandId::ZoomIn,

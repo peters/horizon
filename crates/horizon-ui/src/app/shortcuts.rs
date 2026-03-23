@@ -2,7 +2,20 @@ use egui::{InputState, Key, Modifiers};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
-    input.modifiers.matches_logically(egui_modifiers(binding.modifiers)) && key_pressed(input, binding.key)
+    let modifiers = egui_modifiers(binding.modifiers);
+    input.events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers: event_modifiers,
+                ..
+            } if event_modifiers.matches_logically(modifiers)
+                && key_matches(*key, *physical_key, binding.key)
+        )
+    })
 }
 
 fn egui_modifiers(modifiers: ShortcutModifiers) -> Modifiers {
@@ -15,91 +28,113 @@ fn egui_modifiers(modifiers: ShortcutModifiers) -> Modifiers {
     }
 }
 
-fn key_pressed(input: &InputState, key: ShortcutKey) -> bool {
-    match key {
-        ShortcutKey::ArrowDown => input.key_pressed(Key::ArrowDown),
-        ShortcutKey::ArrowLeft => input.key_pressed(Key::ArrowLeft),
-        ShortcutKey::ArrowRight => input.key_pressed(Key::ArrowRight),
-        ShortcutKey::ArrowUp => input.key_pressed(Key::ArrowUp),
-        ShortcutKey::Escape => input.key_pressed(Key::Escape),
-        ShortcutKey::Enter => input.key_pressed(Key::Enter),
-        ShortcutKey::Tab => input.key_pressed(Key::Tab),
-        ShortcutKey::Comma => input.key_pressed(Key::Comma),
-        ShortcutKey::Minus => input.key_pressed(Key::Minus),
-        ShortcutKey::Plus => input.key_pressed(Key::Plus) || input.key_pressed(Key::Equals),
-        ShortcutKey::Digit(0) => input.key_pressed(Key::Num0),
-        ShortcutKey::Digit(1) => input.key_pressed(Key::Num1),
-        ShortcutKey::Digit(2) => input.key_pressed(Key::Num2),
-        ShortcutKey::Digit(3) => input.key_pressed(Key::Num3),
-        ShortcutKey::Digit(4) => input.key_pressed(Key::Num4),
-        ShortcutKey::Digit(5) => input.key_pressed(Key::Num5),
-        ShortcutKey::Digit(6) => input.key_pressed(Key::Num6),
-        ShortcutKey::Digit(7) => input.key_pressed(Key::Num7),
-        ShortcutKey::Digit(8) => input.key_pressed(Key::Num8),
-        ShortcutKey::Digit(9) => input.key_pressed(Key::Num9),
-        ShortcutKey::Letter('A') => input.key_pressed(Key::A),
-        ShortcutKey::Letter('B') => input.key_pressed(Key::B),
-        ShortcutKey::Letter('C') => input.key_pressed(Key::C),
-        ShortcutKey::Letter('D') => input.key_pressed(Key::D),
-        ShortcutKey::Letter('E') => input.key_pressed(Key::E),
-        ShortcutKey::Letter('F') => input.key_pressed(Key::F),
-        ShortcutKey::Letter('G') => input.key_pressed(Key::G),
-        ShortcutKey::Letter('H') => input.key_pressed(Key::H),
-        ShortcutKey::Letter('I') => input.key_pressed(Key::I),
-        ShortcutKey::Letter('J') => input.key_pressed(Key::J),
-        ShortcutKey::Letter('K') => input.key_pressed(Key::K),
-        ShortcutKey::Letter('L') => input.key_pressed(Key::L),
-        ShortcutKey::Letter('M') => input.key_pressed(Key::M),
-        ShortcutKey::Letter('N') => input.key_pressed(Key::N),
-        ShortcutKey::Letter('O') => input.key_pressed(Key::O),
-        ShortcutKey::Letter('P') => input.key_pressed(Key::P),
-        ShortcutKey::Letter('Q') => input.key_pressed(Key::Q),
-        ShortcutKey::Letter('R') => input.key_pressed(Key::R),
-        ShortcutKey::Letter('S') => input.key_pressed(Key::S),
-        ShortcutKey::Letter('T') => input.key_pressed(Key::T),
-        ShortcutKey::Letter('U') => input.key_pressed(Key::U),
-        ShortcutKey::Letter('V') => input.key_pressed(Key::V),
-        ShortcutKey::Letter('W') => input.key_pressed(Key::W),
-        ShortcutKey::Letter('X') => input.key_pressed(Key::X),
-        ShortcutKey::Letter('Y') => input.key_pressed(Key::Y),
-        ShortcutKey::Letter('Z') => input.key_pressed(Key::Z),
-        ShortcutKey::Function(1) => input.key_pressed(Key::F1),
-        ShortcutKey::Function(2) => input.key_pressed(Key::F2),
-        ShortcutKey::Function(3) => input.key_pressed(Key::F3),
-        ShortcutKey::Function(4) => input.key_pressed(Key::F4),
-        ShortcutKey::Function(5) => input.key_pressed(Key::F5),
-        ShortcutKey::Function(6) => input.key_pressed(Key::F6),
-        ShortcutKey::Function(7) => input.key_pressed(Key::F7),
-        ShortcutKey::Function(8) => input.key_pressed(Key::F8),
-        ShortcutKey::Function(9) => input.key_pressed(Key::F9),
-        ShortcutKey::Function(10) => input.key_pressed(Key::F10),
-        ShortcutKey::Function(11) => input.key_pressed(Key::F11),
-        ShortcutKey::Function(12) => input.key_pressed(Key::F12),
-        ShortcutKey::Function(13) => input.key_pressed(Key::F13),
-        ShortcutKey::Function(14) => input.key_pressed(Key::F14),
-        ShortcutKey::Function(15) => input.key_pressed(Key::F15),
-        ShortcutKey::Function(16) => input.key_pressed(Key::F16),
-        ShortcutKey::Function(17) => input.key_pressed(Key::F17),
-        ShortcutKey::Function(18) => input.key_pressed(Key::F18),
-        ShortcutKey::Function(19) => input.key_pressed(Key::F19),
-        ShortcutKey::Function(20) => input.key_pressed(Key::F20),
-        ShortcutKey::Function(21) => input.key_pressed(Key::F21),
-        ShortcutKey::Function(22) => input.key_pressed(Key::F22),
-        ShortcutKey::Function(23) => input.key_pressed(Key::F23),
-        ShortcutKey::Function(24) => input.key_pressed(Key::F24),
-        ShortcutKey::Function(25) => input.key_pressed(Key::F25),
-        ShortcutKey::Function(26) => input.key_pressed(Key::F26),
-        ShortcutKey::Function(27) => input.key_pressed(Key::F27),
-        ShortcutKey::Function(28) => input.key_pressed(Key::F28),
-        ShortcutKey::Function(29) => input.key_pressed(Key::F29),
-        ShortcutKey::Function(30) => input.key_pressed(Key::F30),
-        ShortcutKey::Function(31) => input.key_pressed(Key::F31),
-        ShortcutKey::Function(32) => input.key_pressed(Key::F32),
-        ShortcutKey::Function(33) => input.key_pressed(Key::F33),
-        ShortcutKey::Function(34) => input.key_pressed(Key::F34),
-        ShortcutKey::Function(35) => input.key_pressed(Key::F35),
-        ShortcutKey::Digit(_) | ShortcutKey::Letter(_) | ShortcutKey::Function(_) => false,
+fn key_matches(logical_key: Key, physical_key: Option<Key>, shortcut_key: ShortcutKey) -> bool {
+    match shortcut_key {
+        ShortcutKey::ArrowDown => logical_key == Key::ArrowDown,
+        ShortcutKey::ArrowLeft => logical_key == Key::ArrowLeft,
+        ShortcutKey::ArrowRight => logical_key == Key::ArrowRight,
+        ShortcutKey::ArrowUp => logical_key == Key::ArrowUp,
+        ShortcutKey::Escape => logical_key == Key::Escape,
+        ShortcutKey::Enter => logical_key == Key::Enter,
+        ShortcutKey::Tab => logical_key == Key::Tab,
+        ShortcutKey::Comma => logical_key == Key::Comma,
+        ShortcutKey::Minus => logical_key == Key::Minus,
+        ShortcutKey::Plus => logical_key == Key::Plus || logical_key == Key::Equals,
+        ShortcutKey::Digit(digit) => {
+            digit_key(digit).is_some_and(|key| logical_key == key || physical_key == Some(key))
+        }
+        ShortcutKey::Letter(letter) => letter_key(letter).is_some_and(|key| logical_key == key),
+        ShortcutKey::Function(function) => function_key(function).is_some_and(|key| logical_key == key),
     }
+}
+
+fn digit_key(digit: u8) -> Option<Key> {
+    Some(match digit {
+        0 => Key::Num0,
+        1 => Key::Num1,
+        2 => Key::Num2,
+        3 => Key::Num3,
+        4 => Key::Num4,
+        5 => Key::Num5,
+        6 => Key::Num6,
+        7 => Key::Num7,
+        8 => Key::Num8,
+        9 => Key::Num9,
+        _ => return None,
+    })
+}
+
+fn letter_key(letter: char) -> Option<Key> {
+    Some(match letter {
+        'A' => Key::A,
+        'B' => Key::B,
+        'C' => Key::C,
+        'D' => Key::D,
+        'E' => Key::E,
+        'F' => Key::F,
+        'G' => Key::G,
+        'H' => Key::H,
+        'I' => Key::I,
+        'J' => Key::J,
+        'K' => Key::K,
+        'L' => Key::L,
+        'M' => Key::M,
+        'N' => Key::N,
+        'O' => Key::O,
+        'P' => Key::P,
+        'Q' => Key::Q,
+        'R' => Key::R,
+        'S' => Key::S,
+        'T' => Key::T,
+        'U' => Key::U,
+        'V' => Key::V,
+        'W' => Key::W,
+        'X' => Key::X,
+        'Y' => Key::Y,
+        'Z' => Key::Z,
+        _ => return None,
+    })
+}
+
+fn function_key(function: u8) -> Option<Key> {
+    Some(match function {
+        1 => Key::F1,
+        2 => Key::F2,
+        3 => Key::F3,
+        4 => Key::F4,
+        5 => Key::F5,
+        6 => Key::F6,
+        7 => Key::F7,
+        8 => Key::F8,
+        9 => Key::F9,
+        10 => Key::F10,
+        11 => Key::F11,
+        12 => Key::F12,
+        13 => Key::F13,
+        14 => Key::F14,
+        15 => Key::F15,
+        16 => Key::F16,
+        17 => Key::F17,
+        18 => Key::F18,
+        19 => Key::F19,
+        20 => Key::F20,
+        21 => Key::F21,
+        22 => Key::F22,
+        23 => Key::F23,
+        24 => Key::F24,
+        25 => Key::F25,
+        26 => Key::F26,
+        27 => Key::F27,
+        28 => Key::F28,
+        29 => Key::F29,
+        30 => Key::F30,
+        31 => Key::F31,
+        32 => Key::F32,
+        33 => Key::F33,
+        34 => Key::F34,
+        35 => Key::F35,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -139,6 +174,26 @@ mod tests {
         raw.events.push(Event::Key {
             key: Key::K,
             physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: raw.modifiers,
+        });
+
+        let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
+
+        assert!(shortcut_pressed(&input, binding));
+    }
+
+    #[test]
+    fn digit_shortcuts_match_physical_digit_keys_when_layout_changes_logical_key() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0));
+        let mut raw = RawInput {
+            modifiers: Modifiers::COMMAND,
+            ..RawInput::default()
+        };
+        raw.events.push(Event::Key {
+            key: Key::Quote,
+            physical_key: Some(Key::Num0),
             pressed: true,
             repeat: false,
             modifiers: raw.modifiers,

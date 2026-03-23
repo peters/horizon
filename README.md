@@ -140,7 +140,7 @@ cargo run --release
 
 ### Keyboard Shortcuts
 
-All app shortcuts use **Ctrl+Shift** to avoid conflicts with shell programs (Ctrl+C, Ctrl+K, Ctrl+B, etc.) and OS-level bindings. They are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
+Most app shortcuts use **Ctrl+Shift** to avoid conflicts with shell programs (Ctrl+C, Ctrl+K, Ctrl+B, etc.) and OS-level bindings. Canvas zoom keeps the standard **Ctrl/Cmd+0**, **Ctrl/Cmd+Plus**, and **Ctrl/Cmd+Minus** bindings. They are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
 Duplicate or overlapping bindings are rejected, including near-conflicts such as `Ctrl+B` and `Ctrl+Shift+B`.
 
 | Shortcut | What it does |
@@ -155,9 +155,9 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Ctrl+Shift+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
 | **Ctrl+Shift+,** | Open settings editor |
-| **Ctrl+Shift+0** | Reset canvas view |
-| **Ctrl+Shift+Plus** | Zoom canvas in |
-| **Ctrl+Shift+Minus** | Zoom canvas out |
+| **Ctrl+0** | Reset canvas zoom to 100% |
+| **Ctrl+Plus** | Zoom canvas in |
+| **Ctrl+Minus** | Zoom canvas out |
 | **F11** | Fullscreen the active panel |
 | **Escape** | Exit active panel fullscreen |
 | **Ctrl+Shift+F11** | Toggle window fullscreen |
@@ -205,9 +205,9 @@ shortcuts:
   toggle_minimap: Ctrl+Shift+M
   align_workspaces_horizontally: Ctrl+Shift+A
   toggle_settings: Ctrl+Shift+Comma
-  reset_view: Ctrl+Shift+0
-  zoom_in: Ctrl+Shift+Plus
-  zoom_out: Ctrl+Shift+Minus
+  zoom_reset: Ctrl+0
+  zoom_in: Ctrl+Plus
+  zoom_out: Ctrl+Minus
   fullscreen_panel: F11
   exit_fullscreen_panel: Escape
   fullscreen_window: Ctrl+Shift+F11

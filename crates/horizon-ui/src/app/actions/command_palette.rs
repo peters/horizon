@@ -86,7 +86,10 @@ impl HorizonApp {
                     self.board.focused
                 };
             }
-            CommandId::ResetView => self.reset_view(ctx),
+            CommandId::ZoomReset => {
+                let canvas_rect = self.canvas_rect(ctx);
+                let _ = self.zoom_reset(canvas_rect, canvas_rect.center());
+            }
             CommandId::ZoomIn => {
                 let canvas_rect = self.canvas_rect(ctx);
                 let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
@@ -136,7 +139,7 @@ impl HorizonApp {
 
     pub(in crate::app) fn handle_shortcuts(&mut self, ctx: &Context) {
         let shortcut_bindings: &[(_, CommandId)] = &[
-            (self.shortcuts.reset_view, CommandId::ResetView),
+            (self.shortcuts.zoom_reset, CommandId::ZoomReset),
             (self.shortcuts.zoom_in, CommandId::ZoomIn),
             (self.shortcuts.zoom_out, CommandId::ZoomOut),
             (self.shortcuts.focus_active_workspace, CommandId::FocusActiveWorkspace),

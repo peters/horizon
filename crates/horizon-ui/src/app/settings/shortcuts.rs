@@ -68,7 +68,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
             &mut config.shortcuts.toggle_settings,
             &mut all_valid,
         );
-        changed |= shortcut_row(ui, "Reset View", &mut config.shortcuts.reset_view, &mut all_valid);
+        changed |= shortcut_row(ui, "Reset Zoom", &mut config.shortcuts.zoom_reset, &mut all_valid);
         changed |= shortcut_row(ui, "Zoom In", &mut config.shortcuts.zoom_in, &mut all_valid);
         changed |= shortcut_row(ui, "Zoom Out", &mut config.shortcuts.zoom_out, &mut all_valid);
         changed |= shortcut_row(

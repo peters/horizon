@@ -294,7 +294,8 @@ pub struct ShortcutsConfig {
     pub toggle_minimap: String,
     pub align_workspaces_horizontally: String,
     pub toggle_settings: String,
-    pub reset_view: String,
+    #[serde(alias = "reset_view")]
+    pub zoom_reset: String,
     pub zoom_in: String,
     pub zoom_out: String,
     pub fullscreen_panel: String,
@@ -317,9 +318,9 @@ impl Default for ShortcutsConfig {
             toggle_minimap: "Ctrl+Shift+M".to_string(),
             align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
             toggle_settings: "Ctrl+Shift+Comma".to_string(),
-            reset_view: "Ctrl+Shift+0".to_string(),
-            zoom_in: "Ctrl+Shift+Plus".to_string(),
-            zoom_out: "Ctrl+Shift+Minus".to_string(),
+            zoom_reset: "Ctrl+0".to_string(),
+            zoom_in: "Ctrl+Plus".to_string(),
+            zoom_out: "Ctrl+Minus".to_string(),
             fullscreen_panel: "F11".to_string(),
             exit_fullscreen_panel: "Escape".to_string(),
             fullscreen_window: "Ctrl+Shift+F11".to_string(),
@@ -350,7 +351,7 @@ impl ShortcutsConfig {
                 &self.align_workspaces_horizontally,
             )?,
             toggle_settings: parse_shortcut("toggle_settings", &self.toggle_settings)?,
-            reset_view: parse_shortcut("reset_view", &self.reset_view)?,
+            zoom_reset: parse_shortcut("zoom_reset", &self.zoom_reset)?,
             zoom_in: parse_shortcut("zoom_in", &self.zoom_in)?,
             zoom_out: parse_shortcut("zoom_out", &self.zoom_out)?,
             fullscreen_panel: parse_shortcut("fullscreen_panel", &self.fullscreen_panel)?,
@@ -371,7 +372,7 @@ impl ShortcutsConfig {
             ("toggle_minimap", shortcuts.toggle_minimap),
             ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
             ("toggle_settings", shortcuts.toggle_settings),
-            ("reset_view", shortcuts.reset_view),
+            ("zoom_reset", shortcuts.zoom_reset),
             ("zoom_in", shortcuts.zoom_in),
             ("zoom_out", shortcuts.zoom_out),
             ("fullscreen_panel", shortcuts.fullscreen_panel),
@@ -776,6 +777,17 @@ mod tests {
                 .expect("shortcuts should resolve")
                 .command_palette,
             crate::shortcuts::ShortcutBinding::parse("Alt+K").expect("shortcut should parse")
+        );
+    }
+
+    #[test]
+    fn legacy_reset_view_alias_is_accepted() {
+        let config = Config::from_yaml("shortcuts:\n  reset_view: Alt+0\n").expect("config should deserialize");
+
+        assert_eq!(config.shortcuts.zoom_reset, "Alt+0");
+        assert_eq!(
+            config.shortcuts.resolve().expect("shortcuts should resolve").zoom_reset,
+            crate::shortcuts::ShortcutBinding::parse("Alt+0").expect("shortcut should parse")
         );
     }
 

@@ -59,6 +59,11 @@ impl HorizonApp {
     }
 
     #[profiling::function]
+    pub(super) fn zoom_reset(&mut self, canvas_rect: Rect, screen_anchor: Pos2) -> bool {
+        self.zoom_canvas_at(canvas_rect, screen_anchor, horizon_core::DEFAULT_CANVAS_ZOOM)
+    }
+
+    #[profiling::function]
     pub(super) fn animate_pan(&mut self, ctx: &Context) {
         if let Some(target) = self.pan_target {
             let dt = ctx.input(|input| input.predicted_dt);
