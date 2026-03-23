@@ -6,8 +6,9 @@ use egui::{
 use crate::{loading_spinner, theme};
 
 use super::{
-    SshUploadFlow, UploadMode, UploadTransportChoice, UploadUiAction, file_summary, human_bytes,
-    join_remote_browser_path, progress_fraction, request_directory_listing,
+    SshUploadFlow, UploadMode, UploadTransportChoice, UploadUiAction, estimated_remaining_duration, file_summary,
+    human_bytes, human_duration, human_transfer_rate, join_remote_browser_path, progress_fraction,
+    request_directory_listing, transfer_speed_bytes_per_second,
 };
 
 // Layout
@@ -47,7 +48,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .collapsible(false)
         .resizable(false)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Debug)
         .fixed_size(Vec2::new(MODAL_WIDTH, 0.0))
         .frame(
             egui::Frame::NONE
@@ -276,7 +277,7 @@ fn render_transport_choice(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
                 let ssh_enabled = flow.ssh_upload_error.is_none();
 
                 let ssh_active = flow.transport_choice == UploadTransportChoice::Ssh;
-                if render_segment_button(ui, "SSH (scp)", ssh_active, ssh_enabled) {
+                if render_segment_button(ui, "SSH", ssh_active, ssh_enabled) {
                     flow.transport_choice = UploadTransportChoice::Ssh;
                 }
 
@@ -585,7 +586,7 @@ fn paint_separator(ui: &mut egui::Ui) {
 
 fn render_uploading_state(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: &mut Vec<UploadUiAction>) {
     if let Some(snapshot) = &flow.upload_snapshot {
-        render_upload_progress(ui, snapshot);
+        render_upload_progress(ui, snapshot, flow.upload_started_at);
     } else {
         ui.add_space(8.0);
         loading_spinner::show(ui, Id::new("ssh_upload_start"), Some("Starting upload..."));
@@ -603,7 +604,11 @@ fn render_uploading_state(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: 
     });
 }
 
-fn render_upload_progress(ui: &mut egui::Ui, snapshot: &super::UploadSnapshot) {
+fn render_upload_progress(
+    ui: &mut egui::Ui,
+    snapshot: &super::UploadSnapshot,
+    upload_started_at: Option<std::time::Instant>,
+) {
     ui.label(RichText::new("Uploading...").size(14.0).strong().color(theme::FG));
     ui.add_space(4.0);
 
@@ -649,7 +654,48 @@ fn render_upload_progress(ui: &mut egui::Ui, snapshot: &super::UploadSnapshot) {
         });
     });
 
+    ui.add_space(2.0);
+    render_transfer_timing(ui, snapshot, upload_started_at);
     ui.label(RichText::new(snapshot.detail.as_str()).size(11.0).color(theme::FG_DIM));
+}
+
+fn render_transfer_timing(
+    ui: &mut egui::Ui,
+    snapshot: &super::UploadSnapshot,
+    upload_started_at: Option<std::time::Instant>,
+) {
+    let Some(started_at) = upload_started_at else {
+        ui.label(
+            RichText::new("Estimating transfer speed…")
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
+        return;
+    };
+
+    let now = std::time::Instant::now();
+    let Some(bytes_per_second) = transfer_speed_bytes_per_second(snapshot.completed_bytes, started_at, now) else {
+        ui.label(
+            RichText::new("Estimating transfer speed…")
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
+        return;
+    };
+
+    let speed_label = human_transfer_rate(bytes_per_second);
+    let eta_label = estimated_remaining_duration(snapshot.completed_bytes, snapshot.total_bytes, bytes_per_second)
+        .map_or_else(
+            || "ETA calculating…".to_string(),
+            |duration| format!("ETA {}", human_duration(duration)),
+        );
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new(speed_label).size(11.0).color(theme::FG_DIM));
+        ui.label(RichText::new("•").size(11.0).color(theme::FG_DIM));
+        ui.label(RichText::new(eta_label).size(11.0).color(theme::FG_DIM));
+    });
 }
 
 // ---------------------------------------------------------------------------

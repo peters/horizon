@@ -3,6 +3,7 @@ mod worker;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 use egui::{Context, ViewportId};
 use horizon_core::{PanelId, PanelKind, SshConnection};
@@ -60,6 +61,7 @@ pub(super) struct SshUploadFlow {
     preparation_rx: Option<Receiver<Result<PreparationResult, String>>>,
     upload_handle: Option<UploadWorkerHandle>,
     upload_snapshot: Option<UploadSnapshot>,
+    upload_started_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +94,7 @@ impl SshUploadFlow {
             browser: RemoteDirectoryBrowser::default(),
             upload_handle: None,
             upload_snapshot: None,
+            upload_started_at: None,
         }
     }
 }
@@ -141,6 +144,7 @@ impl HorizonApp {
                     preparation_rx: None,
                     upload_handle: None,
                     upload_snapshot: None,
+                    upload_started_at: None,
                 });
                 return true;
             }
@@ -225,6 +229,7 @@ impl HorizonApp {
                 }
 
                 if let Some(result) = finished_result {
+                    flow.upload_started_at = None;
                     match result {
                         Ok(outcome) => {
                             if !outcome.cancelled && matches!(flow.transport_choice, UploadTransportChoice::Ssh) {
@@ -255,6 +260,9 @@ impl HorizonApp {
         if flow.target_viewport_id != ctx.viewport_id() {
             return;
         }
+        if flow.mode.is_uploading() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
 
         render_backdrop(ctx);
         let actions = render_upload_window(ctx, flow);
@@ -273,6 +281,7 @@ impl HorizonApp {
                 flow.mode = UploadMode::Ready;
                 flow.upload_snapshot = None;
                 flow.upload_handle = None;
+                flow.upload_started_at = None;
             }
             if actions.contains(&UploadUiAction::StartUpload) {
                 start_flow_upload(flow);
@@ -320,6 +329,7 @@ fn start_flow_upload(flow: &mut SshUploadFlow) {
         current_file_size: None,
         detail: "Starting upload…".to_string(),
     });
+    flow.upload_started_at = Some(Instant::now());
     flow.upload_handle = Some(start_upload(flow.connection.clone(), flow.files.clone(), transport));
     flow.mode = UploadMode::Uploading;
 }
@@ -414,11 +424,79 @@ fn progress_fraction(completed_bytes: u64, total_bytes: u64) -> f32 {
     u16::try_from(per_mille.min(1000)).map_or(1.0, |value| f32::from(value) / 1000.0)
 }
 
+fn transfer_speed_bytes_per_second(completed_bytes: u64, started_at: Instant, now: Instant) -> Option<u64> {
+    if completed_bytes == 0 {
+        return None;
+    }
+
+    let elapsed_millis =
+        u64::try_from(now.saturating_duration_since(started_at).as_millis()).map_or(u64::MAX, |value| value);
+    if elapsed_millis == 0 {
+        return None;
+    }
+
+    let bytes_per_second = completed_bytes
+        .saturating_mul(1000)
+        .checked_div(elapsed_millis)
+        .unwrap_or(0);
+    (bytes_per_second > 0).then_some(bytes_per_second)
+}
+
+fn estimated_remaining_duration(completed_bytes: u64, total_bytes: u64, bytes_per_second: u64) -> Option<Duration> {
+    if bytes_per_second == 0 || completed_bytes >= total_bytes {
+        return None;
+    }
+
+    let remaining_bytes = total_bytes.saturating_sub(completed_bytes);
+    let eta_seconds = remaining_bytes
+        .saturating_add(bytes_per_second.saturating_sub(1))
+        .checked_div(bytes_per_second)
+        .unwrap_or(0);
+    Some(Duration::from_secs(eta_seconds))
+}
+
+fn human_transfer_rate(bytes_per_second: u64) -> String {
+    format!("{}/s", human_bytes(bytes_per_second))
+}
+
+fn human_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    if total_seconds < 60 {
+        return format!("{total_seconds}s");
+    }
+
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    let mut parts = Vec::with_capacity(3);
+    if hours > 0 {
+        parts.push(format!("{hours} {}", if hours == 1 { "hour" } else { "hours" }));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes} {}", if minutes == 1 { "minute" } else { "minutes" }));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{seconds} {}", if seconds == 1 { "second" } else { "seconds" }));
+    }
+
+    match parts.len() {
+        0 => "0s".to_string(),
+        1 => parts.remove(0),
+        2 => format!("{} and {}", parts[0], parts[1]),
+        _ => format!("{}, {} and {}", parts[0], parts[1], parts[2]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{file_summary, human_bytes, join_remote_browser_path, parent_remote_path, progress_fraction};
+    use super::{
+        estimated_remaining_duration, file_summary, human_bytes, human_duration, human_transfer_rate,
+        join_remote_browser_path, parent_remote_path, progress_fraction, transfer_speed_bytes_per_second,
+    };
     use crate::app::ssh_upload::worker::LocalUploadFile;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn parent_remote_path_preserves_root() {
@@ -457,6 +535,39 @@ mod tests {
         assert!((progress_fraction(0, 0) - 0.0).abs() <= f32::EPSILON);
         assert!((progress_fraction(512, 1024) - 0.5).abs() <= f32::EPSILON);
         assert!((progress_fraction(4096, 1024) - 1.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn transfer_speed_bytes_per_second_uses_elapsed_time() {
+        let start = Instant::now();
+
+        assert_eq!(
+            transfer_speed_bytes_per_second(2048, start, start + Duration::from_secs(2)),
+            Some(1024)
+        );
+    }
+
+    #[test]
+    fn estimated_remaining_duration_rounds_up_to_next_second() {
+        assert_eq!(
+            estimated_remaining_duration(1024, 4096, 1500),
+            Some(Duration::from_secs(3))
+        );
+    }
+
+    #[test]
+    fn human_transfer_rate_formats_per_second_suffix() {
+        assert_eq!(human_transfer_rate(1536), "1.5 KB/s");
+    }
+
+    #[test]
+    fn human_duration_formats_short_and_long_values() {
+        assert_eq!(human_duration(Duration::from_secs(53)), "53s");
+        assert_eq!(human_duration(Duration::from_secs(123)), "2 minutes and 3 seconds");
+        assert_eq!(
+            human_duration(Duration::from_secs(3723)),
+            "1 hour, 2 minutes and 3 seconds"
+        );
     }
 
     fn test_file(name: &str) -> LocalUploadFile {
