@@ -146,6 +146,7 @@ impl HorizonApp {
         self.poll_git_watchers();
         self.poll_config_reload();
         self.poll_update_check();
+        self.maybe_start_update_check();
 
         had_terminal_output
     }

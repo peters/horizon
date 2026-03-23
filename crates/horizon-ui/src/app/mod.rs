@@ -201,6 +201,7 @@ pub struct HorizonApp {
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_update_prompt: Option<AvailableUpdatePrompt>,
+    next_surge_update_check_at: Option<Instant>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
@@ -236,6 +237,14 @@ impl HorizonApp {
         board.attention_enabled = config.features.attention_feed;
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
+
+        let managed_install = std::env::current_exe()
+            .ok()
+            .and_then(|current_exe| ManagedInstall::discover(&current_exe));
+        let next_surge_update_check_at = managed_install
+            .as_ref()
+            .filter(|install| install.uses_stable_channel() && install.uses_github_releases())
+            .map(|_| Instant::now());
 
         let mut app = Self {
             board,
@@ -283,11 +292,10 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),
             settings: None,
-            managed_install: std::env::current_exe()
-                .ok()
-                .and_then(|current_exe| ManagedInstall::discover(&current_exe)),
+            managed_install,
             surge_update_check_rx: None,
             surge_update_prompt: None,
+            next_surge_update_check_at,
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,

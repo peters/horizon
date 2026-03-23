@@ -2,6 +2,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use egui::{Align2, Context, RichText};
 use horizon_core::ManagedInstall;
@@ -14,6 +15,7 @@ use super::HorizonApp;
 
 const UPDATE_CHANNEL: &str = "stable";
 const RELEASES_DOWNLOAD_BASE: &str = "https://github.com/peters/horizon/releases/download";
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AvailableUpdatePrompt {
@@ -34,6 +36,9 @@ impl HorizonApp {
         let Some(managed_install) = self.managed_install.clone() else {
             return;
         };
+        let Some(next_due) = self.next_surge_update_check_at else {
+            return;
+        };
 
         if !managed_install.uses_stable_channel() || !managed_install.uses_github_releases() {
             return;
@@ -43,6 +48,11 @@ impl HorizonApp {
             return;
         }
 
+        if !update_check_is_due(Instant::now(), next_due) {
+            return;
+        }
+
+        self.next_surge_update_check_at = Some(next_update_check_deadline(Instant::now()));
         self.surge_update_check_rx = Some(spawn_update_check(managed_install));
     }
 
@@ -190,6 +200,14 @@ fn installer_download_url(version: &str, installer_asset: &str) -> String {
     format!("{RELEASES_DOWNLOAD_BASE}/v{version}/{installer_asset}")
 }
 
+fn update_check_is_due(now: Instant, next_due: Instant) -> bool {
+    now >= next_due
+}
+
+fn next_update_check_deadline(now: Instant) -> Instant {
+    now + UPDATE_CHECK_INTERVAL
+}
+
 fn installer_asset_name(rid: &str) -> Option<&'static str> {
     match rid {
         "linux-x64" => Some("horizon-installer-linux-x64.bin"),
@@ -247,7 +265,9 @@ fn open_external_url(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{installer_asset_name, installer_download_url};
+    use std::time::{Duration, Instant};
+
+    use super::{installer_asset_name, installer_download_url, next_update_check_deadline, update_check_is_due};
 
     #[test]
     fn installer_asset_name_matches_release_assets() {
@@ -265,5 +285,21 @@ mod tests {
             installer_download_url("0.2.0", "horizon-installer-win-x64.exe"),
             "https://github.com/peters/horizon/releases/download/v0.2.0/horizon-installer-win-x64.exe"
         );
+    }
+
+    #[test]
+    fn update_check_is_due_when_deadline_has_passed() {
+        let now = Instant::now();
+
+        assert!(update_check_is_due(now + Duration::from_secs(1), now));
+        assert!(!update_check_is_due(now, now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn next_update_check_deadline_is_twenty_four_hours_out() {
+        let now = Instant::now();
+        let deadline = next_update_check_deadline(now);
+
+        assert_eq!(deadline.duration_since(now), Duration::from_secs(24 * 60 * 60));
     }
 }
