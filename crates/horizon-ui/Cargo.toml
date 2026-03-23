@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 horizon-core.workspace = true
+horizon-cursor.workspace = true
 eframe.workspace = true
 egui.workspace = true
 winit.workspace = true
