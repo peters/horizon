@@ -87,8 +87,16 @@ impl PresetCategory {
     }
 }
 
+fn preset_ssh_connection(preset: &PresetConfig) -> Option<&horizon_core::SshConnection> {
+    if preset.kind == PanelKind::Ssh {
+        preset.ssh_connection.as_ref()
+    } else {
+        None
+    }
+}
+
 fn preset_category(preset: &PresetConfig) -> PresetCategory {
-    if preset.ssh_connection.is_some() || preset.kind == PanelKind::Ssh {
+    if preset.kind == PanelKind::Ssh {
         PresetCategory::Remote
     } else if preset.kind.is_agent() {
         PresetCategory::Agent
@@ -245,18 +253,19 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
         .iter()
         .enumerate()
         .map(|(index, preset)| {
+            let ssh_connection = preset_ssh_connection(preset);
             let mut keywords = vec![preset.kind.display_name().to_ascii_lowercase()];
             if let Some(alias) = &preset.alias {
                 keywords.push(alias.clone());
             }
-            if let Some(connection) = &preset.ssh_connection {
+            if let Some(connection) = ssh_connection {
                 keywords.push(connection.host.clone());
                 if let Some(user) = &connection.user {
                     keywords.push(user.clone());
                 }
             }
 
-            let detail = if let Some(connection) = &preset.ssh_connection {
+            let detail = if let Some(connection) = ssh_connection {
                 connection.display_label()
             } else if let Some(alias) = &preset.alias {
                 format!("{}  {}", preset.kind.display_name(), alias)
@@ -272,4 +281,45 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
+
+    use super::{PresetCategory, command_palette_preset_entries, preset_category};
+
+    fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
+        PresetConfig {
+            name: "Shell".to_string(),
+            alias: None,
+            kind: PanelKind::Shell,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: Some(SshConnection {
+                host: "prod-api".to_string(),
+                user: Some("deploy".to_string()),
+                ..SshConnection::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn preset_category_ignores_stale_ssh_metadata_for_non_ssh_presets() {
+        assert!(matches!(
+            preset_category(&shell_preset_with_stale_ssh_metadata()),
+            PresetCategory::Shell
+        ));
+    }
+
+    #[test]
+    fn command_palette_preset_entries_ignore_stale_ssh_metadata_for_non_ssh_presets() {
+        let entries = command_palette_preset_entries(&[shell_preset_with_stale_ssh_metadata()]);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].detail, "Shell");
+        assert!(!entries[0].keywords.iter().any(|keyword| keyword == "prod-api"));
+        assert!(!entries[0].keywords.iter().any(|keyword| keyword == "deploy"));
+    }
 }
