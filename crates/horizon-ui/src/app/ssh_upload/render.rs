@@ -1,21 +1,18 @@
 use egui::{
-    Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, Rect, RichText, ScrollArea, Stroke, StrokeKind,
-    Vec2,
+    Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, Rect, RichText, Stroke, StrokeKind, Vec2,
 };
 
 use crate::{loading_spinner, theme};
 
 use super::{
     SshUploadFlow, UploadMode, UploadTransportChoice, UploadUiAction, estimated_remaining_duration, file_summary,
-    human_bytes, human_duration, human_transfer_rate, join_remote_browser_path, progress_fraction,
-    request_directory_listing, transfer_speed_bytes_per_second,
+    human_bytes, human_duration, human_transfer_rate, progress_fraction, transfer_speed_bytes_per_second,
 };
 
 // Layout
 const MODAL_WIDTH: f32 = 520.0;
 const SECTION_SPACING: f32 = 16.0;
 const INNER_SPACING: f32 = 8.0;
-const BROWSER_MAX_HEIGHT: f32 = 200.0;
 const PROGRESS_BAR_HEIGHT: f32 = 6.0;
 
 // Colors derived from the theme palette.
@@ -192,7 +189,7 @@ fn render_ready_state(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: &mut
     ui.add_space(INNER_SPACING);
 
     if flow.transport_choice == UploadTransportChoice::Ssh {
-        render_destination_editor(ui, flow);
+        render_destination_editor(ui, flow, actions);
     } else if let Some(target) = &flow.taildrop_target {
         render_taildrop_info(ui, target);
     }
@@ -332,7 +329,7 @@ fn render_segment_button(ui: &mut egui::Ui, label: &str, active: bool, enabled: 
 // Destination input & browser
 // ---------------------------------------------------------------------------
 
-fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
+fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: &mut Vec<UploadUiAction>) {
     ui.label(RichText::new("Remote destination").size(11.0).color(theme::FG_DIM));
 
     egui::Frame::NONE
@@ -348,28 +345,16 @@ fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
                 ui.add_space(4.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut flow.destination_input)
-                        .desired_width(ui.available_width() - 140.0)
+                        .desired_width(ui.available_width() - 88.0)
                         .hint_text("~/uploads")
                         .frame(false)
                         .text_color(theme::FG),
                 );
-                let browse_label = if flow.browser.open { "Close" } else { "Browse" };
-                if styled_small_button(ui, browse_label) {
-                    flow.browser.open = !flow.browser.open;
-                    if flow.browser.open {
-                        request_directory_listing(flow, flow.destination_input.clone());
-                    }
-                }
-                if styled_small_button(ui, "Refresh") {
-                    request_directory_listing(flow, flow.destination_input.clone());
+                if styled_small_button(ui, "Browse") {
+                    actions.push(UploadUiAction::OpenDestinationPicker);
                 }
             });
         });
-
-    if flow.browser.open {
-        ui.add_space(6.0);
-        render_directory_browser(ui, flow);
-    }
 }
 
 fn styled_small_button(ui: &mut egui::Ui, label: &str) -> bool {
@@ -382,81 +367,7 @@ fn styled_small_button(ui: &mut egui::Ui, label: &str) -> bool {
     .clicked()
 }
 
-fn render_directory_browser(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
-    egui::Frame::NONE
-        .fill(theme::BG)
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(10))
-        .show(ui, |ui| {
-            if flow.browser.loading {
-                loading_spinner::show(ui, Id::new("ssh_upload_browser"), Some("Listing remote directories..."));
-                return;
-            }
-
-            if let Some(error) = &flow.browser.error {
-                ui.label(RichText::new(error).size(11.0).color(theme::PALETTE_RED));
-                return;
-            }
-
-            if !flow.browser.current_dir.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&flow.browser.current_dir).size(11.0).color(theme::FG_DIM));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if styled_small_button(ui, "Use this folder") {
-                            flow.destination_input.clone_from(&flow.browser.current_dir);
-                        }
-                    });
-                });
-                ui.add_space(6.0);
-            }
-
-            let mut navigate_to = None;
-            ScrollArea::vertical().max_height(BROWSER_MAX_HEIGHT).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for entry in &flow.browser.entries {
-                    if render_directory_row(ui, entry) {
-                        navigate_to = Some(join_remote_browser_path(&flow.browser.current_dir, entry));
-                    }
-                }
-            });
-            if let Some(next_path) = navigate_to {
-                request_directory_listing(flow, next_path);
-            }
-        });
-}
-
-fn render_directory_row(ui: &mut egui::Ui, name: &str) -> bool {
-    let desired_size = Vec2::new(ui.available_width(), 26.0);
-    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
-
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter_at(rect);
-        if response.hovered() {
-            painter.rect_filled(rect, 6.0, SURFACE_TINT);
-        }
-
-        let icon_rect = Rect::from_min_size(egui::pos2(rect.min.x + 8.0, rect.min.y + 5.0), Vec2::new(16.0, 16.0));
-        paint_folder_icon(&painter, icon_rect);
-
-        let text_pos = egui::pos2(rect.min.x + 30.0, rect.center().y - 6.0);
-        let text_color = if name == ".." { theme::FG_DIM } else { theme::FG_SOFT };
-        painter.text(
-            text_pos,
-            Align2::LEFT_TOP,
-            name,
-            egui::FontId::proportional(12.0),
-            text_color,
-        );
-    }
-
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    response.clicked()
-}
-
-fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
+pub(super) fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
     let color = theme::PALETTE_YELLOW;
     let body = Rect::from_min_max(
         egui::pos2(rect.min.x, rect.min.y + 4.0),
