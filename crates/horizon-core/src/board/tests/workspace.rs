@@ -119,11 +119,13 @@ fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
     let beta_before = board.workspace(beta).expect("beta workspace").position;
     let gamma_before = board.workspace(gamma).expect("gamma workspace").position;
 
-    assert!(board.translate_workspace_with_push_in_scope(alpha, [500.0, 0.0], &[alpha, beta]));
+    let outcome = board.translate_workspace_with_push_in_scope(alpha, [500.0, 0.0], &[alpha, beta]);
 
     let beta_after = board.workspace(beta).expect("beta workspace").position;
     let gamma_after = board.workspace(gamma).expect("gamma workspace").position;
 
+    assert!(outcome.moved);
+    assert_eq!(outcome.affected_workspaces, vec![alpha, beta]);
     assert!(
         beta_after[0] > beta_before[0],
         "expected beta to move right from {beta_before:?}, got {beta_after:?}"
@@ -131,6 +133,33 @@ fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
     assert!(
         vec2_eq(gamma_after, gamma_before),
         "expected out-of-scope gamma workspace to stay at {gamma_before:?}, got {gamma_after:?}"
+    );
+}
+
+#[test]
+fn translate_workspace_with_push_reports_full_collision_chain() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [250.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [500.0, 40.0]);
+
+    let beta_before = board.workspace(beta).expect("beta workspace").position;
+    let gamma_before = board.workspace(gamma).expect("gamma workspace").position;
+
+    let outcome = board.translate_workspace_with_push(alpha, [80.0, 0.0]);
+
+    let beta_after = board.workspace(beta).expect("beta workspace").position;
+    let gamma_after = board.workspace(gamma).expect("gamma workspace").position;
+
+    assert!(outcome.moved);
+    assert_eq!(outcome.affected_workspaces, vec![alpha, beta, gamma]);
+    assert!(
+        beta_after[0] > beta_before[0],
+        "expected beta to move right from {beta_before:?}, got {beta_after:?}"
+    );
+    assert!(
+        gamma_after[0] > gamma_before[0],
+        "expected gamma to move right from {gamma_before:?}, got {gamma_after:?}"
     );
 }
 

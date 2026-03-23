@@ -51,9 +51,9 @@ impl Board {
 
     /// After the workspace `source` was moved, push every overlapping
     /// workspace along `drag_dir`, cascading until nothing overlaps.
-    pub(super) fn resolve_workspace_collisions(&mut self, source: WorkspaceId, drag_dir: [f32; 2]) {
+    pub(super) fn resolve_workspace_collisions(&mut self, source: WorkspaceId, drag_dir: [f32; 2]) -> Vec<WorkspaceId> {
         let workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
-        self.resolve_workspace_collisions_with_push(source, drag_dir, &workspace_ids, collision_push);
+        self.resolve_workspace_collisions_with_push(source, drag_dir, &workspace_ids, collision_push)
     }
 
     /// Resolve collisions for `source` against an explicit workspace scope.
@@ -62,8 +62,8 @@ impl Board {
         source: WorkspaceId,
         drag_dir: [f32; 2],
         workspace_ids: &[WorkspaceId],
-    ) {
-        self.resolve_workspace_collisions_with_push(source, drag_dir, workspace_ids, collision_push);
+    ) -> Vec<WorkspaceId> {
+        self.resolve_workspace_collisions_with_push(source, drag_dir, workspace_ids, collision_push)
     }
 
     fn resolve_workspace_resize_collisions_in_scope(
@@ -81,7 +81,7 @@ impl Board {
         delta: [f32; 2],
         workspace_ids: &[WorkspaceId],
         push_fn: RectCollisionPush,
-    ) {
+    ) -> Vec<WorkspaceId> {
         let mut queue = vec![source];
         let mut settled = vec![source];
 
@@ -108,6 +108,8 @@ impl Board {
                 }
             }
         }
+
+        settled
     }
 
     pub fn move_panel(&mut self, id: PanelId, position: [f32; 2]) -> bool {

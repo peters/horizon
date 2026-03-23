@@ -4,7 +4,7 @@ use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
-use super::Board;
+use super::{Board, WorkspaceTranslationOutcome};
 
 impl Board {
     #[must_use]
@@ -307,12 +307,14 @@ impl Board {
 
     /// Translate a workspace and push any colliding workspaces further along
     /// the drag direction, cascading through the chain of collisions.
-    pub fn translate_workspace_with_push(&mut self, id: WorkspaceId, delta: [f32; 2]) -> bool {
+    pub fn translate_workspace_with_push(&mut self, id: WorkspaceId, delta: [f32; 2]) -> WorkspaceTranslationOutcome {
         if !self.translate_workspace(id, delta) {
-            return false;
+            return WorkspaceTranslationOutcome::default();
         }
-        self.resolve_workspace_collisions(id, delta);
-        true
+        WorkspaceTranslationOutcome {
+            moved: true,
+            affected_workspaces: self.resolve_workspace_collisions(id, delta),
+        }
     }
 
     /// Translate a workspace and push colliding workspaces within an explicit
@@ -322,12 +324,14 @@ impl Board {
         id: WorkspaceId,
         delta: [f32; 2],
         workspace_ids: &[WorkspaceId],
-    ) -> bool {
+    ) -> WorkspaceTranslationOutcome {
         if !self.translate_workspace(id, delta) {
-            return false;
+            return WorkspaceTranslationOutcome::default();
         }
-        self.resolve_workspace_collisions_in_scope(id, delta, workspace_ids);
-        true
+        WorkspaceTranslationOutcome {
+            moved: true,
+            affected_workspaces: self.resolve_workspace_collisions_in_scope(id, delta, workspace_ids),
+        }
     }
 
     pub(super) fn create_workspace_record(&mut self, workspace_state: &WorkspaceState) -> WorkspaceId {
