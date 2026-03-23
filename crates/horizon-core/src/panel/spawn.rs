@@ -189,7 +189,8 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         ..
     } = opts;
 
-    let (transcript, replay_bytes) = prepare_transcript_restore(id, kind, transcript_root, &local_id);
+    let (transcript, replay_bytes, had_persisted_transcript_state) =
+        prepare_transcript_restore(id, kind, transcript_root, &local_id);
     let saved_command = command.clone();
     let saved_args = args.clone();
     let saved_cwd = cwd.clone();
@@ -235,7 +236,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         launch_cwd: saved_cwd,
         ssh_connection: saved_ssh_connection,
     };
-    if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh {
+    if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
     }
     let terminal = Terminal::spawn(TerminalSpawnOptions {
@@ -591,8 +592,9 @@ fn prepare_transcript_restore(
     kind: PanelKind,
     transcript_root: Option<PathBuf>,
     local_id: &str,
-) -> (Option<PanelTranscript>, Vec<u8>) {
+) -> (Option<PanelTranscript>, Vec<u8>, bool) {
     let mut transcript = PanelTranscript::for_panel(kind, transcript_root, local_id);
+    let had_persisted_state = transcript.as_ref().is_some_and(PanelTranscript::has_persisted_state);
     let replay_bytes = if let Some(active_transcript) = transcript.as_ref() {
         match active_transcript.prepare_replay_bytes() {
             Ok(bytes) => bytes,
@@ -610,7 +612,7 @@ fn prepare_transcript_restore(
         Vec::new()
     };
 
-    (transcript, replay_bytes)
+    (transcript, replay_bytes, had_persisted_state)
 }
 
 fn resolve_session_binding(
@@ -757,6 +759,37 @@ mod tests {
             assert_eq!(program, default_shell());
             assert_eq!(args, vec!["-c".to_string(), "exit".to_string()]);
         }
+    }
+
+    #[test]
+    fn prepare_transcript_restore_treats_empty_root_as_fresh_state() {
+        let transcript_root = tempfile::tempdir().expect("tempdir");
+
+        let (_, replay_bytes, had_persisted_state) = prepare_transcript_restore(
+            PanelId(1),
+            PanelKind::Ssh,
+            Some(transcript_root.path().to_path_buf()),
+            "ssh-panel",
+        );
+
+        assert!(replay_bytes.is_empty());
+        assert!(!had_persisted_state);
+    }
+
+    #[test]
+    fn prepare_transcript_restore_detects_empty_persisted_transcript() {
+        let transcript_root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(transcript_root.path().join("ssh-panel.bin"), b"").expect("write transcript");
+
+        let (_, replay_bytes, had_persisted_state) = prepare_transcript_restore(
+            PanelId(1),
+            PanelKind::Ssh,
+            Some(transcript_root.path().to_path_buf()),
+            "ssh-panel",
+        );
+
+        assert!(replay_bytes.is_empty());
+        assert!(had_persisted_state);
     }
 
     #[test]
