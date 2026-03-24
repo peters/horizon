@@ -18,6 +18,8 @@ Usage:
     [--repo-url <https-url>] \
     [--branch <git-branch>] \
     [--commit-sha <git-sha>] \
+    [--surge-repo-url <https-url>] \
+    [--surge-commit-sha <git-sha>] \
     [--location <azure-region>] \
     [--image <publisher:offer:sku:version>] \
     [--size <vm-size>] \
@@ -217,7 +219,10 @@ param(
     [string]$Branch,
 
     [Parameter(Mandatory = $true)]
-    [string]$CommitSha
+    [string]$CommitSha,
+
+    [string]$SurgeRepoUrl = "",
+    [string]$SurgeCommitSha = ""
 )
 
 Set-StrictMode -Version Latest
@@ -235,6 +240,15 @@ function Write-Utf8File {
 
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
+function Quote-BashArg {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    return "'" + $Value.Replace("'", "'""'""'") + "'"
 }
 
 $smokeRoot = "C:\horizon-surge-smoke"
@@ -279,12 +293,21 @@ Start-Sleep -Seconds 2
 New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
 Remove-Item -LiteralPath $runnerPath, $cmdPath, $errorPath, $streamPath, $transcriptPath, $sessionPath -Force -ErrorAction SilentlyContinue
 
+$smokeArgs = @("--rid", "win-x64")
+if ($SurgeRepoUrl) {
+    $smokeArgs += @("--surge-repo-url", $SurgeRepoUrl)
+}
+if ($SurgeCommitSha) {
+    $smokeArgs += @("--surge-commit-sha", $SurgeCommitSha)
+}
+$smokeArgString = ($smokeArgs | ForEach-Object { Quote-BashArg $_ }) -join " "
+
 $innerCmd = @"
 @echo off
 call "$vsDevCmd" -arch=amd64 -host_arch=amd64
 if errorlevel 1 exit /b 1
 set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\Git\cmd;%PATH%"
-"$gitBash" -lc "cd /c/horizon-surge-smoke/repo && ./scripts/run-surge-filesystem-smoke.sh --rid win-x64"
+"$gitBash" -lc "cd /c/horizon-surge-smoke/repo && ./scripts/run-surge-filesystem-smoke.sh $smokeArgString"
 exit /b %ERRORLEVEL%
 "@
 Write-Utf8File -Path $cmdPath -Content $innerCmd
@@ -553,6 +576,8 @@ EOF
 repo_url=""
 branch=""
 commit_sha=""
+surge_repo_url=""
+surge_commit_sha=""
 location="northeurope"
 image="MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest"
 size="Standard_D4s_v3"
@@ -578,6 +603,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --commit-sha)
       commit_sha="${2:-}"
+      shift 2
+      ;;
+    --surge-repo-url)
+      surge_repo_url="${2:-}"
+      shift 2
+      ;;
+    --surge-commit-sha)
+      surge_commit_sha="${2:-}"
       shift 2
       ;;
     --location)
@@ -703,6 +736,9 @@ create_fetch_logs_script "$fetch_logs_script"
 
 printf 'Using repo %s\n' "$repo_url"
 printf 'Using branch %s at %s\n' "$branch" "$commit_sha"
+if [ -n "$surge_commit_sha" ]; then
+  printf 'Using Surge source %s at %s\n' "${surge_repo_url:-https://github.com/fintermobilityas/surge.git}" "$surge_commit_sha"
+fi
 
 if azure_vm_exists; then
   reused_existing_vm=true
@@ -760,6 +796,8 @@ azure_run_powershell "$stage_script" \
   "RepoUrl=${repo_url}" \
   "Branch=${branch}" \
   "CommitSha=${commit_sha}" \
+  "SurgeRepoUrl=${surge_repo_url}" \
+  "SurgeCommitSha=${surge_commit_sha}" \
   >/dev/null
 
 if [ "$reused_existing_vm" = true ] && [ "${current_power_state:-}" = "VM running" ]; then

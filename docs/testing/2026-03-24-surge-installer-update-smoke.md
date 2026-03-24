@@ -21,7 +21,7 @@ Use a local `filesystem` backend before any hosted smoke:
 
 Horizon only shows its in-app update prompt for `github_releases` + `stable` managed installs. The local smoke below validates the installer and package-update plumbing directly, using the helper example at [crates/horizon-ui/examples/surge-update-smoke.rs](/home/peters/github/horizon-surge-stable/crates/horizon-ui/examples/surge-update-smoke.rs). After this passes, do one hosted GitHub Releases smoke for the UI prompt path.
 
-The fastest supported path on macOS or Windows is the wrapper at [run-surge-filesystem-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-filesystem-smoke.sh). It auto-detects the current target, stages the icon asset that `surge pack` requires, installs `0.2.0-smoke.1`, then packs/promotes/applies `0.2.0-smoke.2`.
+The fastest supported path on macOS or Windows is the wrapper at [run-surge-filesystem-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-filesystem-smoke.sh). It auto-detects the current target, builds Horizon in debug mode by default, stages the icon asset that `surge pack` requires, installs `0.2.0-smoke.1`, then packs/promotes/applies `0.2.0-smoke.2`.
 
 For Windows smoke from a Linux or macOS host, use [run-surge-azure-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-azure-smoke.sh). It provisions a disposable Azure Windows 11 VM, installs Build Tools if they are missing, forces one autologon to get a real desktop session, then launches the smoke through an interactive scheduled task.
 
@@ -29,8 +29,8 @@ For Windows smoke from a Linux or macOS host, use [run-surge-azure-smoke.sh](/ho
 
 Run these steps on the target OS you are validating.
 
-1. Build Horizon once in release mode.
-2. Build the Surge toolchain.
+1. Build Horizon once. Use the default debug build unless the payload itself must be release.
+2. Build or reuse the Surge toolchain from the source you are validating.
 3. Create a temporary one-app Surge manifest that uses `provider: filesystem`.
 4. Stage and pack `0.2.0-smoke.1`.
 5. Push `0.2.0-smoke.1` to `beta`, then promote it to `stable`.
@@ -55,6 +55,8 @@ Important implementation notes from the Azure Windows smoke:
 - do not rely on the user's Startup folder alone to kick off the smoke, even when autologon and `explorer.exe` are both present; start the guest runner with a scheduled task that uses `LogonType Interactive`
 - the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
 - if you are iterating on the Windows smoke, keep the VM warm and reuse it; that avoids the slowest steps: Azure provisioning, first boot, and Build Tools installation
+- when validating an unmerged Surge fix, point the smoke helpers at the exact Surge source you want: `--surge-path <checkout>` for local smoke, or `--surge-repo-url <repo> --surge-commit-sha <sha>` for Azure smoke
+- the toolchain helper caches by Surge source ref + commit under `.surge/toolchain-bin`, so reruns against the same Surge commit skip the expensive rebuild
 
 ## Temporary Manifest Template
 
@@ -101,7 +103,7 @@ Values:
 Run this from Git Bash in the repo root:
 
 ```bash
-./scripts/run-surge-filesystem-smoke.sh --rid win-x64
+./scripts/run-surge-filesystem-smoke.sh --rid win-x64 --surge-path ../surge
 ```
 
 ### Azure One-Liner
@@ -109,7 +111,9 @@ Run this from Git Bash in the repo root:
 Run this from a Linux or macOS host in the repo root after pushing the branch/commit you want the guest to build:
 
 ```bash
-./scripts/run-surge-azure-smoke.sh
+./scripts/run-surge-azure-smoke.sh \
+  --surge-repo-url https://github.com/fintermobilityas/surge.git \
+  --surge-commit-sha 2cb42ef38a2553cb1cafa3e336448ee45d80fa6b
 ```
 
 Useful overrides:
@@ -117,11 +121,12 @@ Useful overrides:
 - `--keep-resources` keeps the VM and resource group for manual inspection
 - `--branch <name>` and `--commit-sha <sha>` pin the exact guest checkout
 - `--repo-url <https-url>` points the guest at a staging fork instead of `origin`
+- `--surge-repo-url <https-url>` and `--surge-commit-sha <sha>` pin the exact unmerged Surge source the guest should build
 - `--location <region>` and `--size <vm-size>` let you work around regional quota shortages
 
 Warm-VM workflow:
 
-- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources`
+- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha 2cb42ef38a2553cb1cafa3e336448ee45d80fa6b`
 - rerun: pass the same `--resource-group`, `--vm-name`, and `--admin-password`
 - when those names point at an existing VM, the helper now starts and reuses it instead of provisioning a fresh machine
 - reused VMs are kept automatically, because destroying them defeats the purpose of the warm cache
@@ -133,13 +138,13 @@ The Azure helper performs the same local-filesystem install/update smoke as the 
 1. Build Horizon:
 
 ```bash
-cargo build --release
+cargo build
 ```
 
 2. Build Surge:
 
 ```bash
-./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.surge/toolchain-bin"
+./scripts/build-surge-toolchain.sh --source-path ../surge --output-dir "$PWD/.surge/toolchain-bin"
 export PATH="$PWD/.surge/toolchain-bin:$PATH"
 ```
 
@@ -148,7 +153,7 @@ export PATH="$PWD/.surge/toolchain-bin:$PATH"
 4. Stage `0.2.0-smoke.1` with the same built binary:
 
 ```bash
-./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --binary target/release/horizon.exe --main-exe horizon.exe
+./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --binary target/debug/horizon.exe --main-exe horizon.exe
 ```
 
 5. Pack `0.2.0-smoke.1`:
@@ -192,7 +197,7 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid wi
 1. Stage and pack version 2:
 
 ```bash
-./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --binary target/release/horizon.exe --main-exe horizon.exe
+./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --binary target/debug/horizon.exe --main-exe horizon.exe
 surge --manifest-path <SMOKE_MANIFEST> pack \
   --app-id horizon-win-x64 \
   --rid win-x64 \
@@ -210,7 +215,7 @@ surge --manifest-path <SMOKE_MANIFEST> push --app-id horizon-win-x64 --rid win-x
 3. Confirm no `stable` update is visible yet:
 
 ```bash
-cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$LOCALAPPDATA/horizon/app/horizon.exe"
+cargo run --config .surge/smoke/win-x64/cargo-config.toml -p horizon-ui --example surge-update-smoke -- --app-exe "$LOCALAPPDATA/horizon/app/horizon.exe"
 ```
 
 Expected: no update available.
@@ -272,7 +277,7 @@ Run this once per architecture you ship, on native hardware or a matching VM:
 Run this from the repo root:
 
 ```bash
-./scripts/run-surge-filesystem-smoke.sh
+./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge
 ```
 
 ### Build And Pack
@@ -280,13 +285,13 @@ Run this from the repo root:
 1. Build Horizon:
 
 ```bash
-cargo build --release
+cargo build
 ```
 
 2. Build Surge:
 
 ```bash
-./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.surge/toolchain-bin"
+./scripts/build-surge-toolchain.sh --source-path ../surge --output-dir "$PWD/.surge/toolchain-bin"
 export PATH="$PWD/.surge/toolchain-bin:$PATH"
 ```
 
@@ -295,7 +300,7 @@ export PATH="$PWD/.surge/toolchain-bin:$PATH"
 4. Stage `0.2.0-smoke.1` with the same binary:
 
 ```bash
-./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --binary target/release/horizon --main-exe horizon
+./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --binary target/debug/horizon --main-exe horizon
 ```
 
 5. Pack, push, and promote version 1:
@@ -342,7 +347,7 @@ screencapture -x /tmp/horizon-surge-smoke/install-launch.png
 1. Stage and pack version 2:
 
 ```bash
-./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --binary target/release/horizon --main-exe horizon
+./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --binary target/debug/horizon --main-exe horizon
 surge --manifest-path <SMOKE_MANIFEST> pack \
   --app-id <APP_ID> \
   --rid <RID> \
@@ -360,7 +365,7 @@ surge --manifest-path <SMOKE_MANIFEST> push --app-id <APP_ID> --rid <RID> --vers
 3. Confirm no `stable` update is visible yet:
 
 ```bash
-cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$HOME/Library/Application Support/horizon/app/horizon"
+cargo run --config .surge/smoke/"$RID"/cargo-config.toml -p horizon-ui --example surge-update-smoke -- --app-exe "$HOME/Library/Application Support/horizon/app/horizon"
 ```
 
 Expected: no update available.

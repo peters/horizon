@@ -10,7 +10,11 @@ Usage:
     [--rid <linux-x64|osx-arm64|osx-x64|win-x64>] \
     [--version-a <version>] \
     [--version-b <version>] \
+    [--profile <debug|release>] \
     [--toolchain-version <git-tag>] \
+    [--surge-path <path>] \
+    [--surge-repo-url <https-url>] \
+    [--surge-commit-sha <git-sha>] \
     [--store-dir <path>] \
     [--manifest-path <path>] \
     [--install-root <path>] \
@@ -229,7 +233,11 @@ run_cargo() {
 rid=""
 version_a="0.2.0-smoke.1"
 version_b="0.2.0-smoke.2"
+profile="debug"
 toolchain_version="v1.0.0-beta.1"
+surge_path=""
+surge_repo_url=""
+surge_commit_sha=""
 store_dir=""
 manifest_path=""
 install_root=""
@@ -251,8 +259,24 @@ while [ "$#" -gt 0 ]; do
       version_b="${2:-}"
       shift 2
       ;;
+    --profile)
+      profile="${2:-}"
+      shift 2
+      ;;
     --toolchain-version)
       toolchain_version="${2:-}"
+      shift 2
+      ;;
+    --surge-path)
+      surge_path="${2:-}"
+      shift 2
+      ;;
+    --surge-repo-url)
+      surge_repo_url="${2:-}"
+      shift 2
+      ;;
+    --surge-commit-sha)
+      surge_commit_sha="${2:-}"
       shift 2
       ;;
     --store-dir)
@@ -298,6 +322,14 @@ if [ -z "$rid" ]; then
   rid="$(detect_rid)"
 fi
 
+case "$profile" in
+  debug|release) ;;
+  *)
+    printf 'Unsupported profile: %s\n' "$profile" >&2
+    exit 1
+    ;;
+esac
+
 if [ "$rid" = "win-x64" ]; then
   configure_windows_linker
 fi
@@ -306,21 +338,21 @@ case "$rid" in
   linux-x64)
     app_id="horizon-linux-x64"
     main_exe="horizon"
-    binary_relpath="target/release/horizon"
+    binary_relpath="target/$profile/horizon"
     installer_ext="bin"
     install_root_default="$HOME/.local/share/horizon"
     ;;
   osx-arm64|osx-x64)
     app_id="horizon-$rid"
     main_exe="horizon"
-    binary_relpath="target/release/horizon"
+    binary_relpath="target/$profile/horizon"
     installer_ext="bin"
     install_root_default="$HOME/Library/Application Support/horizon"
     ;;
   win-x64)
     app_id="horizon-win-x64"
     main_exe="horizon.exe"
-    binary_relpath="target/release/horizon.exe"
+    binary_relpath="target/$profile/horizon.exe"
     installer_ext="exe"
     if [ -z "${LOCALAPPDATA:-}" ]; then
       printf 'LOCALAPPDATA is required for Windows smoke.\n' >&2
@@ -352,6 +384,9 @@ fi
 
 toolchain_dir="$repo_root/.surge/toolchain-bin"
 toolchain_source_root="$repo_root/.surge/toolchain-src"
+if [ -n "$surge_path" ]; then
+  toolchain_source_root="$(cd -- "$surge_path" && pwd)"
+fi
 toolchain_source_core_path="$toolchain_source_root/crates/surge-core"
 packages_dir="$repo_root/.surge/packages"
 installer_path="$repo_root/.surge/installers/$app_id/$rid/Setup-$rid-$app_id-stable-online-gui.$installer_ext"
@@ -361,17 +396,38 @@ install_root_native="$(to_native_path "$install_root")"
 store_dir_native="$(to_native_path "$store_dir")"
 cargo_config_path="$repo_root/.surge/smoke/$rid/cargo-config.toml"
 cargo_global_args=()
+patch_surge_core=false
 
 mkdir -p "$(dirname -- "$manifest_path")"
 
 if [ "$skip_toolchain_build" = false ]; then
-  printf 'Building Surge toolchain %s\n' "$toolchain_version"
-  (cd "$repo_root" && ./scripts/build-surge-toolchain.sh --version "$toolchain_version" --output-dir "$toolchain_dir")
+  build_toolchain_args=(--output-dir "$toolchain_dir")
+  if [ -n "$surge_path" ]; then
+    build_toolchain_args+=(--source-path "$surge_path")
+    printf 'Building Surge toolchain from local source %s\n' "$surge_path"
+  elif [ -n "$surge_commit_sha" ]; then
+    build_toolchain_args+=(--commit-sha "$surge_commit_sha")
+    if [ -n "$surge_repo_url" ]; then
+      build_toolchain_args+=(--repo-url "$surge_repo_url")
+    fi
+    printf 'Building Surge toolchain from %s at %s\n' "${surge_repo_url:-https://github.com/fintermobilityas/surge.git}" "$surge_commit_sha"
+  else
+    build_toolchain_args+=(--version "$toolchain_version")
+    if [ -n "$surge_repo_url" ]; then
+      build_toolchain_args+=(--repo-url "$surge_repo_url")
+    fi
+    printf 'Building Surge toolchain %s\n' "$toolchain_version"
+  fi
+  (cd "$repo_root" && ./scripts/build-surge-toolchain.sh "${build_toolchain_args[@]}")
 fi
 
-if [ "$rid" = "win-x64" ]; then
+if [ "$rid" = "win-x64" ] || [ -n "$surge_path" ] || [ -n "$surge_commit_sha" ]; then
+  patch_surge_core=true
+fi
+
+if [ "$patch_surge_core" = true ]; then
   if [ ! -d "$toolchain_source_core_path" ]; then
-    printf 'Windows smoke requires Surge sources at %s. Rerun without --skip-toolchain-build.\n' "$toolchain_source_core_path" >&2
+    printf 'Smoke run requires Surge sources at %s. Rerun without --skip-toolchain-build.\n' "$toolchain_source_core_path" >&2
     exit 1
   fi
 
@@ -383,8 +439,12 @@ EOF
 fi
 
 if [ "$skip_build" = false ]; then
-  printf 'Building Horizon release binary\n'
-  run_cargo build --release
+  printf 'Building Horizon %s binary\n' "$profile"
+  if [ "$profile" = "release" ]; then
+    run_cargo build --release
+  else
+    run_cargo build
+  fi
 fi
 
 export PATH="$toolchain_dir:$PATH"
