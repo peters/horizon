@@ -118,6 +118,7 @@ configure_windows_linker() {
   local candidates
   local candidate
   local linker_path=""
+  local normalized_candidate
 
   if ! is_windows_shell; then
     return 0
@@ -126,8 +127,9 @@ configure_windows_linker() {
   candidates="$(cmd.exe //d //c "where link.exe" 2>/dev/null | tr -d '\r' || true)"
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
-    case "$candidate" in
-      *'Git\\usr\\bin\\link.exe'|*'Git/usr/bin/link.exe')
+    normalized_candidate="$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]' | tr '\\' '/')"
+    case "$normalized_candidate" in
+      *'git/usr/bin/link.exe')
         continue
         ;;
     esac
