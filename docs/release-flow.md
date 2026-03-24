@@ -129,9 +129,10 @@ The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke
 - `./scripts/build-surge-toolchain.sh` reuses `.surge/toolchain-bin` when the requested Surge source ref and commit match the cached toolchain
 - after `v1.0.0-beta.2`, the default released smoke path uses the tagged Surge source with no override flags
 - when you override Surge for smoke, `./scripts/run-surge-filesystem-smoke.sh` patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that preserves Surge workspace dependency resolution on Windows
+- after the headless installer returns, stop the installer-launched `--surge-first-run` Horizon process before the scripted launch/update checks continue; that keeps repeated Windows runs deterministic
 - use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` to validate a local unmerged Surge checkout without recloning or retagging it
 
-For a disposable Windows host from Linux or macOS, use `./scripts/run-surge-azure-smoke.sh`. It provisions a Windows 11 VM, installs Build Tools when needed, forces one autologon to create the desktop session, then launches the smoke through an interactive scheduled task. If you rerun it with the same `--resource-group` and `--vm-name`, it starts and reuses that VM instead of provisioning another one. To validate an open Surge PR before merge, pass `--surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>`.
+For a disposable Windows host from Linux or macOS, use `./scripts/run-surge-azure-smoke.sh`. It provisions a Windows 11 VM, installs Build Tools when needed, forces one autologon to create the desktop session, then launches the smoke through an interactive scheduled task. If you rerun it with the same `--resource-group` and `--vm-name`, it starts and reuses that VM instead of provisioning another one. The helper now streams the guest-side Bash smoke output live instead of buffering it until the whole Windows command exits, so use `smoke.stream.log` as the primary progress signal while the task is running. To validate an open Surge PR before merge, pass `--surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>`.
 
 Use the hosted WinGet smoke below only after the local filesystem path is green.
 

@@ -548,8 +548,12 @@ if ! file_contains_literal "$install_root/app/.surge/runtime.yml" "version: ${ve
   exit 1
 fi
 
+printf 'Stopping installer-launched Horizon instance\n'
+stop_managed_install_processes "$install_root_native"
+
 printf 'Launching installed Horizon once\n'
 launch_installed_app "$app_exe_native" "$app_exe_posix"
+stop_managed_install_processes "$install_root_native"
 
 printf 'Verifying no update is visible before promoting %s\n' "$version_b"
 run_helper no-update \

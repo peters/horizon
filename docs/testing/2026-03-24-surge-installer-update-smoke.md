@@ -56,9 +56,11 @@ Important implementation notes from the Azure Windows smoke:
 - the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
 - if you are iterating on the Windows smoke, keep the VM warm and reuse it; that avoids the slowest steps: Azure provisioning, first boot, and Build Tools installation
 - before cleaning `%LOCALAPPDATA%\\horizon`, the smoke helper now force-stops any running processes whose executable lives under that install root; otherwise repeated Windows runs can fail with `Device or resource busy`
+- after the headless installer returns, stop the installer-launched `--surge-first-run` Horizon process before moving on to the scripted launch/update checks; otherwise the smoke can inherit a noisy managed-install session from the installer itself
 - when validating an unmerged Surge fix, point the smoke helpers at the exact Surge source you want: `--surge-path <checkout>` for local smoke, or `--surge-repo-url <repo> --surge-commit-sha <sha>` for Azure smoke
 - when a Surge override is active, the smoke helper patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that keeps Cargo workspace inheritance working on Windows
 - the toolchain helper caches by Surge source ref + commit under `.surge/toolchain-bin`, so reruns against the same Surge commit skip the expensive rebuild
+- the Azure helper now streams the guest-side Bash smoke output live into `smoke.stream.log`; do not wait for a single end-of-run dump before deciding where the Windows pass is stuck
 
 ## Temporary Manifest Template
 
@@ -182,7 +184,15 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid wi
 .surge\installers\horizon-win-x64\win-x64\Setup-win-x64-horizon-win-x64-stable-online-gui.exe --headless
 ```
 
-2. Verify the install tree:
+2. Stop the installer-launched first-run app instance before continuing:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -like '*--surge-first-run*' -and $_.ExecutablePath -like "$env:LOCALAPPDATA\\horizon\\*" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+3. Verify the install tree:
 
 - install root: `%LOCALAPPDATA%\horizon`
 - active app dir: `%LOCALAPPDATA%\horizon\app`
@@ -190,7 +200,7 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid wi
 - desktop shortcut: `%USERPROFILE%\Desktop\Horizon.lnk`
 - start-menu shortcut: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Horizon.lnk`
 
-3. Launch the installed `horizon.exe` once and confirm it stays running long enough to create a window.
+4. Launch the installed `horizon.exe` once and confirm it stays running long enough to create a window.
 
 ### Update Smoke
 

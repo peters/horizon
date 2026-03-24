@@ -338,16 +338,8 @@ function Invoke-CmdLogged {
         [string]$Command
     )
 
-    $cmdLogPath = Join-Path $env:TEMP ("horizon-surge-native-{0}.log" -f ([guid]::NewGuid().ToString("N")))
-    & cmd.exe /d /c "$Command > `"$cmdLogPath`" 2>&1"
-    $exitCode = $LASTEXITCODE
-
-    if (Test-Path $cmdLogPath) {
-        Get-Content -LiteralPath $cmdLogPath | Tee-Object -FilePath $streamPath -Append | Out-Default
-        Remove-Item -LiteralPath $cmdLogPath -Force -ErrorAction SilentlyContinue
-    }
-
-    return $exitCode
+    & cmd.exe /d /c $Command 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
+    return $LASTEXITCODE
 }
 
 Remove-Item -LiteralPath $errorPath, $streamPath -Force -ErrorAction SilentlyContinue
