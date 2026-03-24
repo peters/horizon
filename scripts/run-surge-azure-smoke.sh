@@ -345,9 +345,9 @@ try {
         Pop-Location
     }
 
-    & cmd.exe /c $cmdPath 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-    if ($LASTEXITCODE -ne 0) {
-        throw "smoke command failed with exit code $LASTEXITCODE"
+    $smokeExit = Invoke-CmdLogged "`"$cmdPath`""
+    if ($smokeExit -ne 0) {
+        throw "smoke command failed with exit code $smokeExit"
     }
 
     Set-Content -LiteralPath $statePath -Value 'succeeded'
