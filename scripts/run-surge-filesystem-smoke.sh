@@ -145,6 +145,7 @@ configure_windows_linker() {
   fi
 
   export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="$linker_path"
+  export RUSTC_LINKER="$linker_path"
   printf 'Using Windows linker %s\n' "$CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
 }
 
