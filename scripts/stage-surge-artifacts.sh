@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Stage a Horizon binary into Surge's expected artifacts directory layout.
+Stage a Horizon binary and static packaging assets into Surge's expected artifacts directory layout.
 
 Usage:
   stage-surge-artifacts.sh \
@@ -68,10 +68,18 @@ fi
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 target_dir="$repo_root/.surge/artifacts/$app_id/$rid/$version"
+icon_source="$repo_root/assets/icons/icon-512.png"
+
+if [ ! -f "$icon_source" ]; then
+  printf 'Icon not found: %s\n' "$icon_source" >&2
+  exit 1
+fi
+
 rm -rf "$target_dir"
-mkdir -p "$target_dir"
+mkdir -p "$target_dir/assets/icons"
 
 cp "$binary_path" "$target_dir/$main_exe"
+cp "$icon_source" "$target_dir/assets/icons/icon-512.png"
 
 if [[ "$main_exe" != *.exe ]]; then
   chmod +x "$target_dir/$main_exe"

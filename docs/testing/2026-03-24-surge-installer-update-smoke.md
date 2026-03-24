@@ -21,6 +21,8 @@ Use a local `filesystem` backend before any hosted smoke:
 
 Horizon only shows its in-app update prompt for `github_releases` + `stable` managed installs. The local smoke below validates the installer and package-update plumbing directly, using the helper example at [crates/horizon-ui/examples/surge-update-smoke.rs](/home/peters/github/horizon-surge-stable/crates/horizon-ui/examples/surge-update-smoke.rs). After this passes, do one hosted GitHub Releases smoke for the UI prompt path.
 
+The fastest supported path on macOS or Windows is the wrapper at [run-surge-filesystem-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-filesystem-smoke.sh). It auto-detects the current target, stages the icon asset that `surge pack` requires, installs `0.2.0-smoke.1`, then packs/promotes/applies `0.2.0-smoke.2`.
+
 ## Shared Setup
 
 Run these steps on the target OS you are validating.
@@ -28,15 +30,21 @@ Run these steps on the target OS you are validating.
 1. Build Horizon once in release mode.
 2. Build the Surge toolchain.
 3. Create a temporary one-app Surge manifest that uses `provider: filesystem`.
-4. Stage the same built Horizon binary twice as two smoke versions, for example `0.2.0-smoke.1` and `0.2.0-smoke.2`.
-5. Pack both versions.
-6. Push `0.2.0-smoke.1` to `beta`, then promote it to `stable`.
-7. Install `0.2.0-smoke.1` with the generated installer.
-8. Verify the installed tree and runtime manifest.
+4. Stage and pack `0.2.0-smoke.1`.
+5. Push `0.2.0-smoke.1` to `beta`, then promote it to `stable`.
+6. Install `0.2.0-smoke.1` with the generated installer.
+7. Verify the installed tree and runtime manifest.
+8. Stage and pack `0.2.0-smoke.2`.
 9. Push `0.2.0-smoke.2` to `beta` only and confirm the installed `stable` app still reports no update.
 10. Promote `0.2.0-smoke.2` to `stable`, then apply it with the helper example.
 
 Using the same Horizon binary for both smoke versions is acceptable here. The goal is to validate packaging, channel promotion, install layout, and update application, not binary differences.
+
+Important implementation notes from the local smoke:
+
+- keep `channels: [stable, beta]` in that order, because Surge binds published installers to the app's default channel
+- do not pack `0.2.0-smoke.2` until after `0.2.0-smoke.1` is installed, because the stable installer filename is reused and later packs replace the earlier installer
+- if the temporary manifest lives outside the repo root, pass explicit `--artifacts-dir` to `surge pack` and `--packages-dir` to `surge push`
 
 ## Temporary Manifest Template
 
@@ -54,12 +62,14 @@ apps:
     main: <MAIN_EXE>
     installDirectory: horizon
     icon: assets/icons/icon-512.png
-    channels: [beta, stable]
+    channels: [stable, beta]
     shortcuts: [desktop, start_menu]
     installers: [online-gui]
     target:
       rid: <RID>
 ```
+
+The first channel is the installer's default channel. For this smoke, `stable` must come first so the generated installer exercises the same stable install path that the update flow later checks.
 
 Values:
 
@@ -76,6 +86,14 @@ Values:
 - Git Bash or another Bash environment for the repo scripts
 - PowerShell 7 or Windows PowerShell for inspection steps
 
+### Recommended One-Liner
+
+Run this from Git Bash in the repo root:
+
+```bash
+./scripts/run-surge-filesystem-smoke.sh --rid win-x64
+```
+
 ### Build And Pack
 
 1. Build Horizon:
@@ -87,30 +105,33 @@ cargo build --release
 2. Build Surge:
 
 ```bash
-./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.tmp/surge-toolchain"
-export PATH="$PWD/.tmp/surge-toolchain:$PATH"
+./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.surge/toolchain-bin"
+export PATH="$PWD/.surge/toolchain-bin:$PATH"
 ```
 
 3. Create a filesystem store, for example `C:/tmp/horizon-surge-store`, and write a temporary manifest for `win-x64`.
 
-4. Stage both smoke versions with the same binary:
+4. Stage `0.2.0-smoke.1` with the same built binary:
 
 ```bash
 ./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --binary target/release/horizon.exe --main-exe horizon.exe
-./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --binary target/release/horizon.exe --main-exe horizon.exe
 ```
 
-5. Pack both versions:
+5. Pack `0.2.0-smoke.1`:
 
 ```bash
-surge --manifest-path <SMOKE_MANIFEST> pack --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1
-surge --manifest-path <SMOKE_MANIFEST> pack --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2
+surge --manifest-path <SMOKE_MANIFEST> pack \
+  --app-id horizon-win-x64 \
+  --rid win-x64 \
+  --version 0.2.0-smoke.1 \
+  --artifacts-dir "$PWD/.surge/artifacts/horizon-win-x64/win-x64/0.2.0-smoke.1" \
+  --output-dir "$PWD/.surge/packages"
 ```
 
 6. Publish version 1 to `beta`, then promote it to `stable`:
 
 ```bash
-surge --manifest-path <SMOKE_MANIFEST> push --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --channel beta
+surge --manifest-path <SMOKE_MANIFEST> push --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --channel beta --packages-dir "$PWD/.surge/packages"
 surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.1 --channel stable
 ```
 
@@ -134,13 +155,25 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid wi
 
 ### Update Smoke
 
-1. Push version 2 to `beta` only:
+1. Stage and pack version 2:
 
 ```bash
-surge --manifest-path <SMOKE_MANIFEST> push --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --channel beta
+./scripts/stage-surge-artifacts.sh --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --binary target/release/horizon.exe --main-exe horizon.exe
+surge --manifest-path <SMOKE_MANIFEST> pack \
+  --app-id horizon-win-x64 \
+  --rid win-x64 \
+  --version 0.2.0-smoke.2 \
+  --artifacts-dir "$PWD/.surge/artifacts/horizon-win-x64/win-x64/0.2.0-smoke.2" \
+  --output-dir "$PWD/.surge/packages"
 ```
 
-2. Confirm no `stable` update is visible yet:
+2. Push version 2 to `beta` only:
+
+```bash
+surge --manifest-path <SMOKE_MANIFEST> push --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --channel beta --packages-dir "$PWD/.surge/packages"
+```
+
+3. Confirm no `stable` update is visible yet:
 
 ```bash
 cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$LOCALAPPDATA/horizon/app/horizon.exe"
@@ -148,19 +181,19 @@ cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$LOCALAPPDATA
 
 Expected: no update available.
 
-3. Promote version 2 to `stable`:
+4. Promote version 2 to `stable`:
 
 ```bash
 surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid win-x64 --version 0.2.0-smoke.2 --channel stable
 ```
 
-4. Apply the update:
+5. Apply the update:
 
 ```bash
 cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$LOCALAPPDATA/horizon/app/horizon.exe"
 ```
 
-5. Re-check the install tree:
+6. Re-check the install tree:
 
 - runtime manifest version becomes `0.2.0-smoke.2`
 - previous snapshot exists as `%LOCALAPPDATA%\horizon\app-0.2.0-smoke.1`
@@ -200,6 +233,14 @@ Run this once per architecture you ship, on native hardware or a matching VM:
 - Xcode Command Line Tools
 - Rust stable `>= 1.88`
 
+### Recommended One-Liner
+
+Run this from the repo root:
+
+```bash
+./scripts/run-surge-filesystem-smoke.sh
+```
+
 ### Build And Pack
 
 1. Build Horizon:
@@ -211,25 +252,28 @@ cargo build --release
 2. Build Surge:
 
 ```bash
-./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.tmp/surge-toolchain"
-export PATH="$PWD/.tmp/surge-toolchain:$PATH"
+./scripts/build-surge-toolchain.sh --version v1.0.0-beta.1 --output-dir "$PWD/.surge/toolchain-bin"
+export PATH="$PWD/.surge/toolchain-bin:$PATH"
 ```
 
 3. Create a filesystem store, for example `/tmp/horizon-surge-store`, and write a temporary manifest for the target RID.
 
-4. Stage both smoke versions with the same binary:
+4. Stage `0.2.0-smoke.1` with the same binary:
 
 ```bash
 ./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --binary target/release/horizon --main-exe horizon
-./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --binary target/release/horizon --main-exe horizon
 ```
 
 5. Pack, push, and promote version 1:
 
 ```bash
-surge --manifest-path <SMOKE_MANIFEST> pack --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1
-surge --manifest-path <SMOKE_MANIFEST> pack --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2
-surge --manifest-path <SMOKE_MANIFEST> push --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --channel beta
+surge --manifest-path <SMOKE_MANIFEST> pack \
+  --app-id <APP_ID> \
+  --rid <RID> \
+  --version 0.2.0-smoke.1 \
+  --artifacts-dir "$PWD/.surge/artifacts/<APP_ID>/<RID>/0.2.0-smoke.1" \
+  --output-dir "$PWD/.surge/packages"
+surge --manifest-path <SMOKE_MANIFEST> push --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --channel beta --packages-dir "$PWD/.surge/packages"
 surge --manifest-path <SMOKE_MANIFEST> promote --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.1 --channel stable
 ```
 
@@ -261,13 +305,25 @@ screencapture -x /tmp/horizon-surge-smoke/install-launch.png
 
 ### Update Smoke
 
-1. Push version 2 to `beta` only:
+1. Stage and pack version 2:
 
 ```bash
-surge --manifest-path <SMOKE_MANIFEST> push --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --channel beta
+./scripts/stage-surge-artifacts.sh --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --binary target/release/horizon --main-exe horizon
+surge --manifest-path <SMOKE_MANIFEST> pack \
+  --app-id <APP_ID> \
+  --rid <RID> \
+  --version 0.2.0-smoke.2 \
+  --artifacts-dir "$PWD/.surge/artifacts/<APP_ID>/<RID>/0.2.0-smoke.2" \
+  --output-dir "$PWD/.surge/packages"
 ```
 
-2. Confirm no `stable` update is visible yet:
+2. Push version 2 to `beta` only:
+
+```bash
+surge --manifest-path <SMOKE_MANIFEST> push --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --channel beta --packages-dir "$PWD/.surge/packages"
+```
+
+3. Confirm no `stable` update is visible yet:
 
 ```bash
 cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$HOME/Library/Application Support/horizon/app/horizon"
@@ -275,19 +331,19 @@ cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$HOME/Library
 
 Expected: no update available.
 
-3. Promote version 2 to `stable`:
+4. Promote version 2 to `stable`:
 
 ```bash
 surge --manifest-path <SMOKE_MANIFEST> promote --app-id <APP_ID> --rid <RID> --version 0.2.0-smoke.2 --channel stable
 ```
 
-4. Apply the update:
+5. Apply the update:
 
 ```bash
 cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$HOME/Library/Application Support/horizon/app/horizon"
 ```
 
-5. Re-check the install tree:
+6. Re-check the install tree:
 
 - runtime manifest version becomes `0.2.0-smoke.2`
 - previous snapshot exists as `~/Library/Application Support/horizon/app-0.2.0-smoke.1`

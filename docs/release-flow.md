@@ -120,6 +120,12 @@ Before trusting a changed Surge packaging/update flow, run the Windows + macOS l
 - beta-to-stable promotion behavior using a local filesystem backend
 - package-based update application via `UpdateManager::download_and_apply`
 
+The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke.sh`. It now bakes in the path rules the local smoke exposed:
+
+- `stable` must be the first channel in the temporary manifest so the installer targets the stable line
+- `0.2.0-smoke.1` must be installed before `0.2.0-smoke.2` is packed, because later packs replace the stable installer artifact
+- `surge pack` and `surge push` need explicit artifact/package directories when the temporary manifest lives outside the repo root
+
 Use the hosted WinGet smoke below only after the local filesystem path is green.
 
 Hosted GitHub Releases smoke is intended to run from a separate public staging repo. In that setup:
