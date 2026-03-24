@@ -123,7 +123,7 @@ configure_windows_linker() {
     return 0
   fi
 
-  candidates="$(cmd.exe /d /c "where link.exe" 2>/dev/null | tr -d '\r' || true)"
+  candidates="$(cmd.exe //d //c "where link.exe" 2>/dev/null | tr -d '\r' || true)"
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
     case "$candidate" in
