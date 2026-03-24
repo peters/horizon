@@ -24,6 +24,7 @@ pub(super) enum ToolbarAction {
     QuickNav,
     FitWorkspace,
     RemoteHosts,
+    Update,
     Settings,
 }
 
@@ -36,6 +37,7 @@ impl ToolbarAction {
             Self::QuickNav => "Quick Nav",
             Self::FitWorkspace => "Fit Workspace",
             Self::RemoteHosts => "Remote Hosts",
+            Self::Update => "Update",
             Self::Settings => "Settings",
         }
     }
@@ -81,7 +83,7 @@ pub(super) fn effective_sidebar_width(viewport_width: f32) -> f32 {
     (viewport_width * SIDEBAR_WIDTH_RATIO).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH)
 }
 
-pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
+pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootToolbarLayout {
     let content_rect = Rect::from_min_max(
         Pos2::new(
             viewport.min.x + ROOT_TOOLBAR_HORIZONTAL_PAD,
@@ -102,10 +104,17 @@ pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
         (false, 1_usize, false),
         (false, 0_usize, false),
     ];
-    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false);
+    let mut fallback = layout_candidate(viewport, content_rect, false, 0, false, show_update);
 
     for (show_tagline, secondary_visible, show_fps) in states {
-        let candidate = layout_candidate(viewport, content_rect, show_tagline, secondary_visible, show_fps);
+        let candidate = layout_candidate(
+            viewport,
+            content_rect,
+            show_tagline,
+            secondary_visible,
+            show_fps,
+            show_update,
+        );
         if candidate.search_available >= ROOT_TOOLBAR_SEARCH_MIN_WIDTH {
             return candidate.layout;
         }
@@ -121,6 +130,7 @@ fn layout_candidate(
     show_tagline: bool,
     secondary_visible: usize,
     show_fps: bool,
+    show_update: bool,
 ) -> RootToolbarCandidate {
     let brand_width = ROOT_TOOLBAR_NAME_WIDTH
         + if show_tagline {
@@ -147,6 +157,9 @@ fn layout_candidate(
         .collect::<Vec<_>>();
     if !overflow_actions.is_empty() {
         visible_items.push(ToolbarItem::OverflowMenu);
+    }
+    if show_update {
+        visible_items.push(ToolbarItem::Action(ToolbarAction::Update));
     }
     visible_items.push(ToolbarItem::Action(ToolbarAction::Settings));
 
@@ -211,7 +224,7 @@ mod tests {
     #[test]
     fn toolbar_hides_tagline_before_collapsing_actions() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1024.0, 768.0));
-        let layout = root_toolbar_layout(viewport);
+        let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
         assert!(layout.overflow_actions.is_empty());
@@ -227,7 +240,7 @@ mod tests {
     #[test]
     fn toolbar_moves_secondary_actions_into_overflow_on_tighter_widths() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(900.0, 768.0));
-        let layout = root_toolbar_layout(viewport);
+        let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
         assert!(layout.overflow_actions.contains(&ToolbarAction::RemoteHosts));
@@ -239,7 +252,7 @@ mod tests {
     #[test]
     fn toolbar_keeps_primary_actions_visible_at_min_window_width() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
-        let layout = root_toolbar_layout(viewport);
+        let layout = root_toolbar_layout(viewport, false);
 
         assert_eq!(
             layout.overflow_actions,
@@ -260,6 +273,22 @@ mod tests {
             layout
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Settings))
+        );
+    }
+
+    #[test]
+    fn toolbar_keeps_update_visible_when_present() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let layout = root_toolbar_layout(viewport, true);
+
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::Update))
+        );
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::FitWorkspace, ToolbarAction::RemoteHosts]
         );
     }
 }

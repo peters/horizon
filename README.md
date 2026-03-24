@@ -113,14 +113,16 @@ Drop a `.md` file onto the canvas or create one from the command palette. **Spli
 
 ### Download (fastest)
 
-Grab the latest binary from [**Releases**](https://github.com/peters/horizon/releases/latest) — no dependencies needed.
+Grab the latest release from [**Releases**](https://github.com/peters/horizon/releases/latest) — no dependencies needed.
 
-| Platform | Asset | |
-|:---------|:------|:-|
-| **Linux** x64 | `horizon-linux-x64.tar.gz` | Extract, `chmod +x`, run |
-| **macOS** arm64 | `horizon-osx-arm64.tar.gz` | Extract, `chmod +x`, run |
-| **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract, `chmod +x`, run |
-| **Windows** x64 | `horizon-windows-x64.exe` | Download and run |
+| Platform | Raw binary | Surge installer | |
+|:---------|:-----------|:----------------|:-|
+| **Linux** x64 | `horizon-linux-x64.tar.gz` | `horizon-installer-linux-x64.bin` | Extract and run, or use the installer for managed stable updates |
+| **macOS** arm64 | `horizon-osx-arm64.tar.gz` | `horizon-installer-osx-arm64.bin` | Extract and run, or use the installer for managed stable updates |
+| **macOS** x64 | `horizon-osx-x64.tar.gz` | `horizon-installer-osx-x64.bin` | Extract and run, or use the installer for managed stable updates |
+| **Windows** x64 | `horizon-windows-x64.exe` | `horizon-installer-win-x64.exe` | Run the raw binary directly, or use the installer for managed stable updates |
+
+Homebrew and other package-manager installs keep using the package manager's own upgrade flow. Horizon only offers the in-app update prompt for installs created by the Surge installer.
 
 ### Homebrew
 

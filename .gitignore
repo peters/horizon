@@ -2,6 +2,8 @@
 *.swp
 *.swo
 .DS_Store
+.surge/*
+!.surge/surge.yml
 
 # Staging directory created by CI for cargo publish verification
 crates/horizon-ui/publish-assets/

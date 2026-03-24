@@ -13,6 +13,7 @@ pub mod git_status;
 pub mod git_watcher;
 mod horizon_home;
 mod layout;
+mod managed_install;
 mod opencode_paths;
 mod panel;
 mod remote_hosts;
@@ -43,6 +44,7 @@ pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
+pub use managed_install::ManagedInstall;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use remote_hosts::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, discover_remote_hosts};
 pub use runtime_state::{

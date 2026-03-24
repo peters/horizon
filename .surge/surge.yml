@@ -1,0 +1,50 @@
+schema: 1
+storage:
+  provider: github_releases
+  bucket: peters/horizon
+  region: surge
+
+apps:
+  - id: horizon-linux-x64
+    name: Horizon
+    main: horizon
+    installDirectory: horizon
+    icon: assets/icons/icon-512.png
+    channels: [stable]
+    shortcuts: [desktop, start_menu]
+    installers: [offline-gui]
+    target:
+      rid: linux-x64
+
+  - id: horizon-osx-arm64
+    name: Horizon
+    main: horizon
+    installDirectory: horizon
+    icon: assets/icons/icon-512.png
+    channels: [stable]
+    shortcuts: [desktop, start_menu]
+    installers: [offline-gui]
+    target:
+      rid: osx-arm64
+
+  - id: horizon-osx-x64
+    name: Horizon
+    main: horizon
+    installDirectory: horizon
+    icon: assets/icons/icon-512.png
+    channels: [stable]
+    shortcuts: [desktop, start_menu]
+    installers: [offline-gui]
+    target:
+      rid: osx-x64
+
+  - id: horizon-win-x64
+    name: Horizon
+    main: horizon.exe
+    installDirectory: horizon
+    icon: assets/icons/icon-512.png
+    channels: [stable]
+    shortcuts: [desktop, start_menu]
+    installers: [offline-gui]
+    target:
+      rid: win-x64

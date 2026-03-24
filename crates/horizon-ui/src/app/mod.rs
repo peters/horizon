@@ -18,6 +18,7 @@ pub(crate) mod shortcuts;
 mod sidebar;
 mod ssh_upload;
 mod startup_session;
+mod updates;
 pub(crate) mod util;
 mod view;
 mod workspace;
@@ -30,9 +31,9 @@ use std::time::Instant;
 
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
-    StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
+    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
+    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -84,6 +85,7 @@ enum CanvasPanSpaceKeyState {
 
 use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
+use self::updates::{AvailableUpdate, UpdateCheckMessage};
 
 struct StartupBootstrap {
     runtime_state: RuntimeState,
@@ -196,6 +198,10 @@ pub struct HorizonApp {
     last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
+    managed_install: Option<ManagedInstall>,
+    surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
+    surge_available_update: Option<AvailableUpdate>,
+    next_surge_update_check_at: Option<Instant>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
@@ -231,6 +237,14 @@ impl HorizonApp {
         board.attention_enabled = config.features.attention_feed;
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
+
+        let managed_install = std::env::current_exe()
+            .ok()
+            .and_then(|current_exe| ManagedInstall::discover(&current_exe));
+        let next_surge_update_check_at = managed_install
+            .as_ref()
+            .filter(|install| install.uses_stable_channel() && install.uses_github_releases())
+            .map(|_| Instant::now());
 
         let mut app = Self {
             board,
@@ -278,6 +292,10 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),
             settings: None,
+            managed_install,
+            surge_update_check_rx: None,
+            surge_available_update: None,
+            next_surge_update_check_at,
             pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
@@ -312,6 +330,8 @@ impl HorizonApp {
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
             StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
+
+        app.maybe_start_update_check();
 
         app
     }

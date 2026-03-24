@@ -5,7 +5,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which publishes to crates.io and uploads the platform binaries to the same GitHub Release.
-- Stable releases also publish `SHA256SUMS.txt`, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
+- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
 
 ## Source Of Truth
 
@@ -63,9 +63,11 @@ Then it:
 
 - rewrites the workspace version to the exact tag version in CI
 - builds the release binaries for Linux, macOS, and Windows
-- uploads those assets plus `SHA256SUMS.txt` to the GitHub Release you just published
-- for stable releases only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
-- for stable releases only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
+- for stable releases, stages Surge packages and GUI installers for the same platform matrix
+- uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
+- for stable releases, publishes the Surge release index and package artifacts to the dedicated `surge` GitHub Release tag using the `stable` channel
+- in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
+- in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
 ## CLI Alternative
 
@@ -93,14 +95,53 @@ Stable-release packaging assumes:
   - `horizon-osx-arm64.tar.gz`
   - `horizon-osx-x64.tar.gz`
   - `horizon-windows-x64.exe`
-- the stable release uploads all four assets before the tap update runs
+- stable releases also publish the Surge installer assets:
+  - `horizon-installer-linux-x64.bin`
+  - `horizon-installer-osx-arm64.bin`
+  - `horizon-installer-osx-x64.bin`
+  - `horizon-installer-win-x64.exe`
+- the stable release uploads the four raw assets plus the four installer assets before the tap update runs
+- the Surge storage backend uses the dedicated GitHub Release tag `surge` in `peters/horizon`
 - `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
 - `WINGET_PKGS_TOKEN` is configured in the `peters/horizon` repository secrets with write access to the `peters/winget-pkgs` fork
 - `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
 WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
 
-If a stable release is missing one of those assets, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial packaging update.
+If a stable release is missing one of those assets, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
+
+## Cross-Platform Installer And Update Smoke
+
+Before trusting a changed Surge packaging/update flow, run the Windows + macOS local-filesystem smoke plan in [docs/testing/2026-03-24-surge-installer-update-smoke.md](docs/testing/2026-03-24-surge-installer-update-smoke.md). That plan validates:
+
+- installer creation on the target OS
+- headless installer execution into the normal user install root
+- runtime manifest contents and shortcut creation
+- beta-to-stable promotion behavior using a local filesystem backend
+- package-based update application via `UpdateManager::download_and_apply`
+
+The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke.sh`. It now bakes in the path rules the local smoke exposed:
+
+- `stable` must be the first channel in the temporary manifest so the installer targets the stable line
+- `0.2.0-smoke.1` must be installed before `0.2.0-smoke.2` is packed, because later packs replace the stable installer artifact
+- Horizon now ships `offline-gui` installers by default because the packaged app is small enough that a self-contained installer is the simpler release path
+- `surge pack` and `surge push` need explicit artifact/package directories when the temporary manifest lives outside the repo root
+- Horizon smoke builds default to `cargo build` debug binaries for speed; use `--profile release` only when you specifically need a release payload
+- `./scripts/build-surge-toolchain.sh` reuses `.surge/toolchain-bin` when the requested Surge source ref and commit match the cached toolchain
+- after `v1.0.0-beta.6`, the default released smoke path uses the tagged Surge source with no override flags
+- when you override Surge for smoke, `./scripts/run-surge-filesystem-smoke.sh` patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that preserves Surge workspace dependency resolution on Windows
+- after the headless installer returns, stop the installer-launched `--surge-first-run` Horizon process before the scripted launch/update checks continue; that keeps repeated Windows runs deterministic
+- use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` to validate a local unmerged Surge checkout without recloning or retagging it
+
+For a disposable Windows host from Linux or macOS, use `./scripts/run-surge-azure-smoke.sh`. It provisions a Windows 11 VM, installs Build Tools when needed, forces one autologon to create the desktop session, then launches the smoke through an interactive scheduled task. If you rerun it with the same `--resource-group` and `--vm-name`, it starts and reuses that VM instead of provisioning another one. The helper now streams the guest-side Bash smoke output live instead of buffering it until the whole Windows command exits, so use `smoke.stream.log` as the primary progress signal while the task is running. To validate an open Surge PR before merge, pass `--surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>`.
+
+Use the hosted WinGet smoke below only after the local filesystem path is green.
+
+Hosted GitHub Releases smoke is intended to run from a separate public staging repo. In that setup:
+
+- the staging repo still builds raw assets, Surge installers, and Surge release-index packages
+- Homebrew and WinGet publication jobs are skipped automatically because they only run in `peters/horizon`
+- the in-app prompt uses the managed install's GitHub repo metadata, so it opens installer downloads from the staging repo instead of production
 
 ## Interactive WinGet Smoke
 
