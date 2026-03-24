@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "comrak",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-cursor"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "core-graphics 0.25.0",
  "windows-sys 0.61.2",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-ui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "arboard",
