@@ -110,8 +110,29 @@ to_posix_path() {
   fi
 }
 
+to_mixed_path() {
+  local path="$1"
+
+  if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
 path_exists() {
   [ -e "$1" ]
+}
+
+file_contains_literal() {
+  local path="$1"
+  local needle="$2"
+
+  if command -v rg >/dev/null 2>&1; then
+    rg -q --fixed-strings "$needle" "$path"
+  else
+    grep -Fq -- "$needle" "$path"
+  fi
 }
 
 configure_windows_linker() {
@@ -196,6 +217,13 @@ launch_installed_app() {
   fi
   kill "$launch_pid" >/dev/null 2>&1 || true
   wait "$launch_pid" || true
+}
+
+run_cargo() {
+  (
+    cd "$repo_root"
+    cargo "${cargo_global_args[@]}" "$@"
+  )
 }
 
 rid=""
@@ -323,24 +351,42 @@ if [ -z "$binary_path" ]; then
 fi
 
 toolchain_dir="$repo_root/.surge/toolchain-bin"
+toolchain_source_root="$repo_root/.surge/toolchain-src"
+toolchain_source_core_path="$toolchain_source_root/crates/surge-core"
 packages_dir="$repo_root/.surge/packages"
 installer_path="$repo_root/.surge/installers/$app_id/$rid/Setup-$rid-$app_id-stable-online-gui.$installer_ext"
 app_exe_posix="$install_root/app/$main_exe"
 app_exe_native="$(to_native_path "$app_exe_posix")"
 install_root_native="$(to_native_path "$install_root")"
 store_dir_native="$(to_native_path "$store_dir")"
+cargo_config_path="$repo_root/.surge/smoke/$rid/cargo-config.toml"
+cargo_global_args=()
 
 mkdir -p "$(dirname -- "$manifest_path")"
-
-if [ "$skip_build" = false ]; then
-  printf 'Building Horizon release binary\n'
-  (cd "$repo_root" && cargo build --release)
-fi
 
 if [ "$skip_toolchain_build" = false ]; then
   printf 'Building Surge toolchain %s\n' "$toolchain_version"
   (cd "$repo_root" && ./scripts/build-surge-toolchain.sh --version "$toolchain_version" --output-dir "$toolchain_dir")
 fi
+
+if [ "$rid" = "win-x64" ]; then
+  if [ ! -d "$toolchain_source_core_path" ]; then
+    printf 'Windows smoke requires Surge sources at %s. Rerun without --skip-toolchain-build.\n' "$toolchain_source_core_path" >&2
+    exit 1
+  fi
+
+  cat >"$cargo_config_path" <<EOF
+[patch."https://github.com/fintermobilityas/surge.git"]
+surge-core = { path = "$(to_mixed_path "$toolchain_source_core_path")" }
+EOF
+  cargo_global_args=(--config "$cargo_config_path")
+fi
+
+if [ "$skip_build" = false ]; then
+  printf 'Building Horizon release binary\n'
+  run_cargo build --release
+fi
+
 export PATH="$toolchain_dir:$PATH"
 require_command surge
 
@@ -392,7 +438,7 @@ if ! path_exists "$install_root/app/.surge/runtime.yml"; then
   exit 1
 fi
 
-if ! rg -q "^version: ${version_a}$" "$install_root/app/.surge/runtime.yml"; then
+if ! file_contains_literal "$install_root/app/.surge/runtime.yml" "version: ${version_a}"; then
   printf 'Installed runtime manifest does not contain version %s.\n' "$version_a" >&2
   exit 1
 fi
@@ -402,7 +448,7 @@ launch_installed_app "$app_exe_native" "$app_exe_posix"
 
 printf 'Verifying no update is visible before promoting %s\n' "$version_b"
 run_helper no-update \
-  cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$app_exe_native"
+  run_cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$app_exe_native"
 
 printf 'Staging Horizon binary for %s\n' "$version_b"
 (cd "$repo_root" && ./scripts/stage-surge-artifacts.sh --app-id "$app_id" --rid "$rid" --version "$version_b" --binary "$binary_path" --main-exe "$main_exe")
@@ -415,14 +461,14 @@ printf 'Publishing %s to beta only\n' "$version_b"
 
 printf 'Verifying beta-only update stays hidden from stable install\n'
 run_helper no-update \
-  cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$app_exe_native"
+  run_cargo run -p horizon-ui --example surge-update-smoke -- --app-exe "$app_exe_native"
 
 printf 'Promoting %s to stable and applying update\n' "$version_b"
 (cd "$repo_root" && surge --manifest-path "$manifest_path" promote --app-id "$app_id" --rid "$rid" --version "$version_b" --channel stable)
 run_helper applied \
-  cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$app_exe_native"
+  run_cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$app_exe_native"
 
-if ! rg -q "^version: ${version_b}$" "$install_root/app/.surge/runtime.yml"; then
+if ! file_contains_literal "$install_root/app/.surge/runtime.yml" "version: ${version_b}"; then
   printf 'Updated runtime manifest does not contain version %s.\n' "$version_b" >&2
   exit 1
 fi
