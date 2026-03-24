@@ -85,7 +85,7 @@ enum CanvasPanSpaceKeyState {
 
 use self::frame_stats::FrameStats;
 use self::settings::SettingsEditor;
-use self::updates::{AvailableUpdatePrompt, UpdateCheckMessage};
+use self::updates::{AvailableUpdate, UpdateCheckMessage};
 
 struct StartupBootstrap {
     runtime_state: RuntimeState,
@@ -200,7 +200,7 @@ pub struct HorizonApp {
     settings: Option<SettingsEditor>,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
-    surge_update_prompt: Option<AvailableUpdatePrompt>,
+    surge_available_update: Option<AvailableUpdate>,
     next_surge_update_check_at: Option<Instant>,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
@@ -294,7 +294,7 @@ impl HorizonApp {
             settings: None,
             managed_install,
             surge_update_check_rx: None,
-            surge_update_prompt: None,
+            surge_available_update: None,
             next_surge_update_check_at,
             pending_preset_pick: None,
             dir_picker: None,

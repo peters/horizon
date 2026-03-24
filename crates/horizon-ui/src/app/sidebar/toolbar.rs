@@ -13,7 +13,7 @@ use crate::{branding, theme};
 impl HorizonApp {
     pub(in crate::app) fn render_toolbar(&mut self, ctx: &Context) {
         let viewport = util::viewport_local_rect(ctx);
-        let layout = root_toolbar_layout(viewport);
+        let layout = root_toolbar_layout(viewport, self.has_available_update());
 
         egui::Area::new(Id::new("toolbar"))
             .fixed_pos(viewport.min)
@@ -182,6 +182,17 @@ impl HorizonApp {
                         .open_remote_hosts
                         .display_label(util::primary_shortcut_label()),
                 ),
+            ToolbarAction::Update => {
+                let response = ui.add(
+                    util::primary_button(action.label())
+                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
+                );
+                if let Some(tooltip) = self.available_update_hover_text() {
+                    response.on_hover_text(tooltip)
+                } else {
+                    response
+                }
+            }
             ToolbarAction::NewWorkspace | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
@@ -238,6 +249,7 @@ impl HorizonApp {
                 self.execute_command(ctx, &crate::command_registry::CommandId::FitActiveWorkspace);
             }
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
+            ToolbarAction::Update => self.open_available_update(),
             ToolbarAction::Settings => self.toggle_settings(),
         }
     }
@@ -253,6 +265,7 @@ fn action_button_width(action: ToolbarAction) -> f32 {
         ToolbarAction::QuickNav => 102.0,
         ToolbarAction::FitWorkspace => 126.0,
         ToolbarAction::RemoteHosts => 120.0,
+        ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,
     }
 }

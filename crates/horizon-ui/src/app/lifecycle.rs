@@ -359,7 +359,6 @@ impl HorizonApp {
             }
         }
         self.render_canvas_hud(ctx);
-        self.render_update_prompt(ctx);
         self.render_detached_viewports(ctx);
     }
 

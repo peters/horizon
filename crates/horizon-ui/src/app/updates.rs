@@ -1,15 +1,13 @@
+use std::fmt::Write as _;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Context, RichText};
 use horizon_core::ManagedInstall;
 use surge_core::context::{Context as SurgeContext, StorageProvider};
 use surge_core::update::manager::UpdateManager;
-
-use crate::theme;
 
 use super::HorizonApp;
 
@@ -17,7 +15,7 @@ const UPDATE_CHANNEL: &str = "stable";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct AvailableUpdatePrompt {
+pub(super) struct AvailableUpdate {
     pub(super) latest_version: String,
     pub(super) installer_url: String,
     pub(super) error_message: Option<String>,
@@ -25,7 +23,7 @@ pub(super) struct AvailableUpdatePrompt {
 
 #[derive(Debug)]
 pub(super) enum UpdateCheckMessage {
-    Available(AvailableUpdatePrompt),
+    Available(AvailableUpdate),
     Unavailable,
     Error(String),
 }
@@ -43,7 +41,7 @@ impl HorizonApp {
             return;
         }
 
-        if self.surge_update_check_rx.is_some() || self.surge_update_prompt.is_some() {
+        if self.surge_update_check_rx.is_some() || self.surge_available_update.is_some() {
             return;
         }
 
@@ -61,8 +59,8 @@ impl HorizonApp {
         };
 
         match rx.try_recv() {
-            Ok(UpdateCheckMessage::Available(prompt)) => {
-                self.surge_update_prompt = Some(prompt);
+            Ok(UpdateCheckMessage::Available(update)) => {
+                self.surge_available_update = Some(update);
                 self.surge_update_check_rx = None;
             }
             Ok(UpdateCheckMessage::Unavailable) | Err(TryRecvError::Disconnected) => {
@@ -76,52 +74,30 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn render_update_prompt(&mut self, ctx: &Context) {
-        let Some(prompt) = self.surge_update_prompt.as_mut() else {
+    pub(super) fn has_available_update(&self) -> bool {
+        self.surge_available_update.is_some()
+    }
+
+    pub(super) fn available_update_hover_text(&self) -> Option<String> {
+        let update = self.surge_available_update.as_ref()?;
+        let mut text = format!(
+            "Horizon {} is available.\nDownload the latest stable installer.",
+            update.latest_version
+        );
+        if let Some(error_message) = &update.error_message {
+            let _ = write!(text, "\n\nLast download attempt failed: {error_message}");
+        }
+        Some(text)
+    }
+
+    pub(super) fn open_available_update(&mut self) {
+        let Some(update) = self.surge_available_update.as_mut() else {
             return;
         };
 
-        let mut download_installer = false;
-        let mut dismiss = false;
-
-        egui::Window::new("Horizon Update")
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .collapsible(false)
-            .resizable(false)
-            .default_width(420.0)
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new(format!("Horizon {} is available.", prompt.latest_version))
-                        .color(theme::FG)
-                        .strong(),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        "This install was set up by the Surge stable installer. Download the latest installer now?",
-                    )
-                    .color(theme::FG_SOFT),
-                );
-
-                if let Some(error_message) = &prompt.error_message {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(error_message).color(theme::PALETTE_RED));
-                }
-
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    download_installer = ui.button("Download Installer").clicked();
-                    dismiss = ui.button("Later").clicked();
-                });
-            });
-
-        if download_installer {
-            match open_external_url(&prompt.installer_url) {
-                Ok(()) => self.surge_update_prompt = None,
-                Err(error) => prompt.error_message = Some(error),
-            }
-        } else if dismiss {
-            self.surge_update_prompt = None;
+        match open_external_url(&update.installer_url) {
+            Ok(()) => update.error_message = None,
+            Err(error) => update.error_message = Some(error),
         }
     }
 }
@@ -139,7 +115,7 @@ fn spawn_update_check(managed_install: ManagedInstall) -> mpsc::Receiver<UpdateC
     rx
 }
 
-fn check_for_update(managed_install: &ManagedInstall) -> Result<Option<AvailableUpdatePrompt>, String> {
+fn check_for_update(managed_install: &ManagedInstall) -> Result<Option<AvailableUpdate>, String> {
     let Some(rid) = current_release_rid() else {
         return Ok(None);
     };
@@ -181,7 +157,7 @@ fn check_for_update(managed_install: &ManagedInstall) -> Result<Option<Available
         return Ok(None);
     };
 
-    Ok(Some(AvailableUpdatePrompt {
+    Ok(Some(AvailableUpdate {
         latest_version: update_info.latest_version.clone(),
         installer_url: installer_download_url(&managed_install.bucket, &update_info.latest_version, installer_asset)?,
         error_message: None,
