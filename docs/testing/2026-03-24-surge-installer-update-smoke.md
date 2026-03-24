@@ -80,7 +80,7 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable, beta]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: <RID>
 ```
@@ -181,7 +181,7 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id horizon-win-x64 --rid wi
 1. Run the generated installer headless:
 
 ```powershell
-.surge\installers\horizon-win-x64\win-x64\Setup-win-x64-horizon-win-x64-stable-online-gui.exe --headless
+.surge\installers\horizon-win-x64\win-x64\Setup-win-x64-horizon-win-x64-stable-offline-gui.exe --headless
 ```
 
 2. Stop the installer-launched first-run app instance before continuing:
@@ -331,8 +331,8 @@ surge --manifest-path <SMOKE_MANIFEST> promote --app-id <APP_ID> --rid <RID> --v
 1. Run the generated installer headless:
 
 ```bash
-chmod +x .surge/installers/<APP_ID>/<RID>/Setup-<RID>-<APP_ID>-stable-online-gui.bin
-.surge/installers/<APP_ID>/<RID>/Setup-<RID>-<APP_ID>-stable-online-gui.bin --headless
+chmod +x .surge/installers/<APP_ID>/<RID>/Setup-<RID>-<APP_ID>-stable-offline-gui.bin
+.surge/installers/<APP_ID>/<RID>/Setup-<RID>-<APP_ID>-stable-offline-gui.bin --headless
 ```
 
 2. Verify the install tree:

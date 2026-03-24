@@ -12,7 +12,7 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: linux-x64
 
@@ -23,7 +23,7 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: osx-arm64
 
@@ -34,7 +34,7 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: osx-x64
 
@@ -45,6 +45,6 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: win-x64

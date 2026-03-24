@@ -11,7 +11,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  SURGE_VERSION: v1.0.0-beta.1
+  SURGE_VERSION: v1.0.0-beta.3
 
 permissions:
   contents: write
@@ -180,7 +180,7 @@ jobs:
         run: |
           mkdir -p surge-release-assets
           cp \
-            ".surge/installers/${{ matrix.surge_app_id }}/${{ matrix.rid }}/Setup-${{ matrix.rid }}-${{ matrix.surge_app_id }}-stable-online-gui.${{ matrix.surge_installer_ext }}" \
+            ".surge/installers/${{ matrix.surge_app_id }}/${{ matrix.rid }}/Setup-${{ matrix.rid }}-${{ matrix.surge_app_id }}-stable-offline-gui.${{ matrix.surge_installer_ext }}" \
             "surge-release-assets/${{ matrix.surge_installer_asset }}"
       - name: Upload Surge installer asset
         if: ${{ !github.event.release.prerelease }}

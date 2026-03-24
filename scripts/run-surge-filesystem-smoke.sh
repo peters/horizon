@@ -270,7 +270,7 @@ rid=""
 version_a="0.2.0-smoke.1"
 version_b="0.2.0-smoke.2"
 profile="debug"
-toolchain_version="v1.0.0-beta.2"
+toolchain_version="v1.0.0-beta.3"
 surge_path=""
 surge_repo_url=""
 surge_commit_sha=""
@@ -424,7 +424,7 @@ if [ -n "$surge_path" ]; then
   toolchain_source_root="$(cd -- "$surge_path" && pwd)"
 fi
 packages_dir="$repo_root/.surge/packages"
-installer_path="$repo_root/.surge/installers/$app_id/$rid/Setup-$rid-$app_id-stable-online-gui.$installer_ext"
+installer_path="$repo_root/.surge/installers/$app_id/$rid/Setup-$rid-$app_id-stable-offline-gui.$installer_ext"
 app_exe_posix="$install_root/app/$main_exe"
 app_exe_native="$(to_native_path "$app_exe_posix")"
 install_root_native="$(to_native_path "$install_root")"
@@ -516,7 +516,7 @@ apps:
     icon: assets/icons/icon-512.png
     channels: [stable, beta]
     shortcuts: [desktop, start_menu]
-    installers: [online-gui]
+    installers: [offline-gui]
     target:
       rid: ${rid}
 EOF
