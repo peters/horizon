@@ -22,6 +22,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use app::HorizonApp;
+use std::sync::Arc;
+
 use eframe::{egui_wgpu, wgpu};
 use horizon_core::{
     Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser, StartupDecision,
@@ -73,6 +75,10 @@ fn main() -> eframe::Result {
         wgpu_options: egui_wgpu::WgpuConfiguration {
             present_mode: wgpu::PresentMode::AutoNoVsync,
             desired_maximum_frame_latency: Some(1),
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                native_adapter_selector: Some(Arc::new(select_adapter)),
+                ..Default::default()
+            }),
             ..Default::default()
         },
         ..Default::default()
@@ -96,6 +102,62 @@ fn main() -> eframe::Result {
         }),
         observed_keyboard_inputs,
     )
+}
+
+/// Select a wgpu adapter that can actually present to the given surface.
+///
+/// On VMs and headless machines the default DX12 adapter may enumerate
+/// successfully but fail at `Surface::configure` because the Hyper-V
+/// Video driver does not expose a usable swapchain.  We score each
+/// adapter by device type (discrete > integrated > software > other)
+/// and only consider adapters whose surface capabilities include at
+/// least one texture format — which rules out the broken DX12 path
+/// on virtual display adapters.
+fn select_adapter(adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>) -> Result<wgpu::Adapter, String> {
+    let mut candidates: Vec<(&wgpu::Adapter, u8)> = adapters
+        .iter()
+        .filter(|adapter| {
+            let Some(surface) = surface else {
+                return true;
+            };
+            let caps = surface.get_capabilities(adapter);
+            let usable = !caps.formats.is_empty();
+            if !usable {
+                let info = adapter.get_info();
+                tracing::warn!(
+                    adapter = %info.name,
+                    backend = ?info.backend,
+                    "skipping adapter: surface reports no usable formats"
+                );
+            }
+            usable
+        })
+        .map(|adapter| {
+            let score = match adapter.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 4,
+                wgpu::DeviceType::IntegratedGpu => 3,
+                wgpu::DeviceType::VirtualGpu => 2,
+                wgpu::DeviceType::Cpu => 1,
+                wgpu::DeviceType::Other => 0,
+            };
+            (adapter, score)
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    if let Some((best, _)) = candidates.into_iter().next() {
+        let info = best.get_info();
+        tracing::info!(
+            adapter = %info.name,
+            backend = ?info.backend,
+            device_type = ?info.device_type,
+            "selected graphics adapter"
+        );
+        Ok(best.clone())
+    } else {
+        Err("no graphics adapter with a usable surface was found".to_string())
+    }
 }
 
 fn log_graphics_adapter(cc: &eframe::CreationContext<'_>) {
