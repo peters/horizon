@@ -228,17 +228,24 @@ launch_installed_app() {
   sleep 5
   if ! kill -0 "$launch_pid" >/dev/null 2>&1; then
     printf 'Installed Horizon exited immediately.\n' >&2
-    wait "$launch_pid" || true
+    wait "$launch_pid" >/dev/null 2>&1 || true
     return 1
   fi
   kill "$launch_pid" >/dev/null 2>&1 || true
-  wait "$launch_pid" || true
+  wait "$launch_pid" >/dev/null 2>&1 || true
 }
 
 stop_managed_install_processes() {
   local install_root_native="$1"
 
   if ! is_windows_shell; then
+    if command -v pgrep >/dev/null 2>&1; then
+      while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        kill "$pid" >/dev/null 2>&1 || true
+      done < <(pgrep -f -- "$install_root_native" || true)
+      sleep 2
+    fi
     return 0
   fi
 
@@ -259,10 +266,16 @@ stop_managed_install_processes() {
 "Start-Sleep -Seconds 2"
 }
 
+cargo_global_args=()
+
 run_cargo() {
   (
     cd "$repo_root"
-    cargo "${cargo_global_args[@]}" "$@"
+    if [ "${#cargo_global_args[@]}" -gt 0 ]; then
+      cargo "${cargo_global_args[@]}" "$@"
+    else
+      cargo "$@"
+    fi
   )
 }
 
