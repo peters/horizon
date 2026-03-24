@@ -201,6 +201,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
   Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile C:\horizon-surge-smoke\vs_BuildTools.exe
   C:\horizon-surge-smoke\vs_BuildTools.exe --quiet --wait --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621
   ```
+- **For iterative Windows smoke work, keep a warm VM and reuse it**. A reused VM avoids Azure provisioning, first boot, and the Build Tools install. If the helper is given an existing `--resource-group` and `--vm-name`, it should start and reuse that VM instead of creating a new one
 - **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
   ```powershell
   winget install Git.Git --accept-source-agreements --accept-package-agreements

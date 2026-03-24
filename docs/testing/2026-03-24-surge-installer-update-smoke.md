@@ -54,6 +54,7 @@ Important implementation notes from the Azure Windows smoke:
 - on the tested Azure image, Git and Git LFS are already present, but `C:\BuildTools\Common7\Tools\VsDevCmd.bat` is not; install Visual Studio Build Tools before compiling
 - do not rely on the user's Startup folder alone to kick off the smoke, even when autologon and `explorer.exe` are both present; start the guest runner with a scheduled task that uses `LogonType Interactive`
 - the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
+- if you are iterating on the Windows smoke, keep the VM warm and reuse it; that avoids the slowest steps: Azure provisioning, first boot, and Build Tools installation
 
 ## Temporary Manifest Template
 
@@ -117,6 +118,13 @@ Useful overrides:
 - `--branch <name>` and `--commit-sha <sha>` pin the exact guest checkout
 - `--repo-url <https-url>` points the guest at a staging fork instead of `origin`
 - `--location <region>` and `--size <vm-size>` let you work around regional quota shortages
+
+Warm-VM workflow:
+
+- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources`
+- rerun: pass the same `--resource-group`, `--vm-name`, and `--admin-password`
+- when those names point at an existing VM, the helper now starts and reuses it instead of provisioning a fresh machine
+- reused VMs are kept automatically, because destroying them defeats the purpose of the warm cache
 
 The Azure helper performs the same local-filesystem install/update smoke as the Git Bash one-liner above. It is the fastest repeatable path when you do not already have a Windows machine with Rust, MSVC, and Git Bash configured.
 

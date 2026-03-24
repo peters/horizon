@@ -3,12 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Run the full Surge filesystem installer/update smoke on a disposable Azure Windows 11 VM.
+Run the full Surge filesystem installer/update smoke on an Azure Windows 11 VM.
 
 This provisions a Windows VM, installs MSVC build tools if needed, stages the
 local-filesystem smoke runner, forces one autologon to create a real desktop
 session, launches the smoke through an interactive scheduled task, and then
 polls the guest-side logs until the run succeeds or fails.
+
+If `--resource-group` and `--vm-name` point at an existing VM, the script reuses
+that machine instead of provisioning a new one. Reused VMs are always kept.
 
 Usage:
   run-surge-azure-smoke.sh \
@@ -69,6 +72,26 @@ azure_run_powershell() {
     "$@" \
     --query "value[0].message" \
     -o tsv
+}
+
+azure_group_exists() {
+  [ "$(az group exists --name "$resource_group" -o tsv 2>/dev/null || true)" = "true" ]
+}
+
+azure_vm_exists() {
+  az vm show \
+    --resource-group "$resource_group" \
+    --name "$vm_name" \
+    --query id \
+    -o tsv >/dev/null 2>&1
+}
+
+vm_power_state() {
+  az vm get-instance-view \
+    --resource-group "$resource_group" \
+    --name "$vm_name" \
+    --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus | [0]" \
+    -o tsv 2>/dev/null || true
 }
 
 wait_for_vm_agent_ready() {
@@ -246,6 +269,16 @@ $commitSha = '__COMMIT_SHA__'
 $rustupUrl = 'https://win.rustup.rs/x86_64'
 $cmdPath = Join-Path $smokeRoot 'run-smoke-inner.cmd'
 
+function Invoke-CmdLogged {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command
+    )
+
+    & cmd.exe /d /c $Command 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
+    return $LASTEXITCODE
+}
+
 Remove-Item -LiteralPath $errorPath, $streamPath -Force -ErrorAction SilentlyContinue
 Set-Content -LiteralPath $statePath -Value 'running'
 
@@ -267,37 +300,37 @@ try {
     }
 
     if (-not (Test-Path $repoDir)) {
-        & $gitExe clone --branch $branch --single-branch $repoUrl $repoDir 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git clone failed with exit code $LASTEXITCODE"
+        $gitCloneExit = Invoke-CmdLogged "`"$gitExe`" clone --branch `"$branch`" --single-branch `"$repoUrl`" `"$repoDir`""
+        if ($gitCloneExit -ne 0) {
+            throw "git clone failed with exit code $gitCloneExit"
         }
     }
 
     Push-Location $repoDir
     try {
-        & $gitExe remote set-url origin $repoUrl 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git remote set-url failed with exit code $LASTEXITCODE"
+        $gitRemoteExit = Invoke-CmdLogged "`"$gitExe`" remote set-url origin `"$repoUrl`""
+        if ($gitRemoteExit -ne 0) {
+            throw "git remote set-url failed with exit code $gitRemoteExit"
         }
-        & $gitExe fetch origin $branch 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git fetch failed with exit code $LASTEXITCODE"
+        $gitFetchExit = Invoke-CmdLogged "`"$gitExe`" fetch origin `"$branch`""
+        if ($gitFetchExit -ne 0) {
+            throw "git fetch failed with exit code $gitFetchExit"
         }
-        & $gitExe checkout --force $branch 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git checkout failed with exit code $LASTEXITCODE"
+        $gitCheckoutExit = Invoke-CmdLogged "`"$gitExe`" checkout --force `"$branch`""
+        if ($gitCheckoutExit -ne 0) {
+            throw "git checkout failed with exit code $gitCheckoutExit"
         }
-        & $gitExe reset --hard $commitSha 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git reset failed with exit code $LASTEXITCODE"
+        $gitResetExit = Invoke-CmdLogged "`"$gitExe`" reset --hard `"$commitSha`""
+        if ($gitResetExit -ne 0) {
+            throw "git reset failed with exit code $gitResetExit"
         }
-        & $gitExe lfs install --local 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git lfs install failed with exit code $LASTEXITCODE"
+        $gitLfsInstallExit = Invoke-CmdLogged "`"$gitExe`" lfs install --local"
+        if ($gitLfsInstallExit -ne 0) {
+            throw "git lfs install failed with exit code $gitLfsInstallExit"
         }
-        & $gitExe lfs pull 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
-        if ($LASTEXITCODE -ne 0) {
-            throw "git lfs pull failed with exit code $LASTEXITCODE"
+        $gitLfsPullExit = Invoke-CmdLogged "`"$gitExe`" lfs pull"
+        if ($gitLfsPullExit -ne 0) {
+            throw "git lfs pull failed with exit code $gitLfsPullExit"
         }
     }
     finally {
@@ -339,49 +372,6 @@ Write-Output "STAGED"
 Write-Output "SMOKE_ROOT=$smokeRoot"
 Write-Output "RUNNER=$runnerPath"
 Write-Output "AUTOLOGON_USER=$AdminUsername"
-EOF
-}
-
-create_session_check_script() {
-  local session_path="$1"
-
-  cat >"$session_path" <<'EOF'
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$AdminUsername
-)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-$queryOutput = query user 2>$null | Out-String -Width 200
-$queryLines = $queryOutput.TrimEnd("`r", "`n")
-if ($queryLines) {
-    $queryLines -split "`r?`n" | ForEach-Object {
-        Write-Output "QUERY=$_"
-    }
-}
-
-$sessionReady = $false
-if ($queryOutput -match "(?m)^\s*$([regex]::Escape($AdminUsername))\s+console\s+\d+\s+Active") {
-    $sessionReady = $true
-}
-
-$userName = "$env:COMPUTERNAME\$AdminUsername"
-$explorer = Get-Process -Name explorer -IncludeUserName -ErrorAction SilentlyContinue |
-    Where-Object { $_.UserName -eq $userName }
-if ($explorer) {
-    $explorer | Select-Object Id, SessionId, UserName | ForEach-Object {
-        Write-Output "EXPLORER=id=$($_.Id) session_id=$($_.SessionId) user=$($_.UserName)"
-    }
-}
-
-if ($sessionReady -and $explorer) {
-    Write-Output "SESSION_READY=true"
-}
-else {
-    Write-Output "SESSION_READY=false"
-}
 EOF
 }
 
@@ -524,7 +514,7 @@ computer_name=""
 admin_username="azureuser"
 admin_password="CodexSurge!${RANDOM}${RANDOM}${RANDOM}Aa1"
 poll_interval_seconds=30
-session_timeout_seconds=600
+session_timeout_seconds=60
 smoke_timeout_seconds=7200
 keep_resources=false
 
@@ -629,6 +619,7 @@ fi
 
 tmp_dir="$(mktemp -d)"
 resource_group_created=false
+reused_existing_vm=false
 public_ip=""
 vm_agent_status=""
 final_logs_path="$(mktemp "/tmp/horizon-surge-azure-smoke-logs.XXXXXX.txt")"
@@ -636,8 +627,9 @@ final_logs_path="$(mktemp "/tmp/horizon-surge-azure-smoke-logs.XXXXXX.txt")"
 cleanup() {
   rm -rf "$tmp_dir"
 
-  if [ "$keep_resources" = true ]; then
+  if [ "$keep_resources" = true ] || [ "$reused_existing_vm" = true ]; then
     printf 'Keeping Azure resource group %s\n' "$resource_group" >&2
+    printf 'Keeping Azure VM %s\n' "$vm_name" >&2
     printf 'Guest login: %s@%s\n' "$admin_username" "$public_ip" >&2
     return
   fi
@@ -651,37 +643,50 @@ trap cleanup EXIT
 
 buildtools_script="${tmp_dir}/buildtools.ps1"
 stage_script="${tmp_dir}/stage.ps1"
-session_script="${tmp_dir}/session.ps1"
 start_task_script="${tmp_dir}/start-task.ps1"
 poll_script="${tmp_dir}/poll.ps1"
 fetch_logs_script="${tmp_dir}/fetch-logs.ps1"
 
 create_buildtools_script "$buildtools_script"
 create_stage_script "$stage_script"
-create_session_check_script "$session_script"
 create_start_task_script "$start_task_script"
 create_poll_script "$poll_script"
 create_fetch_logs_script "$fetch_logs_script"
 
 printf 'Using repo %s\n' "$repo_url"
 printf 'Using branch %s at %s\n' "$branch" "$commit_sha"
-printf 'Creating Azure resource group %s in %s\n' "$resource_group" "$location"
-az group create --name "$resource_group" --location "$location" -o none
-resource_group_created=true
 
-printf 'Creating Windows 11 VM %s (%s, %s)\n' "$vm_name" "$image" "$size"
-az vm create \
-  --resource-group "$resource_group" \
-  --name "$vm_name" \
-  --computer-name "$computer_name" \
-  --image "$image" \
-  --size "$size" \
-  --admin-username "$admin_username" \
-  --admin-password "$admin_password" \
-  --authentication-type password \
-  --nsg-rule RDP \
-  --no-wait \
-  -o none
+if azure_vm_exists; then
+  reused_existing_vm=true
+  current_power_state="$(vm_power_state)"
+  printf 'Reusing existing Windows 11 VM %s (%s)\n' "$vm_name" "${current_power_state:-unknown state}"
+  if [ "$current_power_state" != "VM running" ]; then
+    printf 'Starting existing Windows 11 VM %s\n' "$vm_name"
+    az vm start --resource-group "$resource_group" --name "$vm_name" -o none
+  fi
+else
+  if ! azure_group_exists; then
+    printf 'Creating Azure resource group %s in %s\n' "$resource_group" "$location"
+    az group create --name "$resource_group" --location "$location" -o none
+    resource_group_created=true
+  else
+    printf 'Using existing Azure resource group %s\n' "$resource_group"
+  fi
+
+  printf 'Creating Windows 11 VM %s (%s, %s)\n' "$vm_name" "$image" "$size"
+  az vm create \
+    --resource-group "$resource_group" \
+    --name "$vm_name" \
+    --computer-name "$computer_name" \
+    --image "$image" \
+    --size "$size" \
+    --admin-username "$admin_username" \
+    --admin-password "$admin_password" \
+    --authentication-type password \
+    --nsg-rule RDP \
+    --no-wait \
+    -o none
+fi
 
 printf 'Waiting for the VM public IP address\n'
 if ! wait_for_public_ip 40 15; then
@@ -709,34 +714,44 @@ azure_run_powershell "$stage_script" \
   "CommitSha=${commit_sha}" \
   >/dev/null
 
-printf 'Restarting the VM to trigger autologon\n'
-az vm restart --resource-group "$resource_group" --name "$vm_name" -o none
+if [ "$reused_existing_vm" = true ] && [ "${current_power_state:-}" = "VM running" ]; then
+  printf 'Warm VM already running; skipping reboot and starting the interactive task directly\n'
+else
+  printf 'Restarting the VM to trigger autologon\n'
+  az vm restart --resource-group "$resource_group" --name "$vm_name" -o none
 
-printf 'Waiting for Azure VM agent readiness after restart\n'
-if ! wait_for_vm_agent_ready 40 15; then
-  printf 'Azure VM agent never reached Ready after restart for %s.\n' "$vm_name" >&2
-  exit 1
-fi
-
-printf 'Waiting for the interactive console session\n'
-session_deadline=$((SECONDS + session_timeout_seconds))
-while [ "$SECONDS" -lt "$session_deadline" ]; do
-  session_output="$(azure_run_powershell "$session_script" --parameters "AdminUsername=${admin_username}" 2>/dev/null || true)"
-  if printf '%s\n' "$session_output" | grep -qx 'SESSION_READY=true'; then
-    break
+  printf 'Waiting for Azure VM agent readiness after restart\n'
+  if ! wait_for_vm_agent_ready 40 15; then
+    printf 'Azure VM agent never reached Ready after restart for %s.\n' "$vm_name" >&2
+    exit 1
   fi
-  sleep 15
-done
-
-if ! printf '%s\n' "$session_output" | grep -qx 'SESSION_READY=true'; then
-  printf 'Timed out waiting for the interactive console session.\n' >&2
-  azure_run_powershell "$fetch_logs_script" >"$final_logs_path" || true
-  cat "$final_logs_path" >&2
-  exit 1
+  printf 'Waiting %s seconds for autologon to settle\n' "$session_timeout_seconds"
+  sleep "$session_timeout_seconds"
 fi
 
 printf 'Starting the interactive scheduled-task smoke runner\n'
-printf '%s\n' "$(azure_run_powershell "$start_task_script" --parameters "AdminUsername=${admin_username}")"
+start_output="$(azure_run_powershell "$start_task_script" --parameters "AdminUsername=${admin_username}")"
+printf '%s\n' "$start_output"
+initial_task_state="$(printf '%s\n' "$start_output" | sed -n 's/^TASK_STATE=//p' | tail -n 1)"
+initial_task_result="$(printf '%s\n' "$start_output" | sed -n 's/^TASK_RESULT=//p' | tail -n 1)"
+
+if [ "$initial_task_state" = "Ready" ] && [ "$initial_task_result" = "267011" ]; then
+  printf 'Interactive task has not run yet; restarting once to force autologon and retry\n'
+  az vm restart --resource-group "$resource_group" --name "$vm_name" -o none
+
+  printf 'Waiting for Azure VM agent readiness after fallback restart\n'
+  if ! wait_for_vm_agent_ready 40 15; then
+    printf 'Azure VM agent never reached Ready after fallback restart for %s.\n' "$vm_name" >&2
+    exit 1
+  fi
+
+  printf 'Waiting %s seconds for autologon to settle after fallback restart\n' "$session_timeout_seconds"
+  sleep "$session_timeout_seconds"
+
+  printf 'Retrying the interactive scheduled-task smoke runner\n'
+  start_output="$(azure_run_powershell "$start_task_script" --parameters "AdminUsername=${admin_username}")"
+  printf '%s\n' "$start_output"
+fi
 
 deadline=$((SECONDS + smoke_timeout_seconds))
 last_state=""
