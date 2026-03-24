@@ -52,15 +52,7 @@ git clone \
   https://github.com/fintermobilityas/surge.git \
   "$work_root"
 
-(cd "$work_root" && cargo build --release --package surge-cli --package surge-supervisor --package surge-installer --package surge-installer-ui)
-
-mkdir -p "$output_dir"
-
-binary_ext=""
-if [[ "$OS" == "Windows_NT" ]]; then
-  binary_ext=".exe"
-fi
-
-for binary in surge surge-supervisor surge-installer surge-installer-ui; do
-  cp "$work_root/target/release/${binary}${binary_ext}" "$output_dir/${binary}${binary_ext}"
-done
+(
+  cd "$work_root"
+  ./scripts/stage-toolchain-artifact.sh --output "$output_dir" --with-gui
+)

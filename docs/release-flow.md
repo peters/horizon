@@ -5,7 +5,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which publishes to crates.io and uploads the platform binaries to the same GitHub Release.
-- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag, and update the `peters/homebrew-horizon` tap.
+- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
 
 ## Source Of Truth
 
@@ -67,6 +67,7 @@ Then it:
 - uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
 - for stable releases, publishes the Surge release index and package artifacts to the dedicated `surge` GitHub Release tag using the `stable` channel
 - for stable releases only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
+- for stable releases only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
 ## CLI Alternative
 
@@ -102,5 +103,51 @@ Stable-release packaging assumes:
 - the stable release uploads the four raw assets plus the four installer assets before the tap update runs
 - the Surge storage backend uses the dedicated GitHub Release tag `surge` in `peters/horizon`
 - `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
+- `WINGET_PKGS_TOKEN` is configured in the `peters/horizon` repository secrets with write access to the `peters/winget-pkgs` fork
+- `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
-If a stable release is missing one of those assets or the tap token secret, the release workflow fails instead of publishing a partial Homebrew or Surge update.
+WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
+
+If a stable release is missing one of those assets, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
+
+## Cross-Platform Installer And Update Smoke
+
+Before trusting a changed Surge packaging/update flow, run the Windows + macOS local-filesystem smoke plan in [docs/testing/2026-03-24-surge-installer-update-smoke.md](docs/testing/2026-03-24-surge-installer-update-smoke.md). That plan validates:
+
+- installer creation on the target OS
+- headless installer execution into the normal user install root
+- runtime manifest contents and shortcut creation
+- beta-to-stable promotion behavior using a local filesystem backend
+- package-based update application via `UpdateManager::download_and_apply`
+
+Use the hosted WinGet smoke below only after the local filesystem path is green.
+
+## Interactive WinGet Smoke
+
+For full install, upgrade, launch, and uninstall validation on a disposable Windows 11 VM, use `scripts/run-winget-azure-smoke.sh`.
+
+The runner:
+
+- creates a Windows 11 VM with `az`
+- stages the local WinGet manifest renderer and smoke script onto the VM
+- opens an RDP session so the smoke runs from a PowerShell window in the logged-in desktop session
+- polls smoke status and collects the final logs
+- deletes the Azure resource group by default when it exits
+
+Example:
+
+```bash
+./scripts/run-winget-azure-smoke.sh \
+  --install-version 0.1.1 \
+  --install-sha 23fda14bc79aaca79e3a5fbd52c3501c11b4971d69b7a28f2f69bba94bd566e1 \
+  --install-release-date 2026-03-21 \
+  --upgrade-version 0.2.0 \
+  --upgrade-sha b7c1632f077067106883302b6936e720998ab53a2f5331511306bff8280fe5d5 \
+  --upgrade-release-date 2026-03-23
+```
+
+Host prerequisites:
+
+- `az` authenticated for the target subscription
+- `xfreerdp` available on `PATH`
+- `xvfb-run` available when running headless without an existing `DISPLAY`

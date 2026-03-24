@@ -191,6 +191,29 @@ When cutting a new release, generate concise release notes from the commits sinc
 - Validate the exact branch or commit that will be pushed. If you use a merge-test worktree or disposable checkout for diagnosis, rerun the decisive smoke pass in the final branch/worktree before concluding the PR is fixed
 - Window titles may lag behind state changes or differ across restore paths. When automating detached-window tests, identify the root and detached windows by PID plus non-root window membership rather than by title string alone when possible
 
+### Windows Smoke Testing (Azure VMs / CI)
+
+When creating an Azure VM for smoke testing, use **Standard_F8s_v2** (8 vCPUs, 16GB RAM, compute-optimized) as the default VM size. **Generate a fresh random password** for each VM — never hard-code or commit credentials to the repo.
+
+- **Add an SSH NSG rule** alongside RDP at VM creation, restricted to the current IP. Once SSH is confirmed working, switch all subsequent commands to SSH — it is faster, more reliable, and supports SCP file transfer
+- **Install prerequisites via winget** from the user's RDP/SSH session (winget is per-user, not available from SYSTEM):
+  ```powershell
+  winget install Git.Git --accept-source-agreements --accept-package-agreements
+  winget install GitHub.GitLFS --accept-source-agreements --accept-package-agreements
+  winget install Microsoft.OpenSSH.Beta --accept-source-agreements --accept-package-agreements
+  winget install Rustlang.Rustup --accept-source-agreements --accept-package-agreements
+  winget install --id Microsoft.VisualStudio.2022.Community --source winget --force --override "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --addProductLang En-us"
+  ```
+- **Fix the OpenSSH firewall rule profile** — `Add-WindowsCapability` creates a rule for `Private` only, but Azure VMs use `Public`:
+  ```powershell
+  Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -Profile Any
+  ```
+- **Use debug builds** (`cargo build`) for smoke testing, not release — much faster compilation, sufficient for validating launch and crash behavior
+- **`az vm run-command` runs as SYSTEM** — no desktop, no winget, single-command-at-a-time bottleneck. Use only for initial bootstrap (SSH setup, firewall rules). Prefer SSH for all iterative work
+- **Git LFS files are not included in GitHub zip downloads** — use `git lfs pull` or download from `https://github.com/<owner>/<repo>/raw/<branch>/<path>`
+- **Hyper-V Video + WARP** are the only GPU adapters on standard Azure VMs. GUI launch tests must run in an interactive user session (scheduled task with `Interactive` logon or RDP)
+- **When SCP-ing manifest directories**, copy individual files — `scp -r` can create nested subdirectories that winget rejects with "Subdirectory not supported in manifest path"
+
 ### Performance Profiling
 
 - Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket
