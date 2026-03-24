@@ -114,6 +114,40 @@ path_exists() {
   [ -e "$1" ]
 }
 
+configure_windows_linker() {
+  local candidates
+  local candidate
+  local linker_path=""
+
+  if ! is_windows_shell; then
+    return 0
+  fi
+
+  candidates="$(cmd.exe /d /c "where link.exe" 2>/dev/null | tr -d '\r' || true)"
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    case "$candidate" in
+      *'Git\\usr\\bin\\link.exe'|*'Git/usr/bin/link.exe')
+        continue
+        ;;
+    esac
+    linker_path="$candidate"
+    break
+  done <<<"$candidates"
+
+  if [ -z "$linker_path" ]; then
+    printf 'Failed to locate MSVC link.exe. Run the Windows smoke from a Visual Studio developer shell.\n' >&2
+    exit 1
+  fi
+
+  if command -v cygpath >/dev/null 2>&1; then
+    linker_path="$(cygpath -m "$linker_path")"
+  fi
+
+  export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="$linker_path"
+  printf 'Using Windows linker %s\n' "$CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
+}
+
 run_helper() {
   local expect="$1"
   shift
@@ -231,6 +265,10 @@ require_command git
 
 if [ -z "$rid" ]; then
   rid="$(detect_rid)"
+fi
+
+if [ "$rid" = "win-x64" ]; then
+  configure_windows_linker
 fi
 
 case "$rid" in

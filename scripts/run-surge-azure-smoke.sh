@@ -243,7 +243,7 @@ $innerCmd = @"
 @echo off
 call "$vsDevCmd" -arch=amd64 -host_arch=amd64
 if errorlevel 1 exit /b 1
-set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\Git\bin;%PATH%"
+set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\Git\cmd;%PATH%"
 "$gitBash" -lc "cd /c/horizon-surge-smoke/repo && ./scripts/run-surge-filesystem-smoke.sh --rid win-x64"
 exit /b %ERRORLEVEL%
 "@
