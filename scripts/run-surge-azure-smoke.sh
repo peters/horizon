@@ -64,14 +64,39 @@ normalize_repo_url() {
 azure_run_powershell() {
   local script_path="$1"
   shift
-  az vm run-command invoke \
-    --resource-group "$resource_group" \
-    --name "$vm_name" \
-    --command-id RunPowerShellScript \
-    --scripts @"$script_path" \
-    "$@" \
-    --query "value[0].message" \
-    -o tsv
+  local attempt
+  local output
+  local status
+
+  for attempt in $(seq 1 12); do
+    set +e
+    output="$(az vm run-command invoke \
+      --resource-group "$resource_group" \
+      --name "$vm_name" \
+      --command-id RunPowerShellScript \
+      --scripts @"$script_path" \
+      "$@" \
+      --query "value[0].message" \
+      -o tsv 2>&1)"
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+
+    if printf '%s\n' "$output" | grep -Fq "Run command extension execution is in progress"; then
+      if [ "$attempt" -lt 12 ]; then
+        printf 'Azure run-command busy; retrying (%s/12)\n' "$attempt" >&2
+        sleep 10
+        continue
+      fi
+    fi
+
+    printf '%s\n' "$output" >&2
+    return "$status"
+  done
 }
 
 azure_group_exists() {
