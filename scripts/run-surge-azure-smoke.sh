@@ -264,7 +264,9 @@ if (-not (Test-Path $vsDevCmd)) {
 $staleProcesses = Get-CimInstance Win32_Process | Where-Object {
     $_.ProcessId -ne $PID -and $_.CommandLine -and (
         $_.CommandLine -like '*horizon-surge-smoke*' -or
-        $_.CommandLine -like '*run-smoke*'
+        $_.CommandLine -like '*run-smoke*' -or
+        $_.CommandLine -like '*run-surge-filesystem-smoke.sh*' -or
+        $_.CommandLine -like '*where link.exe*'
     )
 }
 
