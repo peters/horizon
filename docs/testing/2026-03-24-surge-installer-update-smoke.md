@@ -104,7 +104,7 @@ Values:
 Run this from Git Bash in the repo root:
 
 ```bash
-./scripts/run-surge-filesystem-smoke.sh --rid win-x64 --surge-path ../surge
+./scripts/run-surge-filesystem-smoke.sh --rid win-x64
 ```
 
 ### Azure One-Liner
@@ -112,9 +112,7 @@ Run this from Git Bash in the repo root:
 Run this from a Linux or macOS host in the repo root after pushing the branch/commit you want the guest to build:
 
 ```bash
-./scripts/run-surge-azure-smoke.sh \
-  --surge-repo-url https://github.com/fintermobilityas/surge.git \
-  --surge-commit-sha 52287c163f2e0c8c82d405268c659d6896b29b04
+./scripts/run-surge-azure-smoke.sh
 ```
 
 Useful overrides:
@@ -122,12 +120,12 @@ Useful overrides:
 - `--keep-resources` keeps the VM and resource group for manual inspection
 - `--branch <name>` and `--commit-sha <sha>` pin the exact guest checkout
 - `--repo-url <https-url>` points the guest at a staging fork instead of `origin`
-- `--surge-repo-url <https-url>` and `--surge-commit-sha <sha>` pin the exact unmerged Surge source the guest should build
+- `--surge-repo-url <https-url>` and `--surge-commit-sha <sha>` pin the exact unmerged Surge source the guest should build before it is released
 - `--location <region>` and `--size <vm-size>` let you work around regional quota shortages
 
 Warm-VM workflow:
 
-- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha 52287c163f2e0c8c82d405268c659d6896b29b04`
+- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources`
 - rerun: pass the same `--resource-group`, `--vm-name`, and `--admin-password`
 - when those names point at an existing VM, the helper now starts and reuses it instead of provisioning a fresh machine
 - reused VMs are kept automatically, because destroying them defeats the purpose of the warm cache
@@ -278,7 +276,7 @@ Run this once per architecture you ship, on native hardware or a matching VM:
 Run this from the repo root:
 
 ```bash
-./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge
+./scripts/run-surge-filesystem-smoke.sh
 ```
 
 ### Build And Pack
