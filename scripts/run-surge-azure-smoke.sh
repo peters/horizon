@@ -338,7 +338,7 @@ function Invoke-CmdLogged {
         [string]$Command
     )
 
-    & cmd.exe /d /c $Command 2>&1 | Tee-Object -FilePath $streamPath -Append | Out-Default
+    & cmd.exe /d /c "$Command 2>&1" | Tee-Object -FilePath $streamPath -Append | Out-Default
     return $LASTEXITCODE
 }
 
