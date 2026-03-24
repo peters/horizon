@@ -30,6 +30,16 @@ require_command() {
   fi
 }
 
+output_contains() {
+  local needle="$1"
+
+  if command -v rg >/dev/null 2>&1; then
+    rg -q --fixed-strings "$needle"
+  else
+    grep -Fq -- "$needle"
+  fi
+}
+
 current_os() {
   uname -s
 }
@@ -114,13 +124,13 @@ run_helper() {
 
   case "$expect" in
     no-update)
-      printf '%s\n' "$output" | rg -q "no update available:"
+      printf '%s\n' "$output" | output_contains "no update available:"
       ;;
     applied)
-      printf '%s\n' "$output" | rg -q "update applied:"
+      printf '%s\n' "$output" | output_contains "update applied:"
       ;;
     launched)
-      printf '%s\n' "$output" | rg -q "update available:"
+      printf '%s\n' "$output" | output_contains "update available:"
       ;;
     *)
       printf 'Unknown expectation: %s\n' "$expect" >&2
@@ -218,7 +228,6 @@ done
 
 require_command cargo
 require_command git
-require_command rg
 
 if [ -z "$rid" ]; then
   rid="$(detect_rid)"
