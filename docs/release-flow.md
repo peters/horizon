@@ -126,6 +126,8 @@ The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke
 - `0.2.0-smoke.1` must be installed before `0.2.0-smoke.2` is packed, because later packs replace the stable installer artifact
 - `surge pack` and `surge push` need explicit artifact/package directories when the temporary manifest lives outside the repo root
 
+For a disposable Windows host from Linux or macOS, use `./scripts/run-surge-azure-smoke.sh`. It provisions a Windows 11 VM, installs Build Tools when needed, forces one autologon to create the desktop session, then launches the smoke through an interactive scheduled task.
+
 Use the hosted WinGet smoke below only after the local filesystem path is green.
 
 Hosted GitHub Releases smoke is intended to run from a separate public staging repo. In that setup:

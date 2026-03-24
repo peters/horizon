@@ -23,6 +23,8 @@ Horizon only shows its in-app update prompt for `github_releases` + `stable` man
 
 The fastest supported path on macOS or Windows is the wrapper at [run-surge-filesystem-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-filesystem-smoke.sh). It auto-detects the current target, stages the icon asset that `surge pack` requires, installs `0.2.0-smoke.1`, then packs/promotes/applies `0.2.0-smoke.2`.
 
+For Windows smoke from a Linux or macOS host, use [run-surge-azure-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-surge-azure-smoke.sh). It provisions a disposable Azure Windows 11 VM, installs Build Tools if they are missing, forces one autologon to get a real desktop session, then launches the smoke through an interactive scheduled task.
+
 ## Shared Setup
 
 Run these steps on the target OS you are validating.
@@ -45,6 +47,13 @@ Important implementation notes from the local smoke:
 - keep `channels: [stable, beta]` in that order, because Surge binds published installers to the app's default channel
 - do not pack `0.2.0-smoke.2` until after `0.2.0-smoke.1` is installed, because the stable installer filename is reused and later packs replace the earlier installer
 - if the temporary manifest lives outside the repo root, pass explicit `--artifacts-dir` to `surge pack` and `--packages-dir` to `surge push`
+
+Important implementation notes from the Azure Windows smoke:
+
+- use `git lfs pull` after cloning on the guest, because Horizon's icons and fonts are stored in Git LFS and `surge pack` depends on them
+- on the tested Azure image, Git and Git LFS are already present, but `C:\BuildTools\Common7\Tools\VsDevCmd.bat` is not; install Visual Studio Build Tools before compiling
+- do not rely on the user's Startup folder alone to kick off the smoke, even when autologon and `explorer.exe` are both present; start the guest runner with a scheduled task that uses `LogonType Interactive`
+- the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
 
 ## Temporary Manifest Template
 
@@ -93,6 +102,23 @@ Run this from Git Bash in the repo root:
 ```bash
 ./scripts/run-surge-filesystem-smoke.sh --rid win-x64
 ```
+
+### Azure One-Liner
+
+Run this from a Linux or macOS host in the repo root after pushing the branch/commit you want the guest to build:
+
+```bash
+./scripts/run-surge-azure-smoke.sh
+```
+
+Useful overrides:
+
+- `--keep-resources` keeps the VM and resource group for manual inspection
+- `--branch <name>` and `--commit-sha <sha>` pin the exact guest checkout
+- `--repo-url <https-url>` points the guest at a staging fork instead of `origin`
+- `--location <region>` and `--size <vm-size>` let you work around regional quota shortages
+
+The Azure helper performs the same local-filesystem install/update smoke as the Git Bash one-liner above. It is the fastest repeatable path when you do not already have a Windows machine with Rust, MSVC, and Git Bash configured.
 
 ### Build And Pack
 

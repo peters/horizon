@@ -193,10 +193,15 @@ When cutting a new release, generate concise release notes from the commits sinc
 
 ### Windows Smoke Testing (Azure VMs / CI)
 
-When creating an Azure VM for smoke testing, use **Standard_F8s_v2** (8 vCPUs, 16GB RAM, compute-optimized) as the default VM size. **Generate a fresh random password** for each VM — never hard-code or commit credentials to the repo.
+When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` as the current best-known disposable baseline. It worked in `northeurope` when DSv5 quota was unavailable. **Generate a fresh random password** for each VM — never hard-code or commit credentials to the repo.
 
-- **Add an SSH NSG rule** alongside RDP at VM creation, restricted to the current IP. Once SSH is confirmed working, switch all subsequent commands to SSH — it is faster, more reliable, and supports SCP file transfer
-- **Install prerequisites via winget** from the user's RDP/SSH session (winget is per-user, not available from SYSTEM):
+- **Git and Git LFS are already present on the tested `windowsplustools` image**, but Horizon still needs `git lfs pull` after clone because icons and fonts are stored in LFS and `surge pack` depends on them
+- **Install Visual Studio Build Tools before compiling if `C:\BuildTools\Common7\Tools\VsDevCmd.bat` is missing**:
+  ```powershell
+  Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile C:\horizon-surge-smoke\vs_BuildTools.exe
+  C:\horizon-surge-smoke\vs_BuildTools.exe --quiet --wait --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621
+  ```
+- **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
   ```powershell
   winget install Git.Git --accept-source-agreements --accept-package-agreements
   winget install GitHub.GitLFS --accept-source-agreements --accept-package-agreements
@@ -204,13 +209,14 @@ When creating an Azure VM for smoke testing, use **Standard_F8s_v2** (8 vCPUs, 1
   winget install Rustlang.Rustup --accept-source-agreements --accept-package-agreements
   winget install --id Microsoft.VisualStudio.2022.Community --source winget --force --override "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --addProductLang En-us"
   ```
+- **If you need SSH, add an SSH NSG rule alongside RDP and then switch to SSH once it works**. It is still faster and more reliable than repeated `az vm run-command` calls
 - **Fix the OpenSSH firewall rule profile** — `Add-WindowsCapability` creates a rule for `Private` only, but Azure VMs use `Public`:
   ```powershell
   Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -Profile Any
   ```
 - **Use debug builds** (`cargo build`) for smoke testing, not release — much faster compilation, sufficient for validating launch and crash behavior
-- **`az vm run-command` runs as SYSTEM** — no desktop, no winget, single-command-at-a-time bottleneck. Use only for initial bootstrap (SSH setup, firewall rules). Prefer SSH for all iterative work
-- **Git LFS files are not included in GitHub zip downloads** — use `git lfs pull` or download from `https://github.com/<owner>/<repo>/raw/<branch>/<path>`
+- **`az vm run-command` runs as SYSTEM** — no desktop, no winget, single-command-at-a-time bottleneck. Use it for guest bootstrap, log collection, and starting scheduled tasks, not for the GUI smoke itself
+- **Do not rely on the Startup folder alone to trigger the smoke**. On the tested image, autologon produced `explorer.exe` but the Startup launcher did not fire reliably. Force one autologon to create the console session, then start the actual smoke through a scheduled task with `LogonType Interactive`
 - **Hyper-V Video + WARP** are the only GPU adapters on standard Azure VMs. GUI launch tests must run in an interactive user session (scheduled task with `Interactive` logon or RDP)
 - **When SCP-ing manifest directories**, copy individual files — `scp -r` can create nested subdirectories that winget rejects with "Subdirectory not supported in manifest path"
 
