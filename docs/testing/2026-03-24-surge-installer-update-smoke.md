@@ -19,7 +19,7 @@ Use a local `filesystem` backend before any hosted smoke:
 - it lets you test `beta` and `stable` promotion on one machine
 - it exercises the same package/index/update machinery that the hosted flow depends on
 
-The current Horizon app branch still only shows its in-app update prompt for `github_releases` + `stable` managed installs. The local smoke below therefore validates the installer and package-update plumbing directly, using the helper example at [crates/horizon-ui/examples/surge-update-smoke.rs](/home/peters/github/horizon-surge-stable/crates/horizon-ui/examples/surge-update-smoke.rs). After this passes, do one hosted smoke for the UI prompt path.
+Horizon only shows its in-app update prompt for `github_releases` + `stable` managed installs. The local smoke below validates the installer and package-update plumbing directly, using the helper example at [crates/horizon-ui/examples/surge-update-smoke.rs](/home/peters/github/horizon-surge-stable/crates/horizon-ui/examples/surge-update-smoke.rs). After this passes, do one hosted GitHub Releases smoke for the UI prompt path.
 
 ## Shared Setup
 
@@ -171,6 +171,22 @@ cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$LOCA
 
 After the local filesystem smoke is green, run the WinGet publication smoke with [scripts/run-winget-azure-smoke.sh](/home/peters/github/horizon-surge-stable/scripts/run-winget-azure-smoke.sh). That validates manifest rendering, WinGet install/upgrade/uninstall, and launch in a disposable Windows 11 VM. It does not replace the local Surge update smoke above.
 
+### Hosted GitHub Releases Smoke
+
+Use a separate public staging repo for this step, not `peters/horizon`.
+
+1. Mirror the Horizon release workflow in the staging repo and point its `.surge/surge.yml` `bucket` to that staging repo.
+2. Cut a stable release in the staging repo, install it on Windows from the generated Surge installer, and confirm `%LOCALAPPDATA%\\horizon\\app\\.surge\\runtime.yml` records the staging repo in `bucket:`.
+3. Cut a second stable release in the same staging repo.
+4. Launch the already-installed app and wait for the Horizon update prompt.
+5. Click `Download Installer` and confirm the browser opens the staging repo URL, not production.
+
+Success criteria:
+
+- prompt appears for the second staged stable release
+- opened URL matches `https://github.com/<staging-owner>/<staging-repo>/releases/download/v<version>/...`
+- downloaded installer launches and upgrades the existing install
+
 ## macOS Plan
 
 Run this once per architecture you ship, on native hardware or a matching VM:
@@ -282,6 +298,22 @@ cargo run -p horizon-ui --example surge-update-smoke -- --apply --app-exe "$HOME
 ```bash
 screencapture -x /tmp/horizon-surge-smoke/post-update-launch.png
 ```
+
+### Hosted GitHub Releases Smoke
+
+Use a separate public staging repo for this step, not `peters/horizon`.
+
+1. Mirror the Horizon release workflow in the staging repo and point its `.surge/surge.yml` `bucket` to that staging repo.
+2. Cut a stable release in the staging repo, install it on macOS from the generated Surge installer, and confirm `~/Library/Application Support/horizon/app/.surge/runtime.yml` records the staging repo in `bucket:`.
+3. Cut a second stable release in the same staging repo.
+4. Launch the already-installed app and wait for the Horizon update prompt.
+5. Click `Download Installer` and confirm the browser opens the staging repo URL, not production.
+
+Success criteria:
+
+- prompt appears for the second staged stable release
+- opened URL matches `https://github.com/<staging-owner>/<staging-repo>/releases/download/v<version>/...`
+- downloaded installer launches and upgrades the existing install
 
 ## Pass Criteria
 

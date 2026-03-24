@@ -354,7 +354,7 @@ jobs:
 
   update-homebrew-tap:
     name: Update Homebrew Tap
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ !github.event.release.prerelease && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets]
     runs-on: ubuntu-latest
     steps:
@@ -407,7 +407,7 @@ jobs:
 
   update-winget-pkgs:
     name: Update WinGet Package
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ !github.event.release.prerelease && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets]
     runs-on: ubuntu-latest
     env:

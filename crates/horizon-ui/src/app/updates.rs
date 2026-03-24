@@ -14,7 +14,6 @@ use crate::theme;
 use super::HorizonApp;
 
 const UPDATE_CHANNEL: &str = "stable";
-const RELEASES_DOWNLOAD_BASE: &str = "https://github.com/peters/horizon/releases/download";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +183,7 @@ fn check_for_update(managed_install: &ManagedInstall) -> Result<Option<Available
 
     Ok(Some(AvailableUpdatePrompt {
         latest_version: update_info.latest_version.clone(),
-        installer_url: installer_download_url(&update_info.latest_version, installer_asset),
+        installer_url: installer_download_url(&managed_install.bucket, &update_info.latest_version, installer_asset)?,
         error_message: None,
     }))
 }
@@ -196,8 +195,27 @@ fn parse_storage_provider(raw: &str) -> Result<StorageProvider, String> {
     }
 }
 
-fn installer_download_url(version: &str, installer_asset: &str) -> String {
-    format!("{RELEASES_DOWNLOAD_BASE}/v{version}/{installer_asset}")
+fn installer_download_url(bucket: &str, version: &str, installer_asset: &str) -> Result<String, String> {
+    let (owner, repo) = parse_github_repository(bucket)?;
+    Ok(format!(
+        "https://github.com/{owner}/{repo}/releases/download/v{version}/{installer_asset}"
+    ))
+}
+
+fn parse_github_repository(bucket: &str) -> Result<(&str, &str), String> {
+    let trimmed = bucket.trim().trim_matches('/');
+    let mut parts = trimmed.split('/');
+    let owner = parts.next().unwrap_or_default().trim();
+    let repo = parts.next().unwrap_or_default().trim();
+    let extra = parts.next();
+
+    if owner.is_empty() || repo.is_empty() || extra.is_some() {
+        return Err(format!(
+            "invalid GitHub Releases repository bucket '{bucket}', expected 'owner/repo'"
+        ));
+    }
+
+    Ok((owner, repo))
 }
 
 fn update_check_is_due(now: Instant, next_due: Instant) -> bool {
@@ -267,7 +285,10 @@ fn open_external_url(url: &str) -> Result<(), String> {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{installer_asset_name, installer_download_url, next_update_check_deadline, update_check_is_due};
+    use super::{
+        installer_asset_name, installer_download_url, next_update_check_deadline, parse_github_repository,
+        update_check_is_due,
+    };
 
     #[test]
     fn installer_asset_name_matches_release_assets() {
@@ -282,9 +303,18 @@ mod tests {
     #[test]
     fn installer_download_url_uses_versioned_release_assets() {
         assert_eq!(
-            installer_download_url("0.2.0", "horizon-installer-win-x64.exe"),
-            "https://github.com/peters/horizon/releases/download/v0.2.0/horizon-installer-win-x64.exe"
+            installer_download_url("peters/horizon-surge-smoke", "0.2.0", "horizon-installer-win-x64.exe"),
+            Ok(
+                "https://github.com/peters/horizon-surge-smoke/releases/download/v0.2.0/horizon-installer-win-x64.exe"
+                    .to_string()
+            )
         );
+    }
+
+    #[test]
+    fn parse_github_repository_rejects_invalid_bucket() {
+        assert!(parse_github_repository("peters").is_err());
+        assert!(parse_github_repository("peters/horizon/extra").is_err());
     }
 
     #[test]

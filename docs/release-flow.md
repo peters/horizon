@@ -66,8 +66,8 @@ Then it:
 - for stable releases, stages Surge packages and GUI installers for the same platform matrix
 - uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
 - for stable releases, publishes the Surge release index and package artifacts to the dedicated `surge` GitHub Release tag using the `stable` channel
-- for stable releases only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
-- for stable releases only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
+- in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
+- in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
 ## CLI Alternative
 
@@ -121,6 +121,12 @@ Before trusting a changed Surge packaging/update flow, run the Windows + macOS l
 - package-based update application via `UpdateManager::download_and_apply`
 
 Use the hosted WinGet smoke below only after the local filesystem path is green.
+
+Hosted GitHub Releases smoke is intended to run from a separate public staging repo. In that setup:
+
+- the staging repo still builds raw assets, Surge installers, and Surge release-index packages
+- Homebrew and WinGet publication jobs are skipped automatically because they only run in `peters/horizon`
+- the in-app prompt uses the managed install's GitHub repo metadata, so it opens installer downloads from the staging repo instead of production
 
 ## Interactive WinGet Smoke
 
