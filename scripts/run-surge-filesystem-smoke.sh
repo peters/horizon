@@ -235,6 +235,30 @@ launch_installed_app() {
   wait "$launch_pid" || true
 }
 
+stop_managed_install_processes() {
+  local install_root_native="$1"
+
+  if ! is_windows_shell; then
+    return 0
+  fi
+
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
+    "\$root = [System.IO.Path]::GetFullPath('$install_root_native');"\
+"if (-not (Test-Path \$root)) { exit 0 };"\
+"\$processes = Get-CimInstance Win32_Process | Where-Object {"\
+"  \$path = \$_.ExecutablePath;"\
+"  if (\$path) {"\
+"    return [System.IO.Path]::GetFullPath(\$path).StartsWith(\$root, [System.StringComparison]::OrdinalIgnoreCase)"\
+"  }"\
+"  if (\$_.CommandLine) {"\
+"    return \$_.CommandLine -like \"*\$root*\""\
+"  }"\
+"  return \$false"\
+"};"\
+"foreach (\$process in \$processes) { Stop-Process -Id \$process.ProcessId -Force -ErrorAction SilentlyContinue };"\
+"Start-Sleep -Seconds 2"
+}
+
 run_cargo() {
   (
     cd "$repo_root"
@@ -471,6 +495,7 @@ export PATH="$toolchain_dir:$PATH"
 require_command surge
 
 printf 'Cleaning previous smoke state for %s\n' "$rid"
+stop_managed_install_processes "$install_root_native"
 rm -rf "$store_dir" "$install_root" "$repo_root/.surge/artifacts/$app_id" "$repo_root/.surge/installers/$app_id"
 mkdir -p "$store_dir"
 if [ -d "$repo_root/.surge/packages" ]; then

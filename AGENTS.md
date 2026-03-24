@@ -206,6 +206,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 - **Use the released Surge tag as the default smoke path once it exists**. After `v1.0.0-beta.2`, the normal macOS/Linux/Windows smoke path is `./scripts/run-surge-filesystem-smoke.sh` or `./scripts/run-surge-azure-smoke.sh` with no override flags
 - **Use local or pinned Surge sources only for pre-merge validation**. Use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` for local unmerged smoke, or `./scripts/run-surge-azure-smoke.sh --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>` to validate an open Surge PR on Azure before merge
 - **When overriding Surge for smoke, patch `surge-core` through a local `file://` Git source, not a raw crate path**. The Git source preserves Surge workspace dependency inheritance on Windows; raw crate-path overrides can fail to resolve `workspace = true` dependencies
+- **On Windows, stop install-root processes before deleting `%LOCALAPPDATA%\\horizon` during repeated smoke runs**. A lingering `horizon.exe` or `surge-supervisor.exe` from the previous pass will otherwise make cleanup fail with `Device or resource busy`
 - **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
   ```powershell
   winget install Git.Git --accept-source-agreements --accept-package-agreements

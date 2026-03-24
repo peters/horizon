@@ -55,6 +55,7 @@ Important implementation notes from the Azure Windows smoke:
 - do not rely on the user's Startup folder alone to kick off the smoke, even when autologon and `explorer.exe` are both present; start the guest runner with a scheduled task that uses `LogonType Interactive`
 - the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
 - if you are iterating on the Windows smoke, keep the VM warm and reuse it; that avoids the slowest steps: Azure provisioning, first boot, and Build Tools installation
+- before cleaning `%LOCALAPPDATA%\\horizon`, the smoke helper now force-stops any running processes whose executable lives under that install root; otherwise repeated Windows runs can fail with `Device or resource busy`
 - when validating an unmerged Surge fix, point the smoke helpers at the exact Surge source you want: `--surge-path <checkout>` for local smoke, or `--surge-repo-url <repo> --surge-commit-sha <sha>` for Azure smoke
 - when a Surge override is active, the smoke helper patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that keeps Cargo workspace inheritance working on Windows
 - the toolchain helper caches by Surge source ref + commit under `.surge/toolchain-bin`, so reruns against the same Surge commit skip the expensive rebuild
