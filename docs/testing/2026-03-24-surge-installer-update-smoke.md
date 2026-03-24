@@ -56,6 +56,7 @@ Important implementation notes from the Azure Windows smoke:
 - the current best-known disposable VM baseline is `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` with `Standard_D4s_v3`
 - if you are iterating on the Windows smoke, keep the VM warm and reuse it; that avoids the slowest steps: Azure provisioning, first boot, and Build Tools installation
 - when validating an unmerged Surge fix, point the smoke helpers at the exact Surge source you want: `--surge-path <checkout>` for local smoke, or `--surge-repo-url <repo> --surge-commit-sha <sha>` for Azure smoke
+- when a Surge override is active, the smoke helper patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that keeps Cargo workspace inheritance working on Windows
 - the toolchain helper caches by Surge source ref + commit under `.surge/toolchain-bin`, so reruns against the same Surge commit skip the expensive rebuild
 
 ## Temporary Manifest Template
@@ -113,7 +114,7 @@ Run this from a Linux or macOS host in the repo root after pushing the branch/co
 ```bash
 ./scripts/run-surge-azure-smoke.sh \
   --surge-repo-url https://github.com/fintermobilityas/surge.git \
-  --surge-commit-sha 2cb42ef38a2553cb1cafa3e336448ee45d80fa6b
+  --surge-commit-sha 52287c163f2e0c8c82d405268c659d6896b29b04
 ```
 
 Useful overrides:
@@ -126,7 +127,7 @@ Useful overrides:
 
 Warm-VM workflow:
 
-- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha 2cb42ef38a2553cb1cafa3e336448ee45d80fa6b`
+- first pass: run `./scripts/run-surge-azure-smoke.sh --keep-resources --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha 52287c163f2e0c8c82d405268c659d6896b29b04`
 - rerun: pass the same `--resource-group`, `--vm-name`, and `--admin-password`
 - when those names point at an existing VM, the helper now starts and reuses it instead of provisioning a fresh machine
 - reused VMs are kept automatically, because destroying them defeats the purpose of the warm cache

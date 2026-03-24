@@ -204,6 +204,7 @@ When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `Micro
 - **For iterative Windows smoke work, keep a warm VM and reuse it**. A reused VM avoids Azure provisioning, first boot, and the Build Tools install. If the helper is given an existing `--resource-group` and `--vm-name`, it should start and reuse that VM instead of creating a new one
 - **Reuse the cached Surge toolchain whenever the Surge source commit has not changed**. `scripts/build-surge-toolchain.sh` stamps `.surge/toolchain-bin` with the source ref/commit and skips the rebuild when they still match
 - **Prefer local or pinned Surge sources for smoke validation instead of waiting for a tag**. Use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` for local macOS/Linux/Windows smoke, or `./scripts/run-surge-azure-smoke.sh --surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>` to validate an open Surge PR on Azure before merge
+- **When overriding Surge for smoke, patch `surge-core` through a local `file://` Git source, not a raw crate path**. The Git source preserves Surge workspace dependency inheritance on Windows; raw crate-path overrides can fail to resolve `workspace = true` dependencies
 - **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
   ```powershell
   winget install Git.Git --accept-source-agreements --accept-package-agreements

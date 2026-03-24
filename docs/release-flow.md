@@ -127,7 +127,9 @@ The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke
 - `surge pack` and `surge push` need explicit artifact/package directories when the temporary manifest lives outside the repo root
 - Horizon smoke builds default to `cargo build` debug binaries for speed; use `--profile release` only when you specifically need a release payload
 - `./scripts/build-surge-toolchain.sh` reuses `.surge/toolchain-bin` when the requested Surge source ref and commit match the cached toolchain
+- when you override Surge for smoke, `./scripts/run-surge-filesystem-smoke.sh` patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that preserves Surge workspace dependency resolution on Windows
 - use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` to validate a local unmerged Surge checkout without recloning or retagging it
+- until Surge `v1.0.0-beta.2` exists, the Windows smoke should pass `--surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha 52287c163f2e0c8c82d405268c659d6896b29b04`
 
 For a disposable Windows host from Linux or macOS, use `./scripts/run-surge-azure-smoke.sh`. It provisions a Windows 11 VM, installs Build Tools when needed, forces one autologon to create the desktop session, then launches the smoke through an interactive scheduled task. If you rerun it with the same `--resource-group` and `--vm-name`, it starts and reuses that VM instead of provisioning another one. To validate an open Surge PR before merge, pass `--surge-repo-url https://github.com/fintermobilityas/surge.git --surge-commit-sha <sha>`.
 

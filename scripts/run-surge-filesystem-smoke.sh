@@ -124,6 +124,18 @@ to_mixed_path() {
   fi
 }
 
+to_file_git_url() {
+  local path="$1"
+  local normalized_path
+
+  if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+    normalized_path="$(cygpath -m "$path")"
+    printf 'file:///%s\n' "${normalized_path// /%20}"
+  else
+    printf 'file://%s\n' "${path// /%20}"
+  fi
+}
+
 path_exists() {
   [ -e "$1" ]
 }
@@ -387,7 +399,6 @@ toolchain_source_root="$repo_root/.surge/toolchain-src"
 if [ -n "$surge_path" ]; then
   toolchain_source_root="$(cd -- "$surge_path" && pwd)"
 fi
-toolchain_source_core_path="$toolchain_source_root/crates/surge-core"
 packages_dir="$repo_root/.surge/packages"
 installer_path="$repo_root/.surge/installers/$app_id/$rid/Setup-$rid-$app_id-stable-online-gui.$installer_ext"
 app_exe_posix="$install_root/app/$main_exe"
@@ -397,6 +408,8 @@ store_dir_native="$(to_native_path "$store_dir")"
 cargo_config_path="$repo_root/.surge/smoke/$rid/cargo-config.toml"
 cargo_global_args=()
 patch_surge_core=false
+surge_patch_rev=""
+surge_patch_url=""
 
 mkdir -p "$(dirname -- "$manifest_path")"
 
@@ -421,19 +434,26 @@ if [ "$skip_toolchain_build" = false ]; then
   (cd "$repo_root" && ./scripts/build-surge-toolchain.sh "${build_toolchain_args[@]}")
 fi
 
-if [ "$rid" = "win-x64" ] || [ -n "$surge_path" ] || [ -n "$surge_commit_sha" ]; then
+if [ -n "$surge_path" ] || [ -n "$surge_commit_sha" ]; then
   patch_surge_core=true
 fi
 
 if [ "$patch_surge_core" = true ]; then
-  if [ ! -d "$toolchain_source_core_path" ]; then
-    printf 'Smoke run requires Surge sources at %s. Rerun without --skip-toolchain-build.\n' "$toolchain_source_core_path" >&2
+  if ! git -C "$toolchain_source_root" rev-parse HEAD >/dev/null 2>&1; then
+    printf 'Smoke run requires a Git-backed Surge source checkout at %s. Rerun without --skip-toolchain-build.\n' "$toolchain_source_root" >&2
     exit 1
   fi
 
+  surge_patch_rev="$(git -C "$toolchain_source_root" rev-parse HEAD)"
+  if [ -n "$surge_commit_sha" ] && [ "$surge_patch_rev" != "$surge_commit_sha" ]; then
+    printf 'Prepared Surge source is at %s, expected %s.\n' "$surge_patch_rev" "$surge_commit_sha" >&2
+    exit 1
+  fi
+  surge_patch_url="$(to_file_git_url "$toolchain_source_root")"
+
   cat >"$cargo_config_path" <<EOF
 [patch."https://github.com/fintermobilityas/surge.git"]
-surge-core = { path = "$(to_mixed_path "$toolchain_source_core_path")" }
+surge-core = { git = "$surge_patch_url", rev = "$surge_patch_rev", package = "surge-core" }
 EOF
   cargo_global_args=(--config "$cargo_config_path")
 fi
