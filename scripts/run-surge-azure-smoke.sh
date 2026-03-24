@@ -261,6 +261,19 @@ if (-not (Test-Path $vsDevCmd)) {
     throw "VsDevCmd.bat not found at $vsDevCmd"
 }
 
+$staleProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and $_.CommandLine -and (
+        $_.CommandLine -like '*horizon-surge-smoke*' -or
+        $_.CommandLine -like '*run-smoke*'
+    )
+}
+
+foreach ($staleProcess in $staleProcesses) {
+    Stop-Process -Id $staleProcess.ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+Start-Sleep -Seconds 2
+
 New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
 Remove-Item -LiteralPath $runnerPath, $cmdPath, $errorPath, $streamPath, $transcriptPath, $sessionPath -Force -ErrorAction SilentlyContinue
 
