@@ -11,7 +11,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  SURGE_VERSION: v1.0.0-beta.3
+  SURGE_VERSION: v1.0.0-beta.6
 
 permissions:
   contents: write

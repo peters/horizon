@@ -128,7 +128,7 @@ The quickest supported local entrypoint is `./scripts/run-surge-filesystem-smoke
 - `surge pack` and `surge push` need explicit artifact/package directories when the temporary manifest lives outside the repo root
 - Horizon smoke builds default to `cargo build` debug binaries for speed; use `--profile release` only when you specifically need a release payload
 - `./scripts/build-surge-toolchain.sh` reuses `.surge/toolchain-bin` when the requested Surge source ref and commit match the cached toolchain
-- after `v1.0.0-beta.3`, the default released smoke path uses the tagged Surge source with no override flags
+- after `v1.0.0-beta.6`, the default released smoke path uses the tagged Surge source with no override flags
 - when you override Surge for smoke, `./scripts/run-surge-filesystem-smoke.sh` patches `surge-core` through a local `file://` Git source at the exact checkout/commit instead of a raw crate path; that preserves Surge workspace dependency resolution on Windows
 - after the headless installer returns, stop the installer-launched `--surge-first-run` Horizon process before the scripted launch/update checks continue; that keeps repeated Windows runs deterministic
 - use `./scripts/run-surge-filesystem-smoke.sh --surge-path ../surge` to validate a local unmerged Surge checkout without recloning or retagging it
