@@ -1,21 +1,27 @@
-use egui::{InputState, Key, Modifiers};
+use egui::{Event, InputState, Key, Modifiers};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
+    shortcut_pressed_in_events(&input.events, binding)
+}
+
+pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBinding) -> bool {
+    events.iter().any(|event| shortcut_event_matches(event, binding))
+}
+
+pub(crate) fn shortcut_event_matches(event: &Event, binding: ShortcutBinding) -> bool {
     let modifiers = egui_modifiers(binding.modifiers);
-    input.events.iter().any(|event| {
-        matches!(
-            event,
-            egui::Event::Key {
-                key,
-                physical_key,
-                pressed: true,
-                modifiers: event_modifiers,
-                ..
-            } if event_modifiers.matches_logically(modifiers)
-                && key_matches(*key, *physical_key, binding.key)
-        )
-    })
+    matches!(
+        event,
+        Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            modifiers: event_modifiers,
+            ..
+        } if event_modifiers.matches_logically(modifiers)
+            && key_matches(*key, *physical_key, binding.key)
+    )
 }
 
 fn egui_modifiers(modifiers: ShortcutModifiers) -> Modifiers {
