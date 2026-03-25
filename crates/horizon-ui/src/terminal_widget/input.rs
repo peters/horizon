@@ -3,13 +3,19 @@ use std::collections::VecDeque;
 use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
 use egui::{Key, PointerButton, Pos2, Rect, Vec2};
-use horizon_core::{Panel, SelectionType, TerminalSide};
+use horizon_core::{
+    Panel, PanelKind, SelectionType, ShortcutBinding, ShortcutKey, ShortcutModifiers, SshConnectionStatus, TerminalSide,
+};
 
 use super::super::input::{self, TerminalInputEvent};
 use super::super::primary_selection::PrimarySelection;
+use crate::app::shortcuts::shortcut_event_matches;
 
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
+
+pub(crate) const SSH_RECONNECT_SHORTCUT: ShortcutBinding =
+    ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
 
 #[derive(Clone, Copy)]
 pub(super) struct PointerSupport<'a> {
@@ -454,9 +460,14 @@ pub(super) fn handle_terminal_keyboard_input(
     panel: &mut Panel,
     events: &[TerminalInputEvent],
     primary_selection: &PrimarySelection,
-) {
+    local_ssh_reconnect_enabled: bool,
+) -> bool {
+    if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
+        return true;
+    }
+
     let Some(terminal) = panel.terminal_mut() else {
-        return;
+        return false;
     };
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
@@ -508,6 +519,27 @@ pub(super) fn handle_terminal_keyboard_input(
     if !emission.bytes.is_empty() {
         terminal.write_input(&emission.bytes);
     }
+
+    false
+}
+
+fn disconnected_ssh_reconnect_requested(
+    kind: PanelKind,
+    ssh_status: Option<SshConnectionStatus>,
+    events: &[TerminalInputEvent],
+) -> bool {
+    kind == PanelKind::Ssh
+        && matches!(ssh_status, Some(SshConnectionStatus::Disconnected))
+        && events.iter().any(|input_event| {
+            matches!(
+                &input_event.event,
+                egui::Event::Key {
+                    pressed: true,
+                    repeat: false,
+                    ..
+                }
+            ) && shortcut_event_matches(&input_event.event, SSH_RECONNECT_SHORTCUT)
+        })
 }
 
 #[derive(Default)]
@@ -747,11 +779,12 @@ impl InputEmission {
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardInputForwarder, TerminalInputEvent, pointer_button_event_pos, pointer_event_targets_rect,
-        selection_copy_completed, should_request_primary_paste,
+        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested, pointer_button_event_pos,
+        pointer_event_targets_rect, selection_copy_completed, should_request_primary_paste,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+    use horizon_core::{PanelKind, SshConnectionStatus};
 
     #[test]
     fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
@@ -805,6 +838,70 @@ mod tests {
         let events = vec![Event::PointerMoved(Pos2::new(12.0, 6.0))];
 
         assert!(pointer_event_targets_rect(&events, None, rect));
+    }
+
+    #[test]
+    fn disconnected_ssh_panels_request_reconnect_from_local_shortcut() {
+        assert!(disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Disconnected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn connected_ssh_panels_ignore_local_reconnect_shortcut() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Connected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn non_ssh_panels_ignore_local_reconnect_shortcut() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Shell,
+            None,
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn repeated_reconnect_shortcut_does_not_queue_another_restart() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Disconnected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                true,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
     }
 
     #[test]

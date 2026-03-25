@@ -1,11 +1,15 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
+use horizon_core::{
+    AppShortcuts, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId,
+};
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
-use super::super::terminal_widget::{TerminalGridCache, TerminalView, viewport_for_available_space};
+use super::super::terminal_widget::{
+    SSH_RECONNECT_SHORTCUT, TerminalGridCache, TerminalKeyboardContext, TerminalView, viewport_for_available_space,
+};
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
@@ -94,7 +98,9 @@ struct PanelBodyContext<'a> {
     keyboard_events: &'a [TerminalInputEvent],
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
+    local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
+    reconnect_requested: &'a mut bool,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
 }
 
@@ -117,18 +123,53 @@ fn show_panel_body_contents(
             ui,
             is_focused,
             interactive,
-            body_context.keyboard_events,
-            body_context.primary_selection,
+            TerminalKeyboardContext {
+                keyboard_events: body_context.keyboard_events,
+                primary_selection: body_context.primary_selection,
+                local_ssh_reconnect_enabled: body_context.local_ssh_reconnect_enabled,
+                reconnect_requested: body_context.reconnect_requested,
+            },
         ),
     }
 }
 
+fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; 17] {
+    [
+        shortcuts.command_palette,
+        shortcuts.new_terminal,
+        shortcuts.focus_active_workspace,
+        shortcuts.fit_active_workspace,
+        shortcuts.open_remote_hosts,
+        shortcuts.toggle_sidebar,
+        shortcuts.toggle_hud,
+        shortcuts.toggle_minimap,
+        shortcuts.align_workspaces_horizontally,
+        shortcuts.toggle_settings,
+        shortcuts.zoom_reset,
+        shortcuts.zoom_in,
+        shortcuts.zoom_out,
+        shortcuts.fullscreen_panel,
+        shortcuts.exit_fullscreen_panel,
+        shortcuts.fullscreen_window,
+        shortcuts.search,
+    ]
+}
+
+fn local_ssh_reconnect_shortcut_conflicts(shortcuts: &AppShortcuts) -> bool {
+    global_shortcut_bindings(shortcuts).contains(&SSH_RECONNECT_SHORTCUT)
+}
+
 impl HorizonApp {
+    fn local_ssh_reconnect_shortcut_enabled(&self) -> bool {
+        !local_ssh_reconnect_shortcut_conflicts(&self.shortcuts)
+    }
+
     #[profiling::function]
     pub(super) fn render_fullscreen_panel(&mut self, ctx: &Context) {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
+        let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG))
@@ -144,6 +185,7 @@ impl HorizonApp {
                         .max_rect(body_rect)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
+                        let mut reconnect_requested = false;
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(self.editor_preview_cache.entry(panel_id).or_default())
@@ -159,10 +201,15 @@ impl HorizonApp {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
+                                    local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    reconnect_requested: &mut reconnect_requested,
                                     terminal_grid_cache: None,
                                 },
                             );
+                        }
+                        if reconnect_requested {
+                            self.panels_to_restart.push(panel_id);
                         }
                     },
                 );
@@ -307,6 +354,7 @@ impl HorizonApp {
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
+        let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
@@ -403,6 +451,7 @@ impl HorizonApp {
                         .max_rect(rects.body)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
+                        let mut reconnect_requested = false;
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.editor_preview_cache;
                         let terminal_grid_cache = &mut self.terminal_grid_cache;
@@ -426,10 +475,15 @@ impl HorizonApp {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
+                                    local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    reconnect_requested: &mut reconnect_requested,
                                     terminal_grid_cache: grid_cache,
                                 },
                             );
+                        }
+                        if reconnect_requested {
+                            self.panels_to_restart.push(panel_id);
                         }
                     },
                 );
@@ -609,5 +663,37 @@ impl HorizonApp {
         }
 
         matches!(outcome.command, Some(PanelCommand::Close))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
+
+    use super::{SSH_RECONNECT_SHORTCUT, global_shortcut_bindings, local_ssh_reconnect_shortcut_conflicts};
+
+    #[test]
+    fn default_global_shortcuts_leave_local_ssh_reconnect_available() {
+        assert!(!local_ssh_reconnect_shortcut_conflicts(&AppShortcuts::default()));
+    }
+
+    #[test]
+    fn matching_global_shortcut_disables_local_ssh_reconnect() {
+        let shortcuts = AppShortcuts {
+            open_remote_hosts: SSH_RECONNECT_SHORTCUT,
+            ..AppShortcuts::default()
+        };
+
+        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
+    }
+
+    #[test]
+    fn global_shortcut_bindings_include_command_palette_bindings() {
+        let shortcuts = AppShortcuts {
+            command_palette: ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('P')),
+            ..AppShortcuts::default()
+        };
+
+        assert!(global_shortcut_bindings(&shortcuts).contains(&shortcuts.command_palette));
     }
 }
