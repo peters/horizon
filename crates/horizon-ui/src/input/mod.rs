@@ -266,6 +266,50 @@ mod tests {
         assert_eq!(translation.bytes, b"\x1b[13;2u");
     }
 
+    #[test]
+    fn printable_space_stays_on_text_path_without_report_all_keys() {
+        let key_translation = translate_key_event(
+            Key::Space,
+            true,
+            false,
+            Modifiers::NONE,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+        assert!(
+            key_translation.is_none(),
+            "space key press should defer to the text event"
+        );
+
+        let text_translation = translate_text_event(
+            super::KeyIdentity::new(Key::Space, Some(Key::Space), Some(" ")),
+            " ",
+            super::KeyEventContext::new(
+                true,
+                false,
+                Modifiers::NONE,
+                TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS,
+            ),
+        );
+        assert!(
+            text_translation.is_none(),
+            "space text should stay on the raw text path"
+        );
+    }
+
+    #[test]
+    fn printable_space_uses_kitty_sequence_when_report_all_keys_is_enabled() {
+        let translation = translate_key_event(
+            Key::Space,
+            true,
+            false,
+            Modifiers::NONE,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS | TermMode::REPORT_ALL_KEYS_AS_ESC,
+        )
+        .expect("space with report-all");
+
+        assert_eq!(translation.bytes, b"\x1b[32u");
+    }
+
     /// Regression: `AltGr` is reported by winit as Alt. When typing @
     /// via `AltGr+2`, `translate_key_event` must NOT produce an alt-prefixed
     /// sequence for Num2, because the actual character (@) arrives as a
