@@ -8,10 +8,10 @@ use egui::{
     Align, Color32, Context, CornerRadius, FontId, Id, Layout, Margin, Order, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, UiBuilder, Vec2,
 };
-use horizon_core::{RemoteHostCatalog, SshConnection};
+use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostConnectionSummary, SshConnection};
 
-use self::layout::{Columns, INPUT_HEIGHT, OverlayLayout, ROW_HEIGHT, columns, current_epoch_secs, overlay_layout};
-use self::paint::{paint_empty, render_column_headers, render_host_row};
+use self::layout::{Columns, INPUT_HEIGHT, OverlayLayout, columns, current_epoch_secs, overlay_layout};
+use self::paint::{HostRowRenderContext, paint_empty, render_column_headers, render_host_details, render_host_row};
 use self::query::{connect_action, filtered_indices, parse_user_prefix};
 use crate::command_palette::render::paint_card;
 use crate::theme;
@@ -19,6 +19,7 @@ use crate::theme;
 pub struct RemoteHostsOverlay {
     query: String,
     selected: usize,
+    expanded_host: Option<String>,
     opened_at: Instant,
 }
 
@@ -36,11 +37,20 @@ struct FrameContext<'a> {
     next_refresh_secs: Option<u64>,
 }
 
+struct OverlayRenderContext<'a, 'b> {
+    catalog: &'a RemoteHostCatalog,
+    connection_summaries: &'a [RemoteHostConnectionSummary],
+    filtered: &'a [usize],
+    layout: &'a OverlayLayout,
+    frame: &'b FrameContext<'a>,
+}
+
 impl RemoteHostsOverlay {
     pub fn new() -> Self {
         Self {
             query: String::new(),
             selected: 0,
+            expanded_host: None,
             opened_at: Instant::now(),
         }
     }
@@ -49,6 +59,7 @@ impl RemoteHostsOverlay {
         &mut self,
         ctx: &Context,
         catalog: &RemoteHostCatalog,
+        connection_summaries: &[RemoteHostConnectionSummary],
         refresh_in_flight: bool,
         next_refresh_secs: Option<u64>,
     ) -> RemoteHostsOverlayAction {
@@ -62,6 +73,13 @@ impl RemoteHostsOverlay {
             now_secs: current_epoch_secs(),
             next_refresh_secs,
         };
+        let render = OverlayRenderContext {
+            catalog,
+            connection_summaries,
+            filtered: &filtered,
+            layout: &layout,
+            frame: &frame,
+        };
 
         // Keep the countdown ticking while overlay is visible.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -71,7 +89,7 @@ impl RemoteHostsOverlay {
         }
 
         self.clamp_selection(filtered.len());
-        self.show_modal(ctx, catalog, &filtered, &layout, &frame)
+        self.show_modal(ctx, &render)
     }
 
     fn clamp_selection(&mut self, count: usize) {
@@ -100,29 +118,22 @@ impl RemoteHostsOverlay {
         cancelled
     }
 
-    fn show_modal(
-        &mut self,
-        ctx: &Context,
-        catalog: &RemoteHostCatalog,
-        filtered: &[usize],
-        layout: &OverlayLayout,
-        frame: &FrameContext<'_>,
-    ) -> RemoteHostsOverlayAction {
+    fn show_modal(&mut self, ctx: &Context, render: &OverlayRenderContext<'_, '_>) -> RemoteHostsOverlayAction {
         let mut action = RemoteHostsOverlayAction::None;
 
         egui::Area::new(Id::new("remote_hosts_modal"))
-            .fixed_pos(layout.card.min)
+            .fixed_pos(render.layout.card.min)
             .constrain(true)
             .order(Order::Debug)
             .show(ctx, |ui| {
-                paint_card(ui, layout.card);
+                paint_card(ui, render.layout.card);
 
                 ui.scope_builder(
                     UiBuilder::new()
-                        .max_rect(layout.inner)
+                        .max_rect(render.layout.inner)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                        action = self.show_contents(ui, ctx, catalog, filtered, layout, frame);
+                        action = self.show_contents(ui, ctx, render);
                     },
                 );
             });
@@ -134,24 +145,21 @@ impl RemoteHostsOverlay {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &Context,
-        catalog: &RemoteHostCatalog,
-        filtered: &[usize],
-        layout: &OverlayLayout,
-        frame: &FrameContext<'_>,
+        render: &OverlayRenderContext<'_, '_>,
     ) -> RemoteHostsOverlayAction {
-        let total = catalog.hosts.len();
-        self.render_query_input(ui, layout.inner, filtered.len(), total, frame);
-        if let Some(action) = self.handle_keyboard(ctx, catalog, filtered, frame.user_override) {
+        let total = render.catalog.hosts.len();
+        self.render_query_input(ui, render.layout.inner, render.filtered.len(), total, render.frame);
+        if let Some(action) = self.handle_keyboard(ctx, render.catalog, render.filtered, render.frame.user_override) {
             return action;
         }
 
-        ui.allocate_space(Vec2::new(layout.inner.width(), INPUT_HEIGHT));
+        ui.allocate_space(Vec2::new(render.layout.inner.width(), INPUT_HEIGHT));
         ui.add_space(6.0);
 
-        let columns = columns(layout.inner.width());
-        render_column_headers(ui, layout.inner.width(), &columns);
+        let columns = columns(render.layout.inner.width());
+        render_column_headers(ui, render.layout.inner.width(), &columns);
 
-        let separator_rect = ui.allocate_space(Vec2::new(layout.inner.width(), 1.0)).1;
+        let separator_rect = ui.allocate_space(Vec2::new(render.layout.inner.width(), 1.0)).1;
         ui.painter_at(separator_rect).rect_filled(
             separator_rect,
             CornerRadius::ZERO,
@@ -159,10 +167,10 @@ impl RemoteHostsOverlay {
         );
         ui.add_space(2.0);
 
-        match self.render_results(ui, catalog, filtered, layout, &columns, frame.now_secs) {
+        match self.render_results(ui, &columns, render) {
             Some(index) => {
-                let host = &catalog.hosts[filtered[index]];
-                connect_action(host, frame.user_override)
+                let host = &render.catalog.hosts[render.filtered[index]];
+                connect_action(host, render.frame.user_override)
             }
             None => RemoteHostsOverlayAction::None,
         }
@@ -279,44 +287,79 @@ impl RemoteHostsOverlay {
     fn render_results(
         &mut self,
         ui: &mut egui::Ui,
-        catalog: &RemoteHostCatalog,
-        filtered: &[usize],
-        layout: &OverlayLayout,
         columns: &Columns,
-        now_secs: i64,
+        render: &OverlayRenderContext<'_, '_>,
     ) -> Option<usize> {
-        if filtered.is_empty() {
+        if render.filtered.is_empty() {
             paint_empty(ui, "No matching hosts");
             return None;
         }
 
         let mut clicked_idx = None;
-        let scroll_height = layout.results_height.min(layout.inner.max.y - ui.cursor().min.y - 8.0);
+        let scroll_height = render
+            .layout
+            .results_height
+            .min(render.layout.inner.max.y - ui.cursor().min.y - 8.0);
 
         ScrollArea::vertical()
             .max_height(scroll_height)
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_HEIGHT, filtered.len(), |ui, row_range| {
-                ui.set_min_width(layout.inner.width());
+            .show(ui, |ui| {
+                ui.set_min_width(render.layout.inner.width());
 
-                for filtered_idx in row_range {
-                    let host_idx = filtered[filtered_idx];
-                    let host = &catalog.hosts[host_idx];
+                for (filtered_idx, host_idx) in render.filtered.iter().copied().enumerate() {
+                    let host = &render.catalog.hosts[host_idx];
+                    let summary = &render.connection_summaries[host_idx];
                     let is_selected = self.selected == filtered_idx;
-                    if render_host_row(
+                    let is_expanded = self.is_expanded(host);
+                    let interaction = render_host_row(
                         ui,
-                        layout.inner.width(),
-                        filtered_idx,
-                        host,
-                        is_selected,
-                        columns,
-                        now_secs,
-                    ) {
+                        &HostRowRenderContext {
+                            width: render.layout.inner.width(),
+                            index: filtered_idx,
+                            host,
+                            summary,
+                            is_selected,
+                            is_expanded,
+                            columns,
+                            now_secs: render.frame.now_secs,
+                        },
+                    );
+                    if interaction.select {
+                        self.selected = filtered_idx;
+                    }
+                    if interaction.toggle_expand {
+                        self.toggle_expanded(host);
+                    }
+                    if interaction.connect {
                         clicked_idx = Some(filtered_idx);
+                    }
+                    if is_expanded {
+                        render_host_details(
+                            ui,
+                            render.layout.inner.width() - 4.0,
+                            host,
+                            summary,
+                            render.frame.now_secs,
+                        );
+                        ui.add_space(6.0);
                     }
                 }
             });
 
         clicked_idx
+    }
+
+    fn is_expanded(&self, host: &RemoteHost) -> bool {
+        self.expanded_host.as_deref() == Some(&host.ssh_connection.display_label())
+    }
+
+    fn toggle_expanded(&mut self, host: &RemoteHost) {
+        let key = host.ssh_connection.display_label();
+        if self.expanded_host.as_deref() == Some(key.as_str()) {
+            self.expanded_host = None;
+        } else {
+            self.expanded_host = Some(key);
+        }
     }
 }
