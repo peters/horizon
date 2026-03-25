@@ -905,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn altgr_text_after_release_emits_only_kitty_sequences() {
+    fn altgr_text_after_release_stays_on_text_path_without_report_all_keys() {
         let events = vec![
             key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::ALT),
             key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::ALT),
@@ -917,11 +917,11 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        assert_eq!(bytes, b"\x1b[50:64;3u\x1b[50:64;3:3u");
+        assert_eq!(bytes, b"@");
     }
 
     #[test]
-    fn shifted_symbol_uses_text_reconciliation_for_release_order() {
+    fn shifted_symbol_uses_text_reconciliation_without_forcing_kitty_sequences() {
         let events = vec![
             key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::SHIFT),
             text_event("@"),
@@ -933,15 +933,13 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        assert_eq!(bytes, b"\x1b[50:64;2u\x1b[50:64;2:3u");
+        assert_eq!(bytes, b"@");
     }
 
     /// Regression: on some Linux setups, `AltGr` is NOT reported as
-    /// `modifiers.alt` by winit.  When kitty keyboard protocol is active,
-    /// the key press was immediately emitted as a kitty sequence for the
-    /// base key ("2") and the text event ("@") passed through as raw
-    /// text because suppression expected "2".  Result: "2@" instead of
-    /// just the kitty sequence for "@".
+    /// `modifiers.alt` by winit. The key event must not leak the base
+    /// key ("2") ahead of the later text event ("@"), even when kitty
+    /// keyboard mode is active.
     #[test]
     fn altgr_without_alt_modifier_in_kitty_mode_does_not_leak_base_key() {
         let events = vec![
@@ -955,11 +953,7 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        // Must produce kitty sequences for "@" (codepoint 64), NOT
-        // the base key "2" (codepoint 50) followed by raw "@".
-        // Release includes ";1" (no-modifier marker) because
-        // REPORT_EVENT_TYPES forces the modifier field.
-        assert_eq!(bytes, b"\x1b[50:64u\x1b[50:64;1:3u");
+        assert_eq!(bytes, b"@");
     }
 
     /// Same scenario as above but in non-kitty mode: the text event
@@ -978,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn shifted_international_key_uses_observed_unshifted_text_for_primary_code() {
+    fn shifted_international_key_stays_on_text_path_without_report_all_keys() {
         let events = vec![
             key_event(
                 Key::OpenBracket,
@@ -1002,6 +996,39 @@ mod tests {
         let bytes = forward_bytes(
             &events,
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, "Å".as_bytes());
+    }
+
+    #[test]
+    fn report_all_keys_keeps_printable_text_on_kitty_sequence_path() {
+        let events = vec![
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                true,
+                false,
+                Modifiers::SHIFT,
+            ),
+            text_event("Å"),
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                false,
+                false,
+                Modifiers::SHIFT,
+            ),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES
+                | TermMode::REPORT_EVENT_TYPES
+                | TermMode::REPORT_ALTERNATE_KEYS
+                | TermMode::REPORT_ALL_KEYS_AS_ESC,
         );
 
         assert_eq!(bytes, b"\x1b[229:197:91;2u\x1b[229:197:91;2:3u");
