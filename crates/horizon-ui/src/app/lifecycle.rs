@@ -373,6 +373,7 @@ impl HorizonApp {
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);
+        self.render_session_manager(ctx);
         self.render_ssh_upload_flow(ctx);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();

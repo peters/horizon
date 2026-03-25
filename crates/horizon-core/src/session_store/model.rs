@@ -226,6 +226,18 @@ impl SessionIndex {
         profile.recent_session_ids.insert(0, session_id.to_string());
         profile.recent_session_ids.truncate(12);
     }
+
+    pub(super) fn remove_profile_session(&mut self, profile_id: &str, session_id: &str) {
+        self.version = super::SESSION_INDEX_VERSION;
+        if let Some(profile) = self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.profile_id == profile_id)
+        {
+            profile.remove_session(session_id);
+        }
+        self.profiles.retain(|profile| !profile.is_empty());
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -243,5 +255,16 @@ impl SessionProfileIndex {
             last_session_id: None,
             recent_session_ids: Vec::new(),
         }
+    }
+
+    fn remove_session(&mut self, session_id: &str) {
+        self.recent_session_ids.retain(|candidate| candidate != session_id);
+        if self.last_session_id.as_deref() == Some(session_id) {
+            self.last_session_id = self.recent_session_ids.first().cloned();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.last_session_id.is_none() && self.recent_session_ids.is_empty()
     }
 }

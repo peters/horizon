@@ -289,6 +289,7 @@ pub struct ShortcutsConfig {
     pub focus_active_workspace: String,
     pub fit_active_workspace: String,
     pub open_remote_hosts: String,
+    pub toggle_sessions: String,
     pub toggle_sidebar: String,
     pub toggle_hud: String,
     pub toggle_minimap: String,
@@ -313,6 +314,7 @@ impl Default for ShortcutsConfig {
             focus_active_workspace: "Ctrl+Shift+W".to_string(),
             fit_active_workspace: "Ctrl+Shift+9".to_string(),
             open_remote_hosts: "Ctrl+Shift+H".to_string(),
+            toggle_sessions: "Ctrl+Shift+J".to_string(),
             toggle_sidebar: "Ctrl+Shift+B".to_string(),
             toggle_hud: "Ctrl+Shift+U".to_string(),
             toggle_minimap: "Ctrl+Shift+M".to_string(),
@@ -343,6 +345,7 @@ impl ShortcutsConfig {
             focus_active_workspace: parse_shortcut("focus_active_workspace", &self.focus_active_workspace)?,
             fit_active_workspace: parse_shortcut("fit_active_workspace", &self.fit_active_workspace)?,
             open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
+            toggle_sessions: parse_shortcut("toggle_sessions", &self.toggle_sessions)?,
             toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
             toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
             toggle_minimap: parse_shortcut("toggle_minimap", &self.toggle_minimap)?,
@@ -367,6 +370,7 @@ impl ShortcutsConfig {
             ("focus_active_workspace", shortcuts.focus_active_workspace),
             ("fit_active_workspace", shortcuts.fit_active_workspace),
             ("open_remote_hosts", shortcuts.open_remote_hosts),
+            ("toggle_sessions", shortcuts.toggle_sessions),
             ("toggle_sidebar", shortcuts.toggle_sidebar),
             ("toggle_hud", shortcuts.toggle_hud),
             ("toggle_minimap", shortcuts.toggle_minimap),
@@ -793,8 +797,10 @@ mod tests {
 
     #[test]
     fn workspace_navigation_shortcuts_resolve() {
-        let config = Config::from_yaml("shortcuts:\n  focus_active_workspace: Alt+W\n  fit_active_workspace: Alt+9\n")
-            .expect("config should deserialize");
+        let config = Config::from_yaml(
+            "shortcuts:\n  focus_active_workspace: Alt+W\n  fit_active_workspace: Alt+9\n  toggle_sessions: Alt+J\n",
+        )
+        .expect("config should deserialize");
 
         let shortcuts = config.shortcuts.resolve().expect("shortcuts should resolve");
 
@@ -805,6 +811,10 @@ mod tests {
         assert_eq!(
             shortcuts.fit_active_workspace,
             crate::shortcuts::ShortcutBinding::parse("Alt+9").expect("shortcut should parse")
+        );
+        assert_eq!(
+            shortcuts.toggle_sessions,
+            crate::shortcuts::ShortcutBinding::parse("Alt+J").expect("shortcut should parse")
         );
     }
 

@@ -20,23 +20,21 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
-    NewWorkspace,
     QuickNav,
-    FitWorkspace,
     RemoteHosts,
+    Sessions,
     Update,
     Settings,
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 2] = [Self::FitWorkspace, Self::RemoteHosts];
+    const SECONDARY: [Self; 1] = [Self::RemoteHosts];
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::NewWorkspace => "New Workspace",
             Self::QuickNav => "Quick Nav",
-            Self::FitWorkspace => "Fit Workspace",
             Self::RemoteHosts => "Remote Hosts",
+            Self::Sessions => "Sessions",
             Self::Update => "Update",
             Self::Settings => "Settings",
         }
@@ -96,11 +94,9 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
     );
 
     let states = [
-        (true, 2_usize, true),
-        (false, 2_usize, true),
+        (true, 1_usize, true),
         (false, 1_usize, true),
         (false, 0_usize, true),
-        (false, 2_usize, false),
         (false, 1_usize, false),
         (false, 0_usize, false),
     ];
@@ -144,7 +140,6 @@ fn layout_candidate(
     if show_fps {
         visible_items.push(ToolbarItem::FpsMeter);
     }
-    visible_items.push(ToolbarItem::Action(ToolbarAction::NewWorkspace));
     visible_items.push(ToolbarItem::Action(ToolbarAction::QuickNav));
     for action in ToolbarAction::SECONDARY.iter().take(secondary_visible).copied() {
         visible_items.push(ToolbarItem::Action(action));
@@ -161,6 +156,7 @@ fn layout_candidate(
     if show_update {
         visible_items.push(ToolbarItem::Action(ToolbarAction::Update));
     }
+    visible_items.push(ToolbarItem::Action(ToolbarAction::Sessions));
     visible_items.push(ToolbarItem::Action(ToolbarAction::Settings));
 
     let actions_width = visible_items_width(&visible_items);
@@ -227,23 +223,22 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert!(layout.overflow_actions.is_empty());
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::RemoteHosts))
+                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
         assert!(layout.search_rect.width() >= 180.0);
     }
 
     #[test]
     fn toolbar_moves_secondary_actions_into_overflow_on_tighter_widths() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(900.0, 768.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 768.0));
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert!(layout.overflow_actions.contains(&ToolbarAction::RemoteHosts));
+        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
@@ -251,23 +246,18 @@ mod tests {
 
     #[test]
     fn toolbar_keeps_primary_actions_visible_at_min_window_width() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(760.0, 600.0));
         let layout = root_toolbar_layout(viewport, false);
 
-        assert_eq!(
-            layout.overflow_actions,
-            vec![ToolbarAction::FitWorkspace, ToolbarAction::RemoteHosts]
-        );
-        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
-        assert!(
-            layout
-                .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::NewWorkspace))
-        );
         assert!(
             layout
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::QuickNav))
+        );
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
         assert!(
             layout
@@ -286,9 +276,6 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Update))
         );
-        assert_eq!(
-            layout.overflow_actions,
-            vec![ToolbarAction::FitWorkspace, ToolbarAction::RemoteHosts]
-        );
+        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
     }
 }
