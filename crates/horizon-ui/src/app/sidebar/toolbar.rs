@@ -151,17 +151,6 @@ impl HorizonApp {
 
     fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
         let response = match action {
-            ToolbarAction::FitWorkspace => ui
-                .add_enabled(
-                    self.has_attached_workspace(),
-                    util::chrome_button(action.label())
-                        .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
-                )
-                .on_hover_text(
-                    self.shortcuts
-                        .fit_active_workspace
-                        .display_label(util::primary_shortcut_label()),
-                ),
             ToolbarAction::QuickNav => ui
                 .add(
                     util::chrome_button(action.label())
@@ -193,7 +182,7 @@ impl HorizonApp {
                     response
                 }
             }
-            ToolbarAction::Sessions | ToolbarAction::NewWorkspace | ToolbarAction::Settings => ui.add(
+            ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
             ),
@@ -211,23 +200,10 @@ impl HorizonApp {
                 ui.set_min_width(160.0);
 
                 for action in overflow_actions {
-                    let mut button =
+                    let button =
                         egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT))
                             .frame(false);
-
-                    if *action == ToolbarAction::FitWorkspace {
-                        button = button.sense(if self.has_attached_workspace() {
-                            egui::Sense::click()
-                        } else {
-                            egui::Sense::hover()
-                        });
-                    }
-
-                    let response = if *action == ToolbarAction::FitWorkspace {
-                        ui.add_enabled(self.has_attached_workspace(), button)
-                    } else {
-                        ui.add(button)
-                    };
+                    let response = ui.add(button);
 
                     if response.clicked() {
                         self.perform_toolbar_action(ui.ctx(), *action);
@@ -240,14 +216,7 @@ impl HorizonApp {
 
     fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
         match action {
-            ToolbarAction::NewWorkspace => {
-                let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-                self.create_workspace_visible(ctx, &name);
-            }
             ToolbarAction::QuickNav => self.open_command_palette(),
-            ToolbarAction::FitWorkspace => {
-                self.execute_command(ctx, &crate::command_registry::CommandId::FitActiveWorkspace);
-            }
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
@@ -262,9 +231,7 @@ fn fps_meter_width() -> f32 {
 
 fn action_button_width(action: ToolbarAction) -> f32 {
     match action {
-        ToolbarAction::NewWorkspace => 128.0,
         ToolbarAction::QuickNav => 102.0,
-        ToolbarAction::FitWorkspace => 126.0,
         ToolbarAction::RemoteHosts => 120.0,
         ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,

@@ -1,10 +1,12 @@
+use std::time::Instant;
+
 use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, RichText, Stroke, Vec2};
 use horizon_core::{ResolvedSession, SessionSummary};
 
 use crate::theme;
 
 use super::HorizonApp;
-use super::util::{chrome_button, format_relative_time, primary_button};
+use super::util::{chrome_button, format_relative_time, primary_button, viewport_local_rect};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
@@ -15,6 +17,7 @@ pub(super) struct RuntimeSessionManagerState {
     selected_session_id: Option<String>,
     error: Option<String>,
     confirm_clear_others: bool,
+    opened_at: Instant,
 }
 
 impl RuntimeSessionManagerState {
@@ -38,6 +41,7 @@ impl RuntimeSessionManagerState {
             selected_session_id,
             error,
             confirm_clear_others: false,
+            opened_at: Instant::now(),
         }
     }
 
@@ -122,8 +126,11 @@ impl HorizonApp {
             let Some(state) = self.session_manager.as_mut() else {
                 return;
             };
-            render_backdrop(ctx);
-            render_session_manager_window(ctx, state, current_session_id.as_deref())
+            if render_backdrop(ctx, state.opened_at) {
+                SessionManagerAction::Close
+            } else {
+                render_session_manager_window(ctx, state, current_session_id.as_deref())
+            }
         };
 
         match action {
@@ -229,17 +236,23 @@ impl HorizonApp {
     }
 }
 
-fn render_backdrop(ctx: &Context) {
-    let screen_rect = ctx.input(egui::InputState::viewport_rect);
+fn render_backdrop(ctx: &Context, opened_at: Instant) -> bool {
+    let screen_rect = viewport_local_rect(ctx);
+    let mut close_requested = false;
     egui::Area::new(Id::new("session_manager_backdrop"))
         .fixed_pos(screen_rect.min)
-        .order(egui::Order::Foreground)
-        .interactable(false)
+        .constrain(false)
+        .order(egui::Order::Debug)
+        .interactable(true)
         .show(ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::hover());
+            let (rect, response) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
             ui.painter_at(rect)
                 .rect_filled(rect, 0.0, Color32::from_black_alpha(156));
+            if response.clicked() && opened_at.elapsed().as_millis() > 200 {
+                close_requested = true;
+            }
         });
+    close_requested
 }
 
 fn render_session_manager_window(
@@ -247,6 +260,10 @@ fn render_session_manager_window(
     state: &mut RuntimeSessionManagerState,
     current_session_id: Option<&str>,
 ) -> SessionManagerAction {
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        return SessionManagerAction::Close;
+    }
+
     let mut action = SessionManagerAction::None;
     let view_state = SessionManagerViewState::new(state, current_session_id);
 
@@ -257,7 +274,7 @@ fn render_session_manager_window(
         .collapsible(false)
         .resizable(false)
         .fixed_size(Vec2::new(SESSION_MANAGER_WIDTH, 0.0))
-        .order(egui::Order::Tooltip)
+        .order(egui::Order::Debug)
         .frame(
             egui::Frame::NONE
                 .fill(theme::PANEL_BG)
