@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use egui::{Button, Context, Pos2, Rect, Stroke, Vec2};
 
 use crate::theme;
@@ -43,6 +45,27 @@ pub(super) fn primary_shortcut_label() -> &'static str {
 
 pub(super) fn short_session_id(session_id: &str) -> &str {
     session_id.get(..8).unwrap_or(session_id)
+}
+
+pub(super) fn format_relative_time(timestamp_millis: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let timestamp = u128::try_from(timestamp_millis.max(0)).unwrap_or_default();
+    let age = now.saturating_sub(timestamp);
+    let age = Duration::from_millis(u64::try_from(age.min(u128::from(u64::MAX))).unwrap_or(u64::MAX));
+
+    if age < Duration::from_secs(60) {
+        return "active moments ago".to_string();
+    }
+    if age < Duration::from_secs(60 * 60) {
+        return format!("active {}m ago", age.as_secs() / 60);
+    }
+    if age < Duration::from_secs(60 * 60 * 24) {
+        return format!("active {}h ago", age.as_secs() / (60 * 60));
+    }
+    format!("active {}d ago", age.as_secs() / (60 * 60 * 24))
 }
 
 pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {

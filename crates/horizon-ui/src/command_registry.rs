@@ -23,6 +23,7 @@ pub enum CommandId {
     // Workspace / panel
     NewPanel,
     OpenRemoteHosts,
+    ToggleSessions,
     CreatePanelFromPreset(usize),
 
     // Settings
@@ -60,106 +61,132 @@ pub struct CommandEntry {
     pub keywords: Vec<String>,
 }
 
+fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]) -> CommandEntry {
+    CommandEntry {
+        id,
+        label: label.into(),
+        shortcut: Some(shortcut),
+        keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
+    }
+}
+
 /// Build the static list of action commands (not workspace/panel -- those are
 /// dynamic and assembled at query time by the palette).
 pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
+    let mut commands = workspace_commands(shortcuts, primary_label);
+    commands.extend(view_commands(shortcuts, primary_label));
+    commands.extend(global_commands(shortcuts, primary_label));
+    commands
+}
+
+fn workspace_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
     vec![
-        CommandEntry {
-            id: CommandId::NewPanel,
-            label: "New Panel".into(),
-            shortcut: Some(shortcuts.new_terminal.display_label(primary_label)),
-            keywords: vec!["create".into(), "terminal".into(), "add".into()],
-        },
-        CommandEntry {
-            id: CommandId::FocusActiveWorkspace,
-            label: "Focus Active Workspace".into(),
-            shortcut: Some(shortcuts.focus_active_workspace.display_label(primary_label)),
-            keywords: vec!["workspace".into(), "focus".into(), "pan".into(), "center".into()],
-        },
-        CommandEntry {
-            id: CommandId::FitActiveWorkspace,
-            label: "Fit Active Workspace".into(),
-            shortcut: Some(shortcuts.fit_active_workspace.display_label(primary_label)),
-            keywords: vec!["workspace".into(), "fit".into(), "zoom".into(), "frame".into()],
-        },
-        CommandEntry {
-            id: CommandId::OpenRemoteHosts,
-            label: "Remote Hosts".into(),
-            shortcut: Some(shortcuts.open_remote_hosts.display_label(primary_label)),
-            keywords: vec![
-                "ssh".into(),
-                "tailscale".into(),
-                "remote".into(),
-                "hosts".into(),
-                "nodes".into(),
-            ],
-        },
-        CommandEntry {
-            id: CommandId::ToggleSidebar,
-            label: "Toggle Sidebar".into(),
-            shortcut: Some(shortcuts.toggle_sidebar.display_label(primary_label)),
-            keywords: vec!["sidebar".into(), "hide".into(), "show".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleHud,
-            label: "Toggle HUD".into(),
-            shortcut: Some(shortcuts.toggle_hud.display_label(primary_label)),
-            keywords: vec!["heads".into(), "up".into(), "display".into(), "info".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleMinimap,
-            label: "Toggle Minimap".into(),
-            shortcut: Some(shortcuts.toggle_minimap.display_label(primary_label)),
-            keywords: vec!["overview".into(), "map".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleFullscreenWindow,
-            label: "Toggle Fullscreen (Window)".into(),
-            shortcut: Some(shortcuts.fullscreen_window.display_label(primary_label)),
-            keywords: vec!["maximize".into(), "window".into(), "fullscreen".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleFullscreenPanel,
-            label: "Toggle Fullscreen (Panel)".into(),
-            shortcut: Some(shortcuts.fullscreen_panel.display_label(primary_label)),
-            keywords: vec!["maximize".into(), "panel".into(), "fullscreen".into(), "focus".into()],
-        },
-        CommandEntry {
-            id: CommandId::ZoomReset,
-            label: "Reset Zoom".into(),
-            shortcut: Some(shortcuts.zoom_reset.display_label(primary_label)),
-            keywords: vec!["zoom".into(), "reset".into(), "100".into(), "percent".into()],
-        },
-        CommandEntry {
-            id: CommandId::ZoomIn,
-            label: "Zoom In".into(),
-            shortcut: Some(shortcuts.zoom_in.display_label(primary_label)),
-            keywords: vec!["zoom".into(), "bigger".into(), "enlarge".into()],
-        },
-        CommandEntry {
-            id: CommandId::ZoomOut,
-            label: "Zoom Out".into(),
-            shortcut: Some(shortcuts.zoom_out.display_label(primary_label)),
-            keywords: vec!["zoom".into(), "smaller".into(), "shrink".into()],
-        },
-        CommandEntry {
-            id: CommandId::AlignWorkspacesHorizontally,
-            label: "Align Workspaces".into(),
-            shortcut: Some(shortcuts.align_workspaces_horizontally.display_label(primary_label)),
-            keywords: vec!["arrange".into(), "horizontal".into(), "layout".into(), "row".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleSettings,
-            label: "Settings".into(),
-            shortcut: Some(shortcuts.toggle_settings.display_label(primary_label)),
-            keywords: vec!["settings".into(), "config".into(), "preferences".into()],
-        },
-        CommandEntry {
-            id: CommandId::ToggleSearch,
-            label: "Search Terminals".into(),
-            shortcut: Some(shortcuts.search.display_label(primary_label)),
-            keywords: vec!["find".into(), "search".into(), "grep".into(), "text".into()],
-        },
+        command_entry(
+            CommandId::NewPanel,
+            "New Panel",
+            shortcuts.new_terminal.display_label(primary_label),
+            &["create", "terminal", "add"],
+        ),
+        command_entry(
+            CommandId::FocusActiveWorkspace,
+            "Focus Active Workspace",
+            shortcuts.focus_active_workspace.display_label(primary_label),
+            &["workspace", "focus", "pan", "center"],
+        ),
+        command_entry(
+            CommandId::FitActiveWorkspace,
+            "Fit Active Workspace",
+            shortcuts.fit_active_workspace.display_label(primary_label),
+            &["workspace", "fit", "zoom", "frame"],
+        ),
+        command_entry(
+            CommandId::OpenRemoteHosts,
+            "Remote Hosts",
+            shortcuts.open_remote_hosts.display_label(primary_label),
+            &["ssh", "tailscale", "remote", "hosts", "nodes"],
+        ),
+        command_entry(
+            CommandId::ToggleSessions,
+            "Sessions",
+            shortcuts.toggle_sessions.display_label(primary_label),
+            &["session", "switch", "resume", "restore"],
+        ),
+        command_entry(
+            CommandId::AlignWorkspacesHorizontally,
+            "Align Workspaces",
+            shortcuts.align_workspaces_horizontally.display_label(primary_label),
+            &["arrange", "horizontal", "layout", "row"],
+        ),
+    ]
+}
+
+fn view_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
+    vec![
+        command_entry(
+            CommandId::ToggleSidebar,
+            "Toggle Sidebar",
+            shortcuts.toggle_sidebar.display_label(primary_label),
+            &["sidebar", "hide", "show"],
+        ),
+        command_entry(
+            CommandId::ToggleHud,
+            "Toggle HUD",
+            shortcuts.toggle_hud.display_label(primary_label),
+            &["heads", "up", "display", "info"],
+        ),
+        command_entry(
+            CommandId::ToggleMinimap,
+            "Toggle Minimap",
+            shortcuts.toggle_minimap.display_label(primary_label),
+            &["overview", "map"],
+        ),
+        command_entry(
+            CommandId::ToggleFullscreenWindow,
+            "Toggle Fullscreen (Window)",
+            shortcuts.fullscreen_window.display_label(primary_label),
+            &["maximize", "window", "fullscreen"],
+        ),
+        command_entry(
+            CommandId::ToggleFullscreenPanel,
+            "Toggle Fullscreen (Panel)",
+            shortcuts.fullscreen_panel.display_label(primary_label),
+            &["maximize", "panel", "fullscreen", "focus"],
+        ),
+        command_entry(
+            CommandId::ZoomReset,
+            "Reset Zoom",
+            shortcuts.zoom_reset.display_label(primary_label),
+            &["zoom", "reset", "100", "percent"],
+        ),
+        command_entry(
+            CommandId::ZoomIn,
+            "Zoom In",
+            shortcuts.zoom_in.display_label(primary_label),
+            &["zoom", "bigger", "enlarge"],
+        ),
+        command_entry(
+            CommandId::ZoomOut,
+            "Zoom Out",
+            shortcuts.zoom_out.display_label(primary_label),
+            &["zoom", "smaller", "shrink"],
+        ),
+    ]
+}
+
+fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
+    vec![
+        command_entry(
+            CommandId::ToggleSettings,
+            "Settings",
+            shortcuts.toggle_settings.display_label(primary_label),
+            &["settings", "config", "preferences"],
+        ),
+        command_entry(
+            CommandId::ToggleSearch,
+            "Search Terminals",
+            shortcuts.search.display_label(primary_label),
+            &["find", "search", "grep", "text"],
+        ),
     ]
 }
 

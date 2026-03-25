@@ -1,4 +1,6 @@
 mod model;
+#[cfg(test)]
+mod tests;
 
 use std::fs;
 use std::io::ErrorKind;
@@ -156,6 +158,46 @@ impl SessionStore {
     /// Returns an error if the session runtime state or metadata cannot be read.
     pub fn take_over_session(&self, session_id: &str) -> Result<ResolvedSession> {
         self.load_existing_session(session_id)
+    }
+
+    /// List saved sessions for the current profile using the same ordering as startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored session index or metadata cannot be read.
+    pub fn list_profile_sessions(&self) -> Result<Vec<SessionSummary>> {
+        Ok(self
+            .load_profile_snapshot()?
+            .sessions
+            .into_iter()
+            .map(|session| session.summary)
+            .collect())
+    }
+
+    /// Delete an inactive saved session from disk and remove it from the profile index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session does not belong to the current profile,
+    /// is still live, or its files/index cannot be removed.
+    pub fn delete_session(&self, session_id: &str) -> Result<()> {
+        let session = self
+            .load_profile_snapshot()?
+            .sessions
+            .into_iter()
+            .find(|session| session.summary.session_id == session_id)
+            .ok_or_else(|| Error::State(format!("session {session_id} was not found for this profile")))?;
+        if session.is_live {
+            return Err(Error::State(format!(
+                "cannot delete live session {session_id} while it is still active"
+            )));
+        }
+
+        remove_dir_if_exists(&self.home.session_dir(session_id))?;
+        let mut index = self.load_session_index()?;
+        index.remove_profile_session(&self.profile_id, session_id);
+        self.save_session_index(&index)?;
+        Ok(())
     }
 
     /// Persist the runtime state and refreshed metadata for a session.
@@ -488,54 +530,10 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
-
-    #[test]
-    fn empty_store_creates_new_session() {
-        let root = test_root("empty-store");
-        let home = HorizonHome::from_root(root.clone());
-        let store = SessionStore::new(home.clone(), home.config_path());
-
-        let decision = store.prepare_startup(&Config::default()).expect("startup decision");
-
-        match decision {
-            StartupDecision::Open {
-                disposition: SessionOpenDisposition::New,
-                session,
-            } => {
-                assert!(session.runtime_state_path.exists());
-                assert!(session.transcript_root.starts_with(root.join("sessions")));
-            }
-            other => panic!("unexpected decision: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn second_startup_resumes_previous_session() {
-        let root = test_root("resume-store");
-        let home = HorizonHome::from_root(root.clone());
-        let store = SessionStore::new(home.clone(), home.config_path());
-        let created = store.create_new_session(&Config::default()).expect("create session");
-        store
-            .save_runtime_state(&created.session_id, &RuntimeState::from_config(&Config::default()))
-            .expect("save state");
-
-        let decision = store.prepare_startup(&Config::default()).expect("startup decision");
-
-        match decision {
-            StartupDecision::Open {
-                disposition: SessionOpenDisposition::Resume,
-                session,
-            } => assert_eq!(session.session_id, created.session_id),
-            other => panic!("unexpected decision: {other:?}"),
-        }
-    }
-
-    fn test_root(label: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("horizon-session-store-{label}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp root");
-        root
+fn remove_dir_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }

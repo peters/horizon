@@ -115,6 +115,7 @@ impl HorizonApp {
                 }
             }
             CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(ctx),
+            CommandId::ToggleSessions => self.toggle_session_manager(),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self
@@ -153,6 +154,7 @@ impl HorizonApp {
             (self.shortcuts.toggle_hud, CommandId::ToggleHud),
             (self.shortcuts.toggle_minimap, CommandId::ToggleMinimap),
             (self.shortcuts.open_remote_hosts, CommandId::OpenRemoteHosts),
+            (self.shortcuts.toggle_sessions, CommandId::ToggleSessions),
             (self.shortcuts.new_terminal, CommandId::NewPanel),
             (self.shortcuts.search, CommandId::ToggleSearch),
         ];

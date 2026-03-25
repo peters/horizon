@@ -3,13 +3,19 @@ use std::collections::VecDeque;
 use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
 use egui::{Key, PointerButton, Pos2, Rect, Vec2};
-use horizon_core::{Panel, SelectionType, TerminalSide};
+use horizon_core::{
+    Panel, PanelKind, SelectionType, ShortcutBinding, ShortcutKey, ShortcutModifiers, SshConnectionStatus, TerminalSide,
+};
 
 use super::super::input::{self, TerminalInputEvent};
 use super::super::primary_selection::PrimarySelection;
+use crate::app::shortcuts::shortcut_event_matches;
 
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
+
+pub(crate) const SSH_RECONNECT_SHORTCUT: ShortcutBinding =
+    ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
 
 #[derive(Clone, Copy)]
 pub(super) struct PointerSupport<'a> {
@@ -454,9 +460,14 @@ pub(super) fn handle_terminal_keyboard_input(
     panel: &mut Panel,
     events: &[TerminalInputEvent],
     primary_selection: &PrimarySelection,
-) {
+    local_ssh_reconnect_enabled: bool,
+) -> bool {
+    if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
+        return true;
+    }
+
     let Some(terminal) = panel.terminal_mut() else {
-        return;
+        return false;
     };
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
@@ -508,6 +519,27 @@ pub(super) fn handle_terminal_keyboard_input(
     if !emission.bytes.is_empty() {
         terminal.write_input(&emission.bytes);
     }
+
+    false
+}
+
+fn disconnected_ssh_reconnect_requested(
+    kind: PanelKind,
+    ssh_status: Option<SshConnectionStatus>,
+    events: &[TerminalInputEvent],
+) -> bool {
+    kind == PanelKind::Ssh
+        && matches!(ssh_status, Some(SshConnectionStatus::Disconnected))
+        && events.iter().any(|input_event| {
+            matches!(
+                &input_event.event,
+                egui::Event::Key {
+                    pressed: true,
+                    repeat: false,
+                    ..
+                }
+            ) && shortcut_event_matches(&input_event.event, SSH_RECONNECT_SHORTCUT)
+        })
 }
 
 #[derive(Default)]
@@ -747,11 +779,12 @@ impl InputEmission {
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardInputForwarder, TerminalInputEvent, pointer_button_event_pos, pointer_event_targets_rect,
-        selection_copy_completed, should_request_primary_paste,
+        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested, pointer_button_event_pos,
+        pointer_event_targets_rect, selection_copy_completed, should_request_primary_paste,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
+    use horizon_core::{PanelKind, SshConnectionStatus};
 
     #[test]
     fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
@@ -808,7 +841,71 @@ mod tests {
     }
 
     #[test]
-    fn altgr_text_after_release_emits_only_kitty_sequences() {
+    fn disconnected_ssh_panels_request_reconnect_from_local_shortcut() {
+        assert!(disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Disconnected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn connected_ssh_panels_ignore_local_reconnect_shortcut() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Connected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn non_ssh_panels_ignore_local_reconnect_shortcut() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Shell,
+            None,
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                false,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn repeated_reconnect_shortcut_does_not_queue_another_restart() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Disconnected),
+            &[key_event(
+                Key::R,
+                Some(Key::R),
+                None,
+                true,
+                true,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            )],
+        ));
+    }
+
+    #[test]
+    fn altgr_text_after_release_stays_on_text_path_without_report_all_keys() {
         let events = vec![
             key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::ALT),
             key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::ALT),
@@ -820,11 +917,11 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        assert_eq!(bytes, b"\x1b[50:64;3u\x1b[50:64;3:3u");
+        assert_eq!(bytes, b"@");
     }
 
     #[test]
-    fn shifted_symbol_uses_text_reconciliation_for_release_order() {
+    fn shifted_symbol_uses_text_reconciliation_without_forcing_kitty_sequences() {
         let events = vec![
             key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::SHIFT),
             text_event("@"),
@@ -836,15 +933,13 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        assert_eq!(bytes, b"\x1b[50:64;2u\x1b[50:64;2:3u");
+        assert_eq!(bytes, b"@");
     }
 
     /// Regression: on some Linux setups, `AltGr` is NOT reported as
-    /// `modifiers.alt` by winit.  When kitty keyboard protocol is active,
-    /// the key press was immediately emitted as a kitty sequence for the
-    /// base key ("2") and the text event ("@") passed through as raw
-    /// text because suppression expected "2".  Result: "2@" instead of
-    /// just the kitty sequence for "@".
+    /// `modifiers.alt` by winit. The key event must not leak the base
+    /// key ("2") ahead of the later text event ("@"), even when kitty
+    /// keyboard mode is active.
     #[test]
     fn altgr_without_alt_modifier_in_kitty_mode_does_not_leak_base_key() {
         let events = vec![
@@ -858,11 +953,7 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
         );
 
-        // Must produce kitty sequences for "@" (codepoint 64), NOT
-        // the base key "2" (codepoint 50) followed by raw "@".
-        // Release includes ";1" (no-modifier marker) because
-        // REPORT_EVENT_TYPES forces the modifier field.
-        assert_eq!(bytes, b"\x1b[50:64u\x1b[50:64;1:3u");
+        assert_eq!(bytes, b"@");
     }
 
     /// Same scenario as above but in non-kitty mode: the text event
@@ -881,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn shifted_international_key_uses_observed_unshifted_text_for_primary_code() {
+    fn shifted_international_key_stays_on_text_path_without_report_all_keys() {
         let events = vec![
             key_event(
                 Key::OpenBracket,
@@ -905,6 +996,39 @@ mod tests {
         let bytes = forward_bytes(
             &events,
             TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, "Å".as_bytes());
+    }
+
+    #[test]
+    fn report_all_keys_keeps_printable_text_on_kitty_sequence_path() {
+        let events = vec![
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                true,
+                false,
+                Modifiers::SHIFT,
+            ),
+            text_event("Å"),
+            key_event(
+                Key::OpenBracket,
+                Some(Key::OpenBracket),
+                Some("å"),
+                false,
+                false,
+                Modifiers::SHIFT,
+            ),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES
+                | TermMode::REPORT_EVENT_TYPES
+                | TermMode::REPORT_ALTERNATE_KEYS
+                | TermMode::REPORT_ALL_KEYS_AS_ESC,
         );
 
         assert_eq!(bytes, b"\x1b[229:197:91;2u\x1b[229:197:91;2:3u");

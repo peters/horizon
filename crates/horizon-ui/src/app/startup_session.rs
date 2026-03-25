@@ -1,5 +1,3 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
 use egui::{Align, Color32, Context, CursorIcon, Layout, Margin, RichText, Sense, Stroke};
 use horizon_core::StartupPromptReason;
 
@@ -59,7 +57,7 @@ impl HorizonApp {
         self.restore_window_viewport(ctx);
     }
 
-    fn restore_window_viewport(&self, ctx: &Context) {
+    pub(super) fn restore_window_viewport(&self, ctx: &Context) {
         let width = self.window_config.width.clamp(800.0, 7680.0);
         let height = self.window_config.height.clamp(600.0, 4320.0);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
@@ -178,7 +176,7 @@ fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary
                             "{} workspaces · {} panels · {}",
                             session.workspace_count,
                             session.panel_count,
-                            format_relative_time(session.last_active_at)
+                            super::util::format_relative_time(session.last_active_at)
                         ))
                         .size(12.0)
                         .color(theme::FG_SOFT),
@@ -226,25 +224,4 @@ fn render_action_row(ui: &mut egui::Ui, state: &StartupChooserState, action: &mu
             }
         }
     });
-}
-
-fn format_relative_time(timestamp_millis: i64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let timestamp = u128::try_from(timestamp_millis.max(0)).unwrap_or_default();
-    let age = now.saturating_sub(timestamp);
-    let age = Duration::from_millis(u64::try_from(age.min(u128::from(u64::MAX))).unwrap_or(u64::MAX));
-
-    if age < Duration::from_secs(60) {
-        return "active moments ago".to_string();
-    }
-    if age < Duration::from_secs(60 * 60) {
-        return format!("active {}m ago", age.as_secs() / 60);
-    }
-    if age < Duration::from_secs(60 * 60 * 24) {
-        return format!("active {}h ago", age.as_secs() / (60 * 60));
-    }
-    format!("active {}d ago", age.as_secs() / (60 * 60 * 24))
 }

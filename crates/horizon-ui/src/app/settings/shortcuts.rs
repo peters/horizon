@@ -43,6 +43,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
             &mut config.shortcuts.open_remote_hosts,
             &mut all_valid,
         );
+        changed |= shortcut_row(ui, "Sessions", &mut config.shortcuts.toggle_sessions, &mut all_valid);
         changed |= shortcut_row(
             ui,
             "Toggle Sidebar",

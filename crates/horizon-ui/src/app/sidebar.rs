@@ -36,6 +36,8 @@ struct SidebarPanelEntry {
 
 #[derive(Clone, Copy, Default)]
 struct SidebarActions {
+    create_workspace: bool,
+    fit_active_workspace: bool,
     focus_panel: Option<PanelId>,
     pan_to_panel: Option<PanelId>,
     pan_to_workspace: Option<WorkspaceId>,
@@ -152,16 +154,7 @@ impl HorizonApp {
         workspace_data: &[WorkspaceSidebarEntry],
         actions: &mut SidebarActions,
     ) {
-        ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(
-                egui::RichText::new("WORKSPACES")
-                    .color(theme::FG_DIM)
-                    .size(10.5)
-                    .strong(),
-            );
-        });
+        self.render_sidebar_header(ui, actions);
         ui.add_space(10.0);
 
         let available = ui.available_height();
@@ -177,6 +170,43 @@ impl HorizonApp {
             });
 
         ui.add_space(8.0);
+    }
+
+    fn render_sidebar_header(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            ui.add_space(18.0);
+            ui.label(
+                egui::RichText::new("WORKSPACES")
+                    .color(theme::FG_DIM)
+                    .size(10.5)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(12.0);
+                let fit = ui
+                    .add_enabled(
+                        self.has_attached_workspace(),
+                        util::chrome_button("Fit").min_size(Vec2::new(42.0, 24.0)),
+                    )
+                    .on_hover_text(
+                        self.shortcuts
+                            .fit_active_workspace
+                            .display_label(util::primary_shortcut_label()),
+                    );
+                if fit.clicked() {
+                    actions.fit_active_workspace = true;
+                }
+
+                let new_workspace = ui
+                    .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
+                    .on_hover_text("Create a new workspace.");
+                if new_workspace.clicked() {
+                    actions.create_workspace = true;
+                }
+            });
+        });
     }
 
     fn render_sidebar_workspace(
@@ -494,6 +524,13 @@ impl HorizonApp {
     }
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
+        if actions.create_workspace {
+            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+            self.create_workspace_visible(ctx, &name);
+        }
+        if actions.fit_active_workspace {
+            let _ = self.fit_active_workspace(ctx);
+        }
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
         }
