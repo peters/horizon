@@ -19,7 +19,7 @@ use crate::theme;
 pub struct RemoteHostsOverlay {
     query: String,
     selected: usize,
-    expanded_host: Option<String>,
+    expanded_host: Option<ExpandedHostId>,
     opened_at: Instant,
 }
 
@@ -43,6 +43,12 @@ struct OverlayRenderContext<'a, 'b> {
     filtered: &'a [usize],
     layout: &'a OverlayLayout,
     frame: &'b FrameContext<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExpandedHostId {
+    label: String,
+    connection: SshConnection,
 }
 
 impl RemoteHostsOverlay {
@@ -351,15 +357,81 @@ impl RemoteHostsOverlay {
     }
 
     fn is_expanded(&self, host: &RemoteHost) -> bool {
-        self.expanded_host.as_deref() == Some(&host.ssh_connection.display_label())
+        self.expanded_host
+            .as_ref()
+            .is_some_and(|expanded| *expanded == ExpandedHostId::from(host))
     }
 
     fn toggle_expanded(&mut self, host: &RemoteHost) {
-        let key = host.ssh_connection.display_label();
-        if self.expanded_host.as_deref() == Some(key.as_str()) {
+        let expanded_id = ExpandedHostId::from(host);
+        if self.expanded_host.as_ref() == Some(&expanded_id) {
             self.expanded_host = None;
         } else {
-            self.expanded_host = Some(key);
+            self.expanded_host = Some(expanded_id);
+        }
+    }
+}
+
+impl From<&RemoteHost> for ExpandedHostId {
+    fn from(host: &RemoteHost) -> Self {
+        Self {
+            label: host.label.clone(),
+            connection: host.ssh_connection.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{RemoteHost, RemoteHostSources, RemoteHostStatus, SshConnection};
+
+    use super::RemoteHostsOverlay;
+
+    #[test]
+    fn expanded_host_identity_keeps_duplicate_connection_rows_separate() {
+        let live_a = remote_host("live-a", 22429);
+        let live_b = remote_host("live-b", 22429);
+        let fresh_a = remote_host("fresh-a", 22431);
+        let mut overlay = RemoteHostsOverlay::new();
+
+        overlay.toggle_expanded(&live_a);
+
+        assert!(overlay.is_expanded(&live_a));
+        assert!(!overlay.is_expanded(&live_b));
+        assert!(!overlay.is_expanded(&fresh_a));
+    }
+
+    #[test]
+    fn toggle_expanded_collapses_the_same_row() {
+        let live_a = remote_host("live-a", 22429);
+        let mut overlay = RemoteHostsOverlay::new();
+
+        overlay.toggle_expanded(&live_a);
+        assert!(overlay.is_expanded(&live_a));
+
+        overlay.toggle_expanded(&live_a);
+        assert!(!overlay.is_expanded(&live_a));
+    }
+
+    fn remote_host(label: &str, port: u16) -> RemoteHost {
+        RemoteHost {
+            label: label.to_string(),
+            ssh_connection: SshConnection {
+                host: "127.0.0.1".to_string(),
+                port: Some(port),
+                user: Some("fintermac".to_string()),
+                ..SshConnection::default()
+            },
+            sources: RemoteHostSources {
+                ssh_config: true,
+                tailscale: false,
+            },
+            status: RemoteHostStatus::Unknown,
+            last_seen_secs: None,
+            os: None,
+            hostname: None,
+            tags: Vec::new(),
+            ips: Vec::new(),
         }
     }
 }
