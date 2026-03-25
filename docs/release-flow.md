@@ -65,7 +65,7 @@ Then it:
 - builds the release binaries for Linux, macOS, and Windows
 - for stable releases, stages Surge packages and GUI installers for the same platform matrix
 - uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
-- for stable releases, publishes the Surge release index and package artifacts to the dedicated `surge` GitHub Release tag using the `stable` channel
+- for stable releases, publishes Surge update metadata and package artifacts to the internal `surge` GitHub Release tag using the `stable` channel, then marks that storage tag as a prerelease so the user-facing release list stays centered on the versioned Horizon releases
 - for stable releases, builds the classic `horizon` snap from [`snap/snapcraft.yaml`](../snap/snapcraft.yaml) and releases it to the Snap Store `stable` channel
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 - in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`

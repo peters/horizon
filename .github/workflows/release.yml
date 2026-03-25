@@ -312,7 +312,7 @@ jobs:
             --clobber
 
   publish-surge-release-index:
-    name: Publish Surge Release Index
+    name: Publish Surge Update Storage
     if: ${{ !github.event.release.prerelease }}
     needs: [validate-release, build-artifacts]
     runs-on: ubuntu-latest
@@ -394,6 +394,33 @@ jobs:
           horizon-osx-x64 osx-x64
           horizon-win-x64 win-x64
           EOF
+
+      - name: Mark Surge storage release internal
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > surge-storage-notes.md <<'EOF'
+          Internal storage for Surge update metadata and package artifacts.
+
+          Do not download binaries from this tag.
+          Use the versioned Horizon releases for user-facing downloads.
+          EOF
+
+          gh release edit surge \
+            --repo "${{ github.repository }}" \
+            --prerelease \
+            --title "Internal Surge Update Storage" \
+            --notes-file surge-storage-notes.md
+
+      - name: Restore latest Horizon release marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release edit "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --latest
 
   publish-snap:
     name: Publish Snap
