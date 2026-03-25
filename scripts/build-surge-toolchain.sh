@@ -6,7 +6,7 @@ usage() {
 Build the Surge toolchain binaries needed for Horizon packaging.
 
 Usage:
-  build-surge-toolchain.sh [--version <git-tag> | --commit-sha <git-sha> | --source-path <path>] [--repo-url <https-url>] --output-dir <path>
+  build-surge-toolchain.sh [--version <git-tag> | --commit-sha <git-sha> | --source-path <path>] [--repo-url <https-url>] --output-dir <path> [--prepare-only]
 EOF
 }
 
@@ -15,6 +15,7 @@ commit_sha=""
 repo_url="https://github.com/fintermobilityas/surge.git"
 source_path=""
 output_dir=""
+prepare_only=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -37,6 +38,10 @@ while [ "$#" -gt 0 ]; do
     --output-dir)
       output_dir="${2:-}"
       shift 2
+      ;;
+    --prepare-only)
+      prepare_only=1
+      shift
       ;;
     -h|--help)
       usage
@@ -194,6 +199,11 @@ else
   fi
 
   source_root="$work_root"
+fi
+
+if [ "$prepare_only" -eq 1 ]; then
+  printf 'Prepared Surge source %s at %s\n' "$source_ref" "$source_commit"
+  exit 0
 fi
 
 if toolchain_ready "$output_dir" "$source_ref" "$source_commit"; then
