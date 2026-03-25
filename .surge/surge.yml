@@ -1,7 +1,7 @@
 schema: 1
 storage:
   provider: github_releases
-  bucket: peters/horizon
+  bucket: peters/horizon-updates
   region: surge
 
 apps:

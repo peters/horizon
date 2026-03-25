@@ -257,7 +257,7 @@ After the local filesystem smoke is green, run the WinGet publication smoke with
 
 Use a separate public staging repo for this step, not `peters/horizon`.
 
-1. Mirror the Horizon release workflow in the staging repo and point its `.surge/surge.yml` `bucket` to that staging repo.
+1. Mirror the Horizon release workflow in the staging repo. The workflow now defaults Surge storage to the current repo for non-`peters/horizon` releases, so no `.surge/surge.yml` edit is required.
 2. Cut a stable release in the staging repo, install it on Windows from the generated Surge installer, and confirm `%LOCALAPPDATA%\\horizon\\app\\.surge\\runtime.yml` records the staging repo in `bucket:`.
 3. Cut a second stable release in the same staging repo.
 4. Launch the already-installed app and wait for the Horizon update prompt.
@@ -408,7 +408,7 @@ screencapture -x /tmp/horizon-surge-smoke/post-update-launch.png
 
 Use a separate public staging repo for this step, not `peters/horizon`.
 
-1. Mirror the Horizon release workflow in the staging repo and point its `.surge/surge.yml` `bucket` to that staging repo.
+1. Mirror the Horizon release workflow in the staging repo. The workflow now defaults Surge storage to the current repo for non-`peters/horizon` releases, so no `.surge/surge.yml` edit is required.
 2. Cut a stable release in the staging repo, install it on macOS from the generated Surge installer, and confirm `~/Library/Application Support/horizon/app/.surge/runtime.yml` records the staging repo in `bucket:`.
 3. Cut a second stable release in the same staging repo.
 4. Launch the already-installed app and wait for the Horizon update prompt.
