@@ -189,6 +189,16 @@ pub(super) fn chrome_button(text: &str) -> Button<'_> {
         .corner_radius(10)
 }
 
+pub(super) fn danger_button(text: &str) -> Button<'_> {
+    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG))
+        .fill(theme::blend(theme::PANEL_BG_ALT, theme::PALETTE_RED, 0.22))
+        .stroke(Stroke::new(
+            1.0,
+            theme::blend(theme::BORDER_STRONG, theme::PALETTE_RED, 0.68),
+        ))
+        .corner_radius(10)
+}
+
 pub(crate) fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }

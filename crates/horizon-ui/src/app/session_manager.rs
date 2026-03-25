@@ -6,7 +6,7 @@ use horizon_core::{ResolvedSession, SessionSummary};
 use crate::theme;
 
 use super::HorizonApp;
-use super::util::{chrome_button, format_relative_time, primary_button, viewport_local_rect};
+use super::util::{chrome_button, danger_button, format_relative_time, primary_button, viewport_local_rect};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
@@ -17,6 +17,7 @@ pub(super) struct RuntimeSessionManagerState {
     selected_session_id: Option<String>,
     error: Option<String>,
     confirm_clear_others: bool,
+    confirm_remove_session_id: Option<String>,
     opened_at: Instant,
 }
 
@@ -41,6 +42,7 @@ impl RuntimeSessionManagerState {
             selected_session_id,
             error,
             confirm_clear_others: false,
+            confirm_remove_session_id: None,
             opened_at: Instant::now(),
         }
     }
@@ -74,8 +76,8 @@ struct SessionManagerViewState {
     removable_session_ids: Vec<String>,
     selected_session: Option<SessionSummary>,
     can_switch: bool,
-    can_remove_selected: bool,
     remove_all_label: &'static str,
+    remove_all_question: &'static str,
 }
 
 impl SessionManagerViewState {
@@ -84,22 +86,19 @@ impl SessionManagerViewState {
         let selected_session = state.selected_session().cloned();
         let can_switch = selected_session
             .as_ref()
-            .is_some_and(|session| Some(session.session_id.as_str()) != current_session_id && !session.is_live);
-        let can_remove_selected = selected_session
-            .as_ref()
-            .is_some_and(|session| Some(session.session_id.as_str()) != current_session_id && !session.is_live);
-        let remove_all_label = if current_session_id.is_some() {
-            "Remove Other Sessions"
+            .is_some_and(|session| is_session_removable(session, current_session_id));
+        let (remove_all_label, remove_all_question) = if current_session_id.is_some() {
+            ("Remove Other Sessions", "Remove other sessions?")
         } else {
-            "Remove All Saved Sessions"
+            ("Remove All Saved Sessions", "Remove all saved sessions?")
         };
 
         Self {
             removable_session_ids,
             selected_session,
             can_switch,
-            can_remove_selected,
             remove_all_label,
+            remove_all_question,
         }
     }
 
@@ -189,6 +188,7 @@ impl HorizonApp {
         if let Some(state) = self.session_manager.as_mut() {
             state.error = Some(error);
             state.confirm_clear_others = false;
+            state.confirm_remove_session_id = None;
         }
     }
 
@@ -208,7 +208,7 @@ impl HorizonApp {
 
     fn prepare_session_switch(&mut self) {
         self.auto_save_runtime_state();
-        self.board.shutdown_terminal_panels();
+        let _ = self.board.begin_async_shutdown();
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
@@ -247,7 +247,7 @@ fn render_backdrop(ctx: &Context, opened_at: Instant) -> bool {
         .show(ctx, |ui| {
             let (rect, response) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
             ui.painter_at(rect)
-                .rect_filled(rect, 0.0, Color32::from_black_alpha(156));
+                .rect_filled(rect, 0.0, Color32::from_black_alpha(140));
             if response.clicked() && opened_at.elapsed().as_millis() > 200 {
                 close_requested = true;
             }
@@ -278,13 +278,13 @@ fn render_session_manager_window(
         .frame(
             egui::Frame::NONE
                 .fill(theme::PANEL_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
-                .corner_radius(CornerRadius::same(16))
+                .stroke(Stroke::new(1.5, theme::alpha(theme::ACCENT, 80)))
+                .corner_radius(CornerRadius::same(20))
                 .shadow(egui::Shadow {
                     offset: [0, 12],
-                    blur: 42,
-                    spread: 4,
-                    color: Color32::from_black_alpha(144),
+                    blur: 32,
+                    spread: 2,
+                    color: Color32::from_black_alpha(132),
                 }),
         )
         .show(ctx, |ui| {
@@ -312,7 +312,7 @@ fn render_session_manager_content(
         );
         ui.add_space(14.0);
 
-        render_session_list(ui, state, current_session_id);
+        render_session_list(ui, state, current_session_id, action);
         render_session_error(ui, state.error.as_deref());
         render_session_hint(ui, view_state.selected_session.as_ref(), current_session_id);
         render_session_actions(ui, state, view_state, action);
@@ -320,7 +320,12 @@ fn render_session_manager_content(
     });
 }
 
-fn render_session_list(ui: &mut egui::Ui, state: &mut RuntimeSessionManagerState, current_session_id: Option<&str>) {
+fn render_session_list(
+    ui: &mut egui::Ui,
+    state: &mut RuntimeSessionManagerState,
+    current_session_id: Option<&str>,
+    action: &mut SessionManagerAction,
+) {
     if state.sessions.is_empty() {
         render_empty_state(ui);
         return;
@@ -328,19 +333,37 @@ fn render_session_list(ui: &mut egui::Ui, state: &mut RuntimeSessionManagerState
 
     egui::ScrollArea::vertical()
         .max_height(300.0)
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
         .show(ui, |ui| {
             for session in &state.sessions {
-                if render_session_card(
+                let card_action = render_session_card(
                     ui,
                     session,
                     state.selected_session_id.as_deref() == Some(session.session_id.as_str()),
                     current_session_id,
-                ) {
-                    state.selected_session_id = Some(session.session_id.clone());
-                    state.confirm_clear_others = false;
-                    state.error = None;
+                    state.confirm_remove_session_id.as_deref() == Some(session.session_id.as_str()),
+                );
+
+                match card_action {
+                    SessionCardAction::None => {}
+                    SessionCardAction::Select => {
+                        state.selected_session_id = Some(session.session_id.clone());
+                        state.confirm_clear_others = false;
+                        state.confirm_remove_session_id = None;
+                        state.error = None;
+                    }
+                    SessionCardAction::BeginRemove(session_id) => {
+                        state.selected_session_id = Some(session_id.clone());
+                        state.confirm_clear_others = false;
+                        state.confirm_remove_session_id = Some(session_id);
+                        state.error = None;
+                    }
+                    SessionCardAction::CancelRemove => state.confirm_remove_session_id = None,
+                    SessionCardAction::ConfirmRemove(session_id) => {
+                        *action = SessionManagerAction::Remove(session_id);
+                    }
                 }
+
                 ui.add_space(10.0);
             }
         });
@@ -388,22 +411,7 @@ fn render_session_actions(
             *action = SessionManagerAction::SwitchTo(session.session_id.clone());
         }
 
-        if ui
-            .add_enabled(
-                view_state.can_remove_selected,
-                chrome_button("Remove Selected").min_size(Vec2::new(118.0, 0.0)),
-            )
-            .clicked()
-            && let Some(session) = view_state.selected_session.as_ref()
-        {
-            *action = SessionManagerAction::Remove(session.session_id.clone());
-        }
-
         render_remove_all_actions(ui, state, view_state, action);
-
-        if ui.add(chrome_button("Close")).clicked() {
-            *action = SessionManagerAction::Close;
-        }
     });
 }
 
@@ -417,15 +425,20 @@ fn render_remove_all_actions(
         if ui
             .add_enabled(
                 view_state.has_removable_sessions(),
-                chrome_button("Confirm Remove All").min_size(Vec2::new(146.0, 0.0)),
+                danger_button("Yes").min_size(Vec2::new(46.0, 0.0)),
             )
             .clicked()
         {
             *action = SessionManagerAction::RemoveAll(view_state.removable_session_ids.clone());
         }
-        if ui.add(chrome_button("Cancel")).clicked() {
+        if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
             state.confirm_clear_others = false;
         }
+        ui.label(
+            RichText::new(view_state.remove_all_question)
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
         return;
     }
 
@@ -437,20 +450,17 @@ fn render_remove_all_actions(
         .clicked()
     {
         state.confirm_clear_others = true;
+        state.confirm_remove_session_id = None;
         state.error = None;
     }
 }
 
 fn render_header(ui: &mut egui::Ui, action: &mut SessionManagerAction) {
     egui::Frame::NONE
-        .fill(theme::TITLEBAR_BG)
-        .corner_radius(CornerRadius {
-            nw: 16,
-            ne: 16,
-            sw: 0,
-            se: 0,
-        })
-        .inner_margin(Margin::symmetric(24, 18))
+        .fill(theme::BG_ELEVATED)
+        .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT, 48)))
+        .corner_radius(CornerRadius::same(14))
+        .inner_margin(Margin::symmetric(20, 16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -491,10 +501,13 @@ fn render_session_card(
     session: &SessionSummary,
     selected: bool,
     current_session_id: Option<&str>,
-) -> bool {
+    confirm_remove: bool,
+) -> SessionCardAction {
     let is_current = current_session_id == Some(session.session_id.as_str());
-    let mut clicked = false;
-    let frame_response = egui::Frame::NONE
+    let can_remove = is_session_removable(session, current_session_id);
+    let mut card_action = SessionCardAction::None;
+    let mut selection_rect = None;
+    egui::Frame::NONE
         .fill(if selected {
             theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.16)
         } else {
@@ -512,9 +525,12 @@ fn render_session_card(
         .inner_margin(Margin::same(14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                clicked = ui.radio(selected, "").clicked();
+            let content_response = ui.horizontal(|ui| {
+                if ui.radio(selected, "").clicked() {
+                    card_action = SessionCardAction::Select;
+                }
                 ui.vertical(|ui| {
+                    ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG));
                         if is_current {
@@ -545,16 +561,58 @@ fn render_session_card(
                     );
                 });
             });
-        })
-        .response;
+            selection_rect = Some(content_response.response.rect);
+
+            if can_remove {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(22.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if confirm_remove {
+                            if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
+                                card_action = SessionCardAction::ConfirmRemove(session.session_id.clone());
+                            }
+                            if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
+                                card_action = SessionCardAction::CancelRemove;
+                            }
+                            ui.label(RichText::new("Delete?").size(10.5).color(theme::FG_DIM));
+                        } else if ui.add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0))).clicked() {
+                            card_action = SessionCardAction::BeginRemove(session.session_id.clone());
+                        }
+                    });
+                });
+            }
+        });
+
+    let Some(selection_rect) = selection_rect else {
+        return card_action;
+    };
 
     let response = ui
         .interact(
-            frame_response.rect,
+            selection_rect,
             ui.make_persistent_id(("runtime_session_card", &session.session_id)),
             egui::Sense::click(),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-    clicked || response.clicked()
+    if !matches!(card_action, SessionCardAction::None) {
+        return card_action;
+    }
+    if response.clicked() {
+        return SessionCardAction::Select;
+    }
+    SessionCardAction::None
+}
+
+fn is_session_removable(session: &SessionSummary, current_session_id: Option<&str>) -> bool {
+    Some(session.session_id.as_str()) != current_session_id && !session.is_live
+}
+
+enum SessionCardAction {
+    None,
+    Select,
+    BeginRemove(String),
+    CancelRemove,
+    ConfirmRemove(String),
 }

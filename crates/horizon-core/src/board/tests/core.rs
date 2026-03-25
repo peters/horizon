@@ -179,3 +179,29 @@ fn shutdown_terminal_panels_waits_for_shell_and_command_panels() {
             .wait_for_shutdown(Duration::from_millis(10))
     );
 }
+
+#[test]
+fn begin_async_shutdown_completes_for_shell_and_command_panels() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("shutdown");
+    board
+        .create_panel(PanelOptions::default(), workspace_id)
+        .expect("shell panel should spawn");
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Command,
+                ..PanelOptions::default()
+            },
+            workspace_id,
+        )
+        .expect("command panel should spawn");
+
+    let progress = board.begin_async_shutdown();
+    let started_at = std::time::Instant::now();
+    while !progress.is_complete() && started_at.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(progress.is_complete());
+}

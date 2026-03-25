@@ -163,9 +163,7 @@ impl Board {
 
     pub fn shutdown_terminal_panels(&mut self) {
         for panel in &mut self.panels {
-            if panel.terminal().is_some() {
-                panel.request_shutdown();
-            }
+            panel.request_shutdown();
         }
 
         for panel in &mut self.panels {
@@ -193,9 +191,7 @@ impl Board {
         let mut terminal_count = 0;
 
         for panel in &mut self.panels {
-            if let Some(terminal) = panel.terminal_mut() {
-                terminal.request_shutdown();
-            }
+            panel.request_shutdown();
         }
 
         for panel in &mut self.panels {
