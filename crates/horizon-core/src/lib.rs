@@ -46,7 +46,10 @@ pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use managed_install::ManagedInstall;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
-pub use remote_hosts::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, discover_remote_hosts};
+pub use remote_hosts::{
+    RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
+    RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
+};
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState, PanelState, PanelTemplateRef,
     RuntimeState, WorkspaceState, WorkspaceTemplateRef, new_local_id,

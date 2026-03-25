@@ -5,8 +5,10 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 
+use crate::board::Board;
 use crate::error::{Error, Result};
-use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
+use crate::panel::PanelKind;
+use crate::ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RemoteHostStatus {
@@ -74,6 +76,89 @@ impl RemoteHost {
 pub struct RemoteHostCatalog {
     pub hosts: Vec<RemoteHost>,
     pub refreshed_at: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteHostConnectionHistoryEntry {
+    pub panel_title: String,
+    pub workspace_name: String,
+    pub connection_label: String,
+    pub status: SshConnectionStatus,
+    pub launched_at_millis: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemoteHostConnectionSummary {
+    pub connected_count: usize,
+    pub connecting_count: usize,
+    pub disconnected_count: usize,
+    pub history: Vec<RemoteHostConnectionHistoryEntry>,
+}
+
+impl RemoteHostConnectionSummary {
+    #[must_use]
+    pub const fn total_sessions(&self) -> usize {
+        self.connected_count + self.connecting_count + self.disconnected_count
+    }
+
+    #[must_use]
+    pub const fn live_sessions(&self) -> usize {
+        self.connected_count + self.connecting_count
+    }
+
+    #[must_use]
+    pub const fn current_status(&self) -> Option<SshConnectionStatus> {
+        if self.connected_count > 0 {
+            Some(SshConnectionStatus::Connected)
+        } else if self.connecting_count > 0 {
+            Some(SshConnectionStatus::Connecting)
+        } else if self.disconnected_count > 0 {
+            Some(SshConnectionStatus::Disconnected)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteHostPanelSession {
+    connection: SshConnection,
+    status: SshConnectionStatus,
+    panel_title: String,
+    workspace_name: String,
+    launched_at_millis: i64,
+}
+
+#[must_use]
+pub fn summarize_remote_host_connections(
+    board: &Board,
+    catalog: &RemoteHostCatalog,
+) -> Vec<RemoteHostConnectionSummary> {
+    let workspace_names: HashMap<_, _> = board
+        .workspaces
+        .iter()
+        .map(|workspace| (workspace.id, workspace.name.clone()))
+        .collect();
+
+    let sessions = board.panels.iter().filter_map(|panel| {
+        if panel.kind != PanelKind::Ssh {
+            return None;
+        }
+
+        let connection = panel.ssh_connection.clone()?;
+        Some(RemoteHostPanelSession {
+            connection,
+            status: panel.ssh_status().unwrap_or(SshConnectionStatus::Disconnected),
+            panel_title: panel.display_title().into_owned(),
+            workspace_name: workspace_names
+                .get(&panel.workspace_id)
+                .cloned()
+                .unwrap_or_else(|| "Workspace".to_string()),
+            launched_at_millis: panel.launched_at_millis,
+        })
+    });
+
+    build_remote_host_connection_summaries(&catalog.hosts, sessions)
 }
 
 /// Discover remote hosts from supported local sources.
@@ -337,6 +422,77 @@ fn normalized_host_key(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+fn remote_host_activity_key(connection: &SshConnection) -> String {
+    let extra_args = connection
+        .extra_args
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\x1f");
+
+    format!(
+        "{}|{}|{}|{}|{}|{}",
+        normalized_host_key(&connection.host),
+        connection.port.map_or_else(String::new, |port| port.to_string()),
+        normalized_connection_field(connection.identity_file.as_deref()),
+        normalized_connection_field(connection.proxy_jump.as_deref()),
+        normalized_connection_field(connection.remote_command.as_deref()),
+        extra_args,
+    )
+}
+
+fn normalized_connection_field(value: Option<&str>) -> String {
+    value.map_or_else(String::new, |value| value.trim().to_ascii_lowercase())
+}
+
+fn build_remote_host_connection_summaries<I>(hosts: &[RemoteHost], sessions: I) -> Vec<RemoteHostConnectionSummary>
+where
+    I: IntoIterator<Item = RemoteHostPanelSession>,
+{
+    let mut host_indices_by_key: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, host) in hosts.iter().enumerate() {
+        host_indices_by_key
+            .entry(remote_host_activity_key(&host.ssh_connection))
+            .or_default()
+            .push(index);
+    }
+
+    let mut summaries = vec![RemoteHostConnectionSummary::default(); hosts.len()];
+
+    for session in sessions {
+        let Some(indices) = host_indices_by_key.get(&remote_host_activity_key(&session.connection)) else {
+            continue;
+        };
+
+        for index in indices {
+            let summary = &mut summaries[*index];
+            match session.status {
+                SshConnectionStatus::Connected => summary.connected_count += 1,
+                SshConnectionStatus::Connecting => summary.connecting_count += 1,
+                SshConnectionStatus::Disconnected => summary.disconnected_count += 1,
+            }
+            summary.history.push(RemoteHostConnectionHistoryEntry {
+                panel_title: session.panel_title.clone(),
+                workspace_name: session.workspace_name.clone(),
+                connection_label: session.connection.display_label(),
+                status: session.status,
+                launched_at_millis: session.launched_at_millis,
+            });
+        }
+    }
+
+    for summary in &mut summaries {
+        summary.history.sort_by(|left, right| {
+            right
+                .launched_at_millis
+                .cmp(&left.launched_at_millis)
+                .then_with(|| left.panel_title.cmp(&right.panel_title))
+        });
+    }
+
+    summaries
+}
+
 fn merge_unique_strings(existing: &[String], incoming: &[String]) -> Vec<String> {
     let mut merged = existing.to_vec();
     for value in incoming {
@@ -369,9 +525,12 @@ fn tailscale_node_sort_rank(node: &TailscaleNode) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use crate::ssh::{DiscoveredSshHost, SshConnection};
+    use crate::ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus};
 
-    use super::{RemoteHostStatus, TailscaleNode, build_remote_host_catalog, parse_tailscale_status};
+    use super::{
+        RemoteHost, RemoteHostConnectionSummary, RemoteHostPanelSession, RemoteHostSources, RemoteHostStatus,
+        TailscaleNode, build_remote_host_catalog, build_remote_host_connection_summaries, parse_tailscale_status,
+    };
 
     #[test]
     fn parse_tailscale_status_discovers_online_and_offline_nodes() {
@@ -447,5 +606,147 @@ mod tests {
         assert_eq!(mil.status, RemoteHostStatus::Online);
         assert_eq!(mil.os.as_deref(), Some("linux"));
         assert!(mil.tags.iter().any(|tag| tag == "cuda"));
+    }
+
+    #[test]
+    fn connection_summary_matches_user_override_sessions_to_same_host() {
+        let hosts = vec![remote_host(
+            "prod",
+            ssh_connection("prod.example.com", Some("deploy"), Some(22)),
+        )];
+        let sessions = vec![panel_session(
+            ssh_connection("prod.example.com", Some("root"), Some(22)),
+            SshConnectionStatus::Connected,
+            2_000,
+            "Prod API",
+            "Remote Sessions",
+        )];
+
+        let summaries = build_remote_host_connection_summaries(&hosts, sessions);
+
+        assert_eq!(
+            summaries,
+            vec![RemoteHostConnectionSummary {
+                connected_count: 1,
+                connecting_count: 0,
+                disconnected_count: 0,
+                history: vec![super::RemoteHostConnectionHistoryEntry {
+                    panel_title: "Prod API".to_string(),
+                    workspace_name: "Remote Sessions".to_string(),
+                    connection_label: "root@prod.example.com".to_string(),
+                    status: SshConnectionStatus::Connected,
+                    launched_at_millis: 2_000,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn connection_summary_keeps_distinct_transport_options_separate() {
+        let hosts = vec![
+            remote_host(
+                "prod-direct",
+                ssh_connection("prod.example.com", Some("deploy"), Some(22)),
+            ),
+            remote_host("prod-jump", ssh_connection_with_jump("prod.example.com", "bastion")),
+        ];
+        let sessions = vec![
+            panel_session(
+                ssh_connection("prod.example.com", Some("ops"), Some(22)),
+                SshConnectionStatus::Connected,
+                3_000,
+                "Direct session",
+                "Remote Sessions",
+            ),
+            panel_session(
+                ssh_connection_with_jump("prod.example.com", "bastion"),
+                SshConnectionStatus::Disconnected,
+                1_000,
+                "Jump session",
+                "Archive",
+            ),
+        ];
+
+        let summaries = build_remote_host_connection_summaries(&hosts, sessions);
+
+        assert_eq!(summaries[0].connected_count, 1);
+        assert_eq!(summaries[0].disconnected_count, 0);
+        assert_eq!(summaries[1].connected_count, 0);
+        assert_eq!(summaries[1].disconnected_count, 1);
+    }
+
+    #[test]
+    fn connection_summary_sorts_history_newest_first() {
+        let hosts = vec![remote_host("prod", ssh_connection("prod.example.com", None, None))];
+        let sessions = vec![
+            panel_session(
+                ssh_connection("prod.example.com", None, None),
+                SshConnectionStatus::Disconnected,
+                1_000,
+                "Older session",
+                "Remote Sessions",
+            ),
+            panel_session(
+                ssh_connection("prod.example.com", None, None),
+                SshConnectionStatus::Connecting,
+                5_000,
+                "Newest session",
+                "Remote Sessions",
+            ),
+        ];
+
+        let summaries = build_remote_host_connection_summaries(&hosts, sessions);
+
+        assert_eq!(summaries[0].history.len(), 2);
+        assert_eq!(summaries[0].history[0].panel_title, "Newest session");
+        assert_eq!(summaries[0].history[1].panel_title, "Older session");
+        assert_eq!(summaries[0].current_status(), Some(SshConnectionStatus::Connecting));
+    }
+
+    fn remote_host(label: &str, ssh_connection: SshConnection) -> RemoteHost {
+        RemoteHost {
+            label: label.to_string(),
+            ssh_connection,
+            sources: RemoteHostSources::default(),
+            status: RemoteHostStatus::Unknown,
+            last_seen_secs: None,
+            os: None,
+            hostname: None,
+            tags: Vec::new(),
+            ips: Vec::new(),
+        }
+    }
+
+    fn ssh_connection(host: &str, user: Option<&str>, port: Option<u16>) -> SshConnection {
+        SshConnection {
+            host: host.to_string(),
+            user: user.map(ToString::to_string),
+            port,
+            ..SshConnection::default()
+        }
+    }
+
+    fn ssh_connection_with_jump(host: &str, proxy_jump: &str) -> SshConnection {
+        SshConnection {
+            host: host.to_string(),
+            proxy_jump: Some(proxy_jump.to_string()),
+            ..SshConnection::default()
+        }
+    }
+
+    fn panel_session(
+        connection: SshConnection,
+        status: SshConnectionStatus,
+        launched_at_millis: i64,
+        panel_title: &str,
+        workspace_name: &str,
+    ) -> RemoteHostPanelSession {
+        RemoteHostPanelSession {
+            connection,
+            status,
+            panel_title: panel_title.to_string(),
+            workspace_name: workspace_name.to_string(),
+            launched_at_millis,
+        }
     }
 }

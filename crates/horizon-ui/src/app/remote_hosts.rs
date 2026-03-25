@@ -1,7 +1,9 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use horizon_core::{PanelKind, PanelOptions, RemoteHostCatalog, WorkspaceId, WorkspaceLayout};
+use horizon_core::{
+    PanelKind, PanelOptions, RemoteHostCatalog, WorkspaceId, WorkspaceLayout, summarize_remote_host_connections,
+};
 
 use crate::remote_hosts_overlay::{RemoteHostsOverlay, RemoteHostsOverlayAction};
 
@@ -33,9 +35,11 @@ impl HorizonApp {
                     .as_secs()
             })
         };
+        let connection_summaries = summarize_remote_host_connections(&self.board, &self.remote_hosts_catalog);
         let action = overlay.show(
             ctx,
             &self.remote_hosts_catalog,
+            &connection_summaries,
             self.remote_hosts_refresh_in_flight,
             next_refresh_secs,
         );
