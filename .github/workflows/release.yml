@@ -352,6 +352,47 @@ jobs:
           horizon-win-x64 win-x64
           EOF
 
+  publish-snap:
+    name: Publish Snap
+    if: ${{ !github.event.release.prerelease }}
+    needs: [validate-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Snap Store credentials
+        if: ${{ github.repository == 'peters/horizon' }}
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "::error::SNAPCRAFT_STORE_CREDENTIALS secret is required for stable Snap publication."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          lfs: true
+
+      - uses: snapcore/action-build@v1
+        id: snapcraft
+        with:
+          path: .
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: horizon-linux-x64.snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+
+      - name: Publish snap to Snap Store
+        if: ${{ github.repository == 'peters/horizon' }}
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: stable
+
   update-homebrew-tap:
     name: Update Homebrew Tap
     if: ${{ !github.event.release.prerelease && github.repository == 'peters/horizon' }}
