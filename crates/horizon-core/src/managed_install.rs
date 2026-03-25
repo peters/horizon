@@ -133,7 +133,7 @@ mod tests {
                 "channel: stable\n",
                 "installDirectory: horizon\n",
                 "provider: github_releases\n",
-                "bucket: peters/horizon\n",
+                "bucket: peters/horizon-updates\n",
                 "region: surge\n",
             ),
         )

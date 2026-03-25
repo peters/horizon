@@ -172,10 +172,25 @@ fn parse_storage_provider(raw: &str) -> Result<StorageProvider, String> {
 }
 
 fn installer_download_url(bucket: &str, version: &str, installer_asset: &str) -> Result<String, String> {
-    let (owner, repo) = parse_github_repository(bucket)?;
+    let (owner, repo) = installer_repository(bucket)?;
     Ok(format!(
         "https://github.com/{owner}/{repo}/releases/download/v{version}/{installer_asset}"
     ))
+}
+
+fn installer_repository(bucket: &str) -> Result<(&str, String), String> {
+    let (owner, repo) = parse_github_repository(bucket)?;
+    let installer_repo = repo
+        .strip_suffix("-updates")
+        .map_or_else(|| repo.to_string(), ToString::to_string);
+
+    if installer_repo.trim().is_empty() {
+        return Err(format!(
+            "invalid GitHub Releases repository bucket '{bucket}', expected a repo name before '-updates'"
+        ));
+    }
+
+    Ok((owner, installer_repo))
 }
 
 fn parse_github_repository(bucket: &str) -> Result<(&str, &str), String> {
@@ -262,8 +277,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        installer_asset_name, installer_download_url, next_update_check_deadline, parse_github_repository,
-        update_check_is_due,
+        installer_asset_name, installer_download_url, installer_repository, next_update_check_deadline,
+        parse_github_repository, update_check_is_due,
     };
 
     #[test]
@@ -284,6 +299,22 @@ mod tests {
                 "https://github.com/peters/horizon-surge-smoke/releases/download/v0.2.0/horizon-installer-win-x64.exe"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn installer_download_url_maps_updates_storage_repo_back_to_app_repo() {
+        assert_eq!(
+            installer_download_url("peters/horizon-updates", "0.2.0", "horizon-installer-win-x64.exe"),
+            Ok("https://github.com/peters/horizon/releases/download/v0.2.0/horizon-installer-win-x64.exe".to_string())
+        );
+    }
+
+    #[test]
+    fn installer_repository_strips_updates_suffix() {
+        assert_eq!(
+            installer_repository("peters/horizon-updates"),
+            Ok(("peters", "horizon".to_string()))
         );
     }
 

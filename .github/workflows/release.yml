@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   SURGE_VERSION: v1.0.0-beta.6
+  SURGE_STORAGE_REPOSITORY: peters/horizon-updates
 
 permissions:
   contents: write
@@ -188,11 +189,30 @@ jobs:
             --version "${{ needs.validate-release.outputs.release_version }}" \
             --binary "${{ matrix.binary_path }}" \
             --main-exe "${{ matrix.surge_main_exe }}"
+      - name: Determine Surge storage bucket
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          if [ "${{ github.repository }}" = "peters/horizon" ]; then
+            surge_storage_bucket="${SURGE_STORAGE_REPOSITORY}"
+          else
+            surge_storage_bucket="${{ github.repository }}"
+          fi
+
+          printf 'SURGE_STORAGE_BUCKET=%s\n' "$surge_storage_bucket" >> "$GITHUB_ENV"
+      - name: Render Surge release manifest
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          ./scripts/render-surge-manifest.sh \
+            --input .surge/surge.yml \
+            --output .surge/release.surge.yml \
+            --storage-bucket "${SURGE_STORAGE_BUCKET}"
       - name: Pack Surge release bundle
         if: ${{ !github.event.release.prerelease }}
         shell: bash
         run: |
-          surge --manifest-path .surge/surge.yml pack \
+          surge --manifest-path .surge/release.surge.yml pack \
             --app-id "${{ matrix.surge_app_id }}" \
             --rid "${{ matrix.rid }}" \
             --version "${{ needs.validate-release.outputs.release_version }}"
@@ -312,11 +332,21 @@ jobs:
             --clobber
 
   publish-surge-release-index:
-    name: Publish Surge Release Index
+    name: Publish Surge Update Storage
     if: ${{ !github.event.release.prerelease }}
     needs: [validate-release, build-artifacts]
     runs-on: ubuntu-latest
     steps:
+      - name: Validate Surge storage token
+        if: ${{ github.repository == 'peters/horizon' }}
+        env:
+          SURGE_STORAGE_TOKEN: ${{ secrets.SURGE_STORAGE_TOKEN }}
+        run: |
+          if [ -z "$SURGE_STORAGE_TOKEN" ]; then
+            echo "::error::SURGE_STORAGE_TOKEN secret is required for stable Surge storage publication."
+            exit 1
+          fi
+
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.release.tag_name }}
@@ -351,6 +381,25 @@ jobs:
             --output-dir ".cache/surge-toolchain/linux-x64"
           printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/linux-x64" >> "$GITHUB_PATH"
 
+      - name: Determine Surge storage bucket
+        shell: bash
+        run: |
+          if [ "${{ github.repository }}" = "peters/horizon" ]; then
+            surge_storage_bucket="${SURGE_STORAGE_REPOSITORY}"
+          else
+            surge_storage_bucket="${{ github.repository }}"
+          fi
+
+          printf 'SURGE_STORAGE_BUCKET=%s\n' "$surge_storage_bucket" >> "$GITHUB_ENV"
+
+      - name: Render Surge release manifest
+        shell: bash
+        run: |
+          ./scripts/render-surge-manifest.sh \
+            --input .surge/surge.yml \
+            --output .surge/release.surge.yml \
+            --storage-bucket "${SURGE_STORAGE_BUCKET}"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -376,13 +425,34 @@ jobs:
             fi
           done
 
-      - name: Push stable Surge releases
+      - name: Push stable Surge releases to dedicated storage repo
+        if: ${{ github.repository == 'peters/horizon' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.SURGE_STORAGE_TOKEN }}
+        shell: bash
+        run: |
+          while read -r app_id rid; do
+            surge --manifest-path .surge/release.surge.yml push \
+              --app-id "$app_id" \
+              --rid "$rid" \
+              --version "${{ needs.validate-release.outputs.release_version }}" \
+              --channel stable \
+              --packages-dir .surge/packages
+          done <<'EOF'
+          horizon-linux-x64 linux-x64
+          horizon-osx-arm64 osx-arm64
+          horizon-osx-x64 osx-x64
+          horizon-win-x64 win-x64
+          EOF
+
+      - name: Push stable Surge releases to current repository
+        if: ${{ github.repository != 'peters/horizon' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           while read -r app_id rid; do
-            surge --manifest-path .surge/surge.yml push \
+            surge --manifest-path .surge/release.surge.yml push \
               --app-id "$app_id" \
               --rid "$rid" \
               --version "${{ needs.validate-release.outputs.release_version }}" \
