@@ -1,0 +1,88 @@
+name: horizon
+title: Horizon
+summary: GPU-accelerated terminal board for multi-agent development
+description: |
+  Horizon is a GPU-accelerated terminal board that puts your terminals on
+  an infinite canvas. Organize shell, command, and SSH sessions as freely
+  positioned panels, group them into workspaces, and keep the underlying
+  host tooling available.
+grade: stable
+confinement: classic
+base: core24
+license: MIT
+website: https://github.com/peters/horizon
+issues: https://github.com/peters/horizon/issues
+source-code: https://github.com/peters/horizon
+contact: https://github.com/peters/horizon
+adopt-info: horizon
+
+apps:
+  horizon:
+    command: bin/launch-horizon
+    desktop: usr/share/applications/horizon.desktop
+
+parts:
+  horizon:
+    plugin: rust
+    source: .
+    rust-path:
+      - crates/horizon-ui
+    rust-channel: stable
+    rust-inherit-ldflags: true
+    build-environment:
+      - LDFLAGS: >
+          -Wl,-rpath=\$ORIGIN/lib:/snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/core24/current/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR
+          -Wl,-dynamic-linker=$(find /snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR -name 'ld*.so.*' -print | head -n1)
+    build-packages:
+      - build-essential
+      - pkg-config
+      - libxkbcommon-dev
+      - libwayland-dev
+      - libxcb-render0-dev
+      - libxcb-shape0-dev
+      - libxcb-xfixes0-dev
+      - libvulkan-dev
+      - libgl-dev
+      - cmake
+    stage-packages:
+      - libegl1
+      - libfontconfig1
+      - libfreetype6
+      - libgbm1
+      - libgl1
+      - libgles2
+      - libvulkan1
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - libx11-6
+      - libx11-xcb1
+      - libxcb-render0
+      - libxcb-shape0
+      - libxcb-xfixes0
+      - libxcb1
+      - libxcursor1
+      - libxi6
+      - libxinerama1
+      - libxkbcommon-x11-0
+      - libxkbcommon0
+      - libxrandr2
+      - xdg-utils
+    override-build: |
+      version="$(awk -F'"' '/^\[workspace.package\]$/ { in_workspace = 1; next } in_workspace && /^version = / { print $2; exit }' Cargo.toml)"
+      if [ -z "$version" ]; then
+        echo "failed to determine Horizon version from Cargo.toml" >&2
+        exit 1
+      fi
+
+      craftctl set version="$version"
+      craftctl default
+
+      install -Dm755 snap/local/launch.sh "$CRAFT_PART_INSTALL/bin/launch-horizon"
+      install -Dm644 packaging/linux/horizon.desktop "$CRAFT_PART_INSTALL/usr/share/applications/horizon.desktop"
+      sed -i 's|^Icon=.*$|Icon=${SNAP}/usr/share/icons/hicolor/256x256/apps/horizon.png|' \
+        "$CRAFT_PART_INSTALL/usr/share/applications/horizon.desktop"
+      install -Dm644 assets/icons/icon-512.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/horizon.png"
+      install -Dm644 assets/icons/icon-256.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/256x256/apps/horizon.png"
+      install -Dm644 assets/icons/icon-128.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/128x128/apps/horizon.png"
+      install -Dm644 assets/icons/icon-64.png "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/64x64/apps/horizon.png"

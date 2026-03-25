@@ -157,6 +157,18 @@ winget upgrade Peters.Horizon
 winget uninstall Peters.Horizon
 ```
 
+### Snap
+
+Stable releases are also published to the Snap Store on Linux x64 as a classic snap:
+
+```bash
+sudo snap install horizon --classic
+snap refresh horizon
+snap remove horizon
+```
+
+Classic confinement is intentional. Horizon launches host shells and host tools such as `ssh`, `git`, `xdg-open`, `pgrep`, `lsof`, and optional `tailscale` helpers, so a strict sandbox would compromise core workflows.
+
 ### Build from source
 
 ```bash
