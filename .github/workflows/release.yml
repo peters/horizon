@@ -132,6 +132,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
+      - name: Restore Surge toolchain cache
+        if: ${{ !github.event.release.prerelease }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            .surge/toolchain-src
+            .cache/surge-toolchain/${{ matrix.rid }}
+          key: surge-toolchain-${{ matrix.rid }}-${{ env.SURGE_VERSION }}
+      - name: Prepare Surge toolchain source
+        if: ${{ !github.event.release.prerelease }}
+        shell: bash
+        run: |
+          ./scripts/build-surge-toolchain.sh \
+            --version "${SURGE_VERSION}" \
+            --output-dir ".cache/surge-toolchain/${{ matrix.rid }}" \
+            --prepare-only
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ !github.event.release.prerelease }}
+        with:
+          key: surge-toolchain-${{ matrix.rid }}-${{ env.SURGE_VERSION }}
+          workspaces: |
+            .surge/toolchain-src -> .surge/toolchain-src/target
       - name: Set release version
         shell: bash
         run: ./scripts/set-release-version.sh "${{ needs.validate-release.outputs.release_version }}"
@@ -154,8 +176,8 @@ jobs:
         run: |
           ./scripts/build-surge-toolchain.sh \
             --version "${SURGE_VERSION}" \
-            --output-dir "$RUNNER_TEMP/surge-toolchain"
-          printf '%s\n' "$RUNNER_TEMP/surge-toolchain" >> "$GITHUB_PATH"
+            --output-dir ".cache/surge-toolchain/${{ matrix.rid }}"
+          printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/${{ matrix.rid }}" >> "$GITHUB_PATH"
       - name: Stage Surge artifacts
         if: ${{ !github.event.release.prerelease }}
         shell: bash
@@ -300,13 +322,34 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           lfs: true
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .surge/toolchain-src
+            .cache/surge-toolchain/linux-x64
+          key: surge-toolchain-linux-x64-${{ env.SURGE_VERSION }}
+
+      - name: Prepare Surge toolchain source
+        shell: bash
+        run: |
+          ./scripts/build-surge-toolchain.sh \
+            --version "${SURGE_VERSION}" \
+            --output-dir ".cache/surge-toolchain/linux-x64" \
+            --prepare-only
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: surge-toolchain-linux-x64-${{ env.SURGE_VERSION }}
+          workspaces: |
+            .surge/toolchain-src -> .surge/toolchain-src/target
+
       - name: Build Surge toolchain
         shell: bash
         run: |
           ./scripts/build-surge-toolchain.sh \
             --version "${SURGE_VERSION}" \
-            --output-dir "$RUNNER_TEMP/surge-toolchain"
-          printf '%s\n' "$RUNNER_TEMP/surge-toolchain" >> "$GITHUB_PATH"
+            --output-dir ".cache/surge-toolchain/linux-x64"
+          printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/linux-x64" >> "$GITHUB_PATH"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
