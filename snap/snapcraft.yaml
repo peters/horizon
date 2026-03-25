@@ -28,8 +28,6 @@ parts:
     rust-path:
       - crates/horizon-ui
     rust-channel: stable
-    rust-cargo-parameters:
-      - --locked
     rust-inherit-ldflags: true
     build-environment:
       - LDFLAGS: >
