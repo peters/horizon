@@ -132,6 +132,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
+      - name: Restore Surge toolchain cache
+        if: ${{ !github.event.release.prerelease }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            .surge/toolchain-src
+            .cache/surge-toolchain/${{ matrix.rid }}
+          key: surge-toolchain-${{ matrix.rid }}-${{ env.SURGE_VERSION }}
       - name: Set release version
         shell: bash
         run: ./scripts/set-release-version.sh "${{ needs.validate-release.outputs.release_version }}"
@@ -154,8 +162,8 @@ jobs:
         run: |
           ./scripts/build-surge-toolchain.sh \
             --version "${SURGE_VERSION}" \
-            --output-dir "$RUNNER_TEMP/surge-toolchain"
-          printf '%s\n' "$RUNNER_TEMP/surge-toolchain" >> "$GITHUB_PATH"
+            --output-dir ".cache/surge-toolchain/${{ matrix.rid }}"
+          printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/${{ matrix.rid }}" >> "$GITHUB_PATH"
       - name: Stage Surge artifacts
         if: ${{ !github.event.release.prerelease }}
         shell: bash
