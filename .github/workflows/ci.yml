@@ -124,6 +124,24 @@ jobs:
           key: windows-test-build
       - run: cargo test --workspace --no-run
 
+  snap-build:
+    name: Snap Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: snapcore/action-build@v1
+        id: snapcraft
+        with:
+          path: .
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: horizon-linux-x64.snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

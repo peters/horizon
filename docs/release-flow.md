@@ -5,7 +5,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which publishes to crates.io and uploads the platform binaries to the same GitHub Release.
-- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
+- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag, publish the classic `horizon` snap to the Snap Store, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
 
 ## Source Of Truth
 
@@ -66,6 +66,7 @@ Then it:
 - for stable releases, stages Surge packages and GUI installers for the same platform matrix
 - uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
 - for stable releases, publishes the Surge release index and package artifacts to the dedicated `surge` GitHub Release tag using the `stable` channel
+- for stable releases, builds the classic `horizon` snap from [`snap/snapcraft.yaml`](../snap/snapcraft.yaml) and releases it to the Snap Store `stable` channel
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 - in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
@@ -102,13 +103,15 @@ Stable-release packaging assumes:
   - `horizon-installer-win-x64.exe`
 - the stable release uploads the four raw assets plus the four installer assets before the tap update runs
 - the Surge storage backend uses the dedicated GitHub Release tag `surge` in `peters/horizon`
+- `snap/snapcraft.yaml` continues to package Horizon as a classic snap named `horizon`
+- `SNAPCRAFT_STORE_CREDENTIALS` is configured in the `peters/horizon` repository secrets with credentials exported for the `horizon` snap
 - `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
 - `WINGET_PKGS_TOKEN` is configured in the `peters/horizon` repository secrets with write access to the `peters/winget-pkgs` fork
 - `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
 WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
 
-If a stable release is missing one of those assets, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
+If a stable release is missing one of those assets, the Snap Store credentials, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Snap, Homebrew, Surge, or WinGet update.
 
 ## Cross-Platform Installer And Update Smoke
 
