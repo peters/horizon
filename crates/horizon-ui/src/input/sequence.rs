@@ -37,6 +37,9 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
             | TermMode::REPORT_ASSOCIATED_TEXT,
     );
     let kitty_encode_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+    // Alternate-key and associated-text flags refine CSI-u payloads, but
+    // they should not force ordinary printable text off the legacy UTF-8 path.
+    let kitty_textual = kitty_encode_all;
     let kitty_event_type = mode.contains(TermMode::REPORT_EVENT_TYPES) && (repeat || !pressed);
     let sequence_modifiers = SequenceModifiers::from(modifiers);
     let associated_text = text.filter(|text| {
@@ -47,6 +50,7 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
         mode,
         kitty_sequence,
         kitty_encode_all,
+        kitty_textual,
         kitty_event_type,
         modifiers: sequence_modifiers,
     };
@@ -91,6 +95,7 @@ struct SequenceBuilder {
     mode: TermMode,
     kitty_sequence: bool,
     kitty_encode_all: bool,
+    kitty_textual: bool,
     kitty_event_type: bool,
     modifiers: SequenceModifiers,
 }
@@ -104,7 +109,7 @@ impl SequenceBuilder {
         text: Option<&str>,
         associated_text: Option<&str>,
     ) -> Option<SequenceBase> {
-        let (true, Some(text)) = (self.kitty_sequence, text) else {
+        let (true, Some(text)) = (self.kitty_textual, text) else {
             return None;
         };
 
