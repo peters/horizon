@@ -193,7 +193,7 @@ impl HorizonApp {
                     response
                 }
             }
-            ToolbarAction::NewWorkspace | ToolbarAction::Settings => ui.add(
+            ToolbarAction::Sessions | ToolbarAction::NewWorkspace | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
             ),
@@ -249,6 +249,7 @@ impl HorizonApp {
                 self.execute_command(ctx, &crate::command_registry::CommandId::FitActiveWorkspace);
             }
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
+            ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
             ToolbarAction::Settings => self.toggle_settings(),
         }
@@ -265,6 +266,7 @@ fn action_button_width(action: ToolbarAction) -> f32 {
         ToolbarAction::QuickNav => 102.0,
         ToolbarAction::FitWorkspace => 126.0,
         ToolbarAction::RemoteHosts => 120.0,
+        ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,
     }

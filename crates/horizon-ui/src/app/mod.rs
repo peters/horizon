@@ -13,6 +13,7 @@ mod persistence;
 mod remote_hosts;
 mod root_chrome;
 mod session;
+mod session_manager;
 mod settings;
 pub(crate) mod shortcuts;
 mod sidebar;
@@ -84,6 +85,7 @@ enum CanvasPanSpaceKeyState {
 }
 
 use self::frame_stats::FrameStats;
+use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
 use self::updates::{AvailableUpdate, UpdateCheckMessage};
 
@@ -198,6 +200,7 @@ pub struct HorizonApp {
     last_terminal_output_at: Option<Instant>,
     pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
+    session_manager: Option<RuntimeSessionManagerState>,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_available_update: Option<AvailableUpdate>,
@@ -292,6 +295,7 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             pending_session_rebinds: Vec::new(),
             settings: None,
+            session_manager: None,
             managed_install,
             surge_update_check_rx: None,
             surge_available_update: None,

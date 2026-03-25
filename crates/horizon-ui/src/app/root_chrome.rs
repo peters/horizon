@@ -24,6 +24,7 @@ pub(super) enum ToolbarAction {
     QuickNav,
     FitWorkspace,
     RemoteHosts,
+    Sessions,
     Update,
     Settings,
 }
@@ -37,6 +38,7 @@ impl ToolbarAction {
             Self::QuickNav => "Quick Nav",
             Self::FitWorkspace => "Fit Workspace",
             Self::RemoteHosts => "Remote Hosts",
+            Self::Sessions => "Sessions",
             Self::Update => "Update",
             Self::Settings => "Settings",
         }
@@ -161,6 +163,7 @@ fn layout_candidate(
     if show_update {
         visible_items.push(ToolbarItem::Action(ToolbarAction::Update));
     }
+    visible_items.push(ToolbarItem::Action(ToolbarAction::Sessions));
     visible_items.push(ToolbarItem::Action(ToolbarAction::Settings));
 
     let actions_width = visible_items_width(&visible_items);
@@ -227,12 +230,11 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert!(layout.overflow_actions.is_empty());
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::RemoteHosts))
+                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
         assert!(layout.search_rect.width() >= 180.0);
     }
@@ -258,7 +260,6 @@ mod tests {
             layout.overflow_actions,
             vec![ToolbarAction::FitWorkspace, ToolbarAction::RemoteHosts]
         );
-        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
@@ -268,6 +269,11 @@ mod tests {
             layout
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::QuickNav))
+        );
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
         assert!(
             layout
