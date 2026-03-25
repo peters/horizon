@@ -157,7 +157,7 @@ impl ShortcutBinding {
     }
 
     #[must_use]
-    pub(crate) fn overlaps(self, other: Self) -> bool {
+    pub fn overlaps(self, other: Self) -> bool {
         self.key == other.key
             && (self
                 .matching_event_modifiers()

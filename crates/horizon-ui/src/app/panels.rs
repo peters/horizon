@@ -133,7 +133,7 @@ fn show_panel_body_contents(
     }
 }
 
-fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; 17] {
+fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; 18] {
     [
         shortcuts.command_palette,
         shortcuts.new_terminal,
@@ -151,12 +151,15 @@ fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; 17] {
         shortcuts.fullscreen_panel,
         shortcuts.exit_fullscreen_panel,
         shortcuts.fullscreen_window,
+        shortcuts.save_editor,
         shortcuts.search,
     ]
 }
 
 fn local_ssh_reconnect_shortcut_conflicts(shortcuts: &AppShortcuts) -> bool {
-    global_shortcut_bindings(shortcuts).contains(&SSH_RECONNECT_SHORTCUT)
+    global_shortcut_bindings(shortcuts)
+        .into_iter()
+        .any(|binding| binding.overlaps(SSH_RECONNECT_SHORTCUT))
 }
 
 impl HorizonApp {
@@ -681,6 +684,29 @@ mod tests {
     fn matching_global_shortcut_disables_local_ssh_reconnect() {
         let shortcuts = AppShortcuts {
             open_remote_hosts: SSH_RECONNECT_SHORTCUT,
+            ..AppShortcuts::default()
+        };
+
+        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
+    }
+
+    #[test]
+    fn overlapping_mac_command_shortcut_disables_local_ssh_reconnect() {
+        let shortcuts = AppShortcuts {
+            open_remote_hosts: ShortcutBinding::new(
+                ShortcutModifiers::MAC_CMD.plus(ShortcutModifiers::SHIFT),
+                ShortcutKey::Letter('R'),
+            ),
+            ..AppShortcuts::default()
+        };
+
+        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
+    }
+
+    #[test]
+    fn save_editor_shortcut_conflict_disables_local_ssh_reconnect() {
+        let shortcuts = AppShortcuts {
+            save_editor: SSH_RECONNECT_SHORTCUT,
             ..AppShortcuts::default()
         };
 
