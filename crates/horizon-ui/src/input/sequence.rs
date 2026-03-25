@@ -264,25 +264,16 @@ impl SequenceBuilder {
             return None;
         }
 
-        let mut base = match key {
+        let base = match key {
             Key::Tab => "9",
             Key::Enter => "13",
             Key::Escape => "27",
-            Key::Space => "32",
             Key::Backspace => "127",
-            _ => "",
+            // Space is printable text, so only force it onto CSI-u when the
+            // app explicitly asked for every key via REPORT_ALL_KEYS_AS_ESC.
+            Key::Space if self.kitty_mode.encodes_all() => "32",
+            _ => return None,
         };
-
-        if !self.kitty_mode.encodes_all() && base.is_empty() {
-            return None;
-        }
-
-        if base.is_empty() {
-            base = match key {
-                Key::Tab | Key::Enter | Key::Escape | Key::Space | Key::Backspace => base,
-                _ => return None,
-            };
-        }
 
         Some(SequenceBase::new(base.into(), SequenceTerminator::Kitty))
     }

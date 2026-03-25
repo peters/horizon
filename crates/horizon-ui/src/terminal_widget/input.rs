@@ -936,6 +936,57 @@ mod tests {
         assert_eq!(bytes, b"@");
     }
 
+    #[test]
+    fn plain_space_stays_on_text_path_in_kitty_basic_mode() {
+        let events = vec![
+            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
+            text_event(" "),
+            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b" ");
+    }
+
+    #[test]
+    fn repeated_spaces_do_not_get_dropped_in_kitty_basic_mode() {
+        let events = vec![
+            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
+            text_event(" "),
+            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
+            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
+            text_event(" "),
+            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b"  ");
+    }
+
+    #[test]
+    fn shifted_space_stays_on_text_path_in_kitty_basic_mode() {
+        let events = vec![
+            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::SHIFT),
+            text_event(" "),
+            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::SHIFT),
+        ];
+
+        let bytes = forward_bytes(
+            &events,
+            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+        );
+
+        assert_eq!(bytes, b" ");
+    }
+
     /// Regression: on some Linux setups, `AltGr` is NOT reported as
     /// `modifiers.alt` by winit. The key event must not leak the base
     /// key ("2") ahead of the later text event ("@"), even when kitty
