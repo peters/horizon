@@ -29,17 +29,9 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
         repeat,
         text,
     } = request;
-    let kitty_sequence = mode.intersects(
-        TermMode::REPORT_ALL_KEYS_AS_ESC
-            | TermMode::DISAMBIGUATE_ESC_CODES
-            | TermMode::REPORT_EVENT_TYPES
-            | TermMode::REPORT_ALTERNATE_KEYS
-            | TermMode::REPORT_ASSOCIATED_TEXT,
-    );
-    let kitty_encode_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let kitty_mode = KittySequenceMode::from(mode);
     // Alternate-key and associated-text flags refine CSI-u payloads, but
     // they should not force ordinary printable text off the legacy UTF-8 path.
-    let kitty_textual = kitty_encode_all;
     let kitty_event_type = mode.contains(TermMode::REPORT_EVENT_TYPES) && (repeat || !pressed);
     let sequence_modifiers = SequenceModifiers::from(modifiers);
     let associated_text = text.filter(|text| {
@@ -48,9 +40,7 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
 
     let builder = SequenceBuilder {
         mode,
-        kitty_sequence,
-        kitty_encode_all,
-        kitty_textual,
+        kitty_mode,
         kitty_event_type,
         modifiers: sequence_modifiers,
     };
@@ -93,11 +83,43 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
 
 struct SequenceBuilder {
     mode: TermMode,
-    kitty_sequence: bool,
-    kitty_encode_all: bool,
-    kitty_textual: bool,
+    kitty_mode: KittySequenceMode,
     kitty_event_type: bool,
     modifiers: SequenceModifiers,
+}
+
+#[derive(Clone, Copy)]
+enum KittySequenceMode {
+    Disabled,
+    Basic,
+    EncodeAll,
+}
+
+impl KittySequenceMode {
+    const fn enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    const fn encodes_all(self) -> bool {
+        matches!(self, Self::EncodeAll)
+    }
+}
+
+impl From<TermMode> for KittySequenceMode {
+    fn from(mode: TermMode) -> Self {
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+            Self::EncodeAll
+        } else if mode.intersects(
+            TermMode::DISAMBIGUATE_ESC_CODES
+                | TermMode::REPORT_EVENT_TYPES
+                | TermMode::REPORT_ALTERNATE_KEYS
+                | TermMode::REPORT_ASSOCIATED_TEXT,
+        ) {
+            Self::Basic
+        } else {
+            Self::Disabled
+        }
+    }
 }
 
 impl SequenceBuilder {
@@ -109,7 +131,7 @@ impl SequenceBuilder {
         text: Option<&str>,
         associated_text: Option<&str>,
     ) -> Option<SequenceBase> {
-        let (true, Some(text)) = (self.kitty_textual, text) else {
+        let (true, Some(text)) = (self.kitty_mode.encodes_all(), text) else {
             return None;
         };
 
@@ -140,7 +162,7 @@ impl SequenceBuilder {
             return Some(SequenceBase::new(payload.into(), SequenceTerminator::Kitty));
         }
 
-        if self.kitty_encode_all && associated_text.is_some() {
+        if self.kitty_mode.encodes_all() && associated_text.is_some() {
             return Some(SequenceBase::new("0".into(), SequenceTerminator::Kitty));
         }
 
@@ -148,7 +170,7 @@ impl SequenceBuilder {
     }
 
     fn try_build_named_kitty(&self, key: Key) -> Option<SequenceBase> {
-        if !self.kitty_sequence {
+        if !self.kitty_mode.enabled() {
             return None;
         }
 
@@ -194,7 +216,7 @@ impl SequenceBuilder {
         // with cursor-movement commands (CUP / CPL). Always include the
         // explicit key number "1" so kitty-aware programs can distinguish
         // them from cursor-movement sequences.
-        let one_based_or_kitty = if one_based.is_empty() && self.kitty_sequence {
+        let one_based_or_kitty = if one_based.is_empty() && self.kitty_mode.enabled() {
             "1"
         } else {
             one_based
@@ -238,7 +260,7 @@ impl SequenceBuilder {
     }
 
     fn try_build_control_char_or_modifier(&self, key: Key) -> Option<SequenceBase> {
-        if !self.kitty_encode_all && !self.kitty_sequence {
+        if !self.kitty_mode.enabled() {
             return None;
         }
 
@@ -251,7 +273,7 @@ impl SequenceBuilder {
             _ => "",
         };
 
-        if !self.kitty_encode_all && base.is_empty() {
+        if !self.kitty_mode.encodes_all() && base.is_empty() {
             return None;
         }
 
