@@ -10,14 +10,25 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 pub(crate) struct TerminalInputEvent {
     pub(crate) event: Event,
     pub(crate) key_without_modifiers_text: Option<String>,
+    pub(crate) observed_key: Option<FrameKeyEvent>,
 }
 
 impl TerminalInputEvent {
-    fn new(event: Event, key_without_modifiers_text: Option<String>) -> Self {
+    fn new(event: Event, observed_key: Option<FrameKeyEvent>) -> Self {
+        let key_without_modifiers_text = observed_key
+            .as_ref()
+            .and_then(|frame_key| frame_key.key_without_modifiers_text.clone());
         Self {
             event,
             key_without_modifiers_text,
+            observed_key,
         }
+    }
+
+    pub(crate) fn is_plain_ctrl_c_copy_command(&self) -> bool {
+        self.observed_key
+            .as_ref()
+            .is_some_and(FrameKeyEvent::is_plain_ctrl_c_copy_command)
     }
 }
 
@@ -51,7 +62,7 @@ pub(crate) fn terminal_input_events(events: &[Event], frame_key_events: Vec<Fram
     let mut terminal_events = Vec::with_capacity(events.len());
 
     for event in events {
-        let key_without_modifiers_text = match event {
+        let observed_key = match event {
             Event::Key {
                 key,
                 physical_key,
@@ -60,12 +71,14 @@ pub(crate) fn terminal_input_events(events: &[Event], frame_key_events: Vec<Fram
                 ..
             } => consume_matching(&mut frame_key_events, |candidate| {
                 candidate.matches(*key, *physical_key, *pressed, *modifiers)
-            })
-            .and_then(|candidate| candidate.key_without_modifiers_text),
+            }),
+            Event::Cut => consume_matching(&mut frame_key_events, FrameKeyEvent::is_cut),
+            Event::Copy => consume_matching(&mut frame_key_events, FrameKeyEvent::is_copy),
+            Event::Paste(_) => consume_matching(&mut frame_key_events, FrameKeyEvent::is_paste),
             _ => None,
         };
 
-        terminal_events.push(TerminalInputEvent::new(event.clone(), key_without_modifiers_text));
+        terminal_events.push(TerminalInputEvent::new(event.clone(), observed_key));
     }
 
     terminal_events
@@ -73,6 +86,7 @@ pub(crate) fn terminal_input_events(events: &[Event], frame_key_events: Vec<Fram
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameKeyEvent {
+    kind: KeyboardOutputKind,
     key: Key,
     physical_key: Option<Key>,
     pressed: bool,
@@ -82,7 +96,31 @@ pub(crate) struct FrameKeyEvent {
 
 impl FrameKeyEvent {
     fn matches(&self, key: Key, physical_key: Option<Key>, pressed: bool, modifiers: Modifiers) -> bool {
-        self.key == key && self.physical_key == physical_key && self.pressed == pressed && self.modifiers == modifiers
+        self.kind == KeyboardOutputKind::Key
+            && self.key == key
+            && self.physical_key == physical_key
+            && self.pressed == pressed
+            && self.modifiers == modifiers
+    }
+
+    fn is_cut(&self) -> bool {
+        self.kind == KeyboardOutputKind::Cut
+    }
+
+    fn is_copy(&self) -> bool {
+        self.kind == KeyboardOutputKind::Copy
+    }
+
+    fn is_paste(&self) -> bool {
+        self.kind == KeyboardOutputKind::Paste
+    }
+
+    fn is_plain_ctrl_c_copy_command(&self) -> bool {
+        self.kind == KeyboardOutputKind::Copy
+            && self.key == Key::C
+            && self.modifiers.ctrl
+            && !self.modifiers.mac_cmd
+            && !self.modifiers.shift
     }
 }
 
@@ -168,6 +206,7 @@ fn align_observed_keyboard_events(events: &[Event], observed: VecDeque<ObservedK
                     candidate.matches_key_event(*key, *physical_key, *pressed, *modifiers)
                 }) {
                     frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
                         key: observed_event.key,
                         physical_key: observed_event.physical_key,
                         pressed: observed_event.pressed,
@@ -177,13 +216,46 @@ fn align_observed_keyboard_events(events: &[Event], observed: VecDeque<ObservedK
                 }
             }
             Event::Cut => {
-                let _ = consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Cut);
+                if let Some(observed_event) =
+                    consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Cut)
+                {
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
+                }
             }
             Event::Copy => {
-                let _ = consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Copy);
+                if let Some(observed_event) =
+                    consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Copy)
+                {
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
+                }
             }
             Event::Paste(_) => {
-                let _ = consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Paste);
+                if let Some(observed_event) =
+                    consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Paste)
+                {
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
+                }
             }
             _ => {}
         }
@@ -375,7 +447,7 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
 
     #[test]
-    fn copy_command_does_not_steal_following_key_context() {
+    fn copy_command_keeps_its_origin_and_following_key_context() {
         let events = vec![
             Event::Copy,
             Event::Key {
@@ -411,13 +483,24 @@ mod tests {
 
         assert_eq!(
             frame,
-            vec![FrameKeyEvent {
-                key: Key::OpenBracket,
-                physical_key: Some(Key::OpenBracket),
-                pressed: true,
-                modifiers: Modifiers::SHIFT,
-                key_without_modifiers_text: Some("å".to_owned()),
-            }]
+            vec![
+                FrameKeyEvent {
+                    kind: KeyboardOutputKind::Copy,
+                    key: Key::C,
+                    physical_key: Some(Key::C),
+                    pressed: true,
+                    modifiers: Modifiers::CTRL,
+                    key_without_modifiers_text: Some("c".to_owned()),
+                },
+                FrameKeyEvent {
+                    kind: KeyboardOutputKind::Key,
+                    key: Key::OpenBracket,
+                    physical_key: Some(Key::OpenBracket),
+                    pressed: true,
+                    modifiers: Modifiers::SHIFT,
+                    key_without_modifiers_text: Some("å".to_owned()),
+                },
+            ]
         );
     }
 
@@ -437,6 +520,7 @@ mod tests {
         let terminal_events = terminal_input_events(
             &events,
             vec![FrameKeyEvent {
+                kind: KeyboardOutputKind::Key,
                 key: Key::OpenBracket,
                 physical_key: Some(Key::OpenBracket),
                 pressed: true,
@@ -447,6 +531,34 @@ mod tests {
 
         assert_eq!(terminal_events[0].key_without_modifiers_text.as_deref(), Some("å"));
         assert_eq!(terminal_events[1].key_without_modifiers_text, None);
+        assert_eq!(
+            terminal_events[0].observed_key,
+            Some(FrameKeyEvent {
+                kind: KeyboardOutputKind::Key,
+                key: Key::OpenBracket,
+                physical_key: Some(Key::OpenBracket),
+                pressed: true,
+                modifiers: Modifiers::SHIFT,
+                key_without_modifiers_text: Some("å".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn terminal_input_events_keep_copy_shortcut_origin() {
+        let terminal_events = terminal_input_events(
+            &[Event::Copy],
+            vec![FrameKeyEvent {
+                kind: KeyboardOutputKind::Copy,
+                key: Key::C,
+                physical_key: Some(Key::C),
+                pressed: true,
+                modifiers: Modifiers::CTRL,
+                key_without_modifiers_text: Some("c".to_owned()),
+            }],
+        );
+
+        assert!(terminal_events[0].is_plain_ctrl_c_copy_command());
     }
 
     #[test]

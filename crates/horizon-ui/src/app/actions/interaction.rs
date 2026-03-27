@@ -465,6 +465,7 @@ mod tests {
         TerminalInputEvent {
             event,
             key_without_modifiers_text: None,
+            observed_key: None,
         }
     }
 

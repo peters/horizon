@@ -489,12 +489,12 @@ pub(super) fn handle_terminal_keyboard_input(
                 terminal.write_input(&bytes);
             }
             egui::Event::Copy => {
-                if let Some(text) = terminal.selection_to_string() {
+                if event.is_plain_ctrl_c_copy_command() {
+                    terminal.write_input(&[3]);
+                } else if let Some(text) = terminal.selection_to_string() {
                     primary_selection.copy(&text);
                     ui.ctx().copy_text(text);
                     terminal.clear_selection();
-                } else {
-                    terminal.write_input(&[3]);
                 }
             }
             egui::Event::Cut => {
@@ -1174,6 +1174,7 @@ mod tests {
                 modifiers,
             },
             key_without_modifiers_text: key_without_modifiers_text.map(ToOwned::to_owned),
+            observed_key: None,
         }
     }
 
@@ -1181,6 +1182,7 @@ mod tests {
         TerminalInputEvent {
             event: Event::Text(text.to_owned()),
             key_without_modifiers_text: None,
+            observed_key: None,
         }
     }
 }
