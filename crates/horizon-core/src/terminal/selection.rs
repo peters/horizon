@@ -2,11 +2,10 @@ use super::{Column, Point, Selection, SelectionType, Side, Terminal, viewport_to
 
 impl Terminal {
     /// Start a new text selection at the given viewport-relative row and column.
-    pub fn start_selection(&self, sel_type: SelectionType, row: usize, col: usize) {
+    pub fn start_selection(&self, sel_type: SelectionType, row: usize, col: usize, side: Side) {
         let mut term = self.term.lock();
         let display_offset = term.grid().display_offset();
         let point = viewport_to_point(display_offset, Point::new(row, Column(col)));
-        let side = Side::Left;
         term.selection = Some(Selection::new(sel_type, point, side));
     }
 

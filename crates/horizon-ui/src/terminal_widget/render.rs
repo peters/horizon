@@ -107,7 +107,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
             let cell_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, metrics.line_height));
             let selected = content
                 .selection
-                .is_some_and(|selection| selection.contains_cell(&indexed, indexed.point, content.cursor.shape));
+                .is_some_and(|selection| selection.contains_cell(&indexed, content.cursor.point, content.cursor.shape));
             let (fg, bg) = cell_colors(indexed.cell, selected, content.colors);
             let batchable_char = batchable_cell_char(indexed.cell).filter(|_| !has_cell_decoration(indexed.cell));
 
@@ -424,6 +424,11 @@ fn append_cell_decoration(
 #[cfg(test)]
 mod tests {
     use super::merge_shape_layers;
+    use alacritty_terminal::grid::Indexed;
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::selection::SelectionRange;
+    use alacritty_terminal::term::cell::Cell;
+    use alacritty_terminal::vte::ansi::CursorShape;
     use egui::{Color32, Pos2, Rect, Shape};
 
     #[test]
@@ -447,5 +452,18 @@ mod tests {
         );
 
         assert_eq!(merged, vec![background_a, background_b, foreground_a, foreground_b]);
+    }
+
+    #[test]
+    fn block_cursor_only_hides_selection_at_actual_cursor_position() {
+        let cell = Cell::default();
+        let indexed = Indexed {
+            point: Point::new(Line(0), Column(2)),
+            cell: &cell,
+        };
+        let selection = SelectionRange::new(indexed.point, Point::new(Line(0), Column(4)), false);
+
+        assert!(selection.contains_cell(&indexed, Point::new(Line(0), Column(7)), CursorShape::Block));
+        assert!(!selection.contains_cell(&indexed, indexed.point, CursorShape::Block));
     }
 }
