@@ -35,6 +35,7 @@ struct PointerContext<'a> {
     current_modifiers: egui::Modifiers,
     hovered_point: Option<input::GridPoint>,
     from_global: Option<TSTransform>,
+    active_pointer_pos: Option<Pos2>,
     primary_selection: &'a PrimarySelection,
     ui_ctx: egui::Context,
 }
@@ -95,6 +96,9 @@ pub(super) fn handle_terminal_pointer_input(
         secondary: input.pointer.secondary_down(),
     });
     let current_modifiers = ui.input(|input| input.modifiers);
+    let active_pointer_pos = ui
+        .input(|input| input.pointer.interact_pos())
+        .map(|position| transform_pos(from_global, position));
     let hovered_point = interaction
         .body
         .hover_pos()
@@ -118,6 +122,7 @@ pub(super) fn handle_terminal_pointer_input(
         current_modifiers,
         hovered_point,
         from_global,
+        active_pointer_pos,
         primary_selection: support.primary_selection,
         ui_ctx: ui.ctx().clone(),
     };
@@ -220,7 +225,9 @@ fn handle_terminal_body_pointer_actions(
     body_primary_press_pos: Option<Pos2>,
     body_middle_press_pos: Option<Pos2>,
 ) {
-    let body_pointer_pos = response_pointer_pos(&pointer.interaction.body);
+    let body_pointer_pos = pointer
+        .active_pointer_pos
+        .or_else(|| response_pointer_pos(&pointer.interaction.body));
 
     if (pointer.current_modifiers.ctrl || pointer.current_modifiers.command)
         && let Some(pos) = body_primary_press_pos
@@ -327,8 +334,9 @@ fn handle_pointer_button(
         } else {
             SelectionType::Simple
         };
+        let side = cell_side(pos, pointer.interaction.layout.body, pointer.metrics, point);
         if let Some(terminal) = panel.terminal_mut() {
-            terminal.start_selection(sel_type, point.line, point.column);
+            terminal.start_selection(sel_type, point.line, point.column, side);
         }
     }
 }

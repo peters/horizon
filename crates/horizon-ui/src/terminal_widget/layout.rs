@@ -167,9 +167,11 @@ pub(super) fn f32_to_usize(value: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridMetrics, SCROLLBAR_GAP, SCROLLBAR_WIDTH, grid_point_from_position, quantize_dimension, terminal_layout,
+        GridMetrics, SCROLLBAR_GAP, SCROLLBAR_WIDTH, cell_side, grid_point_from_position, quantize_dimension,
+        terminal_layout,
     };
     use egui::{FontId, Pos2, Rect, Vec2};
+    use horizon_core::TerminalSide;
 
     fn metrics() -> GridMetrics {
         GridMetrics {
@@ -196,6 +198,22 @@ mod tests {
 
         assert_eq!(point.line, 2);
         assert_eq!(point.column, 9);
+    }
+
+    #[test]
+    fn cell_side_tracks_pointer_half_within_a_cell() {
+        let rect = Rect::from_min_size(Pos2::new(100.0, 80.0), Vec2::new(80.0, 48.0));
+        let point = grid_point_from_position(rect, Pos2::new(104.0, 88.0), &metrics(), 3, 10)
+            .expect("point inside terminal grid");
+
+        assert_eq!(
+            cell_side(Pos2::new(103.0, 88.0), rect, &metrics(), point),
+            TerminalSide::Left
+        );
+        assert_eq!(
+            cell_side(Pos2::new(107.0, 88.0), rect, &metrics(), point),
+            TerminalSide::Right
+        );
     }
 
     #[test]

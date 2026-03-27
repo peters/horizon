@@ -150,6 +150,7 @@ mod tests {
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::Side;
     use alacritty_terminal::selection::SelectionType;
     use alacritty_terminal::sync::FairMutex;
     use alacritty_terminal::term::{self, Term, TermMode};
@@ -382,7 +383,7 @@ mod tests {
         let mut terminal = spawn_test_terminal();
 
         replay_terminal_bytes(&terminal.term, "æøå åäö 你 e\u{0301} ✈\u{fe0f}".as_bytes());
-        terminal.start_selection(SelectionType::Lines, 0, 0);
+        terminal.start_selection(SelectionType::Lines, 0, 0, Side::Left);
 
         assert_eq!(
             terminal.selection_to_string(),
