@@ -364,7 +364,7 @@ impl WorkspaceState {
                 workspace_index,
                 workspace_name: workspace.name.clone(),
             }),
-            layout: None,
+            layout: Some(WorkspaceLayout::Grid),
             panels,
         }
     }
@@ -550,6 +550,8 @@ fn empty_to_none(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{TerminalConfig, WorkspaceConfig};
+
     use super::*;
 
     #[test]
@@ -642,6 +644,24 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn workspace_state_from_config_defaults_layout_to_grid() {
+        let workspace = WorkspaceConfig {
+            name: "Alpha".to_string(),
+            color: None,
+            cwd: None,
+            position: None,
+            terminals: vec![TerminalConfig {
+                name: "Shell".to_string(),
+                ..TerminalConfig::default()
+            }],
+        };
+
+        let state = WorkspaceState::from_config(0, &workspace, [120.0, 64.0]);
+
+        assert_eq!(state.layout, Some(WorkspaceLayout::Grid));
     }
 
     #[test]

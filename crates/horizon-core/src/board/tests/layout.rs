@@ -21,6 +21,46 @@ fn arranging_workspace_records_selected_layout() {
 }
 
 #[test]
+fn new_workspaces_use_grid_layout_by_default() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("grid");
+    let origin = board.workspace(workspace_id).expect("workspace").position;
+
+    let first = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("first panel should spawn");
+    let second = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("second panel should spawn");
+    let third = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("third panel should spawn");
+
+    assert_eq!(
+        board.workspace(workspace_id).expect("workspace").layout,
+        Some(WorkspaceLayout::Grid)
+    );
+    assert!(vec2_eq(
+        board.panel(first).expect("first panel").layout.position,
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+    ));
+    assert!(vec2_eq(
+        board.panel(second).expect("second panel").layout.position,
+        [
+            origin[0] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[0] + TILE_GAP,
+            origin[1] + WS_INNER_PAD
+        ]
+    ));
+    assert!(vec2_eq(
+        board.panel(third).expect("third panel").layout.position,
+        [
+            origin[0] + WS_INNER_PAD,
+            origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP
+        ]
+    ));
+}
+
+#[test]
 fn adding_panel_reflows_arranged_workspace() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("rows");

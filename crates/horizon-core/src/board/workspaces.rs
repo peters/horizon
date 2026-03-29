@@ -61,7 +61,13 @@ impl Board {
     pub fn create_panel(&mut self, mut opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
-        let workspace_layout = self.workspace_layout_value(workspace);
+        let explicit_position = opts.position.is_some();
+        if explicit_position {
+            self.set_workspace_layout(workspace, None);
+        }
+        let workspace_layout = (!explicit_position)
+            .then(|| self.workspace_layout_value(workspace))
+            .flatten();
         let previous_frame = self.workspace_frame_rect(workspace);
 
         // Inherit workspace cwd if the panel doesn't specify one.
