@@ -30,20 +30,15 @@ fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
 }
 
 /// Predefined layout arrangements for panels inside a workspace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum WorkspaceLayout {
     /// Single column, panels stacked top-to-bottom.
     Rows,
     /// Single row, panels side by side.
     Columns,
     /// Square-ish grid (auto columns).
+    #[default]
     Grid,
-}
-
-impl Default for WorkspaceLayout {
-    fn default() -> Self {
-        Self::Grid
-    }
 }
 
 impl WorkspaceLayout {
