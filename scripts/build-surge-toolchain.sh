@@ -63,6 +63,22 @@ fi
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 work_root="$repo_root/.surge/toolchain-src"
+
+resolve_output_dir() {
+  local path="$1"
+
+  case "$path" in
+    /*|[A-Za-z]:[\\/]*|\\\\*)
+      printf '%s\n' "$path"
+      ;;
+    *)
+      printf '%s/%s\n' "$repo_root" "$path"
+      ;;
+  esac
+}
+
+output_dir="$(resolve_output_dir "$output_dir")"
+
 requested_modes=0
 [ -n "$version" ] && requested_modes=$((requested_modes + 1))
 [ -n "$commit_sha" ] && requested_modes=$((requested_modes + 1))
