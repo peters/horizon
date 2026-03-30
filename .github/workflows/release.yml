@@ -42,6 +42,12 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.tag_name }}
           fetch-depth: 0
           lfs: true
+      - name: Restore workflow scripts for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}" -- scripts
 
       - name: Verify workspace versions are aligned
         run: ./scripts/check-version-sync.sh
@@ -163,6 +169,12 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
+      - name: Restore workflow scripts for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}" -- scripts
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
@@ -384,6 +396,12 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
+      - name: Restore workflow scripts for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}" -- scripts
 
       - uses: actions/cache@v5
         with:
@@ -559,6 +577,12 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
+      - name: Restore workflow scripts for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}" -- scripts
 
       - name: Checkout Homebrew tap repository
         uses: actions/checkout@v6
@@ -628,6 +652,12 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
+      - name: Restore workflow scripts for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}" -- scripts
 
       - name: Checkout WinGet fork
         uses: actions/checkout@v6
