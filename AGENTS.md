@@ -106,6 +106,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 - Use idiomatic Rust naming: `snake_case` (functions/modules), `CamelCase` (types), `SCREAMING_SNAKE_CASE` (consts)
 - Typed error enums (thiserror) — no `Box<dyn Error>` or `.unwrap()` in library code
 - Keep APIs explicit: prefer `Result<T, E>` and typed structs/enums over ad-hoc tuples
+- Keep default values and default-selection rules centralized. Prefer `Default`, associated consts, or focused helper functions over repeating literals or enum variants across call sites. Use `static` items only when stable global storage is actually required
 - Prefer `tracing` for structured logging
 - `#![forbid(unsafe_code)]` on all crates
 - Consolidate repeated helpers into shared modules in horizon-core
