@@ -326,7 +326,7 @@ where
     match normalized.as_str() {
         "rows" => Ok(Some(WorkspaceLayout::Rows)),
         "columns" | "cols" => Ok(Some(WorkspaceLayout::Columns)),
-        "grid" => Ok(Some(WorkspaceLayout::Grid)),
+        "grid" => Ok(Some(WorkspaceLayout::default())),
         "stack" | "cascade" => Ok(None),
         _ => Err(serde::de::Error::unknown_variant(
             &value,
@@ -336,9 +336,18 @@ where
 }
 
 impl WorkspaceState {
+    fn layout_from_config(workspace: &WorkspaceConfig) -> Option<WorkspaceLayout> {
+        if workspace.terminals.iter().any(|panel| panel.position.is_some()) {
+            None
+        } else {
+            Some(WorkspaceLayout::default())
+        }
+    }
+
     #[must_use]
     pub fn from_config(workspace_index: usize, workspace: &WorkspaceConfig, resolved_position: [f32; 2]) -> Self {
         let workspace_cwd = normalize_cwd(workspace.cwd.as_deref());
+        let layout = Self::layout_from_config(workspace);
         let panels = workspace
             .terminals
             .iter()
@@ -364,7 +373,7 @@ impl WorkspaceState {
                 workspace_index,
                 workspace_name: workspace.name.clone(),
             }),
-            layout: Some(WorkspaceLayout::Grid),
+            layout,
             panels,
         }
     }
@@ -662,6 +671,25 @@ mod tests {
         let state = WorkspaceState::from_config(0, &workspace, [120.0, 64.0]);
 
         assert_eq!(state.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn workspace_state_from_config_uses_manual_layout_when_any_panel_has_explicit_position() {
+        let workspace = WorkspaceConfig {
+            name: "Alpha".to_string(),
+            color: None,
+            cwd: None,
+            position: None,
+            terminals: vec![TerminalConfig {
+                name: "Shell".to_string(),
+                position: Some([120.0, 80.0]),
+                ..TerminalConfig::default()
+            }],
+        };
+
+        let state = WorkspaceState::from_config(0, &workspace, [120.0, 64.0]);
+
+        assert_eq!(state.layout, None);
     }
 
     #[test]

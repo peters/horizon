@@ -411,6 +411,62 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
 }
 
 #[test]
+fn restored_workspace_layout_is_preserved_after_panel_recreation() {
+    let state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "grid".to_string(),
+            name: "grid".to_string(),
+            cwd: None,
+            position: Some([0.0, 40.0]),
+            template: None,
+            layout: Some(WorkspaceLayout::Grid),
+            panels: vec![
+                PanelState {
+                    local_id: "panel-a".to_string(),
+                    name: "a".to_string(),
+                    kind: PanelKind::Editor,
+                    command: None,
+                    args: Vec::new(),
+                    cwd: None,
+                    ssh_connection: None,
+                    rows: 24,
+                    cols: 80,
+                    resume: PanelResume::Fresh,
+                    position: Some([20.0, 60.0]),
+                    size: Some([320.0, 220.0]),
+                    session_binding: None,
+                    template: None,
+                    editor_content: None,
+                },
+                PanelState {
+                    local_id: "panel-b".to_string(),
+                    name: "b".to_string(),
+                    kind: PanelKind::Editor,
+                    command: None,
+                    args: Vec::new(),
+                    cwd: None,
+                    ssh_connection: None,
+                    rows: 24,
+                    cols: 80,
+                    resume: PanelResume::Fresh,
+                    position: Some([360.0, 60.0]),
+                    size: Some([320.0, 220.0]),
+                    session_binding: None,
+                    template: None,
+                    editor_content: None,
+                },
+            ],
+        }],
+        ..RuntimeState::default()
+    };
+
+    let board = Board::from_runtime_state(&state).expect("board");
+    let workspace = board.workspaces.first().expect("workspace");
+
+    assert_eq!(workspace.layout, Some(WorkspaceLayout::Grid));
+}
+
+#[test]
 fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
     let transcript_root = tempfile::tempdir().expect("tempdir");
     std::fs::write(transcript_root.path().join("ssh-panel.bin"), b"restored ssh prompt\r\n").expect("write transcript");

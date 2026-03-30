@@ -40,6 +40,12 @@ pub enum WorkspaceLayout {
     Grid,
 }
 
+impl Default for WorkspaceLayout {
+    fn default() -> Self {
+        Self::Grid
+    }
+}
+
 impl WorkspaceLayout {
     pub const ALL: [Self; 3] = [Self::Rows, Self::Columns, Self::Grid];
 
@@ -125,6 +131,9 @@ impl Board {
                 options.restore_as_disconnected_snapshot =
                     transcript_root.is_some() && panel_state.kind == PanelKind::Ssh;
                 board.create_panel(options, ws_id)?;
+            }
+            if let Some(workspace) = board.workspace_mut(ws_id) {
+                workspace.layout = workspace_state.layout;
             }
         }
 

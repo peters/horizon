@@ -49,7 +49,7 @@ impl Workspace {
             position: [0.0, 0.0],
             cwd: None,
             template: None,
-            layout: Some(WorkspaceLayout::Grid),
+            layout: Some(WorkspaceLayout::default()),
         }
     }
 
