@@ -5,6 +5,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which uploads the platform binaries to the same GitHub Release.
+- The same release workflow can also be started manually with an existing tag to recover a failed release after fixing workflow automation, without bumping the version.
 - Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag in `peters/horizon-updates`, publish the classic `horizon` snap to the Snap Store, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
 
 ## Source Of Truth
@@ -58,6 +59,8 @@ The release workflow validates:
 - the tag format
 - the GitHub prerelease checkbox matches the tag suffix
 - the tag's base version matches `Cargo.toml`
+
+If the workflow itself needs a fix after a release was already published, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path reuses the existing GitHub Release instead of requiring a bumped version tag. The manual form also lets you leave Snap publication disabled while recovering the rest of the stable release if the Snap Store side is not ready yet.
 
 Then it:
 

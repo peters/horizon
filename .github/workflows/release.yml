@@ -3,9 +3,20 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing Git tag or GitHub Release tag to publish
+        required: true
+        type: string
+      publish_snap:
+        description: Publish the stable snap to the Snap Store during manual recovery
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag_name }}
   cancel-in-progress: true
 
 env:
@@ -22,11 +33,13 @@ jobs:
     name: Validate Release
     runs-on: ubuntu-latest
     outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
       release_version: ${{ steps.validate.outputs.release_version }}
+      release_prerelease: ${{ steps.validate.outputs.release_prerelease }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
           fetch-depth: 0
           lfs: true
 
@@ -35,11 +48,25 @@ jobs:
 
       - id: validate
         name: Validate tag and release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           source ./scripts/version-lib.sh
 
-          tag_name="${{ github.event.release.tag_name }}"
-          release_prerelease="${{ github.event.release.prerelease }}"
+          tag_name="${{ github.event.release.tag_name || inputs.tag_name }}"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            release_json="$(gh release view "$tag_name" --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
+            release_draft="$(jq -r '.isDraft' <<<"$release_json")"
+            release_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+
+            if [ "$release_draft" = "true" ]; then
+              echo "::error::GitHub Release ${tag_name} is still a draft."
+              exit 1
+            fi
+          else
+            release_prerelease="${{ github.event.release.prerelease }}"
+          fi
 
           if [[ "$tag_name" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             release_version="${BASH_REMATCH[1]}"
@@ -67,7 +94,9 @@ jobs:
 
           echo "Validated release: tag=${tag_name} version=${release_version} prerelease=${tag_prerelease}"
 
+          echo "release_tag=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+          echo "release_prerelease=${tag_prerelease}" >> "$GITHUB_OUTPUT"
           echo "## Release validation" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`${tag_name}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Version: \`${release_version}\`" >> "$GITHUB_STEP_SUMMARY"
@@ -86,6 +115,7 @@ jobs:
             cache_key: linux-release-artifacts
             rid: linux-x64
             release_asset: horizon-linux-x64.tar.gz
+            surge_cli: surge
             binary_path: target/release/horizon
             asset_kind: tar
             surge_app_id: horizon-linux-x64
@@ -97,6 +127,7 @@ jobs:
             cache_key: macos-release-artifacts
             rid: osx-arm64
             release_asset: horizon-osx-arm64.tar.gz
+            surge_cli: surge
             binary_path: target/release/horizon
             asset_kind: tar
             surge_app_id: horizon-osx-arm64
@@ -108,6 +139,7 @@ jobs:
             cache_key: macos-intel-release-artifacts
             rid: osx-x64
             release_asset: horizon-osx-x64.tar.gz
+            surge_cli: surge
             binary_path: target/release/horizon
             asset_kind: tar
             surge_app_id: horizon-osx-x64
@@ -119,6 +151,7 @@ jobs:
             cache_key: windows-release-artifacts
             rid: win-x64
             release_asset: horizon-windows-x64.exe
+            surge_cli: surge.exe
             binary_path: target/release/horizon.exe
             asset_kind: file
             surge_app_id: horizon-win-x64
@@ -128,13 +161,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
       - name: Restore Surge toolchain cache
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         uses: actions/cache@v5
         with:
           path: |
@@ -142,7 +175,7 @@ jobs:
             .cache/surge-toolchain/${{ matrix.rid }}
           key: surge-toolchain-${{ matrix.rid }}-${{ env.SURGE_VERSION }}
       - name: Prepare Surge toolchain source
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           ./scripts/build-surge-toolchain.sh \
@@ -150,7 +183,7 @@ jobs:
             --output-dir ".cache/surge-toolchain/${{ matrix.rid }}" \
             --prepare-only
       - uses: Swatinem/rust-cache@v2
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         with:
           key: surge-toolchain-${{ matrix.rid }}-${{ env.SURGE_VERSION }}
           workspaces: |
@@ -172,15 +205,14 @@ jobs:
           name: ${{ matrix.release_asset }}
           path: ${{ matrix.release_asset }}
       - name: Build Surge toolchain
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           ./scripts/build-surge-toolchain.sh \
             --version "${SURGE_VERSION}" \
             --output-dir ".cache/surge-toolchain/${{ matrix.rid }}"
-          printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/${{ matrix.rid }}" >> "$GITHUB_PATH"
       - name: Stage Surge artifacts
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           ./scripts/stage-surge-artifacts.sh \
@@ -190,7 +222,7 @@ jobs:
             --binary "${{ matrix.binary_path }}" \
             --main-exe "${{ matrix.surge_main_exe }}"
       - name: Determine Surge storage bucket
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           if [ "${{ github.repository }}" = "peters/horizon" ]; then
@@ -201,7 +233,7 @@ jobs:
 
           printf 'SURGE_STORAGE_BUCKET=%s\n' "$surge_storage_bucket" >> "$GITHUB_ENV"
       - name: Render Surge release manifest
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           ./scripts/render-surge-manifest.sh \
@@ -209,15 +241,16 @@ jobs:
             --output .surge/release.surge.yml \
             --storage-bucket "${SURGE_STORAGE_BUCKET}"
       - name: Pack Surge release bundle
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
-          surge --manifest-path .surge/release.surge.yml pack \
+          "./.cache/surge-toolchain/${{ matrix.rid }}/${{ matrix.surge_cli }}" \
+            --manifest-path .surge/release.surge.yml pack \
             --app-id "${{ matrix.surge_app_id }}" \
             --rid "${{ matrix.rid }}" \
             --version "${{ needs.validate-release.outputs.release_version }}"
       - name: Collect Surge installer asset
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           mkdir -p surge-release-assets
@@ -225,13 +258,13 @@ jobs:
             ".surge/installers/${{ matrix.surge_app_id }}/${{ matrix.rid }}/Setup-${{ matrix.rid }}-${{ matrix.surge_app_id }}-stable-offline-gui.${{ matrix.surge_installer_ext }}" \
             "surge-release-assets/${{ matrix.surge_installer_asset }}"
       - name: Upload Surge installer asset
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         uses: actions/upload-artifact@v7
         with:
           name: surge-release-assets-${{ matrix.rid }}
           path: surge-release-assets/*
       - name: Collect Surge publish packages
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         shell: bash
         run: |
           mkdir -p surge-push-packages
@@ -241,7 +274,7 @@ jobs:
             cp "$delta" surge-push-packages/
           fi
       - name: Upload Surge publish packages
-        if: ${{ !github.event.release.prerelease }}
+        if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
         uses: actions/upload-artifact@v7
         with:
           name: surge-push-packages-${{ matrix.rid }}
@@ -249,7 +282,7 @@ jobs:
 
   upload-release-assets:
     name: Upload Release Assets
-    needs: [build-artifacts]
+    needs: [validate-release, build-artifacts]
     outputs:
       linux_x64_sha256: ${{ steps.checksums.outputs.linux_x64_sha256 }}
       macos_arm64_sha256: ${{ steps.checksums.outputs.macos_arm64_sha256 }}
@@ -295,7 +328,7 @@ jobs:
             fi
           done
 
-          if [[ "${{ github.event.release.prerelease }}" == "false" ]]; then
+          if [[ "${{ needs.validate-release.outputs.release_prerelease }}" == "false" ]]; then
             required_installers=(
               horizon-installer-linux-x64.bin
               horizon-installer-osx-arm64.bin
@@ -327,13 +360,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" release-assets/* \
+          gh release upload "${{ needs.validate-release.outputs.release_tag }}" release-assets/* \
             --repo "${{ github.repository }}" \
             --clobber
 
   publish-surge-release-index:
     name: Publish Surge Update Storage
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
     needs: [validate-release, build-artifacts]
     runs-on: ubuntu-latest
     steps:
@@ -349,7 +382,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
 
       - uses: actions/cache@v5
@@ -379,7 +412,6 @@ jobs:
           ./scripts/build-surge-toolchain.sh \
             --version "${SURGE_VERSION}" \
             --output-dir ".cache/surge-toolchain/linux-x64"
-          printf '%s\n' "${{ github.workspace }}/.cache/surge-toolchain/linux-x64" >> "$GITHUB_PATH"
 
       - name: Determine Surge storage bucket
         shell: bash
@@ -431,8 +463,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.SURGE_STORAGE_TOKEN }}
         shell: bash
         run: |
+          surge_bin="./.cache/surge-toolchain/linux-x64/surge"
           while read -r app_id rid; do
-            surge --manifest-path .surge/release.surge.yml push \
+            "$surge_bin" --manifest-path .surge/release.surge.yml push \
               --app-id "$app_id" \
               --rid "$rid" \
               --version "${{ needs.validate-release.outputs.release_version }}" \
@@ -451,8 +484,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          surge_bin="./.cache/surge-toolchain/linux-x64/surge"
           while read -r app_id rid; do
-            surge --manifest-path .surge/release.surge.yml push \
+            "$surge_bin" --manifest-path .surge/release.surge.yml push \
               --app-id "$app_id" \
               --rid "$rid" \
               --version "${{ needs.validate-release.outputs.release_version }}" \
@@ -467,7 +501,7 @@ jobs:
 
   publish-snap:
     name: Publish Snap
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && (github.event_name == 'release' || inputs.publish_snap) }}
     needs: [validate-release]
     runs-on: ubuntu-latest
     steps:
@@ -483,7 +517,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
 
       - uses: snapcore/action-build@v1
@@ -508,7 +542,7 @@ jobs:
 
   update-homebrew-tap:
     name: Update Homebrew Tap
-    if: ${{ !github.event.release.prerelease && github.repository == 'peters/horizon' }}
+    if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets]
     runs-on: ubuntu-latest
     steps:
@@ -523,7 +557,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
 
       - name: Checkout Homebrew tap repository
@@ -546,7 +580,7 @@ jobs:
       - name: Commit and push Homebrew tap update
         working-directory: homebrew-horizon
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
         run: |
           if git diff --quiet; then
             echo "Homebrew tap already up to date."
@@ -561,7 +595,7 @@ jobs:
 
   update-winget-pkgs:
     name: Update WinGet Package
-    if: ${{ !github.event.release.prerelease && github.repository == 'peters/horizon' }}
+    if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets]
     runs-on: ubuntu-latest
     env:
@@ -592,7 +626,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
 
       - name: Checkout WinGet fork
@@ -603,9 +637,11 @@ jobs:
           path: winget-pkgs
 
       - name: Update WinGet manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          release_date="$(date -u -d "${{ github.event.release.published_at }}" +%F)"
+          release_date="$(gh release view "${{ needs.validate-release.outputs.release_tag }}" --repo "${{ github.repository }}" --json publishedAt --jq '.publishedAt | split("T")[0]')"
 
           ./scripts/update-winget-pkgs.sh \
             --winget-dir winget-pkgs \
@@ -618,7 +654,7 @@ jobs:
         working-directory: winget-pkgs
         env:
           RELEASE_VERSION: ${{ needs.validate-release.outputs.release_version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
         run: |
           branch_name="horizon-${RELEASE_VERSION}"
           manifest_path="manifests/p/Peters/Horizon/${RELEASE_VERSION}"
@@ -644,7 +680,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
           RELEASE_VERSION: ${{ needs.validate-release.outputs.release_version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
         run: |
           branch_name="${{ steps.push-winget.outputs.branch_name }}"
           fork_owner="${WINGET_PKGS_REPOSITORY%%/*}"
