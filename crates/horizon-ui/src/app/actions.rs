@@ -20,6 +20,22 @@ fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Opti
         .and_then(|workspace| workspace.cwd.clone())
 }
 
+fn add_panel_position(
+    board: &horizon_core::Board,
+    workspace_id: WorkspaceId,
+    canvas_pos: Option<[f32; 2]>,
+) -> Option<[f32; 2]> {
+    if board
+        .workspace(workspace_id)
+        .and_then(|workspace| workspace.layout)
+        .is_some()
+    {
+        None
+    } else {
+        canvas_pos
+    }
+}
+
 enum PresetPickerAction {
     CreatePanel {
         workspace_id: WorkspaceId,
@@ -88,8 +104,8 @@ mod tests {
         detached_workspace_ids,
     };
     use super::{
-        DetachedWorkspaceViewportState, align_attached_workspaces, inherit_workspace_cwd, update_workspace_cwd,
-        workspace_cwd,
+        DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, inherit_workspace_cwd,
+        update_workspace_cwd, workspace_cwd,
     };
     use crate::app::TOOLBAR_HEIGHT;
     use crate::app::root_chrome::effective_sidebar_width;
@@ -148,6 +164,26 @@ mod tests {
         board.workspace_mut(workspace_id).expect("workspace").cwd = Some(path.clone());
 
         assert_eq!(workspace_cwd(&board, workspace_id), Some(path));
+    }
+
+    #[test]
+    fn add_panel_position_ignores_click_target_for_arranged_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("alpha");
+
+        assert_eq!(add_panel_position(&board, workspace_id, Some([320.0, 180.0])), None);
+    }
+
+    #[test]
+    fn add_panel_position_preserves_click_target_for_manual_workspace() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("alpha");
+        assert!(board.clear_workspace_layout(workspace_id));
+
+        assert_eq!(
+            add_panel_position(&board, workspace_id, Some([320.0, 180.0])),
+            Some([320.0, 180.0])
+        );
     }
 
     #[test]

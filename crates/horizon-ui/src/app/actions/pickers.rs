@@ -45,7 +45,7 @@ impl HorizonApp {
             } => {
                 super::update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
                 let mut options = preset.to_panel_options();
-                options.position = canvas_pos;
+                options.position = super::add_panel_position(&self.board, workspace_id, canvas_pos);
                 if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                     tracing::error!("failed to create panel: {error}");
                 }
