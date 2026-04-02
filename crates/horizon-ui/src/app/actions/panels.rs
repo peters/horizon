@@ -2,7 +2,7 @@ use crate::app::HorizonApp;
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
 
-use super::{inherit_workspace_cwd, workspace_cwd};
+use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
 
 impl HorizonApp {
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
@@ -106,7 +106,7 @@ impl HorizonApp {
     ) {
         if workspace_cwd(&self.board, workspace_id).is_some() || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options();
-            options.position = canvas_pos;
+            options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
             if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                 tracing::error!("failed to create panel: {error}");
             }
