@@ -54,6 +54,14 @@ impl WorkspaceLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceDockSide {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,

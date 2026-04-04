@@ -170,6 +170,7 @@ pub struct HorizonApp {
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     sidebar_visible: bool,
+    sidebar_drag_workspace: Option<WorkspaceId>,
     minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,
@@ -240,14 +241,7 @@ impl HorizonApp {
         board.attention_enabled = config.features.attention_feed;
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
-
-        let managed_install = std::env::current_exe()
-            .ok()
-            .and_then(|current_exe| ManagedInstall::discover(&current_exe));
-        let next_surge_update_check_at = managed_install
-            .as_ref()
-            .filter(|install| install.uses_stable_channel() && install.uses_github_releases())
-            .map(|_| Instant::now());
+        let (managed_install, next_surge_update_check_at) = managed_install_state();
 
         let mut app = Self {
             board,
@@ -265,6 +259,7 @@ impl HorizonApp {
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None,
             sidebar_visible: true,
+            sidebar_drag_workspace: None,
             minimap_visible: true,
             hud_visible: false,
             renaming_workspace: None,
@@ -339,6 +334,17 @@ impl HorizonApp {
 
         app
     }
+}
+
+fn managed_install_state() -> (Option<ManagedInstall>, Option<Instant>) {
+    let managed_install = std::env::current_exe()
+        .ok()
+        .and_then(|current_exe| ManagedInstall::discover(&current_exe));
+    let next_surge_update_check_at = managed_install
+        .as_ref()
+        .filter(|install| install.uses_stable_channel() && install.uses_github_releases())
+        .map(|_| Instant::now());
+    (managed_install, next_surge_update_check_at)
 }
 
 fn configure_fonts() -> egui::FontDefinitions {

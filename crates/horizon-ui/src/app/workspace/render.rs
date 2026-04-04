@@ -43,6 +43,7 @@ pub(super) fn render_workspace_visual(
         return WorkspaceInteraction {
             activate_workspace: false,
             drag_delta: Vec2::ZERO,
+            drag_stopped: false,
             start_rename: false,
             rename_action: RenameEditAction::None,
             action: None,
@@ -68,6 +69,7 @@ pub(super) fn render_workspace_visual(
                 WorkspaceInteraction {
                     activate_workspace: false,
                     drag_delta: Vec2::ZERO,
+                    drag_stopped: false,
                     start_rename: false,
                     rename_action: show_inline_rename_editor(
                         ui,
@@ -102,6 +104,7 @@ pub(super) fn render_workspace_visual(
                 let mut interaction = WorkspaceInteraction {
                     activate_workspace: label_response.clicked() || label_response.drag_started(),
                     drag_delta: label_response.drag_delta(),
+                    drag_stopped: label_response.drag_stopped(),
                     start_rename: label_response.double_clicked(),
                     rename_action: RenameEditAction::None,
                     action: None,

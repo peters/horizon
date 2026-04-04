@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::WorkspaceConfig;
-use crate::layout::{TILE_GAP, WS_INNER_PAD};
+use crate::layout::{TILE_GAP, WS_COLLISION_GAP, WS_INNER_PAD};
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState, WorkspaceTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
@@ -284,6 +284,85 @@ fn align_workspaces_horizontally_only_moves_selected_workspaces() {
         vec2_eq(current_third_position, original_third_position),
         "expected detached workspace position {original_third_position:?}, got {current_third_position:?}"
     );
+}
+
+#[test]
+fn move_workspace_beside_places_workspace_tight_to_target() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace("alpha");
+    let beta = board.create_workspace("beta");
+
+    board
+        .create_panel(editor_panel_options(), alpha)
+        .expect("alpha panel should spawn");
+    board
+        .create_panel(editor_panel_options(), beta)
+        .expect("beta panel should spawn");
+
+    assert!(board.move_workspace_beside(beta, alpha, WorkspaceDockSide::Right));
+
+    let alpha_frame = board.workspace_frame_rect(alpha).expect("alpha frame");
+    let beta_frame = board.workspace_frame_rect(beta).expect("beta frame");
+
+    assert!(
+        (beta_frame[0] - (alpha_frame[2] + WS_COLLISION_GAP)).abs() <= f32::EPSILON,
+        "expected beta to sit to the right of alpha with gap {WS_COLLISION_GAP}, got alpha={alpha_frame:?} beta={beta_frame:?}"
+    );
+    assert!(
+        (beta_frame[1] - alpha_frame[1]).abs() <= f32::EPSILON,
+        "expected top edges to align, got alpha={alpha_frame:?} beta={beta_frame:?}"
+    );
+}
+
+#[test]
+fn move_workspace_beside_pushes_colliding_neighbors() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [720.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [1440.0, 40.0]);
+
+    for workspace_id in [alpha, beta, gamma] {
+        board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("panel should spawn");
+    }
+
+    let beta_before = board.workspace_frame_rect(beta).expect("beta frame before");
+
+    assert!(board.move_workspace_beside(gamma, alpha, WorkspaceDockSide::Right));
+
+    let alpha_frame = board.workspace_frame_rect(alpha).expect("alpha frame");
+    let gamma_frame = board.workspace_frame_rect(gamma).expect("gamma frame");
+    let beta_frame = board.workspace_frame_rect(beta).expect("beta frame");
+
+    assert!(
+        (gamma_frame[0] - (alpha_frame[2] + WS_COLLISION_GAP)).abs() <= f32::EPSILON,
+        "expected gamma to dock next to alpha, got alpha={alpha_frame:?} gamma={gamma_frame:?}"
+    );
+    assert!(
+        beta_frame[0] > gamma_frame[2],
+        "expected beta to be pushed out of gamma's way, got beta={beta_frame:?} gamma={gamma_frame:?}"
+    );
+    assert!(
+        beta_frame[0] > beta_before[0],
+        "expected beta to move right after gamma docked near alpha, got before={beta_before:?} after={beta_frame:?}"
+    );
+}
+
+#[test]
+fn moving_workspace_before_and_after_updates_workspace_order() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace("alpha");
+    let beta = board.create_workspace("beta");
+    let gamma = board.create_workspace("gamma");
+
+    assert!(board.move_workspace_before(gamma, alpha));
+    let order: Vec<_> = board.workspaces.iter().map(|workspace| workspace.id).collect();
+    assert_eq!(order, vec![gamma, alpha, beta]);
+
+    assert!(board.move_workspace_after(alpha, beta));
+    let order: Vec<_> = board.workspaces.iter().map(|workspace| workspace.id).collect();
+    assert_eq!(order, vec![gamma, beta, alpha]);
 }
 
 #[test]

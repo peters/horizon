@@ -66,6 +66,41 @@ impl Board {
         self.resolve_workspace_collisions_with_push(source, drag_dir, workspace_ids, collision_push);
     }
 
+    pub(super) fn push_workspace_colliders_in_direction(
+        &mut self,
+        fixed_workspace_ids: &[WorkspaceId],
+        drag_dir: [f32; 2],
+    ) {
+        let movable_workspace_ids: Vec<_> = self
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id)
+            .filter(|workspace_id| !fixed_workspace_ids.contains(workspace_id))
+            .collect();
+        let mut queue = fixed_workspace_ids.to_vec();
+
+        while let Some(check_id) = queue.pop() {
+            let Some(check_rect) = self.workspace_frame_rect(check_id) else {
+                continue;
+            };
+
+            for other_id in &movable_workspace_ids {
+                if *other_id == check_id {
+                    continue;
+                }
+
+                let Some(other_rect) = self.workspace_frame_rect(*other_id) else {
+                    continue;
+                };
+                let push = collision_push(check_rect, other_rect, drag_dir, WS_COLLISION_GAP);
+                if push[0] != 0.0 || push[1] != 0.0 {
+                    self.translate_workspace(*other_id, push);
+                    queue.push(*other_id);
+                }
+            }
+        }
+    }
+
     fn resolve_workspace_resize_collisions_in_scope(
         &mut self,
         source: WorkspaceId,
