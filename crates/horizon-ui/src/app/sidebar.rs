@@ -610,17 +610,14 @@ impl HorizonApp {
             let _ = self.fit_active_workspace(ctx);
         }
         let workspace_drop_target = actions.workspace_drop.map(|drop| {
-            let moved = match drop.insert {
-                SidebarWorkspaceInsert::Before => self.board.move_workspace_beside(
+            let moved = if sidebar_workspace_drop_should_dock(self.workspace_is_detached(drop.target_workspace_id)) {
+                self.board.move_workspace_beside(
                     drop.dragged_workspace_id,
                     drop.target_workspace_id,
-                    WorkspaceDockSide::Left,
-                ),
-                SidebarWorkspaceInsert::After => self.board.move_workspace_beside(
-                    drop.dragged_workspace_id,
-                    drop.target_workspace_id,
-                    WorkspaceDockSide::Right,
-                ),
+                    sidebar_workspace_insert_dock_side(drop.insert),
+                )
+            } else {
+                false
             };
             let reordered = match drop.insert {
                 SidebarWorkspaceInsert::Before => self
@@ -689,6 +686,17 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
+}
+
+fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> WorkspaceDockSide {
+    match insert {
+        SidebarWorkspaceInsert::Before => WorkspaceDockSide::Left,
+        SidebarWorkspaceInsert::After => WorkspaceDockSide::Right,
+    }
+}
+
+fn sidebar_workspace_drop_should_dock(target_detached: bool) -> bool {
+    !target_detached
 }
 
 fn paint_workspace_row_bg(
@@ -769,5 +777,38 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
     } else if hovered {
         ui.painter_at(bg_rect)
             .rect_filled(bg_rect, CornerRadius::same(10), theme::alpha(theme::PANEL_BG_ALT, 180));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side};
+    use horizon_core::WorkspaceDockSide;
+
+    #[test]
+    fn sidebar_drop_docks_attached_workspace_against_attached_target() {
+        assert!(sidebar_workspace_drop_should_dock(false));
+    }
+
+    #[test]
+    fn sidebar_drop_preserves_detached_workspace_reposition_against_attached_target() {
+        assert!(sidebar_workspace_drop_should_dock(false));
+    }
+
+    #[test]
+    fn sidebar_drop_skips_board_docking_when_target_workspace_is_detached() {
+        assert!(!sidebar_workspace_drop_should_dock(true));
+    }
+
+    #[test]
+    fn sidebar_insert_side_maps_to_expected_dock_side() {
+        assert_eq!(
+            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::Before),
+            WorkspaceDockSide::Left
+        );
+        assert_eq!(
+            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::After),
+            WorkspaceDockSide::Right
+        );
     }
 }
