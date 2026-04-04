@@ -6,7 +6,9 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
     Vec2,
 };
-use horizon_core::{AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceId, WorkspaceLayout};
+use horizon_core::{
+    AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
+};
 
 use crate::theme;
 
@@ -38,6 +40,7 @@ struct SidebarPanelEntry {
 struct SidebarActions {
     create_workspace: bool,
     fit_active_workspace: bool,
+    workspace_drop: Option<SidebarWorkspaceDropAction>,
     focus_panel: Option<PanelId>,
     pan_to_panel: Option<PanelId>,
     pan_to_workspace: Option<WorkspaceId>,
@@ -47,6 +50,26 @@ struct SidebarActions {
     close_all_in_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
+}
+
+#[derive(Clone, Copy)]
+enum SidebarWorkspaceInsert {
+    Before,
+    After,
+}
+
+#[derive(Clone, Copy)]
+struct SidebarWorkspaceDropAction {
+    dragged_workspace_id: WorkspaceId,
+    target_workspace_id: WorkspaceId,
+    insert: SidebarWorkspaceInsert,
+}
+
+#[derive(Default)]
+struct SidebarWorkspaceDragState {
+    active_this_frame: bool,
+    drop_requested: bool,
+    drop_action: Option<SidebarWorkspaceDropAction>,
 }
 
 impl HorizonApp {
@@ -158,6 +181,7 @@ impl HorizonApp {
         ui.add_space(10.0);
 
         let available = ui.available_height();
+        let mut drag_state = SidebarWorkspaceDragState::default();
         egui::ScrollArea::vertical()
             .max_height(available)
             .auto_shrink([false, false])
@@ -165,9 +189,16 @@ impl HorizonApp {
                 ui.set_min_width(ui.available_width());
 
                 for workspace in workspace_data {
-                    self.render_sidebar_workspace(ui, workspace, workspace_data, actions);
+                    self.render_sidebar_workspace(ui, workspace, workspace_data, actions, &mut drag_state);
                 }
             });
+
+        if drag_state.drop_requested {
+            actions.workspace_drop = drag_state.drop_action;
+            self.sidebar_drag_workspace = None;
+        } else if !drag_state.active_this_frame && !ui.ctx().input(|input| input.pointer.primary_down()) {
+            self.sidebar_drag_workspace = None;
+        }
 
         ui.add_space(8.0);
     }
@@ -215,13 +246,21 @@ impl HorizonApp {
         workspace: &WorkspaceSidebarEntry,
         workspace_data: &[WorkspaceSidebarEntry],
         actions: &mut SidebarActions,
+        drag_state: &mut SidebarWorkspaceDragState,
     ) {
         ui.add_space(4.0);
 
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let mut row_clicked = false;
-        paint_workspace_row_bg(ui, row_rect, workspace.color, workspace.is_active, click_target_hovered);
+        paint_workspace_row_bg(
+            ui,
+            row_rect,
+            workspace.color,
+            workspace.is_active,
+            click_target_hovered,
+            self.sidebar_drag_workspace == Some(workspace.id),
+        );
         ui.scope_builder(
             UiBuilder::new()
                 .max_rect(row_rect)
@@ -269,14 +308,11 @@ impl HorizonApp {
         let row_response = ui.interact(
             row_rect,
             ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
-            Sense::click(),
+            Sense::click_and_drag(),
         );
         click_target_hovered |= row_response.hovered();
         row_clicked |= row_response.clicked();
-
-        if click_target_hovered {
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
+        self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
 
         if row_clicked {
             if workspace.panels.len() == 1 {
@@ -293,6 +329,48 @@ impl HorizonApp {
             self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
         }
         ui.add_space(8.0);
+    }
+
+    fn handle_sidebar_workspace_drag(
+        &mut self,
+        ui: &egui::Ui,
+        workspace: &WorkspaceSidebarEntry,
+        row_rect: Rect,
+        row_response: &egui::Response,
+        drag_state: &mut SidebarWorkspaceDragState,
+        click_target_hovered: bool,
+    ) {
+        if row_response.drag_started() || row_response.dragged() {
+            self.sidebar_drag_workspace = Some(workspace.id);
+            drag_state.active_this_frame = true;
+        }
+        if self.sidebar_drag_workspace == Some(workspace.id) && row_response.drag_stopped() {
+            drag_state.active_this_frame = true;
+            drag_state.drop_requested = true;
+        }
+
+        if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+            && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
+            && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
+        {
+            let insert = if pointer_pos.y <= row_rect.center().y {
+                SidebarWorkspaceInsert::Before
+            } else {
+                SidebarWorkspaceInsert::After
+            };
+            drag_state.drop_action = Some(SidebarWorkspaceDropAction {
+                dragged_workspace_id,
+                target_workspace_id: workspace.id,
+                insert,
+            });
+            paint_workspace_drop_indicator(ui, row_rect, insert, workspace.color);
+        }
+
+        if self.sidebar_drag_workspace == Some(workspace.id) && row_response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        } else if click_target_hovered {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        }
     }
 
     fn show_workspace_context_menu(
@@ -531,11 +609,36 @@ impl HorizonApp {
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);
         }
+        let workspace_drop_target = actions.workspace_drop.map(|drop| {
+            let moved = if sidebar_workspace_drop_should_dock(self.workspace_is_detached(drop.target_workspace_id)) {
+                self.board.move_workspace_beside(
+                    drop.dragged_workspace_id,
+                    drop.target_workspace_id,
+                    sidebar_workspace_insert_dock_side(drop.insert),
+                )
+            } else {
+                false
+            };
+            let reordered = match drop.insert {
+                SidebarWorkspaceInsert::Before => self
+                    .board
+                    .move_workspace_before(drop.dragged_workspace_id, drop.target_workspace_id),
+                SidebarWorkspaceInsert::After => self
+                    .board
+                    .move_workspace_after(drop.dragged_workspace_id, drop.target_workspace_id),
+            };
+            if moved || reordered {
+                self.mark_runtime_dirty();
+            }
+            drop.dragged_workspace_id
+        });
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
         }
 
-        let pan_workspace_id = if let Some(panel_id) = actions.pan_to_panel {
+        let pan_workspace_id = if workspace_drop_target.is_some() {
+            workspace_drop_target
+        } else if let Some(panel_id) = actions.pan_to_panel {
             self.board.panel(panel_id).map(|panel| panel.workspace_id)
         } else {
             actions.pan_to_workspace
@@ -585,18 +688,36 @@ impl HorizonApp {
     }
 }
 
+fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> WorkspaceDockSide {
+    match insert {
+        SidebarWorkspaceInsert::Before => WorkspaceDockSide::Left,
+        SidebarWorkspaceInsert::After => WorkspaceDockSide::Right,
+    }
+}
+
+fn sidebar_workspace_drop_should_dock(target_detached: bool) -> bool {
+    !target_detached
+}
+
 fn paint_workspace_row_bg(
     ui: &mut egui::Ui,
     workspace_rect: Rect,
     workspace_color: Color32,
     is_active: bool,
     hovered: bool,
+    dragging: bool,
 ) {
     let workspace_bg = Rect::from_min_max(
         Pos2::new(workspace_rect.min.x + 6.0, workspace_rect.min.y),
         Pos2::new(workspace_rect.max.x - 6.0, workspace_rect.max.y),
     );
-    if is_active {
+    if dragging {
+        ui.painter_at(workspace_bg).rect_filled(
+            workspace_bg,
+            CornerRadius::same(10),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace_color, 0.18), 180),
+        );
+    } else if is_active {
         ui.painter_at(workspace_bg).rect_filled(
             workspace_bg,
             CornerRadius::same(10),
@@ -609,6 +730,24 @@ fn paint_workspace_row_bg(
             theme::alpha(theme::PANEL_BG_ALT, 160),
         );
     }
+}
+
+fn paint_workspace_drop_indicator(
+    ui: &egui::Ui,
+    workspace_rect: Rect,
+    insert: SidebarWorkspaceInsert,
+    workspace_color: Color32,
+) {
+    let y = match insert {
+        SidebarWorkspaceInsert::Before => workspace_rect.min.y + 1.0,
+        SidebarWorkspaceInsert::After => workspace_rect.max.y - 1.0,
+    };
+    let left = workspace_rect.min.x + 12.0;
+    let right = workspace_rect.max.x - 12.0;
+    ui.painter().line_segment(
+        [Pos2::new(left, y), Pos2::new(right, y)],
+        Stroke::new(2.0, theme::alpha(workspace_color, 220)),
+    );
 }
 
 fn sidebar_attention_tag(severity: AttentionSeverity) -> (&'static str, Color32) {
@@ -638,5 +777,38 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
     } else if hovered {
         ui.painter_at(bg_rect)
             .rect_filled(bg_rect, CornerRadius::same(10), theme::alpha(theme::PANEL_BG_ALT, 180));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side};
+    use horizon_core::WorkspaceDockSide;
+
+    #[test]
+    fn sidebar_drop_docks_attached_workspace_against_attached_target() {
+        assert!(sidebar_workspace_drop_should_dock(false));
+    }
+
+    #[test]
+    fn sidebar_drop_preserves_detached_workspace_reposition_against_attached_target() {
+        assert!(sidebar_workspace_drop_should_dock(false));
+    }
+
+    #[test]
+    fn sidebar_drop_skips_board_docking_when_target_workspace_is_detached() {
+        assert!(!sidebar_workspace_drop_should_dock(true));
+    }
+
+    #[test]
+    fn sidebar_insert_side_maps_to_expected_dock_side() {
+        assert_eq!(
+            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::Before),
+            WorkspaceDockSide::Left
+        );
+        assert_eq!(
+            sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::After),
+            WorkspaceDockSide::Right
+        );
     }
 }

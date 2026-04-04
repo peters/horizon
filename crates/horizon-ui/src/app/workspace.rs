@@ -5,7 +5,7 @@ mod toolbar;
 use std::collections::HashMap;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2};
-use horizon_core::{WorkspaceId, WorkspaceLayout};
+use horizon_core::{WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use super::util::{OverlayExclusion, workspace_label_width};
 use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
@@ -32,6 +32,7 @@ struct WorkspaceVisual {
 struct WorkspaceInteraction {
     activate_workspace: bool,
     drag_delta: Vec2,
+    drag_stopped: bool,
     start_rename: bool,
     rename_action: RenameEditAction,
     action: Option<WorkspaceAction>,
@@ -52,6 +53,14 @@ const WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH: f32 = 60.0;
 const WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X: i8 = 6;
 const WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y: i8 = 5;
 const WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X: f32 = 10.0;
+const WORKSPACE_DOCK_SNAP_DISTANCE: f32 = 72.0;
+
+#[derive(Clone, Copy)]
+struct WorkspaceDockTarget {
+    dragged_workspace_id: WorkspaceId,
+    workspace_id: WorkspaceId,
+    side: WorkspaceDockSide,
+}
 
 impl HorizonApp {
     #[profiling::function]
@@ -114,6 +123,7 @@ impl HorizonApp {
         let mut close_workspace_panels = None;
         let mut focus_workspace_view = None;
         let mut fit_workspace_view = None;
+        let mut dock_workspace = None;
 
         for workspace in &visuals {
             self.workspace_screen_rects.push((workspace.id, workspace.screen_rect));
@@ -146,6 +156,13 @@ impl HorizonApp {
             }
             if interaction.drag_delta != Vec2::ZERO {
                 pending_workspace_moves.push((workspace.id, interaction.drag_delta));
+            }
+            if interaction.drag_stopped {
+                dock_workspace = workspace_dock_target(
+                    workspace.id,
+                    workspace.screen_rect.translate(interaction.drag_delta),
+                    &visuals,
+                );
             }
             if interaction.start_rename {
                 start_rename_workspace = Some((workspace.id, workspace.name.clone()));
@@ -224,11 +241,21 @@ impl HorizonApp {
 
         if !self.canvas_pan_input_claimed {
             for (workspace_id, delta) in pending_workspace_moves {
+                if dock_workspace.is_some_and(|target| target.dragged_workspace_id == workspace_id) {
+                    continue;
+                }
                 let _ = self.board.translate_workspace_with_push_in_scope(
                     workspace_id,
                     [delta.x, delta.y],
                     &workspace_collision_ids,
                 );
+                self.mark_runtime_dirty();
+            }
+            if let Some(target) = dock_workspace
+                && self
+                    .board
+                    .move_workspace_beside(target.dragged_workspace_id, target.workspace_id, target.side)
+            {
                 self.mark_runtime_dirty();
             }
         }
@@ -313,6 +340,55 @@ impl HorizonApp {
                 })
             })
             .collect()
+    }
+}
+
+fn workspace_dock_target(
+    dragged_workspace_id: WorkspaceId,
+    dragged_screen_rect: Rect,
+    visuals: &[WorkspaceVisual],
+) -> Option<WorkspaceDockTarget> {
+    visuals
+        .iter()
+        .filter(|workspace| workspace.id != dragged_workspace_id)
+        .filter_map(|workspace| {
+            workspace_dock_side(dragged_screen_rect, workspace.screen_rect).map(|side| {
+                let delta = dragged_screen_rect.center() - workspace.screen_rect.center();
+                (
+                    WorkspaceDockTarget {
+                        dragged_workspace_id,
+                        workspace_id: workspace.id,
+                        side,
+                    },
+                    delta.length_sq(),
+                )
+            })
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(target, _)| target)
+}
+
+fn workspace_dock_side(dragged_rect: Rect, target_rect: Rect) -> Option<WorkspaceDockSide> {
+    if !target_rect
+        .expand(WORKSPACE_DOCK_SNAP_DISTANCE)
+        .intersects(dragged_rect)
+    {
+        return None;
+    }
+
+    let delta = dragged_rect.center() - target_rect.center();
+    if delta.x.abs() >= delta.y.abs() {
+        Some(if delta.x <= 0.0 {
+            WorkspaceDockSide::Left
+        } else {
+            WorkspaceDockSide::Right
+        })
+    } else {
+        Some(if delta.y <= 0.0 {
+            WorkspaceDockSide::Above
+        } else {
+            WorkspaceDockSide::Below
+        })
     }
 }
 

@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
-use super::Board;
+use super::{Board, WorkspaceDockSide, vec2_eq};
 
 impl Board {
     #[must_use]
@@ -288,6 +289,57 @@ impl Board {
         false
     }
 
+    pub fn move_workspace_beside(&mut self, id: WorkspaceId, anchor_id: WorkspaceId, side: WorkspaceDockSide) -> bool {
+        if id == anchor_id {
+            return false;
+        }
+
+        let Some(source_frame) = self.workspace_frame_rect(id) else {
+            return false;
+        };
+        let Some(anchor_frame) = self.workspace_frame_rect(anchor_id) else {
+            return false;
+        };
+
+        let source_width = source_frame[2] - source_frame[0];
+        let source_height = source_frame[3] - source_frame[1];
+        let desired_frame_min = match side {
+            WorkspaceDockSide::Left => [anchor_frame[0] - source_width - WS_COLLISION_GAP, anchor_frame[1]],
+            WorkspaceDockSide::Right => [anchor_frame[2] + WS_COLLISION_GAP, anchor_frame[1]],
+            WorkspaceDockSide::Above => [anchor_frame[0], anchor_frame[1] - source_height - WS_COLLISION_GAP],
+            WorkspaceDockSide::Below => [anchor_frame[0], anchor_frame[3] + WS_COLLISION_GAP],
+        };
+        let delta = [
+            desired_frame_min[0] - source_frame[0],
+            desired_frame_min[1] - source_frame[1],
+        ];
+
+        if vec2_eq(delta, [0.0, 0.0]) {
+            return false;
+        }
+
+        if !self.translate_workspace(id, delta) {
+            return false;
+        }
+
+        let drag_dir = match side {
+            WorkspaceDockSide::Left => [-1.0, 0.0],
+            WorkspaceDockSide::Right => [1.0, 0.0],
+            WorkspaceDockSide::Above => [0.0, -1.0],
+            WorkspaceDockSide::Below => [0.0, 1.0],
+        };
+        self.push_workspace_colliders_in_direction(&[anchor_id, id], drag_dir);
+        true
+    }
+
+    pub fn move_workspace_before(&mut self, id: WorkspaceId, anchor_id: WorkspaceId) -> bool {
+        self.reorder_workspace_relative(id, anchor_id, false)
+    }
+
+    pub fn move_workspace_after(&mut self, id: WorkspaceId, anchor_id: WorkspaceId) -> bool {
+        self.reorder_workspace_relative(id, anchor_id, true)
+    }
+
     pub fn translate_workspace(&mut self, id: WorkspaceId, delta: [f32; 2]) -> bool {
         if delta == [0.0, 0.0] {
             return false;
@@ -347,5 +399,25 @@ impl Board {
         }
         self.retained_empty_workspaces.remove(&id);
         id
+    }
+
+    fn reorder_workspace_relative(&mut self, id: WorkspaceId, anchor_id: WorkspaceId, insert_after: bool) -> bool {
+        if id == anchor_id {
+            return false;
+        }
+
+        let Some(source_index) = self.workspaces.iter().position(|workspace| workspace.id == id) else {
+            return false;
+        };
+
+        let source_workspace = self.workspaces.remove(source_index);
+        let Some(anchor_index) = self.workspaces.iter().position(|workspace| workspace.id == anchor_id) else {
+            self.workspaces.insert(source_index, source_workspace);
+            return false;
+        };
+
+        let insert_index = anchor_index + usize::from(insert_after);
+        self.workspaces.insert(insert_index, source_workspace);
+        true
     }
 }
