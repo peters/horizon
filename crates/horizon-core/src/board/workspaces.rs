@@ -290,7 +290,21 @@ impl Board {
     }
 
     pub fn move_workspace_beside(&mut self, id: WorkspaceId, anchor_id: WorkspaceId, side: WorkspaceDockSide) -> bool {
+        let workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.move_workspace_beside_in_scope(id, anchor_id, side, &workspace_ids)
+    }
+
+    pub fn move_workspace_beside_in_scope(
+        &mut self,
+        id: WorkspaceId,
+        anchor_id: WorkspaceId,
+        side: WorkspaceDockSide,
+        workspace_ids: &[WorkspaceId],
+    ) -> bool {
         if id == anchor_id {
+            return false;
+        }
+        if !workspace_ids.contains(&id) || !workspace_ids.contains(&anchor_id) {
             return false;
         }
 
@@ -328,7 +342,7 @@ impl Board {
             WorkspaceDockSide::Above => [0.0, -1.0],
             WorkspaceDockSide::Below => [0.0, 1.0],
         };
-        self.push_workspace_colliders_in_direction(&[anchor_id, id], drag_dir);
+        self.push_workspace_colliders_in_direction_in_scope(&[anchor_id, id], drag_dir, workspace_ids);
         true
     }
 

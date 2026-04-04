@@ -349,7 +349,8 @@ impl HorizonApp {
             drag_state.drop_requested = true;
         }
 
-        if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
+        if sidebar_workspace_drop_should_dock(workspace.detached)
+            && let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
         {
@@ -609,12 +610,14 @@ impl HorizonApp {
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);
         }
+        let workspace_collision_ids = self.workspace_collision_scope(None);
         let workspace_drop_target = actions.workspace_drop.map(|drop| {
             let moved = if sidebar_workspace_drop_should_dock(self.workspace_is_detached(drop.target_workspace_id)) {
-                self.board.move_workspace_beside(
+                self.board.move_workspace_beside_in_scope(
                     drop.dragged_workspace_id,
                     drop.target_workspace_id,
                     sidebar_workspace_insert_dock_side(drop.insert),
+                    &workspace_collision_ids,
                 )
             } else {
                 false

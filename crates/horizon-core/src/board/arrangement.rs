@@ -66,15 +66,15 @@ impl Board {
         self.resolve_workspace_collisions_with_push(source, drag_dir, workspace_ids, collision_push);
     }
 
-    pub(super) fn push_workspace_colliders_in_direction(
+    pub(super) fn push_workspace_colliders_in_direction_in_scope(
         &mut self,
         fixed_workspace_ids: &[WorkspaceId],
         drag_dir: [f32; 2],
+        workspace_ids: &[WorkspaceId],
     ) {
-        let movable_workspace_ids: Vec<_> = self
-            .workspaces
+        let movable_workspace_ids: Vec<_> = workspace_ids
             .iter()
-            .map(|workspace| workspace.id)
+            .copied()
             .filter(|workspace_id| !fixed_workspace_ids.contains(workspace_id))
             .collect();
         let mut queue = fixed_workspace_ids.to_vec();

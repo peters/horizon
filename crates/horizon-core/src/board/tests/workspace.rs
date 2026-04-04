@@ -350,6 +350,37 @@ fn move_workspace_beside_pushes_colliding_neighbors() {
 }
 
 #[test]
+fn move_workspace_beside_in_scope_ignores_out_of_scope_workspaces() {
+    let mut board = Board::new();
+    let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
+    let beta = board.create_workspace_at("beta", [720.0, 40.0]);
+    let gamma = board.create_workspace_at("gamma", [1440.0, 40.0]);
+
+    for workspace_id in [alpha, beta, gamma] {
+        board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("panel should spawn");
+    }
+
+    let beta_before = board.workspace(beta).expect("beta").position;
+
+    assert!(board.move_workspace_beside_in_scope(gamma, alpha, WorkspaceDockSide::Right, &[alpha, gamma]));
+
+    let alpha_frame = board.workspace_frame_rect(alpha).expect("alpha frame");
+    let gamma_frame = board.workspace_frame_rect(gamma).expect("gamma frame");
+    let beta_after = board.workspace(beta).expect("beta").position;
+
+    assert!(
+        (gamma_frame[0] - (alpha_frame[2] + WS_COLLISION_GAP)).abs() <= f32::EPSILON,
+        "expected gamma to dock next to alpha, got alpha={alpha_frame:?} gamma={gamma_frame:?}"
+    );
+    assert!(
+        vec2_eq(beta_after, beta_before),
+        "expected out-of-scope beta workspace to stay at {beta_before:?}, got {beta_after:?}"
+    );
+}
+
+#[test]
 fn moving_workspace_before_and_after_updates_workspace_order() {
     let mut board = Board::new();
     let alpha = board.create_workspace("alpha");

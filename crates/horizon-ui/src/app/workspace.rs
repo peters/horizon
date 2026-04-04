@@ -252,9 +252,12 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
             if let Some(target) = dock_workspace
-                && self
-                    .board
-                    .move_workspace_beside(target.dragged_workspace_id, target.workspace_id, target.side)
+                && self.board.move_workspace_beside_in_scope(
+                    target.dragged_workspace_id,
+                    target.workspace_id,
+                    target.side,
+                    &workspace_collision_ids,
+                )
             {
                 self.mark_runtime_dirty();
             }
