@@ -24,7 +24,7 @@ serde_json.workspace = true
 alacritty_terminal.workspace = true
 rusqlite.workspace = true
 uuid.workspace = true
-comrak = { version = "0.51", default-features = false }
+comrak = { version = "0.52", default-features = false }
 git2.workspace = true
 regex.workspace = true
 
