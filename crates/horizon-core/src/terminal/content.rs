@@ -1,8 +1,8 @@
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 use super::{
-    Column, Dimensions, PathBuf, RenderableContent, Scroll, TermDamage, Terminal, current_cwd_for_pid,
-    find_file_path_at_column, find_url_at_column,
+    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, current_cwd_for_pid,
+    find_file_path_at_column, find_url_at_column, viewport_to_point,
 };
 
 impl Terminal {
@@ -190,25 +190,52 @@ impl Terminal {
     #[must_use]
     pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
-        let content = term.renderable_content();
         let cols = usize::from(self.cols);
-        let mut line_chars: Vec<char> = vec![' '; cols];
+        let (line_chars, logical_col) = wrapped_line_chars_at_viewport_point(&term, cols, row, col)?;
 
-        for indexed in content.display_iter {
-            let Ok(rendered_row) = usize::try_from(indexed.point.line.0) else {
-                continue;
-            };
-            if rendered_row != row {
-                continue;
-            }
-            let column = indexed.point.column.0;
-            if column < cols {
-                line_chars[column] = indexed.cell.c;
-            }
+        find_url_at_column(&line_chars, logical_col).or_else(|| find_file_path_at_column(&line_chars, logical_col))
+    }
+}
+
+fn wrapped_line_chars_at_viewport_point<T>(
+    term: &Term<T>,
+    cols: usize,
+    row: usize,
+    col: usize,
+) -> Option<(Vec<char>, usize)> {
+    if col >= cols {
+        return None;
+    }
+
+    let grid = term.grid();
+    if row >= grid.screen_lines() {
+        return None;
+    }
+
+    let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
+    let start = term.line_search_left(point);
+    let end = term.line_search_right(point);
+    let mut line_chars = Vec::with_capacity(cols);
+    let mut logical_col = 0;
+    let mut line = start.line;
+
+    loop {
+        if line == point.line {
+            logical_col = line_chars.len() + col;
         }
 
-        find_url_at_column(&line_chars, col).or_else(|| find_file_path_at_column(&line_chars, col))
+        for column in 0..cols {
+            line_chars.push(grid[line][Column(column)].c);
+        }
+
+        if line == end.line {
+            break;
+        }
+
+        line += 1;
     }
+
+    Some((line_chars, logical_col))
 }
 
 fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_column: usize, cell: &Cell) {
@@ -239,9 +266,14 @@ fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_colu
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::term::cell::{Cell, Flags};
+    use std::sync::mpsc;
 
-    use super::append_cell_text;
+    use alacritty_terminal::term::cell::{Cell, Flags};
+    use alacritty_terminal::term::{self, Term};
+    use alacritty_terminal::vte::ansi;
+
+    use super::{append_cell_text, wrapped_line_chars_at_viewport_point};
+    use crate::terminal::{TerminalDimensions, TerminalEventProxy, find_url_at_column};
 
     fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
         let mut line = String::new();
@@ -319,5 +351,30 @@ mod tests {
         let line = reconstruct_line(&[(0, wide_cell), (2, x_cell)]);
 
         assert_eq!(line, "你x");
+    }
+
+    fn test_term(rows: u16, cols: u16) -> Term<TerminalEventProxy> {
+        let (event_tx, _event_rx) = mpsc::channel();
+        let dimensions = TerminalDimensions::new(rows, cols);
+        let config = term::Config {
+            scrolling_history: 256,
+            kitty_keyboard: true,
+            ..term::Config::default()
+        };
+
+        Term::new(config, &dimensions, TerminalEventProxy { event_tx })
+    }
+
+    #[test]
+    fn wrapped_url_detection_includes_continuation_rows() {
+        let url = "https://example.com/very/long/path";
+        let mut term = test_term(4, 12);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(&mut term, url.as_bytes());
+
+        let (line_chars, logical_col) =
+            wrapped_line_chars_at_viewport_point(&term, 12, 2, 4).expect("wrapped line should be present");
+
+        assert_eq!(find_url_at_column(&line_chars, logical_col), Some(url.to_string()));
     }
 }
