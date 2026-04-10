@@ -53,7 +53,9 @@ fn collect_dynamic_binding_updates(
             .collect();
         if active_bound_panels.len() == 1 {
             let panel = active_bound_panels[0];
-            let current_binding = panel.session_binding.as_ref().expect("bound panel");
+            let Some(current_binding) = panel.session_binding.as_ref() else {
+                continue;
+            };
             if let Some(candidate) = candidates.iter().find(|candidate| {
                 candidate.session_id != current_binding.session_id
                     && candidate.updated_at > current_binding.updated_at.unwrap_or(0)
