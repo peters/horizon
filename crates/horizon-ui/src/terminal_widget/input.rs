@@ -11,6 +11,7 @@ use super::super::input::{self, TerminalInputEvent};
 use super::super::primary_selection::PrimarySelection;
 use crate::app::shortcuts::shortcut_event_matches;
 
+use super::ime::{prepare_terminal_keyboard_events, store_terminal_ime_enabled, terminal_ime_enabled};
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
 
@@ -465,6 +466,7 @@ fn handle_pointer_selection_drag(
 
 pub(super) fn handle_terminal_keyboard_input(
     ui: &egui::Ui,
+    terminal_id: egui::Id,
     panel: &mut Panel,
     events: &[TerminalInputEvent],
     primary_selection: &PrimarySelection,
@@ -479,10 +481,21 @@ pub(super) fn handle_terminal_keyboard_input(
     };
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
+    let mut ime_enabled = terminal_ime_enabled(ui, terminal_id);
+    let events = prepare_terminal_keyboard_events(events, ime_enabled);
 
-    for event in events {
+    for event in &events {
         match &event.event {
+            egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_)) => {
+                ime_enabled = true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Disabled) => {
+                ime_enabled = false;
+            }
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                if matches!(&event.event, egui::Event::Ime(egui::ImeEvent::Commit(_))) {
+                    ime_enabled = false;
+                }
                 let emission = forwarder.on_text(text, mode);
                 if emission.clears_selection {
                     terminal.clear_selection();
@@ -527,6 +540,8 @@ pub(super) fn handle_terminal_keyboard_input(
     if !emission.bytes.is_empty() {
         terminal.write_input(&emission.bytes);
     }
+
+    store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
 
     false
 }

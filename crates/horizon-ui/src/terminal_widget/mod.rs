@@ -1,3 +1,4 @@
+mod ime;
 mod input;
 mod layout;
 mod render;
@@ -6,6 +7,7 @@ mod scrollbar;
 use egui::{Context, FontId, Vec2};
 use horizon_core::Panel;
 
+use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
 use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
@@ -89,6 +91,9 @@ impl<'a> TerminalView<'a> {
                     },
                 );
             });
+            publish_terminal_ime_output(ui, self.panel, &interaction, &metrics);
+        } else {
+            clear_terminal_ime_state(ui, interaction.body.id);
         }
 
         let allow_grid_cache = !self.panel.had_recent_output()
@@ -136,6 +141,7 @@ impl<'a> TerminalView<'a> {
         if interactive && has_terminal_focus {
             *keyboard.reconnect_requested |= handle_terminal_keyboard_input(
                 ui,
+                interaction.body.id,
                 self.panel,
                 keyboard.keyboard_events,
                 keyboard.primary_selection,
