@@ -1,6 +1,7 @@
 use std::mem;
 
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
+use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::shortcuts::shortcut_pressed;
@@ -150,11 +151,16 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(in super::super) fn handle_canvas_pan(&mut self, ctx: &Context) {
-        self.handle_canvas_pan_in_rect(ctx, self.canvas_rect(ctx));
+        self.handle_canvas_pan_in_rect(ctx, self.canvas_rect(ctx), None);
     }
 
     #[profiling::function]
-    pub(in super::super) fn handle_canvas_pan_in_rect(&mut self, ctx: &Context, canvas_rect: Rect) {
+    pub(in super::super) fn handle_canvas_pan_in_rect(
+        &mut self,
+        ctx: &Context,
+        canvas_rect: Rect,
+        visible_workspace: Option<WorkspaceId>,
+    ) {
         let (
             events,
             pointer_position,
@@ -178,14 +184,16 @@ impl HorizonApp {
                 input.zoom_delta(),
             )
         });
+        let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
         let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
         let ctrl_or_cmd = modifiers.ctrl || modifiers.command;
         let pointer_over_terminal_body = primary_selection_routing_active()
             && pointer_position.is_some_and(|position| {
-                self.terminal_body_screen_rects
-                    .values()
+                panel_geometry
+                    .iter()
+                    .filter_map(|(_, geometry)| geometry.terminal_body_screen_rect)
                     .any(|rect| rect.contains(position))
             });
         let terminal_events = self.terminal_events_for_viewport(ctx.viewport_id(), &events);
@@ -225,7 +233,9 @@ impl HorizonApp {
                 && !drag_panning
                 && scroll != Vec2::ZERO
                 && !ctrl_or_cmd
-                && self.panel_screen_rects.values().any(|rect| rect.contains(position))
+                && panel_geometry
+                    .iter()
+                    .any(|(_, geometry)| geometry.screen_rect.contains(position))
         });
         let pan_delta = if drag_panning {
             pointer_delta

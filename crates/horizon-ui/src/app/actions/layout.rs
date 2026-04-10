@@ -147,16 +147,15 @@ impl HorizonApp {
             return;
         };
 
-        let panel_order: Vec<_> = self
-            .board
-            .panels
-            .iter()
-            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
-            .map(|panel| panel.id)
+        let panel_geometry = self.visible_panel_geometry_for_canvas_view(self.canvas_rect(ctx), None);
+        let panel_order: Vec<_> = panel_geometry.iter().map(|(panel_id, _)| *panel_id).collect();
+        let panel_rects: HashMap<_, _> = panel_geometry
+            .into_iter()
+            .map(|(panel_id, geometry)| (panel_id, geometry.screen_rect))
             .collect();
 
         if let Some(panel_id) =
-            panel_focus_target_at_pointer_press(&panel_order, &self.panel_screen_rects, self.board.focused, pointer_pos)
+            panel_focus_target_at_pointer_press(&panel_order, &panel_rects, self.board.focused, pointer_pos)
         {
             self.board.focus(panel_id);
         }
