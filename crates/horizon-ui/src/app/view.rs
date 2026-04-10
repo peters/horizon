@@ -118,7 +118,7 @@ impl HorizonApp {
     pub(super) fn apply_canvas_layer_transform(&self, ui: &mut Ui, canvas_rect: Rect) {
         let transform = canvas_scene_transform(canvas_rect, self.canvas_view);
         ui.ctx().set_transform_layer(ui.layer_id(), transform);
-        ui.set_clip_rect(transform.inverse() * canvas_rect);
+        ui.set_clip_rect(canvas_layer_clip_rect(ui.clip_rect(), transform, canvas_rect));
     }
 
     pub(super) fn zoom_canvas_at(&mut self, canvas_rect: Rect, screen_anchor: Pos2, zoom: f32) -> bool {
@@ -280,6 +280,15 @@ pub(super) fn canvas_scene_transform(canvas_rect: Rect, canvas_view: horizon_cor
 }
 
 #[must_use]
+pub(in crate::app) fn canvas_layer_clip_rect(
+    existing_clip_rect: Rect,
+    canvas_transform: TSTransform,
+    canvas_rect: Rect,
+) -> Rect {
+    existing_clip_rect.intersect(canvas_transform.inverse() * canvas_rect)
+}
+
+#[must_use]
 fn canvas_origin(canvas_rect: Rect) -> [f32; 2] {
     [canvas_rect.min.x, canvas_rect.min.y]
 }
@@ -289,7 +298,9 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
-    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame};
+    use super::{
+        aligned_pan_offset, canvas_layer_clip_rect, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame,
+    };
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -349,5 +360,16 @@ mod tests {
 
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn canvas_layer_clip_rect_preserves_existing_clip_bounds() {
+        let canvas_rect = Rect::from_min_size(Pos2::new(120.0, 64.0), Vec2::new(640.0, 480.0));
+        let existing = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(520.0, 360.0));
+        let transform = canvas_scene_transform(canvas_rect, CanvasViewState::new([24.0, -18.0], 1.25));
+        let clip_rect = canvas_layer_clip_rect(existing, transform, canvas_rect);
+
+        assert!(existing.contains(clip_rect.min));
+        assert!(existing.contains(clip_rect.max - Vec2::splat(0.01)));
     }
 }

@@ -18,6 +18,12 @@ pub(super) use super::panel_chrome::{
 use super::util::clamp_panel_size;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
+#[derive(Clone, Copy)]
+pub(in crate::app) struct PanelScreenGeometry {
+    pub(in crate::app) screen_rect: Rect,
+    pub(in crate::app) terminal_body_screen_rect: Option<Rect>,
+}
+
 struct PanelSnapshot {
     screen_rect: Rect,
     terminal_body_screen_rect: Option<Rect>,
@@ -162,9 +168,66 @@ fn local_ssh_reconnect_shortcut_conflicts(shortcuts: &AppShortcuts) -> bool {
         .any(|binding| binding.overlaps(SSH_RECONNECT_SHORTCUT))
 }
 
+fn clip_screen_rect_to_canvas(raw_rect: Rect, canvas_rect: Rect) -> Option<Rect> {
+    let clipped = raw_rect.intersect(canvas_rect);
+    (clipped.is_positive()
+        && clipped.min.x.is_finite()
+        && clipped.min.y.is_finite()
+        && clipped.max.x.is_finite()
+        && clipped.max.y.is_finite())
+    .then_some(clipped)
+}
+
 impl HorizonApp {
     fn local_ssh_reconnect_shortcut_enabled(&self) -> bool {
         !local_ssh_reconnect_shortcut_conflicts(&self.shortcuts)
+    }
+
+    pub(in crate::app) fn visible_panel_geometry_for_canvas_view(
+        &self,
+        canvas_rect: Rect,
+        visible_workspace: Option<WorkspaceId>,
+    ) -> Vec<(PanelId, PanelScreenGeometry)> {
+        self.board
+            .panels
+            .iter()
+            .filter(|panel| match visible_workspace {
+                Some(workspace_id) => panel.workspace_id == workspace_id,
+                None => !self.workspace_is_detached(panel.workspace_id),
+            })
+            .filter_map(|panel| {
+                self.panel_screen_geometry(panel, canvas_rect)
+                    .map(|geometry| (panel.id, geometry))
+            })
+            .collect()
+    }
+
+    fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
+        let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+        let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
+        let screen_rect = clip_screen_rect_to_canvas(
+            Rect::from_min_size(
+                self.canvas_to_screen(canvas_rect, canvas_position),
+                self.canvas_size_to_screen(canvas_size),
+            ),
+            canvas_rect,
+        )?;
+        let terminal_body_screen_rect = panel.terminal().and_then(|_| {
+            let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
+            let body_rect = PanelFrame::new(panel_rect).body;
+            clip_screen_rect_to_canvas(
+                Rect::from_min_size(
+                    self.canvas_to_screen(canvas_rect, body_rect.min),
+                    self.canvas_size_to_screen(body_rect.size()),
+                ),
+                canvas_rect,
+            )
+        });
+
+        Some(PanelScreenGeometry {
+            screen_rect,
+            terminal_body_screen_rect,
+        })
     }
 
     #[profiling::function]
@@ -291,27 +354,10 @@ impl HorizonApp {
         workspaces: &[(WorkspaceId, String, Color32)],
     ) -> Option<PanelSnapshot> {
         self.board.panel(panel_id).and_then(|panel| {
+            let geometry = self.panel_screen_geometry(panel, canvas_rect)?;
             let terminal = panel.terminal();
             let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
             let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
-            let screen_rect = Rect::from_min_size(
-                self.canvas_to_screen(canvas_rect, canvas_position),
-                self.canvas_size_to_screen(canvas_size),
-            );
-            let terminal_body_screen_rect = terminal.and_then(|_| {
-                let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
-                let body_rect = PanelFrame::new(panel_rect).body;
-                let screen_body_rect = Rect::from_min_size(
-                    self.canvas_to_screen(canvas_rect, body_rect.min),
-                    self.canvas_size_to_screen(body_rect.size()),
-                );
-                screen_body_rect.is_positive().then_some(screen_body_rect)
-            });
-
-            // Cull off-screen panels — skip chrome, snapshot, and rendering.
-            if !canvas_rect.intersects(screen_rect) {
-                return None;
-            }
 
             let workspace_accent = workspaces
                 .iter()
@@ -327,8 +373,8 @@ impl HorizonApp {
             };
 
             Some(PanelSnapshot {
-                screen_rect,
-                terminal_body_screen_rect,
+                screen_rect: geometry.screen_rect,
+                terminal_body_screen_rect: geometry.terminal_body_screen_rect,
                 canvas_position,
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
@@ -671,9 +717,13 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
+    use egui::{Pos2, Rect, Vec2};
     use horizon_core::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
-    use super::{SSH_RECONNECT_SHORTCUT, global_shortcut_bindings, local_ssh_reconnect_shortcut_conflicts};
+    use super::{
+        SSH_RECONNECT_SHORTCUT, clip_screen_rect_to_canvas, global_shortcut_bindings,
+        local_ssh_reconnect_shortcut_conflicts,
+    };
 
     #[test]
     fn default_global_shortcuts_leave_local_ssh_reconnect_available() {
@@ -721,5 +771,24 @@ mod tests {
         };
 
         assert!(global_shortcut_bindings(&shortcuts).contains(&shortcuts.command_palette));
+    }
+
+    #[test]
+    fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {
+        let canvas_rect = Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(420.0, 320.0));
+        let raw_rect = Rect::from_min_max(Pos2::new(60.0, 40.0), Pos2::new(180.0, 180.0));
+
+        assert_eq!(
+            clip_screen_rect_to_canvas(raw_rect, canvas_rect),
+            Some(Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(180.0, 180.0)))
+        );
+    }
+
+    #[test]
+    fn clip_screen_rect_to_canvas_rejects_non_positive_intersections() {
+        let canvas_rect = Rect::from_min_size(Pos2::new(100.0, 80.0), Vec2::new(320.0, 240.0));
+        let raw_rect = Rect::from_min_size(Pos2::new(430.0, 90.0), Vec2::new(80.0, 80.0));
+
+        assert_eq!(clip_screen_rect_to_canvas(raw_rect, canvas_rect), None);
     }
 }

@@ -52,6 +52,8 @@ fn install_agent_plugins_impl(horizon_home: &HorizonHome, user_home: Option<&Pat
     updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), TEXT_SKILL_FILES)?;
 
     if let Some(home) = user_home {
+        let codex_home_skill_dir = home.join(".codex").join("skills").join("horizon-notify");
+        updated_files += sync_plugin_files(&codex_home_skill_dir, TEXT_SKILL_FILES)?;
         let codex_export_dir = home.join(".agents").join("skills").join("horizon-notify");
         updated_files += sync_plugin_files(&codex_export_dir, TEXT_SKILL_FILES)?;
         let kilo_export_dir = home.join(".kilocode").join("skills").join("horizon-notify");
@@ -91,7 +93,9 @@ fn sync_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmbeddedFile, sync_file_if_changed, sync_plugin_files};
+    use horizon_core::HorizonHome;
+
+    use super::{EmbeddedFile, TEXT_SKILL_FILES, install_agent_plugins_impl, sync_file_if_changed, sync_plugin_files};
 
     #[test]
     fn sync_file_if_changed_writes_missing_file() {
@@ -134,5 +138,36 @@ mod tests {
 
         assert_eq!(first, 2);
         assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn install_agent_plugins_syncs_codex_skill_into_current_codex_home() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+
+        let updated = install_agent_plugins_impl(&horizon_home, Some(&user_home)).expect("install plugins");
+
+        assert!(updated > 0);
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".codex/skills/horizon-notify/SKILL.md"))
+                .expect("codex skill should be exported"),
+            TEXT_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".agents/skills/horizon-notify/SKILL.md"))
+                .expect("legacy codex skill export should still exist"),
+            TEXT_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".kilocode/skills/horizon-notify/SKILL.md"))
+                .expect("kilo skill should be exported"),
+            TEXT_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))
+                .expect("horizon codex integration should be synced"),
+            TEXT_SKILL_FILES[0].content,
+        );
     }
 }
