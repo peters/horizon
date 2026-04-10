@@ -10,6 +10,93 @@ use crate::{loading_spinner, theme};
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
 use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap};
 
+const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+struct DynamicPanelBindingState {
+    panel_id: PanelId,
+    kind: PanelKind,
+    cwd: String,
+    launched_at_millis: i64,
+    session_binding: Option<AgentSessionBinding>,
+    recent_output: bool,
+}
+
+fn collect_dynamic_binding_updates(
+    dynamic_panels: &[DynamicPanelBindingState],
+    reserved_session_ids: &HashSet<String>,
+    recent_for: impl Fn(PanelKind, Option<&str>) -> Vec<horizon_core::AgentSessionRecord>,
+) -> Vec<(PanelId, AgentSessionBinding)> {
+    let mut used_session_ids = reserved_session_ids.clone();
+    used_session_ids.extend(
+        dynamic_panels
+            .iter()
+            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone())),
+    );
+
+    let mut grouped_panels: HashMap<(PanelKind, String), Vec<&DynamicPanelBindingState>> = HashMap::new();
+    for panel in dynamic_panels {
+        grouped_panels
+            .entry((panel.kind, panel.cwd.clone()))
+            .or_default()
+            .push(panel);
+    }
+
+    let mut assignments = Vec::new();
+    for ((kind, cwd), panels) in grouped_panels {
+        let mut candidates = recent_for(kind, empty_string_as_none(&cwd));
+        candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+        let active_bound_panels: Vec<_> = panels
+            .iter()
+            .filter(|panel| panel.recent_output && panel.session_binding.is_some())
+            .collect();
+        if active_bound_panels.len() == 1 {
+            let panel = active_bound_panels[0];
+            let Some(current_binding) = panel.session_binding.as_ref() else {
+                continue;
+            };
+            if let Some(candidate) = candidates.iter().find(|candidate| {
+                candidate.session_id != current_binding.session_id
+                    && candidate.updated_at > current_binding.updated_at.unwrap_or(0)
+                    && !used_session_ids.contains(&candidate.session_id)
+            }) {
+                used_session_ids.insert(candidate.session_id.clone());
+                assignments.push((panel.panel_id, candidate.clone().into_binding()));
+            }
+        }
+
+        let mut unbound_panels: Vec<_> = panels
+            .iter()
+            .filter(|panel| panel.session_binding.is_none())
+            .copied()
+            .collect();
+        if unbound_panels.is_empty() {
+            continue;
+        }
+
+        unbound_panels.sort_by(|left, right| right.launched_at_millis.cmp(&left.launched_at_millis));
+        let oldest_launch = unbound_panels
+            .iter()
+            .map(|panel| panel.launched_at_millis)
+            .min()
+            .unwrap_or(0);
+        let candidates: Vec<_> = candidates
+            .into_iter()
+            .filter(|candidate| {
+                !used_session_ids.contains(&candidate.session_id)
+                    && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
+            })
+            .collect();
+        for (panel, candidate) in unbound_panels.into_iter().zip(candidates) {
+            used_session_ids.insert(candidate.session_id.clone());
+            assignments.push((panel.panel_id, candidate.into_binding()));
+        }
+    }
+
+    assignments
+}
+
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
         self.release_active_session_lease();
@@ -236,12 +323,25 @@ impl HorizonApp {
             }
         }
 
-        let has_unbound_agent = self
-            .board
-            .panels
-            .iter()
-            .any(|panel| panel.kind.supports_session_binding() && panel.session_binding.is_none());
-        if !has_unbound_agent {
+        let has_dynamic_agent =
+            self.board.panels.iter().any(|panel| {
+                panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
+            });
+        if !has_dynamic_agent {
+            return;
+        }
+
+        let has_unbound_agent = self.board.panels.iter().any(|panel| {
+            panel.kind.supports_session_binding()
+                && !matches!(panel.resume, PanelResume::Session { .. })
+                && panel.session_binding.is_none()
+        });
+        let has_recent_dynamic_output = self.board.panels.iter().any(|panel| {
+            panel.kind.supports_session_binding()
+                && !matches!(panel.resume, PanelResume::Session { .. })
+                && panel.had_recent_output_within(SESSION_BINDING_ACTIVITY_WINDOW)
+        });
+        if !has_unbound_agent && !has_recent_dynamic_output {
             return;
         }
 
@@ -255,44 +355,36 @@ impl HorizonApp {
     }
 
     fn capture_new_agent_bindings(&mut self) {
-        let mut used_session_ids: HashSet<String> = self
+        let reserved_session_ids: HashSet<String> = self
             .board
             .panels
             .iter()
+            .filter(|panel| matches!(panel.resume, PanelResume::Session { .. }))
             .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
             .collect();
-        let mut pending_panels: HashMap<(PanelKind, String), Vec<(PanelId, i64)>> = HashMap::new();
-
-        for panel in &self.board.panels {
-            if panel.kind.supports_session_binding() && panel.session_binding.is_none() {
-                let cwd = panel
+        let dynamic_panels: Vec<_> = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| {
+                panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
+            })
+            .map(|panel| DynamicPanelBindingState {
+                panel_id: panel.id,
+                kind: panel.kind,
+                cwd: panel
                     .launch_cwd
                     .as_ref()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_default();
-                pending_panels
-                    .entry((panel.kind, cwd))
-                    .or_default()
-                    .push((panel.id, panel.launched_at_millis));
-            }
-        }
-
-        let mut assignments = Vec::new();
-        for ((kind, cwd), mut panels) in pending_panels {
-            panels.sort_by(|left, right| right.1.cmp(&left.1));
-            let oldest_launch = panels.iter().map(|(_, launched_at)| *launched_at).min().unwrap_or(0);
-            let mut candidates = self.session_catalog.recent_for(kind, empty_string_as_none(&cwd));
-            candidates.retain(|candidate| {
-                !used_session_ids.contains(&candidate.session_id)
-                    && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
-            });
-            candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-
-            for ((panel_id, _), candidate) in panels.into_iter().zip(candidates) {
-                used_session_ids.insert(candidate.session_id.clone());
-                assignments.push((panel_id, candidate.into_binding()));
-            }
-        }
+                    .unwrap_or_default(),
+                launched_at_millis: panel.launched_at_millis,
+                session_binding: panel.session_binding.clone(),
+                recent_output: panel.had_recent_output_within(SESSION_BINDING_ACTIVITY_WINDOW),
+            })
+            .collect();
+        let assignments = collect_dynamic_binding_updates(&dynamic_panels, &reserved_session_ids, |kind, cwd| {
+            self.session_catalog.recent_for(kind, cwd)
+        });
 
         if assignments.is_empty() {
             return;
@@ -345,6 +437,9 @@ impl HorizonApp {
         let mut changed = false;
         for (panel_id, binding) in self.pending_session_rebinds.drain(..) {
             if let Some(panel) = self.board.panel_mut(panel_id) {
+                panel.resume = PanelResume::Session {
+                    session_id: binding.session_id.clone(),
+                };
                 panel.set_session_binding(Some(binding));
                 changed = true;
             }
@@ -375,8 +470,10 @@ pub(super) fn render_loading_view(ctx: &Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::HorizonApp;
-    use horizon_core::{PanelKind, PanelResume, PanelState, RuntimeState, WorkspaceState};
+    use std::collections::HashSet;
+
+    use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates};
+    use horizon_core::{PanelId, PanelKind, PanelResume, PanelState, RuntimeState, WorkspaceState};
 
     #[test]
     fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
@@ -497,5 +594,121 @@ mod tests {
         };
 
         assert!(!HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
+    fn collect_dynamic_binding_updates_assigns_unbound_panels() {
+        let panels = vec![DynamicPanelBindingState {
+            panel_id: PanelId(7),
+            kind: PanelKind::Claude,
+            cwd: "/repo".to_string(),
+            launched_at_millis: 10,
+            session_binding: None,
+            recent_output: false,
+        }];
+        let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
+            assert_eq!(kind, PanelKind::Claude);
+            assert_eq!(cwd, Some("/repo"));
+            vec![horizon_core::AgentSessionRecord {
+                kind: PanelKind::Claude,
+                session_id: "session-1".to_string(),
+                cwd: Some("/repo".to_string()),
+                label: None,
+                updated_at: 12,
+            }]
+        });
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].0, PanelId(7));
+        assert_eq!(updates[0].1.session_id, "session-1");
+    }
+
+    #[test]
+    fn collect_dynamic_binding_updates_refreshes_single_recently_active_panel() {
+        let panels = vec![DynamicPanelBindingState {
+            panel_id: PanelId(7),
+            kind: PanelKind::Claude,
+            cwd: "/repo".to_string(),
+            launched_at_millis: 10,
+            session_binding: Some(horizon_core::AgentSessionBinding::new(
+                PanelKind::Claude,
+                "session-old".to_string(),
+                Some("/repo".to_string()),
+                None,
+                Some(12),
+            )),
+            recent_output: true,
+        }];
+        let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
+            assert_eq!(kind, PanelKind::Claude);
+            assert_eq!(cwd, Some("/repo"));
+            vec![
+                horizon_core::AgentSessionRecord {
+                    kind: PanelKind::Claude,
+                    session_id: "session-new".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 20,
+                },
+                horizon_core::AgentSessionRecord {
+                    kind: PanelKind::Claude,
+                    session_id: "session-old".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 12,
+                },
+            ]
+        });
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].0, PanelId(7));
+        assert_eq!(updates[0].1.session_id, "session-new");
+    }
+
+    #[test]
+    fn collect_dynamic_binding_updates_does_not_reassign_ambiguous_recent_group() {
+        let panels = vec![
+            DynamicPanelBindingState {
+                panel_id: PanelId(7),
+                kind: PanelKind::Codex,
+                cwd: "/repo".to_string(),
+                launched_at_millis: 10,
+                session_binding: Some(horizon_core::AgentSessionBinding::new(
+                    PanelKind::Codex,
+                    "session-a".to_string(),
+                    Some("/repo".to_string()),
+                    None,
+                    Some(12),
+                )),
+                recent_output: true,
+            },
+            DynamicPanelBindingState {
+                panel_id: PanelId(8),
+                kind: PanelKind::Codex,
+                cwd: "/repo".to_string(),
+                launched_at_millis: 11,
+                session_binding: Some(horizon_core::AgentSessionBinding::new(
+                    PanelKind::Codex,
+                    "session-b".to_string(),
+                    Some("/repo".to_string()),
+                    None,
+                    Some(13),
+                )),
+                recent_output: true,
+            },
+        ];
+        let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
+            assert_eq!(kind, PanelKind::Codex);
+            assert_eq!(cwd, Some("/repo"));
+            vec![horizon_core::AgentSessionRecord {
+                kind: PanelKind::Codex,
+                session_id: "session-c".to_string(),
+                cwd: Some("/repo".to_string()),
+                label: None,
+                updated_at: 20,
+            }]
+        });
+
+        assert!(updates.is_empty());
     }
 }

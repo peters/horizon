@@ -162,6 +162,7 @@ pub struct Panel {
     /// Set by `process_output` each frame; read by attention detection to skip
     /// the expensive `last_lines_text` scan for panels without new content.
     pub(crate) had_recent_output: bool,
+    last_output_at_millis: Option<i64>,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
     /// Original launch args (for persistence).
@@ -200,6 +201,13 @@ impl Panel {
     #[must_use]
     pub const fn had_recent_output(&self) -> bool {
         self.had_recent_output
+    }
+
+    #[must_use]
+    pub fn had_recent_output_within(&self, window: Duration) -> bool {
+        let window_millis = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
+        self.last_output_at_millis
+            .is_some_and(|last_output| current_unix_millis().saturating_sub(last_output) <= window_millis)
     }
 
     /// Convenience accessor for the editor content (if this panel holds one).
@@ -251,6 +259,9 @@ impl Panel {
             None
         };
         self.had_recent_output = had_output;
+        if had_output {
+            self.last_output_at_millis = Some(current_unix_millis());
+        }
 
         if let Some(title) = terminal_title {
             self.terminal_title = title;
@@ -590,6 +601,7 @@ mod tests {
             launched_at_millis: 0,
             has_custom_name,
             had_recent_output: false,
+            last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: None,

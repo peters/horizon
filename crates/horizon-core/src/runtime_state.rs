@@ -572,13 +572,17 @@ mod tests {
             .create_panel(
                 PanelOptions {
                     name: Some("agent shell".to_string()),
+                    kind: PanelKind::Codex,
+                    resume: PanelResume::Session {
+                        session_id: "session-42".to_string(),
+                    },
                     position: Some([180.0, 120.0]),
                     size: Some([640.0, 420.0]),
                     session_binding: Some(AgentSessionBinding::new(
-                        PanelKind::Shell,
+                        PanelKind::Codex,
                         "session-42".to_string(),
                         Some("/repo".to_string()),
-                        Some("Agent shell".to_string()),
+                        Some("Codex session".to_string()),
                         Some(17),
                     )),
                     ..PanelOptions::default()
