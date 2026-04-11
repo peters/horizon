@@ -350,5 +350,4 @@ mod tests {
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
     }
-
 }
