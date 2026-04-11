@@ -2,7 +2,6 @@ use egui::emath::TSTransform;
 use egui::{Context, CursorIcon, Id, Pos2, Rect, Sense, Vec2};
 
 use crate::app::panels::show_inline_rename_editor;
-use crate::app::view::canvas_layer_clip_rect;
 use crate::app::{RenameEditAction, util::OverlayExclusion};
 
 use super::paint::{
@@ -130,9 +129,5 @@ pub(super) fn render_workspace_visual(
 
 pub(super) fn apply_canvas_transform(ui: &mut egui::Ui, canvas_transform: TSTransform, canvas_clip_rect: Rect) {
     ui.ctx().set_transform_layer(ui.layer_id(), canvas_transform);
-    ui.set_clip_rect(canvas_layer_clip_rect(
-        ui.clip_rect(),
-        canvas_transform,
-        canvas_clip_rect,
-    ));
+    ui.set_clip_rect(canvas_clip_rect);
 }
