@@ -47,6 +47,10 @@ pub(crate) struct SearchOverlay {
     options_dirty: bool,
     /// When the query last changed; search fires after the debounce window.
     query_changed_at: Option<Instant>,
+    /// Set when terminal output arrives after the last search snapshot.
+    pending_terminal_refresh: bool,
+    /// When search results were last recomputed.
+    last_refresh_at: Option<Instant>,
 }
 
 pub(crate) enum SearchAction {
@@ -71,6 +75,8 @@ impl SearchOverlay {
             request_focus: true,
             options_dirty: false,
             query_changed_at: None,
+            pending_terminal_refresh: false,
+            last_refresh_at: None,
         }
     }
 
@@ -87,6 +93,8 @@ impl SearchOverlay {
         self.display_rows.clear();
         self.selected = 0;
         self.query_changed_at = None;
+        self.pending_terminal_refresh = false;
+        self.last_refresh_at = None;
     }
 
     /// Create a search overlay without auto-focusing the input. Used for
@@ -223,6 +231,7 @@ impl SearchOverlay {
     }
 
     const DEBOUNCE: Duration = Duration::from_millis(150);
+    const LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
     fn maybe_refresh_results(&mut self, ctx: &Context, board: &Board) {
         let terminal_output_changed = self.should_refresh_for_terminal_output(board);
@@ -239,11 +248,16 @@ impl SearchOverlay {
     }
 
     fn maybe_refresh_results_at(&mut self, ctx: &Context, board: &Board, terminal_output_changed: bool, now: Instant) {
+        if terminal_output_changed {
+            self.pending_terminal_refresh = true;
+        }
+
         let query_changed = self.query != self.last_query;
         let options_changed = self.options_dirty;
+        let live_refresh_requested = self.pending_terminal_refresh && !self.query.is_empty();
         let query_or_options_changed = query_changed || options_changed;
 
-        if !query_changed && !options_changed && !terminal_output_changed {
+        if !query_changed && !options_changed && !live_refresh_requested {
             self.query_changed_at = None;
             return;
         }
@@ -262,6 +276,12 @@ impl SearchOverlay {
                 return;
             }
             self.query_changed_at = None;
+        } else if let Some(last_refresh_at) = self.last_refresh_at {
+            let remaining = Self::LIVE_REFRESH_INTERVAL.saturating_sub(now.duration_since(last_refresh_at));
+            if !remaining.is_zero() {
+                ctx.request_repaint_after(remaining);
+                return;
+            }
         }
 
         self.last_query.clone_from(&self.query);
@@ -271,6 +291,8 @@ impl SearchOverlay {
         };
         self.cached_results = search_board(board, &self.query, &options);
         self.rebuild_display_rows();
+        self.pending_terminal_refresh = false;
+        self.last_refresh_at = Some(now);
         if query_or_options_changed {
             self.selected = 0;
         } else {
@@ -472,11 +494,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_output_refreshes_cached_results_without_query_change() {
+    fn terminal_output_refreshes_cached_results_after_live_refresh_interval() {
         let mut overlay = SearchOverlay::new_inactive();
+        let now = Instant::now();
         overlay.query = "error".to_string();
         overlay.last_query = overlay.query.clone();
         overlay.selected = 1;
+        overlay.last_refresh_at = Some(now);
         overlay.cached_results = SearchResults {
             panels: vec![PanelSearchResult {
                 panel_id: PanelId(7),
@@ -500,11 +524,31 @@ mod tests {
             total_lines: 1,
         }];
 
-        overlay.maybe_refresh_results_at(&Context::default(), &Board::new(), true, Instant::now());
+        overlay.maybe_refresh_results_at(
+            &Context::default(),
+            &Board::new(),
+            true,
+            now + Duration::from_millis(50),
+        );
+
+        assert_eq!(overlay.cached_results.total_matches, 1);
+        assert_eq!(overlay.cached_results.panels.len(), 1);
+        assert_eq!(overlay.display_rows.len(), 1);
+        assert_eq!(overlay.selected, 1);
+        assert!(overlay.pending_terminal_refresh);
+
+        overlay.maybe_refresh_results_at(
+            &Context::default(),
+            &Board::new(),
+            false,
+            now + SearchOverlay::LIVE_REFRESH_INTERVAL,
+        );
 
         assert_eq!(overlay.cached_results.total_matches, 0);
         assert!(overlay.cached_results.panels.is_empty());
         assert!(overlay.display_rows.is_empty());
+        assert_eq!(overlay.selected, 0);
+        assert!(!overlay.pending_terminal_refresh);
     }
 
     #[test]
@@ -523,6 +567,26 @@ mod tests {
 
         // After debounce expires: should search.
         overlay.maybe_refresh_results_at(&ctx, &board, false, edit_time + SearchOverlay::DEBOUNCE);
+        assert_eq!(overlay.last_query, overlay.query);
+    }
+
+    #[test]
+    fn options_refresh_results_immediately_without_debounce() {
+        let mut overlay = SearchOverlay::new_inactive();
+        let now = Instant::now();
+        let ctx = Context::default();
+        let board = Board::new();
+
+        overlay.query = "error".to_string();
+        overlay.last_query = overlay.query.clone();
+        overlay.case_sensitive = true;
+        overlay.options_dirty = true;
+        overlay.query_changed_at = Some(now);
+
+        overlay.maybe_refresh_results_at(&ctx, &board, false, now);
+
+        assert!(!overlay.options_dirty);
+        assert!(overlay.query_changed_at.is_none());
         assert_eq!(overlay.last_query, overlay.query);
     }
 }
