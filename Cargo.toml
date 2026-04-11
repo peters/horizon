@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/horizon-core", "crates/horizon-cursor", "crates/horizon-ui"]
 
 [workspace.package]
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -19,8 +19,8 @@ pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
-horizon-core = { path = "crates/horizon-core", version = "0.2.4" }
-horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.4" }
+horizon-core = { path = "crates/horizon-core", version = "0.2.5" }
+horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.5" }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
