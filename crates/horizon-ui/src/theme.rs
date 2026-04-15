@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor, Rgb};
-use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Style, Theme, ThemePreference, Vec2, Visuals};
+use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Style, Theme, Vec2, Visuals};
 use horizon_core::AppearanceTheme;
 
 struct ThemePalette {
@@ -146,16 +146,24 @@ impl ResolvedTheme {
             Theme::Light => Self::Light,
         }
     }
+
+    #[must_use]
+    const fn to_egui(self) -> Theme {
+        match self {
+            Self::Dark => Theme::Dark,
+            Self::Light => Theme::Light,
+        }
+    }
 }
 
 static CURRENT_THEME: AtomicU8 = AtomicU8::new(ResolvedTheme::Dark.as_u8());
 
 pub fn apply(ctx: &egui::Context, preference: AppearanceTheme) -> ResolvedTheme {
-    ctx.set_theme(theme_preference(preference));
     ctx.set_style_of(Theme::Dark, style_for(ResolvedTheme::Dark));
     ctx.set_style_of(Theme::Light, style_for(ResolvedTheme::Light));
 
-    let resolved = resolved_theme(ctx);
+    let resolved = resolve_theme(preference, ctx.system_theme());
+    ctx.set_theme(resolved.to_egui());
     set_theme(resolved);
     resolved
 }
@@ -167,11 +175,6 @@ pub fn set_theme(theme: ResolvedTheme) {
 #[must_use]
 pub fn current_theme() -> ResolvedTheme {
     ResolvedTheme::from_u8(CURRENT_THEME.load(Ordering::Relaxed))
-}
-
-#[must_use]
-pub fn resolved_theme(ctx: &egui::Context) -> ResolvedTheme {
-    ResolvedTheme::from_egui(ctx.theme())
 }
 
 #[must_use]
@@ -306,6 +309,26 @@ pub fn alpha(color: Color32, alpha: u8) -> Color32 {
 }
 
 #[must_use]
+pub fn composite_over(background: Color32, foreground: Color32) -> Color32 {
+    if foreground.a() == 0 {
+        return background;
+    }
+    if foreground.a() == u8::MAX {
+        return foreground;
+    }
+
+    let [fg_r, fg_g, fg_b, _] = foreground.to_srgba_unmultiplied();
+    let amount = f32::from(foreground.a()) / 255.0;
+    let keep = 1.0 - amount;
+
+    Color32::from_rgb(
+        blend_channel(background.r(), fg_r, keep, amount),
+        blend_channel(background.g(), fg_g, keep, amount),
+        blend_channel(background.b(), fg_b, keep, amount),
+    )
+}
+
+#[must_use]
 pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
     if focused {
         blend(BORDER_STRONG(), accent, 0.78)
@@ -356,14 +379,6 @@ fn palette_for(theme: ResolvedTheme) -> &'static ThemePalette {
 
 fn active_palette() -> &'static ThemePalette {
     palette_for(current_theme())
-}
-
-fn theme_preference(theme: AppearanceTheme) -> ThemePreference {
-    match theme {
-        AppearanceTheme::Auto => ThemePreference::System,
-        AppearanceTheme::Dark => ThemePreference::Dark,
-        AppearanceTheme::Light => ThemePreference::Light,
-    }
 }
 
 fn style_for(theme: ResolvedTheme) -> Style {
@@ -528,7 +543,9 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResolvedTheme, alpha, bg_for, contrast_ratio, ensure_terminal_text_contrast, resolve_theme};
+    use super::{
+        ResolvedTheme, alpha, bg_for, composite_over, contrast_ratio, ensure_terminal_text_contrast, resolve_theme,
+    };
     use egui::{Color32, Theme};
     use horizon_core::AppearanceTheme;
 
@@ -570,5 +587,13 @@ mod tests {
         let adjusted = ensure_terminal_text_contrast(fg, bg);
 
         assert!(contrast_ratio(adjusted, bg) >= 3.6);
+    }
+
+    #[test]
+    fn composite_over_flattens_translucent_text_against_background() {
+        let bg = Color32::from_rgb(230, 234, 242);
+        let fg = alpha(Color32::from_rgb(92, 95, 119), 196);
+
+        assert_eq!(composite_over(bg, fg), Color32::from_rgb(124, 127, 147));
     }
 }

@@ -266,6 +266,13 @@ fn cell_colors(
         fg = theme::FG();
     }
 
+    if bg.a() < u8::MAX {
+        bg = theme::composite_over(theme::PANEL_BG(), bg);
+    }
+    if fg.a() < u8::MAX {
+        fg = theme::composite_over(bg, fg);
+    }
+
     if !cell.flags.contains(Flags::HIDDEN) {
         fg = theme::ensure_terminal_text_contrast(fg, bg);
     }
@@ -427,12 +434,14 @@ fn append_cell_decoration(
 
 #[cfg(test)]
 mod tests {
-    use super::merge_shape_layers;
+    use super::{cell_colors, merge_shape_layers};
+    use crate::theme;
     use alacritty_terminal::grid::Indexed;
     use alacritty_terminal::index::{Column, Line, Point};
     use alacritty_terminal::selection::SelectionRange;
     use alacritty_terminal::term::cell::Cell;
-    use alacritty_terminal::vte::ansi::CursorShape;
+    use alacritty_terminal::term::color::Colors;
+    use alacritty_terminal::vte::ansi::{Color as TerminalColor, CursorShape, NamedColor};
     use egui::{Color32, Pos2, Rect, Shape};
 
     #[test]
@@ -469,5 +478,26 @@ mod tests {
 
         assert!(selection.contains_cell(&indexed, Point::new(Line(0), Column(7)), CursorShape::Block));
         assert!(!selection.contains_cell(&indexed, indexed.point, CursorShape::Block));
+    }
+
+    #[test]
+    fn dim_foreground_is_flattened_before_contrast_in_light_theme() {
+        theme::set_theme(theme::ResolvedTheme::Light);
+
+        let cell = Cell {
+            fg: TerminalColor::Named(NamedColor::DimForeground),
+            bg: TerminalColor::Named(NamedColor::Background),
+            ..Cell::default()
+        };
+
+        let (fg, bg) = cell_colors(&cell, false, &Colors::default());
+        let expected = theme::ensure_terminal_text_contrast(
+            theme::composite_over(theme::PANEL_BG(), theme::alpha(theme::FG_SOFT(), 196)),
+            theme::PANEL_BG(),
+        );
+
+        assert_eq!(bg, theme::PANEL_BG());
+        assert_eq!(fg, expected);
+        assert_eq!(fg.a(), u8::MAX);
     }
 }
