@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui::{Context, Pos2, Rect, Vec2, ViewportId};
+use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
     PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
@@ -162,6 +162,8 @@ pub struct HorizonApp {
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
+    panel_render_order: Vec<(PanelId, usize)>,
+    workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
@@ -252,6 +254,8 @@ impl HorizonApp {
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
+            panel_render_order: Vec::new(),
+            workspace_colors: Vec::new(),
             terminal_grid_cache: HashMap::new(),
             editor_preview_cache: HashMap::new(),
             canvas_grid_cache: CanvasGridCache::default(),
