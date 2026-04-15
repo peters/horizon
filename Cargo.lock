@@ -3422,7 +3422,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surge-core"
 version = "1.0.0"
-source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.14#765d6423f6b22f9dd87e20d18f0737c4b8b74c7e"
+source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.12#afa5d0051a9bbfdb8f81fca8f4d9b4815b272ebd"
 dependencies = [
  "async-trait",
  "base64",
@@ -3617,9 +3617,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.1"
+version = "1.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
+checksum = "a91135f59b1cbf38c91e73cf3386fca9bb77915c45ce2771460c9d92f0f3d776"
 dependencies = [
  "bytes",
  "libc",
