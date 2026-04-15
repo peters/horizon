@@ -88,8 +88,11 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn prepare_frame(&mut self, ctx: &Context) -> bool {
-        if !self.theme_applied {
-            theme::apply(ctx);
+        let resolved_theme = theme::resolved_theme(ctx);
+        if !self.theme_applied
+            || (self.appearance_theme == horizon_core::AppearanceTheme::Auto && resolved_theme != self.resolved_theme)
+        {
+            self.resolved_theme = theme::apply(ctx, self.appearance_theme);
             self.theme_applied = true;
         }
 

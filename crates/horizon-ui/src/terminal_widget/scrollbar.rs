@@ -16,15 +16,15 @@ pub(super) fn render_scrollbar(
 ) {
     let painter = ui.painter_at(rect.expand2(Vec2::new(2.0, 0.0)));
     let track_fill = if highlighted {
-        theme::alpha(theme::PANEL_BG_ALT, 220)
+        theme::alpha(theme::PANEL_BG_ALT(), 220)
     } else {
-        theme::alpha(theme::PANEL_BG_ALT, 170)
+        theme::alpha(theme::PANEL_BG_ALT(), 170)
     };
     painter.rect_filled(rect, CornerRadius::same(u8::MAX), track_fill);
     painter.rect_stroke(
         rect,
         CornerRadius::same(u8::MAX),
-        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 180)),
+        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Outside,
     );
 
@@ -34,9 +34,9 @@ pub(super) fn render_scrollbar(
         thumb_rect,
         CornerRadius::same(u8::MAX),
         if scrollback > 0 || highlighted {
-            theme::alpha(theme::ACCENT, 210)
+            theme::alpha(theme::ACCENT(), 210)
         } else {
-            theme::alpha(theme::FG_DIM, 140)
+            theme::alpha(theme::FG_DIM(), 140)
         },
     );
 }

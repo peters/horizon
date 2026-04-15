@@ -3422,7 +3422,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surge-core"
 version = "1.0.0"
-source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.14#765d6423f6b22f9dd87e20d18f0737c4b8b74c7e"
+source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.12#afa5d0051a9bbfdb8f81fca8f4d9b4815b272ebd"
 dependencies = [
  "async-trait",
  "base64",

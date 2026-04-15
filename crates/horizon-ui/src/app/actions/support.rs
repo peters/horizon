@@ -42,7 +42,7 @@ pub(super) fn render_grouped_preset_rows(
                     ui.add_space(2.0);
                 }
                 if category != PresetCategory::Shell {
-                    ui.label(egui::RichText::new(category.label()).size(10.0).color(theme::FG_DIM));
+                    ui.label(egui::RichText::new(category.label()).size(10.0).color(theme::FG_DIM()));
                     ui.add_space(1.0);
                 }
                 group_started = true;
@@ -114,7 +114,7 @@ fn preset_button_label(preset: &PresetConfig) -> LayoutJob {
         0.0,
         TextFormat {
             font_id: FontId::proportional(12.5),
-            color: theme::FG_SOFT,
+            color: theme::FG_SOFT(),
             ..Default::default()
         },
     );
@@ -124,7 +124,7 @@ fn preset_button_label(preset: &PresetConfig) -> LayoutJob {
             0.0,
             TextFormat {
                 font_id: FontId::monospace(10.0),
-                color: theme::FG_DIM,
+                color: theme::FG_DIM(),
                 ..Default::default()
             },
         );
@@ -160,7 +160,7 @@ fn render_panel_preset_picker_row(
             });
         }
 
-        let dir_text = egui::RichText::new("Dir").size(11.0).color(theme::FG_DIM);
+        let dir_text = egui::RichText::new("Dir").size(11.0).color(theme::FG_DIM());
         if ui.add(Button::new(dir_text).frame(false)).clicked() {
             selected_action = Some(PresetPickerAction::ChooseDirectory {
                 workspace_id,

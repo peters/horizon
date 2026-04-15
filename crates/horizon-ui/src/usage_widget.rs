@@ -67,7 +67,7 @@ fn render_section_header(ui: &mut egui::Ui, label: &str) {
     ui.label(
         RichText::new(label.to_uppercase())
             .size(SECTION_FONT_SIZE)
-            .color(theme::ACCENT)
+            .color(theme::ACCENT())
             .strong(),
     );
     ui.add_space(4.0);
@@ -86,7 +86,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
                 ui,
                 "Claude Code",
                 &snapshot.claude,
-                theme::ACCENT,
+                theme::ACCENT(),
                 true,
                 card_width,
                 card_height,
@@ -118,7 +118,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
             ui,
             "Claude Code",
             &snapshot.claude,
-            theme::ACCENT,
+            theme::ACCENT(),
             true,
             card_width,
             card_height,
@@ -158,11 +158,11 @@ fn render_stat_card(
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter();
 
-    painter.rect_filled(rect, CornerRadius::same(CARD_CORNER), theme::BG_ELEVATED);
+    painter.rect_filled(rect, CornerRadius::same(CARD_CORNER), theme::BG_ELEVATED());
     painter.rect_stroke(
         rect,
         CornerRadius::same(CARD_CORNER),
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
+        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
         egui::StrokeKind::Outside,
     );
 
@@ -184,7 +184,7 @@ fn render_stat_card(
         egui::Align2::LEFT_TOP,
         &sessions_text,
         egui::FontId::proportional(STAT_VALUE_SIZE),
-        theme::FG,
+        theme::FG(),
     );
     y += 17.0;
 
@@ -194,7 +194,7 @@ fn render_stat_card(
         egui::Align2::LEFT_TOP,
         &tokens_text,
         egui::FontId::proportional(STAT_VALUE_SIZE),
-        theme::FG_SOFT,
+        theme::FG_SOFT(),
     );
 
     if show_messages && usage.today_messages > 0 {
@@ -204,7 +204,7 @@ fn render_stat_card(
             egui::Align2::RIGHT_TOP,
             &msg_text,
             egui::FontId::proportional(STAT_LABEL_SIZE),
-            theme::FG_DIM,
+            theme::FG_DIM(),
         );
     }
 
@@ -214,7 +214,7 @@ fn render_stat_card(
             egui::Align2::RIGHT_BOTTOM,
             format_cost(usage.today_cost),
             egui::FontId::proportional(STAT_LABEL_SIZE),
-            theme::FG_DIM,
+            theme::FG_DIM(),
         );
     }
 }
@@ -232,14 +232,14 @@ fn render_week_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
             String::new()
         },
     );
-    ui.label(RichText::new(claude_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
+    ui.label(RichText::new(claude_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT()));
 
     let codex_line = format!(
         "Codex:  {} sessions \u{00B7} {} tokens",
         snapshot.codex.week_sessions,
         format_tokens(snapshot.codex.week_tokens),
     );
-    ui.label(RichText::new(codex_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
+    ui.label(RichText::new(codex_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT()));
 
     let opencode_line = format!(
         "OpenCode: {} sessions \u{00B7} {} tokens{}",
@@ -251,7 +251,11 @@ fn render_week_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
             String::new()
         },
     );
-    ui.label(RichText::new(opencode_line).size(STAT_VALUE_SIZE).color(theme::FG_SOFT));
+    ui.label(
+        RichText::new(opencode_line)
+            .size(STAT_VALUE_SIZE)
+            .color(theme::FG_SOFT()),
+    );
 }
 
 fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
@@ -288,7 +292,7 @@ fn render_daily_chart(ui: &mut egui::Ui, daily: &[DailyUsage]) {
 fn render_daily_chart_header(ui: &mut egui::Ui, date_width: f32, bar_area_width: f32) {
     ui.horizontal(|ui| {
         ui.add_space(date_width + 8.0 + bar_area_width + 4.0);
-        ui.label(RichText::new("Claude").size(10.0).color(theme::ACCENT).strong());
+        ui.label(RichText::new("Claude").size(10.0).color(theme::ACCENT()).strong());
         ui.add_space(8.0);
         ui.label(RichText::new("Codex").size(10.0).color(CODEX_COLOR).strong());
         ui.add_space(8.0);
@@ -321,7 +325,7 @@ fn paint_daily_chart_date(painter: &egui::Painter, row_rect: &Rect, day: &DailyU
         egui::Align2::LEFT_CENTER,
         format_short_date(&day.date),
         egui::FontId::monospace(11.0),
-        theme::FG_DIM,
+        theme::FG_DIM(),
     );
 }
 
@@ -353,7 +357,7 @@ fn paint_daily_chart_bar(
     let bar_x = row_rect.min.x + bar_area_start;
     let bar_y = row_rect.center().y - BAR_HEIGHT / 2.0;
 
-    paint_daily_chart_bar_segment(painter, bar_x, bar_y, claude_width, theme::ACCENT);
+    paint_daily_chart_bar_segment(painter, bar_x, bar_y, claude_width, theme::ACCENT());
     paint_daily_chart_bar_segment(painter, bar_x + claude_width, bar_y, codex_width, CODEX_COLOR);
     paint_daily_chart_bar_segment(
         painter,
@@ -382,7 +386,11 @@ fn paint_daily_chart_count(painter: &egui::Painter, counts_x: f32, center_y: f32
         egui::Align2::LEFT_CENTER,
         sessions.to_string(),
         egui::FontId::monospace(11.0),
-        if sessions > 0 { theme::FG_SOFT } else { theme::FG_DIM },
+        if sessions > 0 {
+            theme::FG_SOFT()
+        } else {
+            theme::FG_DIM()
+        },
     );
 }
 
@@ -417,7 +425,7 @@ fn render_footer(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
         ui.label(
             RichText::new(format!("Last updated: {ago}"))
                 .size(10.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
     });
 }

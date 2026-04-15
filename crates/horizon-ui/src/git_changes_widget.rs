@@ -57,7 +57,7 @@ fn render_clean(ui: &mut egui::Ui, status: &GitStatus) {
     render_header(ui, status);
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
-        ui.label(RichText::new("Working tree clean").size(13.0).color(theme::FG_DIM));
+        ui.label(RichText::new("Working tree clean").size(13.0).color(theme::FG_DIM()));
     });
 }
 
@@ -92,13 +92,13 @@ fn render_header(ui: &mut egui::Ui, status: &GitStatus) {
                 let count = status.file_count();
                 if count > 0 {
                     let badge = egui::Frame::new()
-                        .fill(theme::PANEL_BG_ALT)
+                        .fill(theme::PANEL_BG_ALT())
                         .corner_radius(CornerRadius::same(8));
                     badge.show(ui, |ui| {
                         ui.label(
                             RichText::new(format!("{count} files"))
                                 .font(FontId::monospace(10.0))
-                                .color(theme::FG_DIM),
+                                .color(theme::FG_DIM()),
                         );
                     });
                 }
@@ -110,7 +110,7 @@ fn render_header(ui: &mut egui::Ui, status: &GitStatus) {
     let sep_y = header_rect.max.y;
     ui.painter().line_segment(
         [Pos2::new(header_rect.min.x, sep_y), Pos2::new(header_rect.max.x, sep_y)],
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
+        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
     );
 }
 
@@ -127,19 +127,19 @@ fn render_summary(ui: &mut egui::Ui, status: &GitStatus) {
             ui.label(
                 RichText::new(format!("+{}", status.total_insertions))
                     .font(FontId::monospace(SUMMARY_SIZE))
-                    .color(theme::PALETTE_GREEN),
+                    .color(theme::PALETTE_GREEN()),
             );
             ui.add_space(2.0);
             ui.label(
                 RichText::new(format!("\u{2212}{}", status.total_deletions))
                     .font(FontId::monospace(SUMMARY_SIZE))
-                    .color(theme::PALETTE_RED),
+                    .color(theme::PALETTE_RED()),
             );
             ui.add_space(4.0);
             ui.label(
                 RichText::new(format!("across {} files", status.file_count()))
                     .font(FontId::monospace(SUMMARY_SIZE))
-                    .color(theme::FG_DIM),
+                    .color(theme::FG_DIM()),
             );
         },
     );
@@ -151,7 +151,7 @@ fn render_summary(ui: &mut egui::Ui, status: &GitStatus) {
             Pos2::new(summary_rect.min.x, sep_y),
             Pos2::new(summary_rect.max.x, sep_y),
         ],
-        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 128)),
+        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 128)),
     );
 }
 
@@ -196,7 +196,7 @@ fn render_file_list(ui: &mut egui::Ui, panel: &mut Panel, status: &GitStatus) {
                 ui.label(
                     RichText::new(format!("Last scan {ago}"))
                         .font(FontId::monospace(9.5))
-                        .color(theme::FG_DIM),
+                        .color(theme::FG_DIM()),
                 );
             });
             ui.add_space(4.0);
@@ -211,12 +211,7 @@ fn render_file_list(ui: &mut egui::Ui, panel: &mut Panel, status: &GitStatus) {
 
 fn render_section_label(ui: &mut egui::Ui, status: FileStatus, changes: &[horizon_core::FileChange]) {
     let count = changes.iter().filter(|c| c.status == status).count();
-    let (label, color) = match status {
-        FileStatus::Modified => ("MODIFIED", theme::ACCENT),
-        FileStatus::Added => ("ADDED", theme::PALETTE_GREEN),
-        FileStatus::Deleted => ("DELETED", theme::PALETTE_RED),
-        FileStatus::Renamed => ("RENAMED", Color32::from_rgb(249, 226, 175)),
-    };
+    let (label, color) = file_status_label(status);
 
     ui.horizontal(|ui| {
         ui.add_space(14.0);
@@ -244,11 +239,11 @@ fn render_file_row(ui: &mut egui::Ui, change: &horizon_core::FileChange, is_expa
     // Hover highlight
     if response.hovered() {
         ui.painter()
-            .rect_filled(row_rect, CornerRadius::ZERO, theme::alpha(theme::FG, 6));
+            .rect_filled(row_rect, CornerRadius::ZERO, theme::alpha(theme::FG(), 6));
     }
     if is_expanded {
         ui.painter()
-            .rect_filled(row_rect, CornerRadius::ZERO, theme::alpha(theme::ACCENT, 8));
+            .rect_filled(row_rect, CornerRadius::ZERO, theme::alpha(theme::ACCENT(), 8));
     }
 
     ui.scope_builder(
@@ -263,17 +258,12 @@ fn render_file_row(ui: &mut egui::Ui, change: &horizon_core::FileChange, is_expa
             ui.label(
                 RichText::new(arrow)
                     .size(7.0)
-                    .color(if is_expanded { theme::ACCENT } else { theme::FG_DIM }),
+                    .color(if is_expanded { theme::ACCENT() } else { theme::FG_DIM() }),
             );
             ui.add_space(4.0);
 
             // Status indicator
-            let (indicator, color) = match change.status {
-                FileStatus::Modified => ("M", theme::ACCENT),
-                FileStatus::Added => ("A", theme::PALETTE_GREEN),
-                FileStatus::Deleted => ("D", theme::PALETTE_RED),
-                FileStatus::Renamed => ("R", Color32::from_rgb(249, 226, 175)),
-            };
+            let (indicator, color) = file_status_indicator(change.status);
             ui.label(
                 RichText::new(indicator)
                     .font(FontId::monospace(FILE_ROW_SIZE))
@@ -288,13 +278,13 @@ fn render_file_row(ui: &mut egui::Ui, change: &horizon_core::FileChange, is_expa
                 ui.label(
                     RichText::new(dir)
                         .font(FontId::monospace(FILE_ROW_SIZE))
-                        .color(theme::FG_DIM),
+                        .color(theme::FG_DIM()),
                 );
             }
             ui.label(
                 RichText::new(file)
                     .font(FontId::monospace(FILE_ROW_SIZE))
-                    .color(theme::FG_SOFT),
+                    .color(theme::FG_SOFT()),
             );
 
             // +/- stats on the right
@@ -304,14 +294,14 @@ fn render_file_row(ui: &mut egui::Ui, change: &horizon_core::FileChange, is_expa
                     ui.label(
                         RichText::new(format!("\u{2212}{}", change.deletions))
                             .font(FontId::monospace(10.0))
-                            .color(theme::PALETTE_RED),
+                            .color(theme::PALETTE_RED()),
                     );
                 }
                 if change.insertions > 0 {
                     ui.label(
                         RichText::new(format!("+{}", change.insertions))
                             .font(FontId::monospace(10.0))
-                            .color(theme::PALETTE_GREEN),
+                            .color(theme::PALETTE_GREEN()),
                     );
                 }
             });
@@ -321,11 +311,29 @@ fn render_file_row(ui: &mut egui::Ui, change: &horizon_core::FileChange, is_expa
     clicked
 }
 
+fn file_status_label(status: FileStatus) -> (&'static str, Color32) {
+    match status {
+        FileStatus::Modified => ("MODIFIED", theme::ACCENT()),
+        FileStatus::Added => ("ADDED", theme::PALETTE_GREEN()),
+        FileStatus::Deleted => ("DELETED", theme::PALETTE_RED()),
+        FileStatus::Renamed => ("RENAMED", theme::PALETTE_YELLOW()),
+    }
+}
+
+fn file_status_indicator(status: FileStatus) -> (&'static str, Color32) {
+    match status {
+        FileStatus::Modified => ("M", theme::ACCENT()),
+        FileStatus::Added => ("A", theme::PALETTE_GREEN()),
+        FileStatus::Deleted => ("D", theme::PALETTE_RED()),
+        FileStatus::Renamed => ("R", theme::PALETTE_YELLOW()),
+    }
+}
+
 fn render_inline_diff(ui: &mut egui::Ui, diff: &horizon_core::FileDiff, panel_id: u64) {
     let frame = egui::Frame::new()
-        .fill(theme::BG_ELEVATED)
+        .fill(theme::BG_ELEVATED())
         .corner_radius(CornerRadius::same(6))
-        .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE))
+        .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .inner_margin(egui::Margin::same(0));
 
     ui.horizontal(|ui| {
@@ -351,20 +359,20 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
     let hunk_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 18.0));
     ui.allocate_rect(hunk_rect, egui::Sense::hover());
     ui.painter()
-        .rect_filled(hunk_rect, CornerRadius::ZERO, theme::alpha(theme::ACCENT, 12));
+        .rect_filled(hunk_rect, CornerRadius::ZERO, theme::alpha(theme::ACCENT(), 12));
     ui.painter().text(
         Pos2::new(hunk_rect.min.x + 10.0, hunk_rect.center().y),
         egui::Align2::LEFT_CENTER,
         &hunk.header,
         FontId::monospace(10.0),
-        theme::FG_DIM,
+        theme::FG_DIM(),
     );
 
     // Separator below hunk header
     let sep_y = hunk_rect.max.y;
     ui.painter().line_segment(
         [Pos2::new(hunk_rect.min.x, sep_y), Pos2::new(hunk_rect.max.x, sep_y)],
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE),
+        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
     );
 
     // Diff lines
@@ -382,7 +390,7 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
             ui.label(
                 RichText::new(format!("... {more} more lines"))
                     .font(FontId::monospace(10.0))
-                    .color(theme::FG_DIM),
+                    .color(theme::FG_DIM()),
             );
         });
     }
@@ -410,9 +418,9 @@ fn render_diff_line(ui: &mut egui::Ui, line: &horizon_core::DiffLine) {
     };
     let lineno_text = lineno.map_or_else(String::new, |n| format!("{n:>4}"));
     let lineno_color = match line.kind {
-        DiffLineKind::Add => theme::alpha(theme::PALETTE_GREEN, 100),
-        DiffLineKind::Delete => theme::alpha(theme::PALETTE_RED, 100),
-        DiffLineKind::Context => theme::alpha(theme::FG_DIM, 100),
+        DiffLineKind::Add => theme::alpha(theme::PALETTE_GREEN(), 100),
+        DiffLineKind::Delete => theme::alpha(theme::PALETTE_RED(), 100),
+        DiffLineKind::Context => theme::alpha(theme::FG_DIM(), 100),
     };
     ui.painter().text(
         Pos2::new(line_rect.min.x + 4.0, line_rect.center().y),
@@ -429,9 +437,9 @@ fn render_diff_line(ui: &mut egui::Ui, line: &horizon_core::DiffLine) {
         DiffLineKind::Context => " ",
     };
     let content_color = match line.kind {
-        DiffLineKind::Add => theme::PALETTE_GREEN,
-        DiffLineKind::Delete => theme::PALETTE_RED,
-        DiffLineKind::Context => theme::FG_DIM,
+        DiffLineKind::Add => theme::PALETTE_GREEN(),
+        DiffLineKind::Delete => theme::PALETTE_RED(),
+        DiffLineKind::Context => theme::FG_DIM(),
     };
     let display = format!("{prefix}{}", line.content.trim_end_matches('\n'));
     ui.painter().text(

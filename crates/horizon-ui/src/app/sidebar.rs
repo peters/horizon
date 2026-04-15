@@ -160,14 +160,14 @@ impl HorizonApp {
         ui.painter().rect_filled(
             Rect::from_min_size(sidebar_origin, sidebar_size),
             CornerRadius::ZERO,
-            theme::BG_ELEVATED,
+            theme::BG_ELEVATED(),
         );
         ui.painter().line_segment(
             [
                 Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y),
                 Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y + sidebar_size.y),
             ],
-            Stroke::new(1.0, theme::BORDER_SUBTLE),
+            Stroke::new(1.0, theme::BORDER_SUBTLE()),
         );
     }
 
@@ -209,7 +209,7 @@ impl HorizonApp {
             ui.add_space(18.0);
             ui.label(
                 egui::RichText::new("WORKSPACES")
-                    .color(theme::FG_DIM)
+                    .color(theme::FG_DIM())
                     .size(10.5)
                     .strong(),
             );
@@ -269,7 +269,7 @@ impl HorizonApp {
                 ui.add_space(14.0);
 
                 let bar_color = if workspace.attention_count > 0 {
-                    theme::PALETTE_RED
+                    theme::PALETTE_RED()
                 } else {
                     theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
                 };
@@ -280,7 +280,11 @@ impl HorizonApp {
                 let name_response = ui.add(
                     egui::Label::new(
                         egui::RichText::new(&workspace.name)
-                            .color(if workspace.is_active { theme::FG } else { theme::FG_SOFT })
+                            .color(if workspace.is_active {
+                                theme::FG()
+                            } else {
+                                theme::FG_SOFT()
+                            })
                             .size(13.0)
                             .strong(),
                     )
@@ -293,7 +297,7 @@ impl HorizonApp {
                     let detached_response = ui.add(
                         egui::Label::new(
                             egui::RichText::new("NEW WINDOW")
-                                .color(theme::FG_DIM)
+                                .color(theme::FG_DIM())
                                 .size(8.5)
                                 .strong(),
                         )
@@ -381,16 +385,16 @@ impl HorizonApp {
     ) {
         response.context_menu(|ui| {
             ui.set_min_width(160.0);
-            ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
+            ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
             if ui
-                .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT)).frame(false))
+                .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false))
                 .clicked()
             {
                 actions.clear_layout = Some(workspace.id);
                 ui.close();
             }
             for layout in WorkspaceLayout::ALL {
-                let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT);
+                let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
                 if ui.add(Button::new(text).frame(false)).clicked() {
                     actions.arrange_layout = Some((workspace.id, layout));
                     ui.close();
@@ -404,7 +408,7 @@ impl HorizonApp {
                 "Open in New Window"
             };
             if ui
-                .add(Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT)).frame(false))
+                .add(Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false))
                 .clicked()
             {
                 if workspace.detached {
@@ -421,7 +425,7 @@ impl HorizonApp {
                     Button::new(
                         egui::RichText::new("Close All Panels")
                             .size(12.0)
-                            .color(theme::PALETTE_RED),
+                            .color(theme::PALETTE_RED()),
                     )
                     .frame(false),
                 )
@@ -475,7 +479,11 @@ impl HorizonApp {
                         Vec2::new(title_width, 18.0),
                         egui::Label::new(
                             egui::RichText::new(&panel.title)
-                                .color(if panel.is_focused { theme::FG } else { theme::FG_SOFT })
+                                .color(if panel.is_focused {
+                                    theme::FG()
+                                } else {
+                                    theme::FG_SOFT()
+                                })
                                 .size(12.5),
                         )
                         .truncate()
@@ -484,8 +492,9 @@ impl HorizonApp {
                     click_target_hovered |= title_response.hovered();
                     row_clicked |= title_response.clicked();
 
-                    let close = ui
-                        .add(Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM)).frame(false));
+                    let close = ui.add(
+                        Button::new(egui::RichText::new("\u{00D7}").size(16.0).color(theme::FG_DIM())).frame(false),
+                    );
                     if close.clicked() {
                         close_clicked = true;
                     }
@@ -557,14 +566,18 @@ impl HorizonApp {
     ) {
         response.context_menu(|ui| {
             ui.set_min_width(160.0);
-            ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
+            ui.label(
+                egui::RichText::new("Move to Workspace")
+                    .size(11.0)
+                    .color(theme::FG_DIM()),
+            );
             for other_workspace in workspace_data {
                 if other_workspace.id == workspace.id {
                     continue;
                 }
                 let text = egui::RichText::new(&other_workspace.name)
                     .size(12.0)
-                    .color(theme::FG_SOFT);
+                    .color(theme::FG_SOFT());
                 if ui.add(Button::new(text).frame(false)).clicked() {
                     self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
                     self.mark_runtime_dirty();
@@ -583,7 +596,7 @@ impl HorizonApp {
                                 "Restart"
                             })
                             .size(12.0)
-                            .color(theme::FG_SOFT),
+                            .color(theme::FG_SOFT()),
                         )
                         .frame(false),
                     )
@@ -593,7 +606,7 @@ impl HorizonApp {
                 ui.close();
             }
             if ui
-                .add(Button::new(egui::RichText::new("Close").size(12.0).color(theme::PALETTE_RED)).frame(false))
+                .add(Button::new(egui::RichText::new("Close").size(12.0).color(theme::PALETTE_RED())).frame(false))
                 .clicked()
             {
                 actions.close_panel = Some(panel_id);
@@ -718,19 +731,19 @@ fn paint_workspace_row_bg(
         ui.painter_at(workspace_bg).rect_filled(
             workspace_bg,
             CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace_color, 0.18), 180),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.18), 180),
         );
     } else if is_active {
         ui.painter_at(workspace_bg).rect_filled(
             workspace_bg,
             CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace_color, 0.12), 140),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.12), 140),
         );
     } else if hovered {
         ui.painter_at(workspace_bg).rect_filled(
             workspace_bg,
             CornerRadius::same(10),
-            theme::alpha(theme::PANEL_BG_ALT, 160),
+            theme::alpha(theme::PANEL_BG_ALT(), 160),
         );
     }
 }
@@ -755,9 +768,9 @@ fn paint_workspace_drop_indicator(
 
 fn sidebar_attention_tag(severity: AttentionSeverity) -> (&'static str, Color32) {
     match severity {
-        AttentionSeverity::High => ("NEEDS INPUT", theme::PALETTE_RED),
-        AttentionSeverity::Medium => ("DONE", theme::PALETTE_GREEN),
-        AttentionSeverity::Low => ("INFO", theme::ACCENT),
+        AttentionSeverity::High => ("NEEDS INPUT", theme::PALETTE_RED()),
+        AttentionSeverity::Medium => ("DONE", theme::PALETTE_GREEN()),
+        AttentionSeverity::Low => ("INFO", theme::ACCENT()),
     }
 }
 
@@ -770,7 +783,7 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
         ui.painter_at(bg_rect).rect_filled(
             bg_rect,
             CornerRadius::same(10),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace_color, 0.22), 200),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22), 200),
         );
         let edge = Rect::from_min_size(
             Pos2::new(bg_rect.min.x, bg_rect.min.y + 4.0),
@@ -778,8 +791,11 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
         );
         ui.painter().rect_filled(edge, CornerRadius::same(1), workspace_color);
     } else if hovered {
-        ui.painter_at(bg_rect)
-            .rect_filled(bg_rect, CornerRadius::same(10), theme::alpha(theme::PANEL_BG_ALT, 180));
+        ui.painter_at(bg_rect).rect_filled(
+            bg_rect,
+            CornerRadius::same(10),
+            theme::alpha(theme::PANEL_BG_ALT(), 180),
+        );
     }
 }
 

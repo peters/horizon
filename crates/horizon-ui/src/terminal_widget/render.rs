@@ -199,7 +199,7 @@ pub(super) fn render_cursor(
     let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
     let cursor_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(metrics.char_width, metrics.line_height));
     let painter = ui.painter_at(rect);
-    let stroke = egui::Stroke::new(1.2, theme::CURSOR.gamma_multiply(0.82));
+    let stroke = egui::Stroke::new(1.2, theme::CURSOR().gamma_multiply(0.82));
 
     if !has_focus {
         painter.rect_stroke(cursor_rect, CornerRadius::same(1), stroke, StrokeKind::Outside);
@@ -208,18 +208,18 @@ pub(super) fn render_cursor(
 
     match cursor.shape {
         CursorShape::Block => {
-            painter.rect_filled(cursor_rect, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.8));
+            painter.rect_filled(cursor_rect, CornerRadius::same(1), theme::CURSOR().gamma_multiply(0.8));
         }
         CursorShape::Underline => {
             let underline = Rect::from_min_size(
                 Pos2::new(cursor_rect.min.x, cursor_rect.max.y - 2.0),
                 Vec2::new(cursor_rect.width(), 2.0),
             );
-            painter.rect_filled(underline, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.9));
+            painter.rect_filled(underline, CornerRadius::same(1), theme::CURSOR().gamma_multiply(0.9));
         }
         CursorShape::Beam => {
             let beam = Rect::from_min_size(cursor_rect.min, Vec2::new(2.0, cursor_rect.height()));
-            painter.rect_filled(beam, CornerRadius::same(1), theme::CURSOR.gamma_multiply(0.9));
+            painter.rect_filled(beam, CornerRadius::same(1), theme::CURSOR().gamma_multiply(0.9));
         }
         CursorShape::HollowBlock => {
             painter.rect_stroke(cursor_rect, CornerRadius::same(1), stroke, StrokeKind::Outside);
@@ -242,7 +242,7 @@ fn cell_colors(
         )
         && matches!(cell.bg, TerminalColor::Named(NamedColor::Background))
     {
-        return (theme::FG, theme::PANEL_BG);
+        return (theme::FG(), theme::PANEL_BG());
     }
 
     let mut fg = theme::terminal_color_to_egui(cell.fg, colors);
@@ -262,8 +262,12 @@ fn cell_colors(
 
     if selected {
         std::mem::swap(&mut fg, &mut bg);
-        bg = theme::alpha(theme::ACCENT, 76);
-        fg = theme::FG;
+        bg = theme::alpha(theme::ACCENT(), 76);
+        fg = theme::FG();
+    }
+
+    if !cell.flags.contains(Flags::HIDDEN) {
+        fg = theme::ensure_terminal_text_contrast(fg, bg);
     }
 
     (fg, bg)
@@ -340,7 +344,7 @@ fn append_background_rect(
     bg: Color32,
     selected: bool,
 ) {
-    if bg == theme::PANEL_BG && !selected {
+    if bg == theme::PANEL_BG() && !selected {
         flush_background_run(shapes, run);
         return;
     }

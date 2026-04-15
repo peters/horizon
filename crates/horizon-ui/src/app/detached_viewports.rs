@@ -242,21 +242,26 @@ impl HorizonApp {
         TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
             ui.set_height(TOOLBAR_HEIGHT);
             ui.painter()
-                .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG);
+                .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG());
             ui.painter().line_segment(
                 [
                     Pos2::new(ui.max_rect().min.x, ui.max_rect().max.y),
                     Pos2::new(ui.max_rect().max.x, ui.max_rect().max.y),
                 ],
-                Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
+                Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 170)),
             );
 
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new(workspace_name).color(theme::FG).size(13.5).strong());
+                ui.label(
+                    egui::RichText::new(workspace_name)
+                        .color(theme::FG())
+                        .size(13.5)
+                        .strong(),
+                );
                 ui.label(
                     egui::RichText::new("Detached Workspace")
-                        .color(theme::FG_DIM)
+                        .color(theme::FG_DIM())
                         .size(10.5),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -265,7 +270,7 @@ impl HorizonApp {
                             Button::new(
                                 egui::RichText::new("Attach to Main Window")
                                     .size(11.5)
-                                    .color(theme::FG_SOFT),
+                                    .color(theme::FG_SOFT()),
                             )
                             .frame(false),
                         )

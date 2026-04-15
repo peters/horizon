@@ -241,6 +241,9 @@ If you do not want to start by dragging panels around the canvas, use Horizon li
 The settings editor writes back to the same config file Horizon loaded. By default that is `~/.horizon/config.yaml`, and `config.yml` is also supported when discovered or passed explicitly. You can define workspaces, panel presets, feature flags, and keyboard shortcuts:
 
 ```yaml
+appearance:
+  theme: auto # auto, light, or dark
+
 shortcuts:
   command_palette: Ctrl+Shift+K
   new_terminal: Ctrl+Shift+N
@@ -313,7 +316,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 | [**eframe / egui**](https://github.com/emilk/egui) | Immediate-mode UI framework |
 | [**wgpu**](https://wgpu.rs) | GPU rendering — Vulkan, Metal, DX12, OpenGL |
 | [**alacritty_terminal**](https://github.com/alacritty/alacritty) | Battle-tested terminal emulation |
-| [**Catppuccin Mocha**](https://catppuccin.com) | Dark color palette |
+| [**Catppuccin**](https://catppuccin.com) | Mocha and Latte inspired palettes |
 
 ---
 

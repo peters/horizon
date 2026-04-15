@@ -30,9 +30,12 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add(
-                    egui::Button::new(egui::RichText::new("+ Add Preset").size(11.0).color(theme::ACCENT))
-                        .fill(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.08))
-                        .stroke(Stroke::new(1.0, theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.3)))
+                    egui::Button::new(egui::RichText::new("+ Add Preset").size(11.0).color(theme::ACCENT()))
+                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.08))
+                        .stroke(Stroke::new(
+                            1.0,
+                            theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.3),
+                        ))
                         .corner_radius(8),
                 )
                 .clicked()
@@ -72,13 +75,13 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
     let has_error = preset_has_error(preset);
 
     let border_color = if has_error {
-        theme::blend(theme::BORDER_SUBTLE, theme::PALETTE_RED, 0.5)
+        theme::blend(theme::BORDER_SUBTLE(), theme::PALETTE_RED(), 0.5)
     } else {
-        theme::BORDER_SUBTLE
+        theme::BORDER_SUBTLE()
     };
 
     egui::Frame::default()
-        .fill(theme::PANEL_BG)
+        .fill(theme::PANEL_BG())
         .stroke(Stroke::new(1.0, border_color))
         .corner_radius(8)
         .inner_margin(egui::Margin::same(12))
@@ -88,9 +91,9 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
             // Row 1: name, alias, delete button
             ui.horizontal(|ui| {
                 let name_color = if preset.name.trim().is_empty() {
-                    theme::PALETTE_RED
+                    theme::PALETTE_RED()
                 } else {
-                    theme::FG
+                    theme::FG()
                 };
                 let name_response = ui.add(
                     egui::TextEdit::singleline(&mut preset.name)
@@ -118,7 +121,7 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
-                            egui::Button::new(egui::RichText::new("X").size(11.0).color(theme::PALETTE_RED))
+                            egui::Button::new(egui::RichText::new("X").size(11.0).color(theme::PALETTE_RED()))
                                 .fill(Color32::TRANSPARENT)
                                 .corner_radius(4),
                         )
@@ -144,7 +147,7 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new("SSH host cannot be empty")
-                        .color(theme::PALETTE_RED)
+                        .color(theme::PALETTE_RED())
                         .size(11.0),
                 );
             }
@@ -168,7 +171,7 @@ fn preset_has_error(preset: &PresetConfig) -> bool {
 
 fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
     let mut changed = false;
-    ui.label(egui::RichText::new("Kind").color(theme::FG_DIM).size(11.0));
+    ui.label(egui::RichText::new("Kind").color(theme::FG_DIM()).size(11.0));
     let kind_id = egui::Id::new("preset_kind").with(index);
     egui::ComboBox::from_id_salt(kind_id)
         .selected_text(kind.display_name())
@@ -185,7 +188,7 @@ fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
 
 fn render_resume_combo(ui: &mut Ui, index: usize, resume: &mut PanelResume) -> bool {
     let mut changed = false;
-    ui.label(egui::RichText::new("Resume").color(theme::FG_DIM).size(11.0));
+    ui.label(egui::RichText::new("Resume").color(theme::FG_DIM()).size(11.0));
     let resume_id = egui::Id::new("preset_resume").with(index);
     let resume_label = match resume {
         PanelResume::Fresh => "Fresh",

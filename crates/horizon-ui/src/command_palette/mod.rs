@@ -175,7 +175,7 @@ impl CommandPalette {
             PaletteMode::ActionsOnly => "Presets & Actions",
             PaletteMode::PanelsOnly => "Panels",
         };
-        ui.label(egui::RichText::new(title).color(theme::FG).size(15.0).strong());
+        ui.label(egui::RichText::new(title).color(theme::FG()).size(15.0).strong());
         ui.add_space(10.0);
 
         self.render_query_input(ui, layout.inner);
@@ -198,11 +198,11 @@ impl CommandPalette {
     fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect) {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
         ui.painter()
-            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED);
+            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED());
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT, 70)),
+            Stroke::new(1.0, theme::alpha(theme::ACCENT(), 70)),
             StrokeKind::Inside,
         );
 
@@ -216,10 +216,14 @@ impl CommandPalette {
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::proportional(14.0))
-                .text_color(theme::FG)
+                .text_color(theme::FG())
                 .frame(false)
                 .desired_width(text_rect.width())
-                .hint_text(egui::RichText::new("Type to search...").color(theme::FG_DIM).size(13.0))
+                .hint_text(
+                    egui::RichText::new("Type to search...")
+                        .color(theme::FG_DIM())
+                        .size(13.0),
+                )
                 .margin(Margin::ZERO),
         );
         if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
@@ -243,7 +247,7 @@ impl CommandPalette {
             egui::Align2::LEFT_CENTER,
             hint,
             egui::FontId::monospace(10.0),
-            theme::FG_DIM,
+            theme::FG_DIM(),
         );
         ui.allocate_space(Vec2::new(width, 16.0));
     }

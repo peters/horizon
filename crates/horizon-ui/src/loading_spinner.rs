@@ -17,7 +17,7 @@ const LABEL_SPACING: f32 = 10.0;
 /// The spinner is a rotating arc that animates continuously. Pass a stable
 /// `Id` so the animation phase persists across frames.
 pub fn show(ui: &mut egui::Ui, id: Id, label: Option<&str>) {
-    show_colored(ui, id, label, theme::ACCENT);
+    show_colored(ui, id, label, theme::ACCENT());
 }
 
 /// Like [`show`] but lets the caller pick the arc color.
@@ -27,7 +27,7 @@ pub fn show_colored(ui: &mut egui::Ui, id: Id, label: Option<&str>, color: Color
 
 /// Spinner with a primary label and a smaller detail line below it.
 pub fn show_with_detail(ui: &mut egui::Ui, id: Id, label: &str, detail: &str) {
-    show_inner(ui, id, Some(label), Some(detail), theme::ACCENT);
+    show_inner(ui, id, Some(label), Some(detail), theme::ACCENT());
 }
 
 fn show_inner(ui: &mut egui::Ui, id: Id, label: Option<&str>, detail: Option<&str>, color: Color32) {
@@ -53,12 +53,12 @@ fn show_inner(ui: &mut egui::Ui, id: Id, label: Option<&str>, detail: Option<&st
 
         if let Some(text) = label {
             ui.add_space(LABEL_SPACING);
-            ui.label(RichText::new(text).size(12.0).color(theme::FG_DIM));
+            ui.label(RichText::new(text).size(12.0).color(theme::FG_DIM()));
         }
 
         if let Some(text) = detail {
             ui.add_space(4.0);
-            ui.label(RichText::new(text).size(11.0).color(theme::FG_DIM));
+            ui.label(RichText::new(text).size(11.0).color(theme::FG_DIM()));
         }
     });
 }

@@ -6,11 +6,11 @@ use crate::theme;
 /// Render the raw YAML text editor for the configuration file.
 pub(super) fn render(ui: &mut Ui, config_path: &str, buffer: &mut String, available: Vec2) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Config File").color(theme::FG_SOFT).size(12.0));
+        ui.label(egui::RichText::new("Config File").color(theme::FG_SOFT()).size(12.0));
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(config_path)
-                .color(theme::FG_DIM)
+                .color(theme::FG_DIM())
                 .size(11.0)
                 .monospace(),
         );
@@ -24,8 +24,8 @@ pub(super) fn render(ui: &mut Ui, config_path: &str, buffer: &mut String, availa
     };
 
     egui::Frame::default()
-        .fill(theme::PANEL_BG)
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+        .fill(theme::PANEL_BG())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(8)
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {

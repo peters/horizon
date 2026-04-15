@@ -69,10 +69,10 @@ fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
             ] {
                 let text = RichText::new(label)
                     .size(11.0)
-                    .color(if is_active { theme::FG } else { theme::FG_DIM });
+                    .color(if is_active { theme::FG() } else { theme::FG_DIM() });
                 let button = egui::Button::new(text)
                     .fill(if is_active {
-                        theme::PANEL_BG_ALT
+                        theme::PANEL_BG_ALT()
                     } else {
                         Color32::TRANSPARENT
                     })
@@ -92,10 +92,10 @@ fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
                     ui.label(
                         RichText::new(format!("{prefix}{label}"))
                             .size(11.0)
-                            .color(theme::FG_DIM),
+                            .color(theme::FG_DIM()),
                     );
                 } else if editor.dirty {
-                    ui.label(RichText::new("* scratch").size(11.0).color(theme::FG_DIM));
+                    ui.label(RichText::new("* scratch").size(11.0).color(theme::FG_DIM()));
                 }
             });
         },
@@ -166,7 +166,7 @@ fn markdown_text_edit(text: &mut String, min_size: Vec2) -> egui::TextEdit<'_> {
         .desired_rows(1)
         .min_size(min_size)
         .frame(false)
-        .text_color(theme::FG)
+        .text_color(theme::FG())
         .lock_focus(true)
 }
 
@@ -233,7 +233,7 @@ mod tests {
     use std::path::PathBuf;
 
     use egui::{Align, Context, Layout, Pos2, Rect, UiBuilder, Vec2};
-    use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+    use horizon_core::{AppearanceTheme, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
     use super::render_edit_pane;
     use crate::theme;
@@ -271,7 +271,7 @@ mod tests {
         let body_rect = Rect::from_min_size(Pos2::new(20.0, 24.0), Vec2::new(320.0, 200.0));
         let mut panel = test_editor_panel("");
 
-        theme::apply(&ctx);
+        theme::apply(&ctx, AppearanceTheme::Dark);
         ctx.begin_pass(input);
         let text_rect = egui::CentralPanel::default()
             .show(&ctx, |ui| {

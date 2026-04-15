@@ -64,12 +64,12 @@ impl DirPicker {
         let empty_state = if self.initial_results_loaded {
             PickerEmptyState {
                 message: "No directories found",
-                color: theme::FG_DIM,
+                color: theme::FG_DIM(),
             }
         } else {
             PickerEmptyState {
                 message: "Searching...",
-                color: theme::FG_DIM,
+                color: theme::FG_DIM(),
             }
         };
         let action = self.modal.show(
@@ -182,7 +182,7 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
         ui.painter_at(row_rect).rect_filled(
             row_rect,
             CornerRadius::same(8),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28), 200),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28), 200),
         );
     } else {
         let hover = ui
@@ -192,7 +192,7 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
             ui.painter_at(row_rect).rect_filled(
                 row_rect,
                 CornerRadius::same(8),
-                theme::alpha(theme::PANEL_BG_ALT, 160),
+                theme::alpha(theme::PANEL_BG_ALT(), 160),
             );
         }
     }
@@ -205,7 +205,7 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
     let text_y = row_rect.center().y;
     if is_project {
         ui.painter_at(row_rect)
-            .circle_filled(Pos2::new(row_rect.min.x + 14.0, text_y), 3.0, theme::ACCENT);
+            .circle_filled(Pos2::new(row_rect.min.x + 14.0, text_y), 3.0, theme::ACCENT());
     }
 
     let (dir_part, name_part) = split_path_display(&display);
@@ -217,7 +217,7 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
             egui::Align2::LEFT_CENTER,
             &display,
             egui::FontId::monospace(12.5),
-            if is_selected { theme::FG } else { theme::FG_SOFT },
+            if is_selected { theme::FG() } else { theme::FG_SOFT() },
         );
     } else {
         let dir_end = ui.painter_at(row_rect).text(
@@ -225,14 +225,14 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
             egui::Align2::LEFT_CENTER,
             &dir_part,
             egui::FontId::monospace(12.5),
-            theme::FG_DIM,
+            theme::FG_DIM(),
         );
         ui.painter_at(row_rect).text(
             Pos2::new(dir_end.max.x, text_y),
             egui::Align2::LEFT_CENTER,
             &name_part,
             egui::FontId::monospace(12.5),
-            if is_selected { theme::FG } else { theme::FG_SOFT },
+            if is_selected { theme::FG() } else { theme::FG_SOFT() },
         );
     }
 

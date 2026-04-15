@@ -42,8 +42,8 @@ pub(super) fn render_column_headers(ui: &mut Ui, width: f32, columns: &Columns) 
     let y = rect.center().y;
     let x = rect.min.x;
     let font = FontId::monospace(10.0);
-    let color = theme::FG_DIM;
-    let underline_stroke = Stroke::new(1.0, theme::alpha(theme::ACCENT, 40));
+    let color = theme::FG_DIM();
+    let underline_stroke = Stroke::new(1.0, theme::alpha(theme::ACCENT(), 40));
     let headers = [
         ("Alias", columns.alias),
         ("IPv4", columns.ipv4),
@@ -89,8 +89,8 @@ pub(super) fn render_host_details(
     now_secs: i64,
 ) {
     egui::Frame::new()
-        .fill(theme::alpha(theme::PANEL_BG_ALT, 150))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 160)))
+        .fill(details_fill())
+        .stroke(Stroke::new(1.0, details_stroke()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
@@ -100,30 +100,30 @@ pub(super) fn render_host_details(
                 ui.label(
                     RichText::new(host.display_target())
                         .font(FontId::monospace(11.5))
-                        .color(theme::FG_SOFT),
+                        .color(theme::FG_SOFT()),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
                         RichText::new(session_count_text(summary))
                             .font(FontId::monospace(10.5))
-                            .color(theme::FG_DIM),
+                            .color(theme::FG_DIM()),
                     );
                 });
             });
 
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                render_meta_badge(ui, format!("source {}", host.sources.label()), theme::ACCENT);
+                render_meta_badge(ui, format!("source {}", host.sources.label()), theme::ACCENT());
                 render_meta_badge(
                     ui,
                     format!("network {}", host.status.label()),
                     status_color(host.status),
                 );
                 if let Some(hostname) = host.hostname.as_deref() {
-                    render_meta_badge(ui, hostname.to_string(), theme::FG_SOFT);
+                    render_meta_badge(ui, hostname.to_string(), theme::FG_SOFT());
                 }
                 if let Some(os) = host.os.as_deref() {
-                    render_meta_badge(ui, os.to_string(), theme::FG_DIM);
+                    render_meta_badge(ui, os.to_string(), theme::FG_DIM());
                 }
             });
 
@@ -131,7 +131,7 @@ pub(super) fn render_host_details(
             ui.label(
                 RichText::new("Connection history")
                     .font(FontId::monospace(10.5))
-                    .color(theme::FG_DIM),
+                    .color(theme::FG_DIM()),
             );
             ui.add_space(4.0);
 
@@ -139,7 +139,7 @@ pub(super) fn render_host_details(
                 ui.label(
                     RichText::new("No SSH sessions opened from this board yet.")
                         .font(FontId::monospace(10.5))
-                        .color(theme::FG_DIM),
+                        .color(theme::FG_DIM()),
                 );
                 return;
             }
@@ -154,7 +154,7 @@ pub(super) fn render_host_details(
                 ui.label(
                     RichText::new(format!("+{remaining} older session(s)"))
                         .font(FontId::monospace(10.5))
-                        .color(theme::FG_DIM),
+                        .color(theme::FG_DIM()),
                 );
             }
         });
@@ -163,7 +163,7 @@ pub(super) fn render_host_details(
 pub(super) fn paint_empty(ui: &mut Ui, message: &str) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(message).color(theme::FG_DIM).size(13.0));
+        ui.label(RichText::new(message).color(theme::FG_DIM()).size(13.0));
     });
 }
 
@@ -207,17 +207,14 @@ fn host_row_interaction(ui: &mut Ui, layout: &HostRowLayout, index: usize, is_se
 
 fn paint_row_background(ui: &mut Ui, row_rect: Rect, interaction: HostRowInteraction, is_selected: bool) {
     if is_selected {
-        ui.painter_at(row_rect).rect_filled(
-            row_rect,
-            CornerRadius::same(4),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28), 200),
-        );
+        ui.painter_at(row_rect)
+            .rect_filled(row_rect, CornerRadius::same(4), selected_row_fill());
         return;
     }
 
     if interaction.select || ui.rect_contains_pointer(row_rect) {
         ui.painter_at(row_rect)
-            .rect_filled(row_rect, CornerRadius::same(4), theme::alpha(theme::PANEL_BG_ALT, 120));
+            .rect_filled(row_rect, CornerRadius::same(4), hover_row_fill());
     }
 }
 
@@ -242,9 +239,9 @@ fn paint_host_row_contents(ui: &mut Ui, layout: &HostRowLayout, row: &HostRowRen
         if row.is_expanded { "v" } else { ">" },
         mono_sm.clone(),
         if row.summary.total_sessions() > 0 || row.is_expanded {
-            theme::FG_SOFT
+            theme::FG_SOFT()
         } else {
-            theme::FG_DIM
+            theme::FG_DIM()
         },
     );
     painter.text(
@@ -265,7 +262,7 @@ fn paint_row_columns(painter: &egui::Painter, x: f32, y: f32, mono_sm: &FontId, 
         egui::Align2::LEFT_CENTER,
         ip,
         mono_sm.clone(),
-        theme::FG_SOFT,
+        theme::FG_SOFT(),
     );
 
     render_tags(
@@ -282,7 +279,7 @@ fn paint_row_columns(painter: &egui::Painter, x: f32, y: f32, mono_sm: &FontId, 
         Pos2::new(x + row.columns.hostname, y),
         hostname,
         mono_sm,
-        theme::FG_DIM,
+        theme::FG_DIM(),
         x + row.columns.status - COLUMN_GUTTER,
     );
 
@@ -304,16 +301,16 @@ fn paint_row_columns(painter: &egui::Painter, x: f32, y: f32, mono_sm: &FontId, 
         egui::Align2::LEFT_CENTER,
         &last_seen_display,
         mono_sm.clone(),
-        theme::FG_DIM,
+        theme::FG_DIM(),
     );
 }
 
 fn render_status_badge(ui: &mut Ui, status: Option<SshConnectionStatus>) {
     let (label, color) = match status {
-        Some(SshConnectionStatus::Connecting) => ("Connecting", Color32::from_rgb(249, 226, 175)),
-        Some(SshConnectionStatus::Connected) => ("Connected", Color32::from_rgb(166, 227, 161)),
-        Some(SshConnectionStatus::Disconnected) => ("Disconnected", theme::PALETTE_RED),
-        None => ("No live session", theme::FG_DIM),
+        Some(SshConnectionStatus::Connecting) => ("Connecting", theme::PALETTE_YELLOW()),
+        Some(SshConnectionStatus::Connected) => ("Connected", theme::PALETTE_GREEN()),
+        Some(SshConnectionStatus::Disconnected) => ("Disconnected", theme::PALETTE_RED()),
+        None => ("No live session", theme::FG_DIM()),
     };
 
     egui::Frame::new()
@@ -328,7 +325,7 @@ fn render_status_badge(ui: &mut Ui, status: Option<SshConnectionStatus>) {
 
 fn render_meta_badge(ui: &mut Ui, text: String, color: Color32) {
     egui::Frame::new()
-        .fill(theme::alpha(theme::BG_ELEVATED, 170))
+        .fill(theme::alpha(theme::BG_ELEVATED(), 170))
         .stroke(Stroke::new(1.0, theme::alpha(color, 70)))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(8, 4))
@@ -340,26 +337,26 @@ fn render_meta_badge(ui: &mut Ui, text: String, color: Color32) {
 fn render_history_entry(ui: &mut Ui, entry: &RemoteHostConnectionHistoryEntry, now_secs: i64) {
     ui.horizontal(|ui| {
         let status_color = match entry.status {
-            SshConnectionStatus::Connecting => Color32::from_rgb(249, 226, 175),
-            SshConnectionStatus::Connected => Color32::from_rgb(166, 227, 161),
-            SshConnectionStatus::Disconnected => theme::PALETTE_RED,
+            SshConnectionStatus::Connecting => theme::PALETTE_YELLOW(),
+            SshConnectionStatus::Connected => theme::PALETTE_GREEN(),
+            SshConnectionStatus::Disconnected => theme::PALETTE_RED(),
         };
         ui.colored_label(status_color, "•");
         ui.label(
             RichText::new(format_relative_millis(entry.launched_at_millis, now_secs))
                 .font(FontId::monospace(10.5))
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
         ui.label(
             RichText::new(&entry.panel_title)
                 .font(FontId::monospace(10.5))
-                .color(theme::FG_SOFT),
+                .color(theme::FG_SOFT()),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
                 RichText::new(&entry.workspace_name)
                     .font(FontId::monospace(10.0))
-                    .color(theme::FG_DIM),
+                    .color(theme::FG_DIM()),
             );
         });
     });
@@ -417,7 +414,7 @@ fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob 
                 0.0,
                 TextFormat {
                     font_id: font.clone(),
-                    color: theme::FG_DIM,
+                    color: theme::FG_DIM(),
                     ..Default::default()
                 },
             );
@@ -467,7 +464,7 @@ fn session_count_text(summary: &RemoteHostConnectionSummary) -> String {
     }
 }
 
-const TAG_COLORS: [Color32; 8] = [
+const DARK_TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(249, 226, 175),
     Color32::from_rgb(137, 180, 250),
     Color32::from_rgb(166, 227, 161),
@@ -478,34 +475,77 @@ const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(147, 187, 255),
 ];
 
+const LIGHT_TAG_COLORS: [Color32; 8] = [
+    Color32::from_rgb(223, 142, 29),
+    Color32::from_rgb(30, 102, 245),
+    Color32::from_rgb(64, 160, 43),
+    Color32::from_rgb(210, 15, 57),
+    Color32::from_rgb(136, 57, 239),
+    Color32::from_rgb(4, 165, 229),
+    Color32::from_rgb(220, 138, 120),
+    Color32::from_rgb(114, 135, 253),
+];
+
 fn tag_color(tag: &str) -> Color32 {
     let hash = tag
         .bytes()
         .fold(0_u32, |acc, byte| acc.wrapping_mul(31).wrapping_add(u32::from(byte)));
-    TAG_COLORS[(hash as usize) % TAG_COLORS.len()]
+    let colors = match theme::current_theme() {
+        theme::ResolvedTheme::Dark => &DARK_TAG_COLORS,
+        theme::ResolvedTheme::Light => &LIGHT_TAG_COLORS,
+    };
+    colors[(hash as usize) % colors.len()]
 }
 
 fn status_color(status: RemoteHostStatus) -> Color32 {
     match status {
-        RemoteHostStatus::Online => theme::PALETTE_GREEN,
-        RemoteHostStatus::Offline => theme::PALETTE_RED,
-        RemoteHostStatus::Unknown => theme::FG_DIM,
+        RemoteHostStatus::Online => theme::PALETTE_GREEN(),
+        RemoteHostStatus::Offline => theme::PALETTE_RED(),
+        RemoteHostStatus::Unknown => theme::FG_DIM(),
     }
 }
 
 fn alias_color(status: RemoteHostStatus) -> Color32 {
     match status {
-        RemoteHostStatus::Online => Color32::from_rgb(166, 227, 161),
-        RemoteHostStatus::Offline => Color32::from_rgb(249, 226, 175),
-        RemoteHostStatus::Unknown => theme::FG_SOFT,
+        RemoteHostStatus::Online => theme::PALETTE_GREEN(),
+        RemoteHostStatus::Offline => theme::PALETTE_YELLOW(),
+        RemoteHostStatus::Unknown => theme::FG_SOFT(),
     }
 }
 
 fn status_text(status: RemoteHostStatus) -> (&'static str, Color32) {
     match status {
-        RemoteHostStatus::Online => ("yes", theme::PALETTE_GREEN),
-        RemoteHostStatus::Offline => ("no", theme::PALETTE_RED),
-        RemoteHostStatus::Unknown => ("-", theme::FG_DIM),
+        RemoteHostStatus::Online => ("yes", theme::PALETTE_GREEN()),
+        RemoteHostStatus::Offline => ("no", theme::PALETTE_RED()),
+        RemoteHostStatus::Unknown => ("-", theme::FG_DIM()),
+    }
+}
+
+fn selected_row_fill() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => theme::alpha(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28), 200),
+        theme::ResolvedTheme::Light => theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.20),
+    }
+}
+
+fn hover_row_fill() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => theme::alpha(theme::PANEL_BG_ALT(), 120),
+        theme::ResolvedTheme::Light => theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.07),
+    }
+}
+
+fn details_fill() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => theme::alpha(theme::PANEL_BG_ALT(), 150),
+        theme::ResolvedTheme::Light => theme::blend(theme::BG_ELEVATED(), theme::PANEL_BG_ALT(), 0.55),
+    }
+}
+
+fn details_stroke() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => theme::alpha(theme::BORDER_SUBTLE(), 160),
+        theme::ResolvedTheme::Light => theme::BORDER_SUBTLE(),
     }
 }
 
@@ -523,7 +563,7 @@ mod tests {
         assert_eq!(job.text, "tag:cuda,tag:node");
         assert_eq!(job.sections.len(), 3);
         assert_eq!(job.sections[0].format.color, tag_color("tag:cuda"));
-        assert_eq!(job.sections[1].format.color, theme::FG_DIM);
+        assert_eq!(job.sections[1].format.color, theme::FG_DIM());
         assert_eq!(job.sections[2].format.color, tag_color("tag:node"));
         assert!(!job.break_on_newline);
         assert!((job.wrap.max_width - 120.0).abs() < f32::EPSILON);

@@ -25,14 +25,14 @@ impl HorizonApp {
                 ui.painter().rect_filled(
                     Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), TOOLBAR_HEIGHT)),
                     CornerRadius::ZERO,
-                    theme::TITLEBAR_BG,
+                    theme::TITLEBAR_BG(),
                 );
                 ui.painter().line_segment(
                     [
                         Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
                         Pos2::new(viewport.max.x, viewport.min.y + TOOLBAR_HEIGHT),
                     ],
-                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 170)),
+                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 170)),
                 );
 
                 Self::render_toolbar_brand(ui, &layout);
@@ -49,7 +49,7 @@ impl HorizonApp {
             |ui| {
                 ui.label(
                     egui::RichText::new(branding::APP_NAME)
-                        .color(theme::FG)
+                        .color(theme::FG())
                         .size(14.0)
                         .strong(),
                 );
@@ -57,7 +57,7 @@ impl HorizonApp {
                     ui.add_space(ROOT_TOOLBAR_BUTTON_GAP);
                     ui.label(
                         egui::RichText::new(branding::APP_TAGLINE)
-                            .color(theme::FG_DIM)
+                            .color(theme::FG_DIM())
                             .size(10.5),
                     );
                 }
@@ -101,18 +101,18 @@ impl HorizonApp {
             format!("{:.0}", stats.fps)
         };
         let accent = if stats.sample_count == 0 {
-            theme::BORDER_SUBTLE
+            theme::BORDER_SUBTLE()
         } else if stats.fps >= 100.0 {
-            theme::PALETTE_GREEN
+            theme::PALETTE_GREEN()
         } else if stats.fps >= 60.0 {
-            theme::ACCENT
+            theme::ACCENT()
         } else {
-            theme::PALETTE_RED
+            theme::PALETTE_RED()
         };
         let (rect, response) = ui.allocate_exact_size(Vec2::new(fps_meter_width(), 24.0), Sense::hover());
         let painter = ui.painter();
-        let stroke_color = theme::alpha(theme::blend(theme::BORDER_SUBTLE, accent, 0.36), 220);
-        let fill_color = theme::alpha(theme::blend(theme::PANEL_BG_ALT, accent, 0.10), 232);
+        let stroke_color = theme::alpha(theme::blend(theme::BORDER_SUBTLE(), accent, 0.36), 220);
+        let fill_color = theme::alpha(theme::blend(theme::PANEL_BG_ALT(), accent, 0.10), 232);
         let dot_center = Pos2::new(rect.min.x + 10.0, rect.center().y);
 
         painter.rect_filled(rect, CornerRadius::same(10), fill_color);
@@ -128,14 +128,14 @@ impl HorizonApp {
             Align2::LEFT_CENTER,
             value,
             FontId::monospace(11.5),
-            theme::FG,
+            theme::FG(),
         );
         painter.text(
             Pos2::new(rect.max.x - 8.0, rect.center().y),
             Align2::RIGHT_CENTER,
             "fps",
             FontId::proportional(8.5),
-            theme::alpha(theme::FG_DIM, 220),
+            theme::alpha(theme::FG_DIM(), 220),
         );
 
         let tooltip = if stats.sample_count == 0 {
@@ -196,12 +196,12 @@ impl HorizonApp {
     fn render_toolbar_overflow_menu(&mut self, ui: &mut egui::Ui, overflow_actions: &[ToolbarAction]) {
         ui.scope(|ui| {
             ui.style_mut().spacing.button_padding = Vec2::new(12.0, 7.0);
-            ui.menu_button(egui::RichText::new("More").size(11.0).color(theme::FG_SOFT), |ui| {
+            ui.menu_button(egui::RichText::new("More").size(11.0).color(theme::FG_SOFT()), |ui| {
                 ui.set_min_width(160.0);
 
                 for action in overflow_actions {
                     let button =
-                        egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT))
+                        egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT()))
                             .frame(false);
                     let response = ui.add(button);
 

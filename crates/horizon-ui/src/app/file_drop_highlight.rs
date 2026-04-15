@@ -16,7 +16,7 @@ impl HorizonApp {
                 .panel_screen_rects
                 .get(&panel_id)
                 .copied()
-                .map(|rect| (rect, theme::ACCENT, CornerRadius::same(16))),
+                .map(|rect| (rect, theme::ACCENT(), CornerRadius::same(16))),
             FileDropHighlight::Workspace(workspace_id) => self
                 .workspace_screen_rects
                 .iter()
@@ -35,7 +35,7 @@ impl HorizonApp {
             .show(ctx, |ui| {
                 let (_, painter) = ui.allocate_painter(rect.size(), egui::Sense::hover());
                 let local_rect = painter.clip_rect();
-                let fill = theme::alpha(theme::blend(theme::PANEL_BG, accent, 0.22), 48);
+                let fill = theme::alpha(theme::blend(theme::PANEL_BG(), accent, 0.22), 48);
                 let stroke = Stroke::new(2.5, theme::alpha(accent, 180));
                 painter.rect_filled(local_rect, corner_radius, fill);
                 painter.rect_stroke(local_rect, corner_radius, stroke, StrokeKind::Inside);
@@ -48,7 +48,7 @@ fn workspace_accent(board: &horizon_core::Board, workspace_id: horizon_core::Wor
         .workspaces
         .iter()
         .find(|ws| ws.id == workspace_id)
-        .map_or(theme::ACCENT, |ws| {
+        .map_or(theme::ACCENT(), |ws| {
             let (r, g, b) = ws.accent();
             Color32::from_rgb(r, g, b)
         })
