@@ -6,7 +6,7 @@ use crate::config::{
 use crate::error::{Error, Result};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 5;
+pub const CURRENT_CONFIG_VERSION: u32 = 6;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -27,6 +27,7 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
             2 => migrate_v2_to_v3(config),
             3 => migrate_v3_to_v4(config),
             4 => migrate_v4_to_v5(config),
+            5 => migrate_v5_to_v6(config),
             _ => {
                 return Err(Error::Config(format!(
                     "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
@@ -87,6 +88,9 @@ fn migrate_v4_to_v5(config: &mut Config) {
     rewrite(&mut config.shortcuts.zoom_in, "Ctrl+Shift+Plus", "Ctrl+Plus");
     rewrite(&mut config.shortcuts.zoom_out, "Ctrl+Shift+Minus", "Ctrl+Minus");
 }
+
+/// v5 -> v6: add the appearance block with the default auto theme.
+fn migrate_v5_to_v6(_config: &mut Config) {}
 
 fn rewrite(field: &mut String, old_default: &str, new_default: &str) {
     if bindings_match(field, old_default) {
@@ -209,15 +213,16 @@ presets:
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
         let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains("version: 5"));
+        assert!(reloaded.contains("version: 6"));
         assert!(reloaded.contains("Ctrl+Shift+K"));
         assert!(reloaded.contains("zoom_reset: Ctrl+0"));
+        assert!(reloaded.contains("appearance:"));
     }
 
     #[test]
     fn serialized_config_includes_version() {
         let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains("version: 5"));
+        assert!(yaml.contains("version: 6"));
     }
 
     #[test]
@@ -232,6 +237,17 @@ presets:
         assert_eq!(config.shortcuts.zoom_reset, "Ctrl+0");
         assert_eq!(config.shortcuts.zoom_in, "Ctrl+Plus");
         assert_eq!(config.shortcuts.zoom_out, "Ctrl+Minus");
+    }
+
+    #[test]
+    fn migration_to_v6_adds_default_appearance_block() {
+        let mut config: Config = serde_yaml::from_str("version: 5\nworkspaces: []\n").expect("should deserialize");
+
+        migrate_v5_to_v6(&mut config);
+
+        let yaml = config.to_yaml().expect("should serialize");
+        assert!(yaml.contains("appearance:"));
+        assert!(yaml.contains("theme: auto"));
     }
 
     #[test]

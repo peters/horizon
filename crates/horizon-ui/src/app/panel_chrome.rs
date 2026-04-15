@@ -36,11 +36,15 @@ struct HistoryMeter {
 }
 
 fn panel_accent(workspace_accent: Option<Color32>, focused: bool) -> Color32 {
-    workspace_accent.unwrap_or(if focused { theme::ACCENT } else { theme::BORDER_STRONG })
+    workspace_accent.unwrap_or(if focused {
+        theme::ACCENT()
+    } else {
+        theme::BORDER_STRONG()
+    })
 }
 
 fn panel_fill(accent: Color32, focused: bool) -> Color32 {
-    theme::blend(theme::PANEL_BG, accent, if focused { 0.06 } else { 0.0 })
+    theme::blend(theme::PANEL_BG(), accent, if focused { 0.06 } else { 0.0 })
 }
 
 fn panel_border_stroke(accent: Color32, focused: bool) -> Stroke {
@@ -48,15 +52,15 @@ fn panel_border_stroke(accent: Color32, focused: bool) -> Stroke {
 }
 
 fn panel_titlebar_fill(accent: Color32, focused: bool) -> Color32 {
-    theme::blend(theme::PANEL_BG_ALT, accent, if focused { 0.28 } else { 0.10 })
+    theme::blend(theme::PANEL_BG_ALT(), accent, if focused { 0.28 } else { 0.10 })
 }
 
 fn panel_title_color(focused: bool) -> Color32 {
-    if focused { theme::FG } else { theme::FG_SOFT }
+    if focused { theme::FG() } else { theme::FG_SOFT() }
 }
 
 fn focus_ring_stroke(accent: Color32, focused: bool) -> Option<Stroke> {
-    focused.then(|| Stroke::new(3.0, theme::alpha(theme::blend(theme::ACCENT, accent, 0.35), 56)))
+    focused.then(|| Stroke::new(3.0, theme::alpha(theme::blend(theme::ACCENT(), accent, 0.35), 56)))
 }
 
 fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
@@ -71,32 +75,45 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         let [r, g, b] = definition.accent_rgb;
         return (
             definition.icon_label,
-            theme::alpha(Color32::from_rgb(r, g, b), if focused { 220 } else { 120 }),
+            panel_kind_label_color(Color32::from_rgb(r, g, b), focused),
         );
     }
 
     match kind {
-        PanelKind::Shell | PanelKind::Command => (">_", theme::alpha(workspace_color, if focused { 200 } else { 80 })),
-        PanelKind::Ssh => (
-            "SSH",
-            theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 150 }),
-        ),
-        PanelKind::Editor => (
-            "MD",
-            theme::alpha(Color32::from_rgb(166, 227, 161), if focused { 220 } else { 120 }),
-        ),
-        PanelKind::GitChanges => (
-            "GC",
-            theme::alpha(Color32::from_rgb(249, 226, 175), if focused { 220 } else { 120 }),
-        ),
-        PanelKind::Usage => (
-            "US",
-            theme::alpha(Color32::from_rgb(233, 190, 109), if focused { 220 } else { 120 }),
-        ),
+        PanelKind::Shell | PanelKind::Command => (">_", panel_kind_label_color(workspace_color, focused)),
+        PanelKind::Ssh => ("SSH", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
+        PanelKind::Editor => ("MD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
+        PanelKind::GitChanges => ("GC", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
+        PanelKind::Usage => ("US", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
             unreachable!()
         }
     }
+}
+
+fn panel_kind_label_color(base: Color32, focused: bool) -> Color32 {
+    let adjusted = match theme::current_theme() {
+        theme::ResolvedTheme::Dark => base,
+        theme::ResolvedTheme::Light => theme::ensure_terminal_text_contrast(base, theme::PANEL_BG_ALT()),
+    };
+    let alpha = match theme::current_theme() {
+        theme::ResolvedTheme::Dark => {
+            if focused {
+                220
+            } else {
+                120
+            }
+        }
+        theme::ResolvedTheme::Light => {
+            if focused {
+                255
+            } else {
+                228
+            }
+        }
+    };
+
+    theme::alpha(adjusted, alpha)
 }
 
 #[profiling::function]
@@ -197,13 +214,13 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
         close_rect.center(),
         5.0,
         if close_hovered {
-            theme::BTN_CLOSE
+            theme::BTN_CLOSE()
         } else {
-            theme::alpha(theme::FG_DIM, 140)
+            theme::alpha(theme::FG_DIM(), 140)
         },
     );
 
-    let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM, 170));
+    let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM(), 170));
     painter.line_segment(
         [
             resize_rect.right_bottom(),
@@ -298,7 +315,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
         badge_rect,
         CornerRadius::same(7),
         theme::alpha(
-            theme::blend(theme::BG_ELEVATED, meter.accent, 0.10),
+            theme::blend(theme::BG_ELEVATED(), meter.accent, 0.10),
             if meter.focused { 214 } else { 184 },
         ),
     );
@@ -307,17 +324,17 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
         CornerRadius::same(7),
         Stroke::new(
             1.0,
-            theme::alpha(theme::blend(theme::BORDER_SUBTLE, meter.accent, 0.34), 180),
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), meter.accent, 0.34), 180),
         ),
         StrokeKind::Outside,
     );
-    painter.rect_filled(track_rect, CornerRadius::same(2), theme::alpha(theme::FG_DIM, 52));
+    painter.rect_filled(track_rect, CornerRadius::same(2), theme::alpha(theme::FG_DIM(), 52));
     if fill_width > 0.0 {
         painter.rect_filled(
             fill_rect,
             CornerRadius::same(2),
             theme::alpha(
-                theme::blend(theme::ACCENT, meter.accent, 0.35),
+                theme::blend(theme::ACCENT(), meter.accent, 0.35),
                 if meter.focused { 224 } else { 188 },
             ),
         );
@@ -328,9 +345,9 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
         history_text,
         egui::FontId::monospace(10.5),
         if meter.history_size > 0 {
-            theme::FG_SOFT
+            theme::FG_SOFT()
         } else {
-            theme::FG_DIM
+            theme::FG_DIM()
         },
     );
 }
@@ -392,11 +409,7 @@ fn paint_ssh_status_badge(
     has_history_meter: bool,
     status: SshConnectionStatus,
 ) {
-    let color = match status {
-        SshConnectionStatus::Connecting => Color32::from_rgb(249, 226, 175),
-        SshConnectionStatus::Connected => Color32::from_rgb(166, 227, 161),
-        SshConnectionStatus::Disconnected => theme::PALETTE_RED,
-    };
+    let color = ssh_status_color(status);
     let badge_text = status.label();
     let font = egui::FontId::proportional(10.0);
     let badge_right = if has_history_meter {
@@ -436,11 +449,19 @@ fn paint_ssh_status_badge(
     );
 }
 
+fn ssh_status_color(status: SshConnectionStatus) -> Color32 {
+    match status {
+        SshConnectionStatus::Connecting => theme::PALETTE_YELLOW(),
+        SshConnectionStatus::Connected => theme::PALETTE_GREEN(),
+        SshConnectionStatus::Disconnected => theme::PALETTE_RED(),
+    }
+}
+
 fn attention_severity_color(severity: AttentionSeverity) -> Color32 {
     match severity {
-        AttentionSeverity::High => theme::PALETTE_RED,
-        AttentionSeverity::Medium => theme::PALETTE_GREEN,
-        AttentionSeverity::Low => theme::ACCENT,
+        AttentionSeverity::High => theme::PALETTE_RED(),
+        AttentionSeverity::Medium => theme::PALETTE_GREEN(),
+        AttentionSeverity::Low => theme::ACCENT(),
     }
 }
 
@@ -488,7 +509,7 @@ pub(super) fn show_inline_rename_editor(
     );
     let edit = egui::TextEdit::singleline(buffer)
         .font(font)
-        .text_color(theme::FG)
+        .text_color(theme::FG())
         .frame(false)
         .desired_width(rect.width())
         .margin(Margin::ZERO);

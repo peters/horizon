@@ -238,7 +238,7 @@ impl HorizonApp {
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::PANEL_BG))
+            .frame(egui::Frame::default().fill(theme::PANEL_BG()))
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let body_rect = Rect::from_min_max(
@@ -583,7 +583,11 @@ impl HorizonApp {
     ) {
         drag_response.context_menu(|ui| {
             ui.set_min_width(180.0);
-            ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
+            ui.label(
+                egui::RichText::new("Move to Workspace")
+                    .size(11.0)
+                    .color(theme::FG_DIM()),
+            );
             ui.separator();
 
             for (workspace_id, workspace_name, workspace_color) in workspaces {
@@ -594,7 +598,7 @@ impl HorizonApp {
                     format!("  {workspace_name}")
                 };
                 let text = egui::RichText::new(label)
-                    .color(if is_current { *workspace_color } else { theme::FG_SOFT })
+                    .color(if is_current { *workspace_color } else { theme::FG_SOFT() })
                     .size(12.0);
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
                     outcome.workspace_assignment = Some(*workspace_id);
@@ -610,8 +614,8 @@ impl HorizonApp {
                 ui.menu_button("Rebind Session", |ui| {
                     ui.set_min_width(220.0);
                     for (label, binding) in &rebind_options {
-                        let button =
-                            egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT)).frame(false);
+                        let button = egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT()))
+                            .frame(false);
                         if ui.add(button).clicked() {
                             self.pending_session_rebinds.push((panel_id, binding.clone()));
                             ui.close();

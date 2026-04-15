@@ -126,10 +126,10 @@ impl SearchOverlay {
                 .id(text_edit_id)
                 .frame(false)
                 .font(egui::FontId::monospace(13.0))
-                .text_color(theme::FG)
+                .text_color(theme::FG())
                 .hint_text(
                     egui::RichText::new("Search across all terminals...")
-                        .color(theme::FG_DIM)
+                        .color(theme::FG_DIM())
                         .size(12.5),
                 )
                 .margin(Margin::symmetric(42, 9)),

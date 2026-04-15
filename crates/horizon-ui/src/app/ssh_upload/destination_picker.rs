@@ -69,17 +69,17 @@ impl RemoteDestinationPicker {
         let empty_state = if let Some(error) = &self.error {
             PickerEmptyState {
                 message: error,
-                color: theme::PALETTE_RED,
+                color: theme::PALETTE_RED(),
             }
         } else if self.initial_results_loaded {
             PickerEmptyState {
                 message: "No remote directories found",
-                color: theme::FG_DIM,
+                color: theme::FG_DIM(),
             }
         } else {
             PickerEmptyState {
                 message: "Loading remote directories...",
-                color: theme::FG_DIM,
+                color: theme::FG_DIM(),
             }
         };
 
@@ -292,7 +292,7 @@ fn render_remote_result_row(
         ui.painter_at(row_rect).rect_filled(
             row_rect,
             CornerRadius::same(8),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28), 200),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28), 200),
         );
     } else {
         let hover = ui
@@ -306,7 +306,7 @@ fn render_remote_result_row(
             ui.painter_at(row_rect).rect_filled(
                 row_rect,
                 CornerRadius::same(8),
-                theme::alpha(theme::PANEL_BG_ALT, 160),
+                theme::alpha(theme::PANEL_BG_ALT(), 160),
             );
         }
     }
@@ -327,16 +327,16 @@ fn render_remote_result_row(
     paint_folder_icon(&ui.painter_at(row_rect), icon_rect);
 
     let text_color = if entry.name == ".." {
-        theme::FG_DIM
+        theme::FG_DIM()
     } else {
-        theme::FG_SOFT
+        theme::FG_SOFT()
     };
     ui.painter_at(row_rect).text(
         egui::pos2(row_rect.min.x + 30.0, row_rect.center().y),
         Align2::LEFT_CENTER,
         &entry.name,
         egui::FontId::proportional(12.0),
-        if is_selected { theme::FG } else { text_color },
+        if is_selected { theme::FG() } else { text_color },
     );
 
     clicked

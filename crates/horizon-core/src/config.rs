@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub window: WindowConfig,
     #[serde(default)]
+    pub appearance: AppearanceConfig,
+    #[serde(default)]
     pub shortcuts: ShortcutsConfig,
     #[serde(default)]
     pub overlays: OverlaysConfig,
@@ -39,11 +41,35 @@ impl Default for Config {
         Self {
             version: CURRENT_CONFIG_VERSION,
             window: WindowConfig::default(),
+            appearance: AppearanceConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
             features: FeaturesConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceTheme {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AppearanceConfig {
+    pub theme: AppearanceTheme,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            theme: AppearanceTheme::Auto,
         }
     }
 }
@@ -751,6 +777,28 @@ mod tests {
         let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
 
         assert!(config.features.attention_feed);
+    }
+
+    #[test]
+    fn appearance_defaults_to_auto_theme() {
+        let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
+
+        assert_eq!(config.appearance.theme, super::AppearanceTheme::Auto);
+        assert_eq!(Config::default().appearance.theme, super::AppearanceTheme::Auto);
+    }
+
+    #[test]
+    fn explicit_auto_theme_is_preserved() {
+        let config: Config = serde_yaml::from_str("appearance:\n  theme: auto\n").expect("config should deserialize");
+
+        assert_eq!(config.appearance.theme, super::AppearanceTheme::Auto);
+    }
+
+    #[test]
+    fn explicit_light_theme_is_preserved() {
+        let config: Config = serde_yaml::from_str("appearance:\n  theme: light\n").expect("config should deserialize");
+
+        assert_eq!(config.appearance.theme, super::AppearanceTheme::Light);
     }
 
     #[test]

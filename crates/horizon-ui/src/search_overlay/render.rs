@@ -15,8 +15,8 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
         10
     };
     let shell_fill = theme::blend(
-        theme::PANEL_BG,
-        theme::ACCENT,
+        theme::PANEL_BG(),
+        theme::ACCENT(),
         if focused {
             0.14
         } else if hovered {
@@ -26,8 +26,8 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
         },
     );
     let core_fill = theme::blend(
-        theme::BG_ELEVATED,
-        theme::ACCENT,
+        theme::BG_ELEVATED(),
+        theme::ACCENT(),
         if focused {
             0.16
         } else if hovered {
@@ -38,8 +38,8 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
     );
     let border = theme::alpha(
         theme::blend(
-            theme::BORDER_SUBTLE,
-            theme::ACCENT,
+            theme::BORDER_SUBTLE(),
+            theme::ACCENT(),
             if focused {
                 0.78
             } else if hovered {
@@ -51,25 +51,25 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
         if focused { 240 } else { 210 },
     );
     let icon_fill = if focused || has_query {
-        theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.4)
+        theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.4)
     } else {
-        theme::alpha(theme::PANEL_BG_ALT, 230)
+        theme::alpha(theme::PANEL_BG_ALT(), 230)
     };
     let icon_stroke = if focused || hovered {
-        theme::alpha(theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.58), 230)
+        theme::alpha(theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.58), 230)
     } else {
-        theme::alpha(theme::BORDER_SUBTLE, 220)
+        theme::alpha(theme::BORDER_SUBTLE(), 220)
     };
     let icon_color = if focused || has_query {
-        theme::FG
+        theme::FG()
     } else {
-        theme::FG_SOFT
+        theme::FG_SOFT()
     };
 
     painter.rect_stroke(
         rect.expand(3.0),
         CornerRadius::same(13),
-        Stroke::new(3.0, theme::alpha(theme::ACCENT, glow_alpha)),
+        Stroke::new(3.0, theme::alpha(theme::ACCENT(), glow_alpha)),
         StrokeKind::Outside,
     );
     painter.rect_filled(rect, CornerRadius::same(10), shell_fill);
@@ -88,7 +88,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
             Pos2::new(core_rect.min.x + 16.0, core_rect.min.y + 1.5),
             Pos2::new(core_rect.max.x - 16.0, core_rect.min.y + 1.5),
         ],
-        Stroke::new(1.0, theme::alpha(theme::FG, if focused { 28 } else { 16 })),
+        Stroke::new(1.0, theme::alpha(theme::FG(), if focused { 28 } else { 16 })),
     );
 
     let badge_rect = Rect::from_center_size(
@@ -107,17 +107,17 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
 
 pub(super) fn paint_dropdown_frame(ui: &egui::Ui, rect: Rect) {
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(14), theme::PANEL_BG);
+    painter.rect_filled(rect, CornerRadius::same(14), theme::PANEL_BG());
     painter.rect_stroke(
         rect,
         CornerRadius::same(14),
-        Stroke::new(1.0, theme::alpha(theme::ACCENT, 60)),
+        Stroke::new(1.0, theme::alpha(theme::ACCENT(), 60)),
         StrokeKind::Outside,
     );
     painter.rect_stroke(
         rect.expand(1.5),
         CornerRadius::same(15),
-        Stroke::new(1.5, theme::alpha(theme::ACCENT, 18)),
+        Stroke::new(1.5, theme::alpha(theme::ACCENT(), 18)),
         StrokeKind::Outside,
     );
 }
@@ -125,7 +125,7 @@ pub(super) fn paint_dropdown_frame(ui: &egui::Ui, rect: Rect) {
 pub(super) fn paint_empty_results(ui: &mut egui::Ui, message: &str) {
     ui.add_space(12.0);
     ui.vertical_centered(|ui| {
-        ui.label(egui::RichText::new(message).color(theme::FG_DIM).size(11.0));
+        ui.label(egui::RichText::new(message).color(theme::FG_DIM()).size(11.0));
     });
 }
 
@@ -136,7 +136,7 @@ pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) 
         egui::Align2::LEFT_CENTER,
         title,
         BADGE_FONT,
-        theme::FG_DIM,
+        theme::FG_DIM(),
     );
 }
 
@@ -160,7 +160,7 @@ pub(super) fn render_match_row(
         ui.painter_at(row_rect).rect_filled(
             row_rect,
             CornerRadius::same(6),
-            theme::alpha(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28), 200),
+            theme::alpha(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28), 200),
         );
     } else {
         let hover = ui
@@ -170,7 +170,7 @@ pub(super) fn render_match_row(
             ui.painter_at(row_rect).rect_filled(
                 row_rect,
                 CornerRadius::same(6),
-                theme::alpha(theme::PANEL_BG_ALT, 160),
+                theme::alpha(theme::PANEL_BG_ALT(), 160),
             );
         }
     }
@@ -189,7 +189,7 @@ pub(super) fn render_match_row(
             egui::Align2::LEFT_CENTER,
             data.panel_title,
             LABEL_FONT,
-            if is_selected { theme::ACCENT } else { theme::FG_SOFT },
+            if is_selected { theme::ACCENT() } else { theme::FG_SOFT() },
         );
     }
 
@@ -209,7 +209,7 @@ pub(super) fn render_match_row(
             egui::Align2::LEFT_CENTER,
             &truncated,
             DETAIL_FONT,
-            theme::FG_DIM,
+            theme::FG_DIM(),
         );
     }
 
@@ -222,9 +222,9 @@ pub(super) fn render_match_row(
 
 pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool, _id_salt: &str) -> bool {
     let (fg, bg) = if active {
-        (theme::FG, theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.35))
+        (theme::FG(), theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
     } else {
-        (theme::FG_DIM, theme::BG_ELEVATED)
+        (theme::FG_DIM(), theme::BG_ELEVATED())
     };
 
     let size = Vec2::new(estimate_text_width(label, 11.0) + 14.0, 22.0);
@@ -234,7 +234,7 @@ pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool,
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(5),
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 180)),
+        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
     ui.painter().text(
@@ -258,7 +258,7 @@ pub(super) fn render_status_line(ui: &mut egui::Ui, total_matches: usize, panel_
     };
 
     let mut child = ui.new_child(UiBuilder::new().layout(Layout::left_to_right(Align::Center)));
-    child.label(egui::RichText::new(text).color(theme::FG_DIM).size(10.0));
+    child.label(egui::RichText::new(text).color(theme::FG_DIM()).size(10.0));
 }
 
 fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
@@ -267,12 +267,15 @@ fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
         Pos2::new(row_rect.max.x - badge_w - 6.0, text_y - 9.0),
         Vec2::new(badge_w, 18.0),
     );
-    ui.painter_at(row_rect)
-        .rect_filled(badge_rect, CornerRadius::same(4), theme::alpha(theme::BG_ELEVATED, 200));
+    ui.painter_at(row_rect).rect_filled(
+        badge_rect,
+        CornerRadius::same(4),
+        theme::alpha(theme::BG_ELEVATED(), 200),
+    );
     ui.painter_at(row_rect).rect_stroke(
         badge_rect,
         CornerRadius::same(4),
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE, 180)),
+        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
     ui.painter_at(row_rect).text(
@@ -280,7 +283,7 @@ fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
         egui::Align2::CENTER_CENTER,
         label,
         BADGE_FONT,
-        theme::FG_DIM,
+        theme::FG_DIM(),
     );
 }
 

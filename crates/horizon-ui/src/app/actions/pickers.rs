@@ -123,8 +123,8 @@ impl HorizonApp {
             .order(Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::default()
-                    .fill(theme::PANEL_BG)
-                    .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
+                    .fill(theme::PANEL_BG())
+                    .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
                     .corner_radius(8)
                     .inner_margin(Margin::symmetric(8, 6))
                     .show(ui, |ui| {
@@ -132,7 +132,7 @@ impl HorizonApp {
                         ui.label(
                             egui::RichText::new(preset_picker_heading(target_workspace))
                                 .size(11.0)
-                                .color(theme::FG_DIM)
+                                .color(theme::FG_DIM())
                                 .strong(),
                         );
                         ui.add_space(4.0);

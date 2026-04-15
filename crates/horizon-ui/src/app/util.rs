@@ -108,12 +108,12 @@ pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
     painter.circle_filled(
         Pos2::new(rect.max.x + 48.0, rect.center().y),
         rect.height() * 0.44,
-        theme::CANVAS_WARM_GLOW,
+        theme::CANVAS_WARM_GLOW(),
     );
     painter.circle_filled(
         Pos2::new(rect.min.x - 72.0, rect.min.y + rect.height() * 0.16),
         rect.height() * 0.28,
-        theme::CANVAS_COOL_GLOW,
+        theme::CANVAS_COOL_GLOW(),
     );
 }
 
@@ -173,28 +173,28 @@ pub(super) fn rounded_i32(value: f32) -> i32 {
 }
 
 pub(super) fn primary_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(11.5).color(theme::FG))
-        .fill(theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.28))
+    Button::new(egui::RichText::new(text).size(11.5).color(theme::FG()))
+        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28))
         .stroke(Stroke::new(
             1.0,
-            theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.72),
+            theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.72),
         ))
         .corner_radius(10)
 }
 
 pub(super) fn chrome_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT))
-        .fill(theme::PANEL_BG_ALT)
-        .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)))
+    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT()))
+        .fill(theme::PANEL_BG_ALT())
+        .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
         .corner_radius(10)
 }
 
 pub(super) fn danger_button(text: &str) -> Button<'_> {
-    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG))
-        .fill(theme::blend(theme::PANEL_BG_ALT, theme::PALETTE_RED, 0.22))
+    Button::new(egui::RichText::new(text).size(11.0).color(theme::FG()))
+        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_RED(), 0.22))
         .stroke(Stroke::new(
             1.0,
-            theme::blend(theme::BORDER_STRONG, theme::PALETTE_RED, 0.68),
+            theme::blend(theme::BORDER_STRONG(), theme::PALETTE_RED(), 0.68),
         ))
         .corner_radius(10)
 }

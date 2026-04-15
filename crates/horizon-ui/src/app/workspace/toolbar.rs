@@ -33,7 +33,7 @@ pub(super) fn render_workspace_layout_toolbar(
             apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);
             egui::Frame::new()
                 .fill(theme::alpha(
-                    theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.08),
+                    theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.08),
                     228,
                 ))
                 .stroke(Stroke::new(1.0, theme::alpha(workspace.color, 112)))
@@ -49,25 +49,25 @@ pub(super) fn render_workspace_layout_toolbar(
                         let response = ui
                             .add(
                                 Button::new(egui::RichText::new("Default").size(10.5).color(if is_default {
-                                    theme::FG
+                                    theme::FG()
                                 } else {
-                                    theme::FG_SOFT
+                                    theme::FG_SOFT()
                                 }))
                                 .min_size(Vec2::new(
                                     WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH,
                                     WORKSPACE_LAYOUT_BUTTON_HEIGHT,
                                 ))
                                 .fill(if is_default {
-                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.22), 236)
+                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.22), 236)
                                 } else {
-                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05), 220)
+                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
                                 })
                                 .stroke(Stroke::new(
                                     1.0,
                                     if is_default {
                                         theme::alpha(workspace.color, 224)
                                     } else {
-                                        theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216)
+                                        theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216)
                                     },
                                 ))
                                 .corner_radius(8),
@@ -84,23 +84,26 @@ pub(super) fn render_workspace_layout_toolbar(
                                     Button::new(
                                         egui::RichText::new(workspace_layout_label(layout))
                                             .size(10.5)
-                                            .color(if is_selected { theme::FG } else { theme::FG_SOFT }),
+                                            .color(if is_selected { theme::FG() } else { theme::FG_SOFT() }),
                                     )
                                     .min_size(Vec2::new(
                                         workspace_layout_button_width(layout),
                                         WORKSPACE_LAYOUT_BUTTON_HEIGHT,
                                     ))
                                     .fill(if is_selected {
-                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.22), 236)
+                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.22), 236)
                                     } else {
-                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05), 220)
+                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
                                     })
                                     .stroke(Stroke::new(
                                         1.0,
                                         if is_selected {
                                             theme::alpha(workspace.color, 224)
                                         } else {
-                                            theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216)
+                                            theme::alpha(
+                                                theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24),
+                                                216,
+                                            )
                                         },
                                     ))
                                     .corner_radius(8),
@@ -128,16 +131,23 @@ pub(super) fn show_workspace_context_menu(
 ) {
     response.context_menu(|ui| {
         ui.set_min_width(160.0);
-        ui.label(egui::RichText::new("Workspace").size(11.0).color(theme::FG_DIM));
+        ui.label(egui::RichText::new("Workspace").size(11.0).color(theme::FG_DIM()));
         if ui
-            .add(Button::new(egui::RichText::new("Focus Workspace").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .add(
+                Button::new(
+                    egui::RichText::new("Focus Workspace")
+                        .size(12.0)
+                        .color(theme::FG_SOFT()),
+                )
+                .frame(false),
+            )
             .clicked()
         {
             interaction.action = Some(WorkspaceAction::Focus);
             ui.close();
         }
         if ui
-            .add(Button::new(egui::RichText::new("Fit Workspace").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .add(Button::new(egui::RichText::new("Fit Workspace").size(12.0).color(theme::FG_SOFT())).frame(false))
             .clicked()
         {
             interaction.action = Some(WorkspaceAction::Fit);
@@ -145,16 +155,16 @@ pub(super) fn show_workspace_context_menu(
         }
 
         ui.separator();
-        ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM));
+        ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
         if ui
-            .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT)).frame(false))
+            .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false))
             .clicked()
         {
             interaction.action = Some(WorkspaceAction::ClearLayout);
             ui.close();
         }
         for layout in WorkspaceLayout::ALL {
-            let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT);
+            let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
             if ui.add(Button::new(text).frame(false)).clicked() {
                 interaction.action = Some(WorkspaceAction::ArrangeLayout(layout));
                 ui.close();
@@ -167,7 +177,7 @@ pub(super) fn show_workspace_context_menu(
             Button::new(
                 egui::RichText::new("Close All Panels")
                     .size(12.0)
-                    .color(theme::PALETTE_RED),
+                    .color(theme::PALETTE_RED()),
             )
             .frame(false),
         );
@@ -214,15 +224,15 @@ fn workspace_layout_preset_row_width() -> f32 {
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
     ui.add(
-        Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT))
+        Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
             .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
             .fill(theme::alpha(
-                theme::blend(theme::PANEL_BG_ALT, workspace.color, 0.05),
+                theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
                 220,
             ))
             .stroke(Stroke::new(
                 1.0,
-                theme::alpha(theme::blend(theme::BORDER_SUBTLE, workspace.color, 0.24), 216),
+                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
             ))
             .corner_radius(8),
     )

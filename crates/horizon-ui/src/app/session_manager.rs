@@ -277,8 +277,8 @@ fn render_session_manager_window(
         .order(egui::Order::Debug)
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL_BG)
-                .stroke(Stroke::new(1.5, theme::alpha(theme::ACCENT, 80)))
+                .fill(theme::PANEL_BG())
+                .stroke(Stroke::new(1.5, theme::alpha(theme::ACCENT(), 80)))
                 .corner_radius(CornerRadius::same(20))
                 .shadow(egui::Shadow {
                     offset: [0, 12],
@@ -308,7 +308,7 @@ fn render_session_manager_content(
         ui.label(
             RichText::new("Switch between saved sessions, create a fresh one, or prune inactive sessions.")
                 .size(12.5)
-                .color(theme::FG_SOFT),
+                .color(theme::FG_SOFT()),
         );
         ui.add_space(14.0);
 
@@ -372,7 +372,7 @@ fn render_session_list(
 fn render_session_error(ui: &mut egui::Ui, error: Option<&str>) {
     if let Some(error) = error {
         ui.add_space(8.0);
-        ui.label(RichText::new(error).size(11.5).color(theme::PALETTE_RED));
+        ui.label(RichText::new(error).size(11.5).color(theme::PALETTE_RED()));
     }
 }
 
@@ -385,7 +385,7 @@ fn render_session_hint(ui: &mut egui::Ui, selected_session: Option<&SessionSumma
     } else {
         "The current session stays on disk, but it cannot be removed until you switch away from it."
     };
-    ui.label(RichText::new(hint).size(11.0).color(theme::FG_DIM));
+    ui.label(RichText::new(hint).size(11.0).color(theme::FG_DIM()));
     ui.add_space(16.0);
 }
 
@@ -437,7 +437,7 @@ fn render_remove_all_actions(
         ui.label(
             RichText::new(view_state.remove_all_question)
                 .size(11.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
         return;
     }
@@ -457,19 +457,19 @@ fn render_remove_all_actions(
 
 fn render_header(ui: &mut egui::Ui, action: &mut SessionManagerAction) {
     egui::Frame::NONE
-        .fill(theme::BG_ELEVATED)
-        .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT, 48)))
+        .fill(theme::BG_ELEVATED())
+        .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 48)))
         .corner_radius(CornerRadius::same(14))
         .inner_margin(Margin::symmetric(20, 16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.label(RichText::new("Sessions").size(18.0).strong().color(theme::FG));
+                    ui.label(RichText::new("Sessions").size(18.0).strong().color(theme::FG()));
                     ui.label(
                         RichText::new("Manage Horizon sessions without restarting the app.")
                             .size(11.5)
-                            .color(theme::FG_DIM),
+                            .color(theme::FG_DIM()),
                     );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -483,15 +483,15 @@ fn render_header(ui: &mut egui::Ui, action: &mut SessionManagerAction) {
 
 fn render_empty_state(ui: &mut egui::Ui) {
     egui::Frame::NONE
-        .fill(theme::PANEL_BG_ALT)
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+        .fill(theme::PANEL_BG_ALT())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(CornerRadius::same(12))
         .inner_margin(Margin::same(18))
         .show(ui, |ui| {
             ui.label(
                 RichText::new("No saved sessions are available for this profile yet.")
                     .size(12.5)
-                    .color(theme::FG_SOFT),
+                    .color(theme::FG_SOFT()),
             );
         });
 }
@@ -509,16 +509,16 @@ fn render_session_card(
     let mut selection_rect = None;
     egui::Frame::NONE
         .fill(if selected {
-            theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.16)
+            theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.16)
         } else {
-            theme::PANEL_BG_ALT
+            theme::PANEL_BG_ALT()
         })
         .stroke(Stroke::new(
             1.0,
             if selected {
-                theme::blend(theme::BORDER_STRONG, theme::ACCENT, 0.78)
+                theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.78)
             } else {
-                theme::BORDER_SUBTLE
+                theme::BORDER_SUBTLE()
             },
         ))
         .corner_radius(CornerRadius::same(12))
@@ -532,12 +532,12 @@ fn render_session_card(
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG));
+                        ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG()));
                         if is_current {
-                            ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT).strong());
+                            ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT()).strong());
                         }
                         if session.is_live && !is_current {
-                            ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED).strong());
+                            ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED()).strong());
                         }
                     });
                     ui.label(
@@ -548,7 +548,7 @@ fn render_session_card(
                             format_relative_time(session.last_active_at)
                         ))
                         .size(12.0)
-                        .color(theme::FG_SOFT),
+                        .color(theme::FG_SOFT()),
                     );
                     ui.label(
                         RichText::new(format!(
@@ -556,7 +556,7 @@ fn render_session_card(
                             super::util::short_session_id(&session.session_id)
                         ))
                         .size(11.0)
-                        .color(theme::FG_DIM)
+                        .color(theme::FG_DIM())
                         .monospace(),
                     );
                 });
@@ -575,7 +575,7 @@ fn render_session_card(
                             if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
                                 card_action = SessionCardAction::CancelRemove;
                             }
-                            ui.label(RichText::new("Delete?").size(10.5).color(theme::FG_DIM));
+                            ui.label(RichText::new("Delete?").size(10.5).color(theme::FG_DIM()));
                         } else if ui.add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0))).clicked() {
                             card_action = SessionCardAction::BeginRemove(session.session_id.clone());
                         }

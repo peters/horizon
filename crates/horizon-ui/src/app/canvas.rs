@@ -75,28 +75,28 @@ impl HorizonApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::default()
-                    .fill(theme::alpha(theme::PANEL_BG, 236))
+                    .fill(theme::alpha(theme::PANEL_BG(), 236))
                     .inner_margin(Margin::symmetric(12, 10))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG, 210)))
+                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG(), 210)))
                     .corner_radius(12)
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Canvas HUD").color(theme::FG).size(11.5).strong());
+                        ui.label(egui::RichText::new("Canvas HUD").color(theme::FG()).size(11.5).strong());
                         ui.label(
                             egui::RichText::new(format!("view origin  {}", format_grid_position(view_origin)))
                                 .monospace()
-                                .color(theme::FG_SOFT)
+                                .color(theme::FG_SOFT())
                                 .size(11.0),
                         );
                         ui.label(
                             egui::RichText::new(format!("zoom  {:.0}%", self.canvas_view.zoom * 100.0))
                                 .monospace()
-                                .color(theme::FG_SOFT)
+                                .color(theme::FG_SOFT())
                                 .size(11.0),
                         );
                         ui.label(
                             egui::RichText::new(format!("focused term {focused_status}"))
                                 .monospace()
-                                .color(theme::FG_SOFT)
+                                .color(theme::FG_SOFT())
                                 .size(11.0),
                         );
                     });
@@ -106,7 +106,7 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_canvas(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::BG))
+            .frame(egui::Frame::default().fill(theme::BG()))
             .show(ctx, |ui| {
                 paint_canvas_glow(ui);
                 paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
@@ -139,8 +139,8 @@ impl HorizonApp {
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(theme::alpha(theme::PANEL_BG, 238))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 210)))
+                    .fill(theme::alpha(theme::PANEL_BG(), 238))
+                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
                     .corner_radius(20)
                     .inner_margin(Margin::same(20))
                     .show(ui, |ui| {
@@ -149,7 +149,7 @@ impl HorizonApp {
                         ui.with_layout(Layout::top_down(Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new("Start with a workspace-first flow")
-                                    .color(theme::FG)
+                                    .color(theme::FG())
                                     .size(18.0)
                                     .strong(),
                             );
@@ -158,7 +158,7 @@ impl HorizonApp {
                                 egui::RichText::new(
                                     "Create a workspace, launch a preset-driven terminal, jump with Quick Nav, then fit the active workspace when you want a clean overview.",
                                 )
-                                .color(theme::FG_SOFT)
+                                .color(theme::FG_SOFT())
                                 .size(12.0),
                             );
                             ui.add_space(8.0);
@@ -166,7 +166,7 @@ impl HorizonApp {
                                 egui::RichText::new(
                                     "Rows / Cols / Grid live on each workspace header once panels are open, so you can stay structured without giving up the canvas.",
                                 )
-                                .color(theme::FG_DIM)
+                                .color(theme::FG_DIM())
                                 .size(11.0),
                             );
                             ui.add_space(18.0);
@@ -199,7 +199,7 @@ impl HorizonApp {
                                     "Quick Nav: {quick_nav_shortcut}    Fit Workspace: {fit_shortcut}"
                                 ))
                                 .monospace()
-                                .color(theme::FG_SOFT)
+                                .color(theme::FG_SOFT())
                                 .size(11.0),
                             );
                             ui.add_space(6.0);
@@ -207,7 +207,7 @@ impl HorizonApp {
                                 egui::RichText::new(
                                     "You can still Ctrl+double-click to create a workspace and Ctrl+double-click inside one to add a terminal.",
                                 )
-                                .color(theme::FG_DIM)
+                                .color(theme::FG_DIM())
                                 .size(10.5),
                             );
                         });
@@ -282,7 +282,7 @@ fn build_dot_grid_shape(rect: Rect, layout: DotGridLayout) -> Shape {
         let mut y = expanded_rect.min.y;
         while y <= expanded_rect.max.y {
             let dot_rect = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(layout.dot_diameter));
-            mesh.add_colored_rect(dot_rect, theme::GRID_DOT);
+            mesh.add_colored_rect(dot_rect, theme::GRID_DOT());
             y += layout.spacing;
         }
         x += layout.spacing;
