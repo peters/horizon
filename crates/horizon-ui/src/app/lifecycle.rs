@@ -7,6 +7,7 @@ use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
 use super::super::input;
 use crate::{loading_spinner, theme};
 
+use super::canvas::CanvasGridCache;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
 
 impl HorizonApp {
@@ -92,6 +93,9 @@ impl HorizonApp {
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ctx, self.appearance_theme);
             self.theme_applied = true;
+            self.terminal_grid_cache.clear();
+            self.canvas_grid_cache = CanvasGridCache::default();
+            self.editor_preview_cache.clear();
         }
 
         if !self.poll_startup_bootstrap() {
@@ -384,6 +388,12 @@ impl HorizonApp {
         }
         self.flush_runtime_if_dirty();
 
+        if !self.theme_applied {
+            // Deferred theme swaps are applied in prepare_frame, so guarantee
+            // one follow-up frame even when the UI is otherwise idle.
+            ctx.request_repaint();
+        }
+
         let has_live_terminals = !self.board.panels.is_empty();
         let animating = self.pan_target.is_some();
         if animating {
@@ -412,5 +422,57 @@ impl HorizonApp {
             };
             ctx.request_repaint_after(poll);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use eframe::CreationContext;
+    use egui::Context;
+    use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+
+    use super::HorizonApp;
+    use crate::input;
+
+    fn test_app() -> HorizonApp {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let session_store = SessionStore::new(home, config_path.clone());
+        let config = Config::default();
+        let ctx = Context::default();
+        let cc = CreationContext::_new_kittest(ctx);
+
+        HorizonApp::new(
+            &cc,
+            &config,
+            config_path,
+            session_store,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+            input::ObservedKeyboardInputs::default(),
+        )
+    }
+
+    #[test]
+    fn finalize_frame_requests_repaint_when_theme_application_is_deferred() {
+        let ctx = Context::default();
+        let mut app = test_app();
+        app.theme_applied = false;
+        let repaint_requests = Arc::new(AtomicUsize::new(0));
+        let repaint_requests_for_callback = Arc::clone(&repaint_requests);
+        ctx.set_request_repaint_callback(move |_| {
+            repaint_requests_for_callback.fetch_add(1, Ordering::Relaxed);
+        });
+
+        app.finalize_frame(&ctx, false, 0, 0);
+
+        assert!(repaint_requests.load(Ordering::Relaxed) > 0);
     }
 }
