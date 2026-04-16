@@ -229,6 +229,19 @@ pub struct HorizonApp {
     exit_cleanup_complete: bool,
 }
 
+struct AppBootstrap {
+    config_path: PathBuf,
+    session_store: SessionStore,
+    observed_keyboard_inputs: input::ObservedKeyboardInputs,
+    board: Board,
+    resolved_theme: theme::ResolvedTheme,
+    config_last_mtime: Option<std::time::SystemTime>,
+    managed_install: Option<ManagedInstall>,
+    next_surge_update_check_at: Option<Instant>,
+    shortcuts: AppShortcuts,
+    action_commands_cache: Vec<CommandEntry>,
+}
+
 impl HorizonApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -250,7 +263,46 @@ impl HorizonApp {
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
         let (managed_install, next_surge_update_check_at) = managed_install_state();
 
-        let mut app = Self {
+        let bootstrap = AppBootstrap {
+            config_path,
+            session_store,
+            observed_keyboard_inputs,
+            board,
+            resolved_theme,
+            config_last_mtime,
+            managed_install,
+            next_surge_update_check_at,
+            shortcuts,
+            action_commands_cache,
+        };
+        let mut app = Self::initial_state(config, bootstrap);
+
+        match startup {
+            StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
+            StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
+            StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
+        }
+
+        app.maybe_start_update_check();
+
+        app
+    }
+
+    fn initial_state(config: &Config, bootstrap: AppBootstrap) -> Self {
+        let AppBootstrap {
+            config_path,
+            session_store,
+            observed_keyboard_inputs,
+            board,
+            resolved_theme,
+            config_last_mtime,
+            managed_install,
+            next_surge_update_check_at,
+            shortcuts,
+            action_commands_cache,
+        } = bootstrap;
+
+        Self {
             board,
             panels_to_close: Vec::new(),
             panels_to_restart: Vec::new(),
@@ -333,17 +385,7 @@ impl HorizonApp {
             config_last_check: None,
             shutdown_progress: None,
             exit_cleanup_complete: false,
-        };
-
-        match startup {
-            StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
-            StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
-            StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
-
-        app.maybe_start_update_check();
-
-        app
     }
 }
 
