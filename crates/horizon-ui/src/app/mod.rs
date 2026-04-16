@@ -15,6 +15,7 @@ mod root_chrome;
 mod session;
 mod session_manager;
 mod settings;
+mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
 mod ssh_upload;
