@@ -225,12 +225,10 @@ impl HorizonApp {
         self.board.attention_enabled = config.features.attention_feed;
         if self.appearance_theme != config.appearance.theme {
             self.appearance_theme = config.appearance.theme;
-            self.resolved_theme = match self.appearance_theme {
-                horizon_core::AppearanceTheme::Auto => self.resolved_theme,
-                horizon_core::AppearanceTheme::Dark => theme::ResolvedTheme::Dark,
-                horizon_core::AppearanceTheme::Light => theme::ResolvedTheme::Light,
-            };
-            theme::set_theme(self.resolved_theme);
+            // Do not mutate resolved_theme or the global atomic here.
+            // prepare_frame will apply the new preference atomically at the
+            // start of the next frame (egui styles + global atomic + cache
+            // clearing) so panels never render with mixed theme state.
             self.theme_applied = false;
         }
     }
