@@ -15,6 +15,7 @@ mod root_chrome;
 mod session;
 mod session_manager;
 mod settings;
+mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
 mod ssh_upload;
@@ -32,9 +33,9 @@ use std::time::Instant;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config,
+    GitWatcher, ManagedInstall, PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease,
+    SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -149,6 +150,8 @@ pub struct HorizonApp {
     panels_to_restart: Vec<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
     workspace_creates: Vec<PanelId>,
+    appearance_theme: AppearanceTheme,
+    resolved_theme: theme::ResolvedTheme,
     theme_applied: bool,
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
@@ -241,6 +244,8 @@ impl HorizonApp {
         cc.egui_ctx.set_fonts(configure_fonts());
         let mut board = Board::new();
         board.attention_enabled = config.features.attention_feed;
+        let resolved_theme = theme::resolve_theme(config.appearance.theme, cc.egui_ctx.system_theme());
+        theme::set_theme(resolved_theme);
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
         let (managed_install, next_surge_update_check_at) = managed_install_state();
@@ -251,6 +256,8 @@ impl HorizonApp {
             panels_to_restart: Vec::new(),
             workspace_assignments: Vec::new(),
             workspace_creates: Vec::new(),
+            appearance_theme: config.appearance.theme,
+            resolved_theme,
             theme_applied: false,
             panel_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
@@ -442,7 +449,7 @@ impl eframe::App for HorizonApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::BG.to_normalized_gamma_f32()
+        theme::bg_for(self.resolved_theme).to_normalized_gamma_f32()
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {

@@ -223,6 +223,14 @@ impl HorizonApp {
             crate::command_registry::action_commands(&self.shortcuts, util::primary_shortcut_label());
         self.presets = config.resolved_presets();
         self.board.attention_enabled = config.features.attention_feed;
+        if self.appearance_theme != config.appearance.theme {
+            self.appearance_theme = config.appearance.theme;
+            // Do not mutate resolved_theme or the global atomic here.
+            // prepare_frame will apply the new preference atomically at the
+            // start of the next frame (egui styles + global atomic + cache
+            // clearing) so panels never render with mixed theme state.
+            self.theme_applied = false;
+        }
     }
 }
 
@@ -232,10 +240,10 @@ pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
 
 fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
-        SettingsStatus::None => (String::new(), theme::FG_DIM),
-        SettingsStatus::LivePreview => ("Live preview".to_string(), theme::FG_DIM),
-        SettingsStatus::Saved => ("Saved".to_string(), theme::PALETTE_GREEN),
-        SettingsStatus::Error(message) => (message.clone(), theme::PALETTE_RED),
+        SettingsStatus::None => (String::new(), theme::FG_DIM()),
+        SettingsStatus::LivePreview => ("Live preview".to_string(), theme::FG_DIM()),
+        SettingsStatus::Saved => ("Saved".to_string(), theme::PALETTE_GREEN()),
+        SettingsStatus::Error(message) => (message.clone(), theme::PALETTE_RED()),
     }
 }
 
@@ -249,12 +257,12 @@ fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut Settings
         .max_width(viewport_width * 0.5)
         .frame(
             egui::Frame::default()
-                .fill(theme::BG_ELEVATED)
+                .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 16))
-                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE)),
+                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
         )
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new("Settings").color(theme::FG).size(18.0).strong());
+            ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
             ui.add_space(16.0);
 
             render_tab_bar(ui, editor);
@@ -274,7 +282,7 @@ fn render_gui_tab(ui: &mut egui::Ui, tab: SettingsTab, editor: &mut SettingsEdit
     let Some(ref mut config) = editor.editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
-                .color(theme::PALETTE_RED)
+                .color(theme::PALETTE_RED())
                 .size(12.0),
         );
         return;
@@ -305,13 +313,13 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
         for tab in SettingsTab::ALL {
             let selected = editor.active_tab == tab;
             let (fill, text_color) = if selected {
-                (theme::blend(theme::PANEL_BG_ALT, theme::ACCENT, 0.2), theme::FG)
+                (theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.2), theme::FG())
             } else {
-                (Color32::TRANSPARENT, theme::FG_DIM)
+                (Color32::TRANSPARENT, theme::FG_DIM())
             };
 
             let stroke = if selected {
-                Stroke::new(1.0, theme::blend(theme::BORDER_SUBTLE, theme::ACCENT, 0.5))
+                Stroke::new(1.0, theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5))
             } else {
                 Stroke::NONE
             };
@@ -337,14 +345,14 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
 
 fn section_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(title).color(theme::FG_SOFT).size(13.0).strong());
+    ui.label(egui::RichText::new(title).color(theme::FG_SOFT()).size(13.0).strong());
     ui.add_space(6.0);
 }
 
 fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::default()
-        .fill(theme::PANEL_BG)
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+        .fill(theme::PANEL_BG())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(10)
         .inner_margin(Margin::same(16))
         .show(ui, |ui| {
@@ -355,5 +363,5 @@ fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).color(theme::FG_DIM).size(11.0));
+    ui.label(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0));
 }

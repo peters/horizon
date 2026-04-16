@@ -169,7 +169,7 @@ impl RemoteHostsOverlay {
         ui.painter_at(separator_rect).rect_filled(
             separator_rect,
             CornerRadius::ZERO,
-            theme::alpha(theme::BORDER_SUBTLE, 100),
+            theme::alpha(theme::BORDER_SUBTLE(), 100),
         );
         ui.add_space(2.0);
 
@@ -193,11 +193,11 @@ impl RemoteHostsOverlay {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
 
         ui.painter()
-            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED);
+            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED());
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT, 70)),
+            Stroke::new(1.0, theme::alpha(theme::ACCENT(), 70)),
             StrokeKind::Inside,
         );
 
@@ -211,20 +211,24 @@ impl RemoteHostsOverlay {
         child.label(
             RichText::new("SSH Remote")
                 .font(FontId::proportional(13.0))
-                .color(theme::FG_DIM)
+                .color(theme::FG_SOFT())
                 .strong(),
         );
-        child.label(RichText::new(" > ").font(FontId::monospace(13.0)).color(theme::ACCENT));
+        child.label(
+            RichText::new(" > ")
+                .font(FontId::monospace(13.0))
+                .color(theme::ACCENT()),
+        );
 
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(FontId::monospace(14.0))
-                .text_color(theme::FG)
+                .text_color(theme::FG())
                 .frame(false)
                 .desired_width(text_rect.width() - 260.0)
                 .hint_text(
                     RichText::new("type to filter, prefix user@ to connect as that user")
-                        .color(theme::FG_DIM)
+                        .color(theme::FG_DIM())
                         .font(FontId::monospace(11.0)),
                 )
                 .margin(Margin::ZERO),
@@ -252,7 +256,7 @@ impl RemoteHostsOverlay {
             ui.label(
                 RichText::new(count_text)
                     .font(FontId::monospace(11.0))
-                    .color(theme::FG_DIM),
+                    .color(theme::FG_SOFT()),
             );
         });
     }

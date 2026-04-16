@@ -15,13 +15,29 @@ const SECTION_SPACING: f32 = 16.0;
 const INNER_SPACING: f32 = 8.0;
 const PROGRESS_BAR_HEIGHT: f32 = 6.0;
 
-// Colors derived from the theme palette.
-const HEADER_BG: Color32 = Color32::from_rgb(10, 13, 20);
-const SURFACE_TINT: Color32 = Color32::from_rgb(24, 30, 42);
-const SURFACE_BORDER: Color32 = Color32::from_rgb(42, 52, 68);
-const SEGMENT_BG: Color32 = Color32::from_rgb(18, 22, 32);
-const SEGMENT_ACTIVE_BG: Color32 = Color32::from_rgb(30, 42, 68);
-const BTN_PRIMARY_BG: Color32 = Color32::from_rgb(56, 112, 210);
+fn header_bg() -> Color32 {
+    theme::blend(theme::TITLEBAR_BG(), theme::ACCENT(), 0.06)
+}
+
+fn surface_tint() -> Color32 {
+    theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.05)
+}
+
+fn surface_border() -> Color32 {
+    theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.18)
+}
+
+fn segment_bg() -> Color32 {
+    theme::BG_ELEVATED()
+}
+
+fn segment_active_bg() -> Color32 {
+    theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.24)
+}
+
+fn primary_button_bg() -> Color32 {
+    theme::ACCENT()
+}
 
 pub(super) fn render_backdrop(ctx: &Context) {
     let screen_rect = ctx.input(egui::InputState::viewport_rect);
@@ -49,8 +65,8 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
         .fixed_size(Vec2::new(MODAL_WIDTH, 0.0))
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
+                .fill(theme::PANEL_BG())
+                .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
                 .corner_radius(CornerRadius::same(14))
                 .shadow(egui::Shadow {
                     offset: [0, 12],
@@ -100,7 +116,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
 
 fn render_header(ui: &mut egui::Ui, host_label: &str, files: &[super::worker::LocalUploadFile]) {
     egui::Frame::NONE
-        .fill(HEADER_BG)
+        .fill(header_bg())
         .corner_radius(CornerRadius {
             nw: 14,
             ne: 14,
@@ -112,7 +128,7 @@ fn render_header(ui: &mut egui::Ui, host_label: &str, files: &[super::worker::Lo
             ui.horizontal(|ui| {
                 let icon_size = 32.0;
                 let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(icon_size), egui::Sense::hover());
-                paint_upload_icon(ui, icon_rect, theme::ACCENT);
+                paint_upload_icon(ui, icon_rect, theme::ACCENT());
 
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
@@ -121,9 +137,9 @@ fn render_header(ui: &mut egui::Ui, host_label: &str, files: &[super::worker::Lo
                         RichText::new(format!("Upload to {host_label}"))
                             .size(15.0)
                             .strong()
-                            .color(theme::FG),
+                            .color(theme::FG()),
                     );
-                    ui.label(RichText::new(file_summary(files)).size(12.0).color(theme::FG_DIM));
+                    ui.label(RichText::new(file_summary(files)).size(12.0).color(theme::FG_DIM()));
                 });
             });
         });
@@ -183,7 +199,7 @@ fn render_ready_state(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: &mut
 
     if let Some(error) = &flow.ssh_upload_error {
         ui.add_space(4.0);
-        ui.label(RichText::new(error).size(11.0).color(theme::PALETTE_RED));
+        ui.label(RichText::new(error).size(11.0).color(theme::PALETTE_RED()));
     }
 
     ui.add_space(INNER_SPACING);
@@ -212,15 +228,15 @@ fn render_file_pills(ui: &mut egui::Ui, files: &[super::worker::LocalUploadFile]
         if files.len() > visible_count {
             let remaining = files.len() - visible_count;
             egui::Frame::NONE
-                .fill(SURFACE_TINT)
-                .stroke(Stroke::new(1.0, SURFACE_BORDER))
+                .fill(surface_tint())
+                .stroke(Stroke::new(1.0, surface_border()))
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::symmetric(10, 4))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(format!("+{remaining} more"))
                             .size(11.0)
-                            .color(theme::FG_DIM),
+                            .color(theme::FG_DIM()),
                     );
                 });
         }
@@ -229,8 +245,8 @@ fn render_file_pills(ui: &mut egui::Ui, files: &[super::worker::LocalUploadFile]
 
 fn render_single_file_pill(ui: &mut egui::Ui, name: &str, size_bytes: u64) {
     egui::Frame::NONE
-        .fill(SURFACE_TINT)
-        .stroke(Stroke::new(1.0, SURFACE_BORDER))
+        .fill(surface_tint())
+        .stroke(Stroke::new(1.0, surface_border()))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(10, 4))
         .show(ui, |ui| {
@@ -238,10 +254,10 @@ fn render_single_file_pill(ui: &mut egui::Ui, name: &str, size_bytes: u64) {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(6.0, 14.0), egui::Sense::hover());
                 ui.painter_at(dot_rect)
-                    .circle_filled(dot_rect.center(), 3.0, theme::PALETTE_CYAN);
+                    .circle_filled(dot_rect.center(), 3.0, theme::PALETTE_CYAN());
                 let display_name = truncate_name(name, 20);
-                ui.label(RichText::new(display_name).size(11.0).color(theme::FG_SOFT));
-                ui.label(RichText::new(human_bytes(size_bytes)).size(10.0).color(theme::FG_DIM));
+                ui.label(RichText::new(display_name).size(11.0).color(theme::FG_SOFT()));
+                ui.label(RichText::new(human_bytes(size_bytes)).size(10.0).color(theme::FG_DIM()));
             });
         });
 }
@@ -261,11 +277,11 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn render_transport_choice(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
-    ui.label(RichText::new("Transfer method").size(11.0).color(theme::FG_DIM));
+    ui.label(RichText::new("Transfer method").size(11.0).color(theme::FG_DIM()));
 
     egui::Frame::NONE
-        .fill(SEGMENT_BG)
-        .stroke(Stroke::new(1.0, SURFACE_BORDER))
+        .fill(segment_bg())
+        .stroke(Stroke::new(1.0, surface_border()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::same(3))
         .show(ui, |ui| {
@@ -291,19 +307,19 @@ fn render_transport_choice(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
 
 fn render_segment_button(ui: &mut egui::Ui, label: &str, active: bool, enabled: bool) -> bool {
     let fill = if active {
-        SEGMENT_ACTIVE_BG
+        segment_active_bg()
     } else {
         Color32::TRANSPARENT
     };
     let text_color = if !enabled {
-        theme::alpha(theme::FG_DIM, 100)
+        theme::alpha(theme::FG_DIM(), 100)
     } else if active {
-        theme::FG
+        theme::FG()
     } else {
-        theme::FG_DIM
+        theme::FG_DIM()
     };
     let stroke = if active {
-        Stroke::new(1.0, theme::alpha(theme::ACCENT, 80))
+        Stroke::new(1.0, theme::alpha(theme::ACCENT(), 80))
     } else {
         Stroke::NONE
     };
@@ -330,11 +346,11 @@ fn render_segment_button(ui: &mut egui::Ui, label: &str, active: bool, enabled: 
 // ---------------------------------------------------------------------------
 
 fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: &mut Vec<UploadUiAction>) {
-    ui.label(RichText::new("Remote destination").size(11.0).color(theme::FG_DIM));
+    ui.label(RichText::new("Remote destination").size(11.0).color(theme::FG_DIM()));
 
     egui::Frame::NONE
-        .fill(theme::BG_ELEVATED)
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+        .fill(theme::BG_ELEVATED())
+        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
@@ -348,7 +364,7 @@ fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, action
                         .desired_width(ui.available_width() - 88.0)
                         .hint_text("~/uploads")
                         .frame(false)
-                        .text_color(theme::FG),
+                        .text_color(theme::FG()),
                 );
                 if styled_small_button(ui, "Browse") {
                     actions.push(UploadUiAction::OpenDestinationPicker);
@@ -359,16 +375,16 @@ fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, action
 
 fn styled_small_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
-        egui::Button::new(RichText::new(label).size(11.0).color(theme::FG_SOFT))
-            .fill(theme::alpha(theme::ACCENT, 16))
-            .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT, 40)))
+        egui::Button::new(RichText::new(label).size(11.0).color(theme::FG_SOFT()))
+            .fill(theme::alpha(theme::ACCENT(), 16))
+            .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 40)))
             .corner_radius(CornerRadius::same(6)),
     )
     .clicked()
 }
 
 pub(super) fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
-    let color = theme::PALETTE_YELLOW;
+    let color = theme::PALETTE_YELLOW();
     let body = Rect::from_min_max(
         egui::pos2(rect.min.x, rect.min.y + 4.0),
         egui::pos2(rect.max.x, rect.max.y),
@@ -403,15 +419,15 @@ pub(super) fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
 
 fn render_taildrop_info(ui: &mut egui::Ui, target: &str) {
     egui::Frame::NONE
-        .fill(theme::alpha(theme::PALETTE_CYAN, 10))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_CYAN, 30)))
+        .fill(theme::alpha(theme::PALETTE_CYAN(), 10))
+        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_CYAN(), 30)))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(format!("Taildrop target: {target}"))
                     .size(12.0)
-                    .color(theme::PALETTE_CYAN),
+                    .color(theme::PALETTE_CYAN()),
             );
             ui.label(
                 RichText::new(
@@ -419,7 +435,7 @@ fn render_taildrop_info(ui: &mut egui::Ui, target: &str) {
                      No destination directory needed.",
                 )
                 .size(11.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
             );
         });
 }
@@ -454,14 +470,14 @@ fn render_ready_action_buttons(ui: &mut egui::Ui, actions: &mut Vec<UploadUiActi
 
 fn primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
     let fill = if enabled {
-        BTN_PRIMARY_BG
+        primary_button_bg()
     } else {
-        theme::alpha(BTN_PRIMARY_BG, 60)
+        theme::alpha(primary_button_bg(), 60)
     };
     let text_color = if enabled {
         Color32::WHITE
     } else {
-        theme::alpha(Color32::WHITE, 100)
+        theme::alpha(theme::FG(), 100)
     };
 
     ui.add_enabled(
@@ -477,9 +493,9 @@ fn primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 
 fn ghost_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
-        egui::Button::new(RichText::new(label).size(12.0).color(theme::FG_DIM))
+        egui::Button::new(RichText::new(label).size(12.0).color(theme::FG_DIM()))
             .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
             .corner_radius(CornerRadius::same(10))
             .min_size(Vec2::new(80.0, 34.0)),
     )
@@ -488,7 +504,8 @@ fn ghost_button(ui: &mut egui::Ui, label: &str) -> bool {
 
 fn paint_separator(ui: &mut egui::Ui) {
     let (sep_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter_at(sep_rect).rect_filled(sep_rect, 0.0, theme::BORDER_SUBTLE);
+    ui.painter_at(sep_rect)
+        .rect_filled(sep_rect, 0.0, theme::BORDER_SUBTLE());
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +537,7 @@ fn render_upload_progress(
     snapshot: &super::UploadSnapshot,
     upload_started_at: Option<std::time::Instant>,
 ) {
-    ui.label(RichText::new("Uploading...").size(14.0).strong().color(theme::FG));
+    ui.label(RichText::new("Uploading...").size(14.0).strong().color(theme::FG()));
     ui.add_space(4.0);
 
     if let Some(current_file) = &snapshot.current_file_name {
@@ -528,8 +545,8 @@ fn render_upload_progress(
             ui.spacing_mut().item_spacing.x = 6.0;
             let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(6.0, 14.0), egui::Sense::hover());
             ui.painter_at(dot_rect)
-                .circle_filled(dot_rect.center(), 3.0, theme::ACCENT);
-            ui.label(RichText::new(current_file).size(12.0).color(theme::FG_SOFT));
+                .circle_filled(dot_rect.center(), 3.0, theme::ACCENT());
+            ui.label(RichText::new(current_file).size(12.0).color(theme::FG_SOFT()));
         });
         ui.add_space(6.0);
     }
@@ -541,13 +558,13 @@ fn render_upload_progress(
 
     if ui.is_rect_visible(bar_rect) {
         let painter = ui.painter_at(bar_rect);
-        painter.rect_filled(bar_rect, 3.0, SURFACE_TINT);
+        painter.rect_filled(bar_rect, 3.0, surface_tint());
         if frac > 0.0 {
             let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * frac, bar_rect.height()));
-            painter.rect_filled(fill_rect, 3.0, theme::ACCENT);
+            painter.rect_filled(fill_rect, 3.0, theme::ACCENT());
             if frac < 1.0 {
                 let glow_center = egui::pos2(fill_rect.max.x, fill_rect.center().y);
-                painter.circle_filled(glow_center, 4.0, theme::alpha(theme::ACCENT, 60));
+                painter.circle_filled(glow_center, 4.0, theme::alpha(theme::ACCENT(), 60));
             }
         }
     }
@@ -558,7 +575,7 @@ fn render_upload_progress(
         ui.label(
             RichText::new(format!("{} / {} files", snapshot.completed_files, snapshot.total_files))
                 .size(11.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             render_bytes_summary(ui, snapshot.completed_bytes, snapshot.total_bytes);
@@ -567,7 +584,11 @@ fn render_upload_progress(
 
     ui.add_space(2.0);
     render_transfer_timing(ui, snapshot, upload_started_at);
-    ui.label(RichText::new(snapshot.detail.as_str()).size(11.0).color(theme::FG_DIM));
+    ui.label(
+        RichText::new(snapshot.detail.as_str())
+            .size(11.0)
+            .color(theme::FG_DIM()),
+    );
 }
 
 fn render_transfer_timing(
@@ -579,7 +600,7 @@ fn render_transfer_timing(
         ui.label(
             RichText::new("Estimating transfer speed…")
                 .size(11.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
         return;
     };
@@ -589,7 +610,7 @@ fn render_transfer_timing(
         ui.label(
             RichText::new("Estimating transfer speed…")
                 .size(11.0)
-                .color(theme::FG_DIM),
+                .color(theme::FG_DIM()),
         );
         return;
     };
@@ -603,9 +624,9 @@ fn render_transfer_timing(
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.label(RichText::new(speed_label).size(11.0).color(theme::FG_DIM));
-        ui.label(RichText::new("•").size(11.0).color(theme::FG_DIM));
-        ui.label(RichText::new(eta_label).size(11.0).color(theme::FG_DIM));
+        ui.label(RichText::new(speed_label).size(11.0).color(theme::FG_DIM()));
+        ui.label(RichText::new("•").size(11.0).color(theme::FG_DIM()));
+        ui.label(RichText::new(eta_label).size(11.0).color(theme::FG_DIM()));
     });
 }
 
@@ -621,18 +642,18 @@ fn render_finished_state(ui: &mut egui::Ui, outcome: &super::UploadOutcome, acti
         let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(icon_size), egui::Sense::hover());
 
         if outcome.cancelled {
-            paint_cancel_icon(ui, icon_rect, theme::PALETTE_YELLOW);
+            paint_cancel_icon(ui, icon_rect, theme::PALETTE_YELLOW());
             ui.add_space(8.0);
-            ui.label(RichText::new("Upload cancelled").size(15.0).strong().color(theme::FG));
+            ui.label(RichText::new("Upload cancelled").size(15.0).strong().color(theme::FG()));
         } else {
-            paint_checkmark_icon(ui, icon_rect, theme::PALETTE_GREEN);
+            paint_checkmark_icon(ui, icon_rect, theme::PALETTE_GREEN());
             ui.add_space(8.0);
-            ui.label(RichText::new("Upload complete").size(15.0).strong().color(theme::FG));
+            ui.label(RichText::new("Upload complete").size(15.0).strong().color(theme::FG()));
         }
     });
 
     ui.add_space(8.0);
-    ui.label(RichText::new(&outcome.detail).size(12.0).color(theme::FG_SOFT));
+    ui.label(RichText::new(&outcome.detail).size(12.0).color(theme::FG_SOFT()));
     render_bytes_summary(ui, outcome.completed_bytes, outcome.total_bytes);
 
     ui.add_space(SECTION_SPACING);
@@ -693,26 +714,26 @@ fn render_failed_state(ui: &mut egui::Ui, error: &str, no_files: bool, actions: 
     ui.horizontal(|ui| {
         let icon_size = 28.0;
         let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(icon_size), egui::Sense::hover());
-        paint_error_icon(ui, icon_rect, theme::PALETTE_RED);
+        paint_error_icon(ui, icon_rect, theme::PALETTE_RED());
 
         ui.add_space(8.0);
         ui.label(
             RichText::new("Upload failed")
                 .size(15.0)
                 .strong()
-                .color(theme::PALETTE_RED),
+                .color(theme::PALETTE_RED()),
         );
     });
 
     ui.add_space(8.0);
 
     egui::Frame::NONE
-        .fill(theme::alpha(theme::PALETTE_RED, 8))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_RED, 25)))
+        .fill(theme::alpha(theme::PALETTE_RED(), 8))
+        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 25)))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            ui.label(RichText::new(error).size(12.0).color(theme::FG_SOFT));
+            ui.label(RichText::new(error).size(12.0).color(theme::FG_SOFT()));
         });
 
     ui.add_space(SECTION_SPACING);
@@ -763,6 +784,6 @@ fn render_bytes_summary(ui: &mut egui::Ui, completed_bytes: u64, total_bytes: u6
             human_bytes(total_bytes),
         ))
         .size(11.0)
-        .color(theme::FG_DIM),
+        .color(theme::FG_DIM()),
     );
 }

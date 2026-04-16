@@ -54,10 +54,10 @@ pub fn render_attention_feed(
         .interactable(true)
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::BG_ELEVATED)
+                .fill(theme::BG_ELEVATED())
                 .stroke(egui::Stroke::new(
                     1.0,
-                    theme::blend(theme::BG_ELEVATED, theme::FG_DIM, 0.15),
+                    theme::blend(theme::BG_ELEVATED(), theme::FG_DIM(), 0.15),
                 ))
                 .corner_radius(10.0)
                 .inner_margin(egui::Margin::symmetric(8, 6));
@@ -89,7 +89,12 @@ pub fn render_attention_feed(
 
 fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Attention Feed").size(11.0).color(theme::FG_DIM).strong());
+        ui.label(
+            RichText::new("Attention Feed")
+                .size(11.0)
+                .color(theme::FG_DIM())
+                .strong(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let open_count = items.iter().filter(|i| i.is_open()).count();
             if open_count > 0 {
@@ -152,9 +157,9 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
             ui.set_width(feed_width - 16.0);
             render_feed_item_header(ui, item, is_resolved, color);
             let msg_color = if is_resolved {
-                theme::alpha(theme::FG_SOFT, 100)
+                theme::alpha(theme::FG_SOFT(), 100)
             } else {
-                theme::FG_SOFT
+                theme::FG_SOFT()
             };
             ui.label(RichText::new(&item.summary).size(11.0).color(msg_color));
 
@@ -162,8 +167,8 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if item.is_open() {
                         let dismiss = ui.add(
-                            Button::new(RichText::new("\u{00D7}").size(11.0).color(theme::FG_DIM))
-                                .fill(theme::alpha(theme::BG_ELEVATED, 140))
+                            Button::new(RichText::new("\u{00D7}").size(11.0).color(theme::FG_DIM()))
+                                .fill(theme::alpha(theme::BG_ELEVATED(), 140))
                                 .corner_radius(CornerRadius::same(4))
                                 .stroke(egui::Stroke::NONE),
                         );
@@ -171,8 +176,8 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
                     }
                     if item.is_open() && item.panel_id.is_some() {
                         let goto = ui.add(
-                            egui::Button::new(RichText::new("Go to panel \u{2192}").size(9.5).color(theme::ACCENT))
-                                .fill(theme::alpha(theme::ACCENT, 20))
+                            egui::Button::new(RichText::new("Go to panel \u{2192}").size(9.5).color(theme::ACCENT()))
+                                .fill(theme::alpha(theme::ACCENT(), 20))
                                 .corner_radius(CornerRadius::same(4))
                                 .stroke(egui::Stroke::NONE),
                         );
@@ -232,7 +237,7 @@ fn render_feed_item_header(ui: &mut egui::Ui, item: &AttentionItem, is_resolved:
         ui.label(
             RichText::new(&item.source)
                 .size(9.0)
-                .color(theme::alpha(theme::FG_DIM, if is_resolved { 100 } else { 180 })),
+                .color(theme::alpha(theme::FG_DIM(), if is_resolved { 100 } else { 180 })),
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -240,13 +245,13 @@ fn render_feed_item_header(ui: &mut egui::Ui, item: &AttentionItem, is_resolved:
             ui.label(
                 RichText::new(elapsed)
                     .size(9.0)
-                    .color(theme::alpha(theme::FG_DIM, if is_resolved { 80 } else { 140 })),
+                    .color(theme::alpha(theme::FG_DIM(), if is_resolved { 80 } else { 140 })),
             );
             if is_resolved {
                 ui.label(
                     RichText::new("\u{2713}")
                         .size(9.0)
-                        .color(theme::alpha(theme::PALETTE_GREEN, 120)),
+                        .color(theme::alpha(theme::PALETTE_GREEN(), 120)),
                 );
             }
         });
@@ -255,9 +260,9 @@ fn render_feed_item_header(ui: &mut egui::Ui, item: &AttentionItem, is_resolved:
 
 fn severity_color(severity: AttentionSeverity) -> Color32 {
     match severity {
-        AttentionSeverity::High => theme::PALETTE_RED,
-        AttentionSeverity::Medium => theme::PALETTE_GREEN,
-        AttentionSeverity::Low => theme::ACCENT,
+        AttentionSeverity::High => theme::PALETTE_RED(),
+        AttentionSeverity::Medium => theme::PALETTE_GREEN(),
+        AttentionSeverity::Low => theme::ACCENT(),
     }
 }
 

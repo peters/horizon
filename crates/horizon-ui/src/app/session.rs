@@ -453,11 +453,11 @@ impl HorizonApp {
 
 pub(super) fn render_loading_view(ctx: &Context) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(theme::BG))
+        .frame(egui::Frame::default().fill(theme::BG()))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.28);
-                ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG));
+                ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG()));
                 ui.add_space(16.0);
             });
             loading_spinner::show(

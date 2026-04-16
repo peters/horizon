@@ -152,11 +152,11 @@ fn paint_minimap_contents(
     workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     scope: MinimapScope,
 ) {
-    painter.rect_filled(rect, CornerRadius::same(8), theme::alpha(theme::BG_ELEVATED, 220));
+    painter.rect_filled(rect, CornerRadius::same(8), theme::alpha(theme::BG_ELEVATED(), 220));
     painter.rect_stroke(
         rect,
         CornerRadius::same(8),
-        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 180)),
+        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Outside,
     );
 
@@ -464,7 +464,7 @@ fn vertical_label_badge_rect(workspace_rect: Rect, font_size: f32, badge_height:
 
 fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: bool) {
     let fill = theme::alpha(
-        theme::blend(theme::BG_ELEVATED, color, if is_active { 0.24 } else { 0.14 }),
+        theme::blend(theme::BG_ELEVATED(), color, if is_active { 0.24 } else { 0.14 }),
         236,
     );
     let stroke = Stroke::new(1.0, theme::alpha(color, if is_active { 210 } else { 140 }));
@@ -474,9 +474,9 @@ fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: b
 
 fn label_text_color(is_active: bool) -> Color32 {
     if is_active {
-        theme::FG
+        theme::FG()
     } else {
-        theme::alpha(theme::FG_SOFT, 240)
+        theme::alpha(theme::FG_SOFT(), 240)
     }
 }
 
@@ -527,7 +527,7 @@ fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model
         let workspace_color = app
             .board
             .workspace(panel.workspace_id)
-            .map_or(theme::ACCENT, |workspace| {
+            .map_or(theme::ACCENT(), |workspace| {
                 let (r, g, b) = workspace.accent();
                 Color32::from_rgb(r, g, b)
             });
@@ -609,11 +609,11 @@ fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel)
     if !viewport_rect.is_positive() {
         return;
     }
-    painter.rect_filled(viewport_rect, CornerRadius::same(1), theme::alpha(theme::FG, 14));
+    painter.rect_filled(viewport_rect, CornerRadius::same(1), theme::alpha(theme::FG(), 14));
     painter.rect_stroke(
         viewport_rect,
         CornerRadius::same(1),
-        Stroke::new(1.0, theme::alpha(theme::FG, 90)),
+        Stroke::new(1.0, theme::alpha(theme::FG(), 90)),
         StrokeKind::Inside,
     );
 }

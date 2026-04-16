@@ -3,9 +3,6 @@ use egui::{Color32, FontId, TextFormat};
 
 use crate::theme;
 
-/// Palette index 3 — warm yellow for numeric/boolean literals.
-const YAML_LITERAL: Color32 = Color32::from_rgb(233, 190, 109);
-
 /// Build a syntax-highlighted `LayoutJob` for a YAML string.
 ///
 /// The tokenizer is intentionally simple — it handles the subset of YAML
@@ -34,14 +31,14 @@ fn highlight_line(job: &mut LayoutJob, full: &str, line: &str, font_id: &FontId)
         if before_hash.chars().all(|c| c == ' ' || c == '\t') || before_hash.ends_with(' ') {
             // Everything before the # keeps default color.
             if hash_pos > 0 {
-                push(job, line_start, hash_pos, theme::FG, font_id);
+                push(job, line_start, hash_pos, theme::FG(), font_id);
             }
             // The comment itself.
             push(
                 job,
                 line_start + hash_pos,
                 line.len() - hash_pos,
-                theme::FG_DIM,
+                theme::FG_DIM(),
                 font_id,
             );
             return;
@@ -51,14 +48,14 @@ fn highlight_line(job: &mut LayoutJob, full: &str, line: &str, font_id: &FontId)
     // Try to split on first `:` for key/value.
     if let Some(colon_pos) = first_mapping_colon(line) {
         // Key portion (before colon).
-        push(job, line_start, colon_pos, theme::ACCENT, font_id);
+        push(job, line_start, colon_pos, theme::ACCENT(), font_id);
         // The colon (and any trailing space).
         let sep_len = if line.as_bytes().get(colon_pos + 1) == Some(&b' ') {
             2
         } else {
             1
         };
-        push(job, line_start + colon_pos, sep_len, theme::FG_SOFT, font_id);
+        push(job, line_start + colon_pos, sep_len, theme::FG_SOFT(), font_id);
         // Value portion.
         let value_start = colon_pos + sep_len;
         let value = &line[value_start..];
@@ -68,10 +65,10 @@ fn highlight_line(job: &mut LayoutJob, full: &str, line: &str, font_id: &FontId)
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
         if indent > 0 {
-            push(job, line_start, indent, theme::FG, font_id);
+            push(job, line_start, indent, theme::FG(), font_id);
         }
         if let Some(rest) = trimmed.strip_prefix("- ") {
-            push(job, line_start + indent, 2, theme::FG_SOFT, font_id);
+            push(job, line_start + indent, 2, theme::FG_SOFT(), font_id);
             highlight_value(job, line_start + indent + 2, rest, font_id);
         } else {
             highlight_value(job, line_start + indent, trimmed, font_id);
@@ -85,20 +82,20 @@ fn highlight_value(job: &mut LayoutJob, offset: usize, value: &str, font_id: &Fo
     let v = trimmed.trim();
 
     let color = if v.is_empty() {
-        theme::FG
+        theme::FG()
     } else if is_quoted(v) {
-        theme::PALETTE_GREEN
+        theme::PALETTE_GREEN()
     } else if is_number_or_bool(v) {
-        YAML_LITERAL
+        theme::PALETTE_YELLOW()
     } else {
-        theme::FG
+        theme::FG()
     };
 
     if !trimmed.is_empty() {
         push(job, offset, trimmed.len(), color, font_id);
     }
     if trailing > 0 {
-        push(job, offset + trimmed.len(), trailing, theme::FG, font_id);
+        push(job, offset + trimmed.len(), trailing, theme::FG(), font_id);
     }
 }
 
@@ -164,7 +161,7 @@ mod tests {
         let job = highlight_yaml(text, &FontId::monospace(13.0));
         assert!(!job.sections.is_empty());
         let last = job.sections.last().unwrap();
-        assert_eq!(last.format.color, theme::FG_DIM);
+        assert_eq!(last.format.color, theme::FG_DIM());
     }
 
     #[test]
@@ -172,7 +169,7 @@ mod tests {
         let text = "name: hello\n";
         let job = highlight_yaml(text, &FontId::monospace(13.0));
         // First section is the key — should be ACCENT.
-        assert_eq!(job.sections[0].format.color, theme::ACCENT);
+        assert_eq!(job.sections[0].format.color, theme::ACCENT());
     }
 
     #[test]
@@ -180,7 +177,7 @@ mod tests {
         let text = "key: \"value\"\n";
         let job = highlight_yaml(text, &FontId::monospace(13.0));
         let value_section = &job.sections[2];
-        assert_eq!(value_section.format.color, theme::PALETTE_GREEN);
+        assert_eq!(value_section.format.color, theme::PALETTE_GREEN());
     }
 
     #[test]
@@ -188,6 +185,6 @@ mod tests {
         let text = "enabled: true\n";
         let job = highlight_yaml(text, &FontId::monospace(13.0));
         let value_section = &job.sections[2];
-        assert_eq!(value_section.format.color, YAML_LITERAL);
+        assert_eq!(value_section.format.color, theme::PALETTE_YELLOW());
     }
 }

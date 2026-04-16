@@ -1,5 +1,5 @@
 use egui::Ui;
-use horizon_core::Config;
+use horizon_core::{AppearanceTheme, Config};
 
 use crate::theme;
 
@@ -7,8 +7,15 @@ use crate::theme;
 /// and overlay sizes.  Returns `true` when any value was modified.
 pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
+    changed |= render_window_section(ui, config);
+    changed |= render_appearance_section(ui, config);
+    changed |= render_features_section(ui, config);
+    changed |= render_overlays_section(ui, config);
+    changed
+}
 
-    // -- Window ----------------------------------------------------------
+fn render_window_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
     super::section_heading(ui, "Window");
     super::section_card(ui, |ui| {
         super::dim_label(ui, "Default window size and position on launch.");
@@ -18,7 +25,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
             .num_columns(4)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Width").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Width").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.window.width)
@@ -28,7 +35,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     )
                     .changed();
 
-                ui.label(egui::RichText::new("Height").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Height").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.window.height)
@@ -39,28 +46,73 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     .changed();
                 ui.end_row();
 
-                ui.label(egui::RichText::new("X").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("X").color(theme::FG_SOFT()).size(12.0));
                 changed |= optional_f32_drag(ui, &mut config.window.x, "px");
 
-                ui.label(egui::RichText::new("Y").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Y").color(theme::FG_SOFT()).size(12.0));
                 changed |= optional_f32_drag(ui, &mut config.window.y, "px");
                 ui.end_row();
             });
     });
+    changed
+}
 
-    // -- Features --------------------------------------------------------
+fn render_appearance_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    super::section_heading(ui, "Appearance");
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "Follow the system theme by default, or force a light or dark override.",
+        );
+        ui.add_space(8.0);
+
+        egui::ComboBox::from_id_salt("settings_appearance_theme")
+            .selected_text(theme_label(config.appearance.theme))
+            .show_ui(ui, |ui| {
+                changed |= ui
+                    .selectable_value(
+                        &mut config.appearance.theme,
+                        AppearanceTheme::Auto,
+                        theme_label(AppearanceTheme::Auto),
+                    )
+                    .changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut config.appearance.theme,
+                        AppearanceTheme::Dark,
+                        theme_label(AppearanceTheme::Dark),
+                    )
+                    .changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut config.appearance.theme,
+                        AppearanceTheme::Light,
+                        theme_label(AppearanceTheme::Light),
+                    )
+                    .changed();
+            });
+    });
+    changed
+}
+
+fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
     super::section_heading(ui, "Features");
     super::section_card(ui, |ui| {
         changed |= ui
             .checkbox(
                 &mut config.features.attention_feed,
-                egui::RichText::new("Attention Feed").color(theme::FG).size(12.0),
+                egui::RichText::new("Attention Feed").color(theme::FG()).size(12.0),
             )
             .changed();
         super::dim_label(ui, "Show a notification feed for agent activity.");
     });
+    changed
+}
 
-    // -- Overlays --------------------------------------------------------
+fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
     super::section_heading(ui, "Overlays");
     super::section_card(ui, |ui| {
         super::dim_label(ui, "Dimensions of overlay widgets on the canvas.");
@@ -70,7 +122,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
             .num_columns(4)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Feed Width").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Feed Width").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.attention_feed_width)
@@ -80,7 +132,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     )
                     .changed();
 
-                ui.label(egui::RichText::new("Feed Height").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Feed Height").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.attention_feed_height)
@@ -91,7 +143,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     .changed();
                 ui.end_row();
 
-                ui.label(egui::RichText::new("Map Width").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Map Width").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.minimap_width)
@@ -101,7 +153,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     )
                     .changed();
 
-                ui.label(egui::RichText::new("Map Height").color(theme::FG_SOFT).size(12.0));
+                ui.label(egui::RichText::new("Map Height").color(theme::FG_SOFT()).size(12.0));
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.minimap_height)
@@ -113,7 +165,6 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                 ui.end_row();
             });
     });
-
     changed
 }
 
@@ -140,4 +191,12 @@ fn optional_f32_drag(ui: &mut Ui, value: &mut Option<f32>, suffix: &str) -> bool
     }
 
     changed
+}
+
+fn theme_label(theme: AppearanceTheme) -> &'static str {
+    match theme {
+        AppearanceTheme::Auto => "Auto (system)",
+        AppearanceTheme::Dark => "Dark",
+        AppearanceTheme::Light => "Light",
+    }
 }

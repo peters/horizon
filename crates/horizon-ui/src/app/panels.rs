@@ -1,20 +1,19 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{
-    AppShortcuts, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId,
-};
+use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
-    SSH_RECONNECT_SHORTCUT, TerminalGridCache, TerminalKeyboardContext, TerminalView, viewport_for_available_space,
+    TerminalGridCache, TerminalKeyboardContext, TerminalView, viewport_for_available_space,
 };
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
+use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
 use super::util::clamp_panel_size;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
@@ -137,35 +136,6 @@ fn show_panel_body_contents(
     }
 }
 
-fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; 18] {
-    [
-        shortcuts.command_palette,
-        shortcuts.new_terminal,
-        shortcuts.focus_active_workspace,
-        shortcuts.fit_active_workspace,
-        shortcuts.open_remote_hosts,
-        shortcuts.toggle_sidebar,
-        shortcuts.toggle_hud,
-        shortcuts.toggle_minimap,
-        shortcuts.align_workspaces_horizontally,
-        shortcuts.toggle_settings,
-        shortcuts.zoom_reset,
-        shortcuts.zoom_in,
-        shortcuts.zoom_out,
-        shortcuts.fullscreen_panel,
-        shortcuts.exit_fullscreen_panel,
-        shortcuts.fullscreen_window,
-        shortcuts.save_editor,
-        shortcuts.search,
-    ]
-}
-
-fn local_ssh_reconnect_shortcut_conflicts(shortcuts: &AppShortcuts) -> bool {
-    global_shortcut_bindings(shortcuts)
-        .into_iter()
-        .any(|binding| binding.overlaps(SSH_RECONNECT_SHORTCUT))
-}
-
 fn clip_screen_rect_to_canvas(raw_rect: Rect, canvas_rect: Rect) -> Option<Rect> {
     let clipped = raw_rect.intersect(canvas_rect);
     (clipped.is_positive()
@@ -178,7 +148,7 @@ fn clip_screen_rect_to_canvas(raw_rect: Rect, canvas_rect: Rect) -> Option<Rect>
 
 impl HorizonApp {
     fn local_ssh_reconnect_shortcut_enabled(&self) -> bool {
-        !local_ssh_reconnect_shortcut_conflicts(&self.shortcuts)
+        !ssh_reconnect_shortcut_conflicts(&self.shortcuts)
     }
 
     pub(in crate::app) fn visible_panel_geometry_for_canvas_view(
@@ -236,7 +206,7 @@ impl HorizonApp {
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::PANEL_BG))
+            .frame(egui::Frame::default().fill(theme::PANEL_BG()))
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let body_rect = Rect::from_min_max(
@@ -580,7 +550,11 @@ impl HorizonApp {
     ) {
         drag_response.context_menu(|ui| {
             ui.set_min_width(180.0);
-            ui.label(egui::RichText::new("Move to Workspace").size(11.0).color(theme::FG_DIM));
+            ui.label(
+                egui::RichText::new("Move to Workspace")
+                    .size(11.0)
+                    .color(theme::FG_DIM()),
+            );
             ui.separator();
 
             // Look up workspace names lazily — this closure only runs when the
@@ -596,7 +570,7 @@ impl HorizonApp {
                     format!("  {}", workspace.name)
                 };
                 let text = egui::RichText::new(label)
-                    .color(if is_current { workspace_color } else { theme::FG_SOFT })
+                    .color(if is_current { workspace_color } else { theme::FG_SOFT() })
                     .size(12.0);
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
                     outcome.workspace_assignment = Some(workspace.id);
@@ -612,8 +586,8 @@ impl HorizonApp {
                 ui.menu_button("Rebind Session", |ui| {
                     ui.set_min_width(220.0);
                     for (label, binding) in &rebind_options {
-                        let button =
-                            egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT)).frame(false);
+                        let button = egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT()))
+                            .frame(false);
                         if ui.add(button).clicked() {
                             self.pending_session_rebinds.push((panel_id, binding.clone()));
                             ui.close();
@@ -721,61 +695,8 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
+    use super::clip_screen_rect_to_canvas;
     use egui::{Pos2, Rect, Vec2};
-    use horizon_core::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
-
-    use super::{
-        SSH_RECONNECT_SHORTCUT, clip_screen_rect_to_canvas, global_shortcut_bindings,
-        local_ssh_reconnect_shortcut_conflicts,
-    };
-
-    #[test]
-    fn default_global_shortcuts_leave_local_ssh_reconnect_available() {
-        assert!(!local_ssh_reconnect_shortcut_conflicts(&AppShortcuts::default()));
-    }
-
-    #[test]
-    fn matching_global_shortcut_disables_local_ssh_reconnect() {
-        let shortcuts = AppShortcuts {
-            open_remote_hosts: SSH_RECONNECT_SHORTCUT,
-            ..AppShortcuts::default()
-        };
-
-        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
-    }
-
-    #[test]
-    fn overlapping_mac_command_shortcut_disables_local_ssh_reconnect() {
-        let shortcuts = AppShortcuts {
-            open_remote_hosts: ShortcutBinding::new(
-                ShortcutModifiers::MAC_CMD.plus(ShortcutModifiers::SHIFT),
-                ShortcutKey::Letter('R'),
-            ),
-            ..AppShortcuts::default()
-        };
-
-        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
-    }
-
-    #[test]
-    fn save_editor_shortcut_conflict_disables_local_ssh_reconnect() {
-        let shortcuts = AppShortcuts {
-            save_editor: SSH_RECONNECT_SHORTCUT,
-            ..AppShortcuts::default()
-        };
-
-        assert!(local_ssh_reconnect_shortcut_conflicts(&shortcuts));
-    }
-
-    #[test]
-    fn global_shortcut_bindings_include_command_palette_bindings() {
-        let shortcuts = AppShortcuts {
-            command_palette: ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('P')),
-            ..AppShortcuts::default()
-        };
-
-        assert!(global_shortcut_bindings(&shortcuts).contains(&shortcuts.command_palette));
-    }
 
     #[test]
     fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {

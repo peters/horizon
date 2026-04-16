@@ -147,7 +147,12 @@ impl PickerModalState {
         results: &[Item],
         render_row: &mut impl FnMut(&mut egui::Ui, f32, usize, &Item, bool) -> bool,
     ) -> PickerModalAction {
-        ui.label(egui::RichText::new(config.heading).color(theme::FG).size(15.0).strong());
+        ui.label(
+            egui::RichText::new(config.heading)
+                .color(theme::FG())
+                .size(15.0)
+                .strong(),
+        );
         ui.add_space(10.0);
 
         self.render_query_input(ui, layout.inner, config.hint_text);
@@ -159,7 +164,7 @@ impl PickerModalState {
         ui.add_space(8.0);
 
         if let Some(status_text) = config.status_text {
-            ui.label(egui::RichText::new(status_text).size(11.0).color(theme::FG_DIM));
+            ui.label(egui::RichText::new(status_text).size(11.0).color(theme::FG_DIM()));
             ui.add_space(6.0);
         }
 
@@ -179,11 +184,11 @@ impl PickerModalState {
     fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect, hint_text: &str) {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
         ui.painter()
-            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED);
+            .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED());
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT, 70)),
+            Stroke::new(1.0, theme::alpha(theme::ACCENT(), 70)),
             StrokeKind::Inside,
         );
 
@@ -196,10 +201,10 @@ impl PickerModalState {
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::monospace(14.0))
-                .text_color(theme::FG)
+                .text_color(theme::FG())
                 .frame(false)
                 .desired_width(text_rect.width())
-                .hint_text(egui::RichText::new(hint_text).color(theme::FG_DIM).size(13.0))
+                .hint_text(egui::RichText::new(hint_text).color(theme::FG_DIM()).size(13.0))
                 .margin(Margin::ZERO),
         );
 
@@ -294,7 +299,7 @@ fn render_footer(ui: &mut egui::Ui, footer_action_label: Option<&str>) -> bool {
             if let Some(label) = footer_action_label {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
-                        .add(Button::new(egui::RichText::new(label).size(11.5).color(theme::FG_DIM)).frame(false))
+                        .add(Button::new(egui::RichText::new(label).size(11.5).color(theme::FG_DIM())).frame(false))
                         .clicked()
                     {
                         footer_action = true;
@@ -326,17 +331,17 @@ fn picker_layout(screen_rect: Rect) -> PickerLayout {
 
 fn paint_picker_card(ui: &egui::Ui, card_rect: Rect) {
     let painter = ui.painter();
-    painter.rect_filled(card_rect, CornerRadius::same(20), theme::PANEL_BG);
+    painter.rect_filled(card_rect, CornerRadius::same(20), theme::PANEL_BG());
     painter.rect_stroke(
         card_rect,
         CornerRadius::same(20),
-        Stroke::new(1.5, theme::alpha(theme::ACCENT, 80)),
+        Stroke::new(1.5, theme::alpha(theme::ACCENT(), 80)),
         StrokeKind::Outside,
     );
     painter.rect_stroke(
         card_rect.expand(2.0),
         CornerRadius::same(22),
-        Stroke::new(2.0, theme::alpha(theme::ACCENT, 25)),
+        Stroke::new(2.0, theme::alpha(theme::ACCENT(), 25)),
         StrokeKind::Outside,
     );
 }
@@ -345,14 +350,14 @@ fn keyboard_hint(ui: &mut egui::Ui, key: &str, desc: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         egui::Frame::default()
-            .fill(theme::BG_ELEVATED)
+            .fill(theme::BG_ELEVATED())
             .corner_radius(4)
             .inner_margin(Margin::symmetric(5, 2))
-            .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 160)))
+            .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 160)))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(key).monospace().size(10.0).color(theme::FG));
+                ui.label(egui::RichText::new(key).monospace().size(10.0).color(theme::FG()));
             });
-        ui.label(egui::RichText::new(desc).size(10.5).color(theme::FG_DIM));
+        ui.label(egui::RichText::new(desc).size(10.5).color(theme::FG_DIM()));
         ui.add_space(8.0);
     });
 }

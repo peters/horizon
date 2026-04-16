@@ -17,9 +17,9 @@ pub(super) fn render(
         .exact_height(super::SETTINGS_BAR_HEIGHT)
         .frame(
             egui::Frame::default()
-                .fill(theme::BG_ELEVATED)
+                .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 8))
-                .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE, 100))),
+                .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 100))),
         )
         .show(ctx, |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -29,7 +29,7 @@ pub(super) fn render(
                 if !is_valid {
                     ui.label(
                         egui::RichText::new("Invalid config")
-                            .color(theme::PALETTE_RED)
+                            .color(theme::PALETTE_RED())
                             .size(12.0),
                     );
                 }
@@ -43,9 +43,9 @@ pub(super) fn render(
                         action = SettingsAction::Revert;
                     } else if ui
                         .add(
-                            Button::new(egui::RichText::new("Close").size(12.0).color(theme::FG_SOFT))
-                                .fill(theme::PANEL_BG_ALT)
-                                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE))
+                            Button::new(egui::RichText::new("Close").size(12.0).color(theme::FG_SOFT()))
+                                .fill(theme::PANEL_BG_ALT())
+                                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
                                 .corner_radius(8),
                         )
                         .clicked()
