@@ -48,7 +48,6 @@ surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.
 [profile.release]
 lto = true
 strip = true
-panic = "abort"
 
 [profile.profiling]
 inherits = "release"
