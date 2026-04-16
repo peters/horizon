@@ -7,6 +7,7 @@ use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
 use super::super::input;
 use crate::{loading_spinner, theme};
 
+use super::canvas::CanvasGridCache;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
 
 impl HorizonApp {
@@ -92,6 +93,9 @@ impl HorizonApp {
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ctx, self.appearance_theme);
             self.theme_applied = true;
+            self.terminal_grid_cache.clear();
+            self.canvas_grid_cache = CanvasGridCache::default();
+            self.editor_preview_cache.clear();
         }
 
         if !self.poll_startup_bootstrap() {
