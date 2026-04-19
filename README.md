@@ -197,11 +197,13 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Ctrl+Shift+W** | Focus the active workspace at the current zoom |
 | **Ctrl+Shift+9** | Fit the active workspace into view |
 | **Ctrl+Shift+H** | Open Remote Hosts overlay |
+| **Ctrl+Shift+J** | Open the sessions picker |
 | **Ctrl+Shift+B** | Toggle sidebar |
 | **Ctrl+Shift+U** | Toggle HUD |
 | **Ctrl+Shift+M** | Toggle minimap |
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
 | **Ctrl+Shift+,** | Open settings editor |
+| **Ctrl+Shift+F** | Focus the terminal search bar |
 | **Ctrl+0** | Reset canvas zoom to 100% |
 | **Ctrl+Plus** | Zoom canvas in |
 | **Ctrl+Minus** | Zoom canvas out |
@@ -209,6 +211,9 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Escape** | Exit active panel fullscreen |
 | **Ctrl+Shift+F11** | Toggle window fullscreen |
 | **Ctrl+Shift+S** | Save the active Markdown editor |
+| **Ctrl+Shift+C** | Copy the current terminal selection |
+| **Ctrl+Shift+V** | Paste into the focused terminal |
+| **Ctrl+Shift+R** | Reconnect the focused disconnected SSH panel |
 
 ### Structured Workflow
 
@@ -232,7 +237,7 @@ If you do not want to start by dragging panels around the canvas, use Horizon li
 | **Ctrl+double-click** canvas | Create a new workspace |
 | **Ctrl+double-click** inside a workspace | Add a new terminal |
 
-<sub>On macOS, substitute Cmd for Ctrl.</sub>
+<sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings, and on Windows you can also use Ctrl+Insert / Shift+Insert. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
 
 ---
 
