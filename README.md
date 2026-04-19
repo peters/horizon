@@ -87,7 +87,7 @@ A built-in **git status panel** watches your repo in the background. See changed
 <td>
 
 ### Live Settings Editor
-Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highlighting** and live preview. Every change applies instantly to the canvas behind it.
+Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highlighting** and live preview. Toggle between **light and dark themes** or follow the system; every change applies instantly to the canvas behind it.
 
 </td>
 </tr>
@@ -316,7 +316,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 | [**eframe / egui**](https://github.com/emilk/egui) | Immediate-mode UI framework |
 | [**wgpu**](https://wgpu.rs) | GPU rendering — Vulkan, Metal, DX12, OpenGL |
 | [**alacritty_terminal**](https://github.com/alacritty/alacritty) | Battle-tested terminal emulation |
-| [**Catppuccin**](https://catppuccin.com) | Mocha and Latte inspired palettes |
+| [**Catppuccin**](https://catppuccin.com) | Terminal palettes (Mocha dark / Latte light) on a warm editorial UI chrome |
 
 ---
 
