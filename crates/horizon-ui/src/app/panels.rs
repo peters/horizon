@@ -29,8 +29,6 @@ struct PanelSnapshot {
     canvas_position: Pos2,
     canvas_size: Vec2,
     current_workspace_id: WorkspaceId,
-    title: String,
-    display_title: String,
     kind: PanelKind,
     history_size: usize,
     scrollback_limit: usize,
@@ -259,39 +257,39 @@ impl HorizonApp {
         self.panel_screen_order.clear();
         let workspace_collision_ids = self.workspace_collision_scope(None);
 
-        let workspaces: Vec<(WorkspaceId, String, Color32)> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
+        // Reuse workspace color vec across frames (avoids per-frame String
+        // clones — names are looked up lazily in the context menu).
+        self.workspace_colors.clear();
+        self.workspace_colors
+            .extend(self.board.workspaces.iter().map(|workspace| {
                 let (r, g, b) = workspace.accent();
-                (workspace.id, workspace.name.clone(), Color32::from_rgb(r, g, b))
-            })
-            .collect();
+                (workspace.id, Color32::from_rgb(r, g, b))
+            }));
 
-        let mut panel_order: Vec<_> = self
-            .board
-            .panels
-            .iter()
-            .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
-            .enumerate()
-            .map(|(index, panel)| (panel.id, index))
-            .collect();
+        // Reuse panel ordering vec across frames. Collect into a local first,
+        // then swap into the field, because the filter borrows self immutably
+        // while extend borrows panel_render_order mutably.
+        let mut order = std::mem::take(&mut self.panel_render_order);
+        order.clear();
+        order.extend(
+            self.board
+                .panels
+                .iter()
+                .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
+                .enumerate()
+                .map(|(index, panel)| (panel.id, index)),
+        );
+        self.panel_render_order = order;
         let focused = self.board.focused;
-        panel_order.sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
+        self.panel_render_order
+            .sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
         let canvas_rect = self.canvas_rect(ctx);
         let mut panels_to_close = Vec::new();
 
-        for (panel_id, fallback_index) in panel_order {
-            if self.render_panel(
-                ctx,
-                canvas_rect,
-                panel_id,
-                fallback_index,
-                &workspaces,
-                &workspace_collision_ids,
-            ) {
+        for i in 0..self.panel_render_order.len() {
+            let (panel_id, fallback_index) = self.panel_render_order[i];
+            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -306,33 +304,28 @@ impl HorizonApp {
         canvas_rect: Rect,
         panel_id: PanelId,
         _fallback_index: usize,
-        workspaces: &[(WorkspaceId, String, Color32)],
         workspace_collision_ids: &[WorkspaceId],
     ) -> bool {
-        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect, workspaces) else {
+        let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, workspaces);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
     #[profiling::function]
-    fn panel_snapshot(
-        &self,
-        panel_id: PanelId,
-        canvas_rect: Rect,
-        workspaces: &[(WorkspaceId, String, Color32)],
-    ) -> Option<PanelSnapshot> {
+    fn panel_snapshot(&self, panel_id: PanelId, canvas_rect: Rect) -> Option<PanelSnapshot> {
         self.board.panel(panel_id).and_then(|panel| {
             let geometry = self.panel_screen_geometry(panel, canvas_rect)?;
             let terminal = panel.terminal();
             let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
             let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
 
-            let workspace_accent = workspaces
+            let workspace_accent = self
+                .workspace_colors
                 .iter()
-                .find(|(workspace_id, _, _)| *workspace_id == panel.workspace_id)
-                .map(|(_, _, color)| *color);
+                .find(|(workspace_id, _)| *workspace_id == panel.workspace_id)
+                .map(|(_, color)| *color);
 
             let attention_badge = if self.template_config.features.attention_feed {
                 self.board
@@ -348,8 +341,6 @@ impl HorizonApp {
                 canvas_position,
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
-                title: panel.title.clone(),
-                display_title: panel.display_title().into_owned(),
                 kind: panel.kind,
                 history_size: terminal.map_or(0, horizon_core::Terminal::history_size),
                 scrollback_limit: terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
@@ -369,7 +360,6 @@ impl HorizonApp {
         canvas_rect: Rect,
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
-        workspaces: &[(WorkspaceId, String, Color32)],
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
@@ -427,10 +417,19 @@ impl HorizonApp {
                         panel_id,
                         snapshot.current_workspace_id,
                         snapshot.kind,
-                        workspaces,
                         &mut outcome,
                     );
                 }
+
+                // Compute display_title from the board on demand, avoiding a
+                // per-panel String clone in PanelSnapshot. The Cow is borrowed
+                // when the underlying panel title is sufficient, and only
+                // allocates when a formatted composite title is needed.
+                let display_title = if snapshot.is_renaming {
+                    None
+                } else {
+                    self.board.panel(panel_id).map(|p| p.display_title())
+                };
 
                 paint_panel_chrome(
                     ui,
@@ -441,11 +440,7 @@ impl HorizonApp {
                         titlebar_rect: rects.titlebar,
                         close_rect: rects.close,
                         resize_rect: rects.resize,
-                        title: if snapshot.is_renaming {
-                            None
-                        } else {
-                            Some(snapshot.display_title.as_str())
-                        },
+                        title: display_title.as_deref(),
                         history_size: snapshot.history_size,
                         scrollback_limit: snapshot.scrollback_limit,
                         focused: snapshot.is_focused,
@@ -455,6 +450,9 @@ impl HorizonApp {
                         ssh_status: snapshot.ssh_status,
                     },
                 );
+
+                // Release the shared board borrow before the mutable borrow below.
+                drop(display_title);
 
                 if snapshot.is_renaming {
                     outcome.rename_action = show_inline_rename_editor(
@@ -548,7 +546,6 @@ impl HorizonApp {
         panel_id: PanelId,
         current_workspace_id: WorkspaceId,
         kind: PanelKind,
-        workspaces: &[(WorkspaceId, String, Color32)],
         outcome: &mut PanelUiOutcome,
     ) {
         drag_response.context_menu(|ui| {
@@ -560,18 +557,23 @@ impl HorizonApp {
             );
             ui.separator();
 
-            for (workspace_id, workspace_name, workspace_color) in workspaces {
-                let is_current = current_workspace_id == *workspace_id;
+            // Look up workspace names lazily — this closure only runs when the
+            // context menu is actually open, so the per-workspace iteration and
+            // formatting cost is not paid on every frame.
+            for workspace in &self.board.workspaces {
+                let (r, g, b) = workspace.accent();
+                let workspace_color = Color32::from_rgb(r, g, b);
+                let is_current = current_workspace_id == workspace.id;
                 let label = if is_current {
-                    format!("● {workspace_name}")
+                    format!("● {}", workspace.name)
                 } else {
-                    format!("  {workspace_name}")
+                    format!("  {}", workspace.name)
                 };
                 let text = egui::RichText::new(label)
-                    .color(if is_current { *workspace_color } else { theme::FG_SOFT() })
+                    .color(if is_current { workspace_color } else { theme::FG_SOFT() })
                     .size(12.0);
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                    outcome.workspace_assignment = Some(*workspace_id);
+                    outcome.workspace_assignment = Some(workspace.id);
                     ui.close();
                 }
             }
@@ -626,7 +628,9 @@ impl HorizonApp {
         if matches!(outcome.command, Some(PanelCommand::StartRename)) {
             self.clear_workspace_rename();
             self.renaming_panel = Some(panel_id);
-            self.panel_rename_buffer.clone_from(&snapshot.title);
+            if let Some(panel) = self.board.panel(panel_id) {
+                self.panel_rename_buffer.clone_from(&panel.title);
+            }
         }
 
         match outcome.rename_action {
