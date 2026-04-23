@@ -38,12 +38,12 @@ egui_commonmark = { version = "0.22.0", default-features = false, features = ["p
 winit = "0.30.13"
 tempfile = "3.20.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
-uuid = { version = "1.23.0", features = ["serde", "v4"] }
+uuid = { version = "1.23.1", features = ["serde", "v4"] }
 git2 = { version = "0.20", default-features = false }
 regex = "1.12.3"
 arboard = "3.6.1"
-tokio = { version = "1.52.0", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.12", package = "surge-core" }
+tokio = { version = "1.52.1", features = ["rt", "macros"] }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.16", package = "surge-core" }
 
 [profile.release]
 lto = true

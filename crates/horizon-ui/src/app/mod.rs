@@ -426,11 +426,10 @@ fn configure_fonts() -> egui::FontDefinitions {
         include_bytes!("../../assets/fonts/NotoSansSymbols2-Regular.ttf"),
     );
 
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, FONT_INTER.to_owned());
+    let proportional = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    proportional.insert(0, FONT_INTER.to_owned());
+    proportional.insert(1, FONT_NOTO_CJK.to_owned());
+    proportional.insert(2, FONT_NOTO_SYMBOLS.to_owned());
 
     let monospace = fonts.families.entry(egui::FontFamily::Monospace).or_default();
     monospace.insert(0, FONT_JETBRAINS_MONO.to_owned());
@@ -530,7 +529,7 @@ mod tests {
     use super::{FONT_INTER, FONT_JETBRAINS_MONO, FONT_NOTO_CJK, FONT_NOTO_SYMBOLS, configure_fonts};
 
     #[test]
-    fn configure_fonts_registers_terminal_fallback_stack() {
+    fn configure_fonts_registers_ui_and_terminal_fallback_stacks() {
         let fonts = configure_fonts();
         let proportional = fonts
             .families
@@ -542,6 +541,8 @@ mod tests {
             .expect("monospace font family");
 
         assert_eq!(proportional.first().map(String::as_str), Some(FONT_INTER));
+        assert_eq!(proportional.get(1).map(String::as_str), Some(FONT_NOTO_CJK));
+        assert_eq!(proportional.get(2).map(String::as_str), Some(FONT_NOTO_SYMBOLS));
         assert_eq!(monospace.first().map(String::as_str), Some(FONT_JETBRAINS_MONO));
         assert_eq!(monospace.get(1).map(String::as_str), Some(FONT_NOTO_CJK));
         assert_eq!(monospace.get(2).map(String::as_str), Some(FONT_NOTO_SYMBOLS));

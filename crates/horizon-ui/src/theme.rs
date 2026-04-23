@@ -75,27 +75,27 @@ const DARK_THEME: ThemePalette = ThemePalette {
 };
 
 const LIGHT_THEME: ThemePalette = ThemePalette {
-    bg: Color32::from_rgb(243, 245, 250),
-    bg_elevated: Color32::from_rgb(236, 239, 246),
-    panel_bg: Color32::from_rgb(230, 234, 242),
-    panel_bg_alt: Color32::from_rgb(222, 227, 236),
-    fg: Color32::from_rgb(76, 79, 105),
-    fg_soft: Color32::from_rgb(92, 95, 119),
-    fg_dim: Color32::from_rgb(108, 111, 133),
-    cursor: Color32::from_rgb(30, 102, 245),
-    grid_dot: Color32::from_rgb(205, 212, 224),
-    accent: Color32::from_rgb(30, 102, 245),
-    border_subtle: Color32::from_rgb(188, 192, 204),
-    border_strong: Color32::from_rgb(172, 176, 190),
-    titlebar_bg: Color32::from_rgb(236, 240, 248),
-    toolbar_bg: Color32::from_rgb(239, 242, 248),
-    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(65, 108, 226, 18),
-    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(245, 147, 66, 18),
-    btn_close: Color32::from_rgb(214, 67, 95),
-    palette_green: Color32::from_rgb(64, 160, 43),
+    bg: Color32::from_rgb(247, 244, 239),
+    bg_elevated: Color32::from_rgb(253, 251, 247),
+    panel_bg: Color32::from_rgb(254, 253, 250),
+    panel_bg_alt: Color32::from_rgb(243, 240, 233),
+    fg: Color32::from_rgb(24, 28, 34),
+    fg_soft: Color32::from_rgb(77, 86, 96),
+    fg_dim: Color32::from_rgb(131, 143, 154),
+    cursor: Color32::from_rgb(94, 106, 210),
+    grid_dot: Color32::from_rgb(222, 216, 204),
+    accent: Color32::from_rgb(94, 106, 210),
+    border_subtle: Color32::from_rgb(229, 224, 213),
+    border_strong: Color32::from_rgb(202, 194, 177),
+    titlebar_bg: Color32::from_rgb(248, 246, 240),
+    toolbar_bg: Color32::from_rgb(248, 246, 240),
+    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(94, 106, 210, 14),
+    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(243, 158, 80, 22),
+    btn_close: Color32::from_rgb(214, 67, 67),
+    palette_green: Color32::from_rgb(5, 150, 105),
     palette_red: Color32::from_rgb(210, 15, 57),
-    palette_yellow: Color32::from_rgb(223, 142, 29),
-    palette_cyan: Color32::from_rgb(4, 165, 229),
+    palette_yellow: Color32::from_rgb(217, 119, 6),
+    palette_cyan: Color32::from_rgb(8, 145, 178),
     terminal_palette: [
         Color32::from_rgb(92, 95, 119),
         Color32::from_rgb(210, 15, 57),
@@ -399,7 +399,7 @@ fn visuals(theme: ResolvedTheme) -> Visuals {
 
     let (window_shadow_alpha, popup_shadow_alpha) = match theme {
         ResolvedTheme::Dark => (128, 118),
-        ResolvedTheme::Light => (54, 44),
+        ResolvedTheme::Light => (36, 24),
     };
 
     visuals.window_corner_radius = CornerRadius::same(16);

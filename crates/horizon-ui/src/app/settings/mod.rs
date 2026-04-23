@@ -225,10 +225,6 @@ impl HorizonApp {
         self.board.attention_enabled = config.features.attention_feed;
         if self.appearance_theme != config.appearance.theme {
             self.appearance_theme = config.appearance.theme;
-            // Do not mutate resolved_theme or the global atomic here.
-            // prepare_frame will apply the new preference atomically at the
-            // start of the next frame (egui styles + global atomic + cache
-            // clearing) so panels never render with mixed theme state.
             self.theme_applied = false;
         }
     }
