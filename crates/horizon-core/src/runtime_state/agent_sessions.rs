@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ impl AgentSessionCatalog {
         let mut sessions = load_claude_sessions()?;
         sessions.extend(load_codex_sessions()?);
         sessions.extend(load_opencode_sessions()?);
-        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        sessions.sort_by_key(|session| Reverse(session.updated_at));
         Ok(Self { sessions })
     }
 
@@ -75,7 +76,7 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
 
     let mut session_paths = Vec::new();
     collect_claude_project_files(&projects_dir, &mut session_paths)?;
-    session_paths.sort_by(|left, right| right.1.cmp(&left.1));
+    session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
     session_paths.truncate(super::MAX_CLAUDE_SESSION_FILES);
 
     let mut sessions_by_id: HashMap<String, AgentSessionRecord> = HashMap::new();
@@ -96,7 +97,7 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
     }
 
     let mut sessions: Vec<_> = sessions_by_id.into_values().collect();
-    sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    sessions.sort_by_key(|session| Reverse(session.updated_at));
     Ok(sessions)
 }
 

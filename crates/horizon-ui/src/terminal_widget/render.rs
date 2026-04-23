@@ -288,19 +288,22 @@ fn cell_text(cell: &Cell) -> Option<String> {
         return None;
     }
 
-    if cell.c == ' ' && cell.zerowidth().is_none() {
+    let zerowidth = cell.zerowidth();
+    if cell.c == ' ' && zerowidth.is_none() {
         return None;
     }
 
-    let mut text = String::new();
-    text.push(cell.c);
-    if let Some(chars) = cell.zerowidth() {
-        for ch in chars {
-            text.push(*ch);
+    match zerowidth {
+        Some(chars) => {
+            let mut text = String::with_capacity(cell.c.len_utf8() + chars.len() * 3);
+            text.push(cell.c);
+            for ch in chars {
+                text.push(*ch);
+            }
+            Some(text)
         }
+        None => Some(cell.c.to_string()),
     }
-
-    Some(text)
 }
 
 fn batchable_cell_char(cell: &Cell) -> Option<char> {

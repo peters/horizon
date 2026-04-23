@@ -55,10 +55,32 @@ pub(super) fn handle_terminal_pointer_input(
         interaction.body.request_focus();
     }
 
-    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
     let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
     let body_pointer_pos = response_pointer_pos(&interaction.body);
     let scrollbar_pointer_pos = response_pointer_pos(&interaction.scrollbar);
+
+    // Check cheap interaction-state conditions before cloning the event list.
+    // For most panels the pointer is elsewhere, so we exit early and avoid the
+    // per-panel Vec<Event> clone entirely.
+    let should_handle_pointer = body_pointer_pos.is_some()
+        || scrollbar_pointer_pos.is_some()
+        || interaction.body.is_pointer_button_down_on()
+        || interaction.scrollbar.is_pointer_button_down_on()
+        || interaction.body.drag_stopped_by(PointerButton::Primary)
+        || interaction.body.double_clicked()
+        || interaction.body.triple_clicked()
+        || interaction.body.clicked_by(PointerButton::Middle)
+        || interaction.scrollbar.clicked()
+        || ui.input(|input| {
+            pointer_event_targets_rect(&input.events, from_global, interaction.layout.body)
+                || pointer_event_targets_rect(&input.events, from_global, interaction.layout.scrollbar)
+        });
+    if !should_handle_pointer {
+        return;
+    }
+
+    // Only clone events for the panel that actually needs pointer processing.
+    let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
     let body_primary_press_pos = pointer_button_event_pos(
         &events,
         from_global,
@@ -73,20 +95,6 @@ pub(super) fn handle_terminal_pointer_input(
         true,
         interaction.layout.body,
     );
-    let should_handle_pointer = body_pointer_pos.is_some()
-        || scrollbar_pointer_pos.is_some()
-        || pointer_event_targets_rect(&events, from_global, interaction.layout.body)
-        || pointer_event_targets_rect(&events, from_global, interaction.layout.scrollbar)
-        || interaction.body.is_pointer_button_down_on()
-        || interaction.scrollbar.is_pointer_button_down_on()
-        || interaction.body.drag_stopped_by(PointerButton::Primary)
-        || interaction.body.double_clicked()
-        || interaction.body.triple_clicked()
-        || interaction.body.clicked_by(PointerButton::Middle)
-        || interaction.scrollbar.clicked();
-    if !should_handle_pointer {
-        return;
-    }
 
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;

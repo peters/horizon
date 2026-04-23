@@ -340,15 +340,12 @@ impl HorizonApp {
         self.panel_screen_order.clear();
         let workspace_collision_ids = self.workspace_collision_scope(Some(workspace_id));
 
-        let workspaces: Vec<_> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| {
+        self.workspace_colors.clear();
+        self.workspace_colors
+            .extend(self.board.workspaces.iter().map(|workspace| {
                 let (r, g, b) = workspace.accent();
-                (workspace.id, workspace.name.clone(), Color32::from_rgb(r, g, b))
-            })
-            .collect();
+                (workspace.id, Color32::from_rgb(r, g, b))
+            }));
 
         let mut panel_ids = self
             .board
@@ -361,14 +358,7 @@ impl HorizonApp {
         let canvas_rect = detached_canvas_rect(ctx);
         self.panels_to_close.clear();
         for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
-            if self.render_panel(
-                ctx,
-                canvas_rect,
-                panel_id,
-                fallback_index,
-                &workspaces,
-                &workspace_collision_ids,
-            ) {
+            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
                 self.panels_to_close.push(panel_id);
             }
         }
