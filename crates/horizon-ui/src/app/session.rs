@@ -97,6 +97,36 @@ fn collect_dynamic_binding_updates(
     assignments
 }
 
+fn used_agent_session_ids(board: &Board) -> HashSet<String> {
+    board
+        .panels
+        .iter()
+        .filter(|panel| panel.kind.supports_session_binding())
+        .filter_map(|panel| {
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.clone())
+                .or_else(|| match &panel.resume {
+                    PanelResume::Session { session_id } => Some(session_id.clone()),
+                    PanelResume::Fresh | PanelResume::Last => None,
+                })
+        })
+        .collect()
+}
+
+fn select_panel_launch_binding(
+    kind: PanelKind,
+    cwd: Option<&str>,
+    used_session_ids: &HashSet<String>,
+    recent_for: impl FnOnce(PanelKind, Option<&str>) -> Vec<horizon_core::AgentSessionRecord>,
+) -> Option<AgentSessionBinding> {
+    recent_for(kind, cwd)
+        .into_iter()
+        .find(|session| !used_session_ids.contains(&session.session_id))
+        .map(horizon_core::AgentSessionRecord::into_binding)
+}
+
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
         self.release_active_session_lease();
@@ -215,11 +245,11 @@ impl HorizonApp {
         match AgentSessionCatalog::load() {
             Ok(catalog) => {
                 let cwd = opts.cwd.as_ref().map(|path| path.display().to_string());
-                opts.session_binding = catalog
-                    .recent_for(opts.kind, cwd.as_deref())
-                    .into_iter()
-                    .next()
-                    .map(horizon_core::AgentSessionRecord::into_binding);
+                let used_session_ids = used_agent_session_ids(&self.board);
+                opts.session_binding =
+                    select_panel_launch_binding(opts.kind, cwd.as_deref(), &used_session_ids, |kind, cwd| {
+                        catalog.recent_for(kind, cwd)
+                    });
                 self.session_catalog = catalog;
                 self.last_session_catalog_refresh = Some(Instant::now());
             }
@@ -472,7 +502,7 @@ pub(super) fn render_loading_view(ctx: &Context) {
 mod tests {
     use std::collections::HashSet;
 
-    use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates};
+    use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates, select_panel_launch_binding};
     use horizon_core::{PanelId, PanelKind, PanelResume, PanelState, RuntimeState, WorkspaceState};
 
     #[test]
@@ -710,5 +740,51 @@ mod tests {
         });
 
         assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn panel_launch_binding_skips_sessions_used_by_open_panels() {
+        let used_session_ids = HashSet::from(["session-a".to_string()]);
+        let binding = select_panel_launch_binding(PanelKind::Codex, Some("/repo"), &used_session_ids, |kind, cwd| {
+            assert_eq!(kind, PanelKind::Codex);
+            assert_eq!(cwd, Some("/repo"));
+            vec![
+                horizon_core::AgentSessionRecord {
+                    kind: PanelKind::Codex,
+                    session_id: "session-a".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 20,
+                },
+                horizon_core::AgentSessionRecord {
+                    kind: PanelKind::Codex,
+                    session_id: "session-b".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 12,
+                },
+            ]
+        })
+        .expect("unused binding should be selected");
+
+        assert_eq!(binding.session_id, "session-b");
+    }
+
+    #[test]
+    fn panel_launch_binding_starts_fresh_when_recent_sessions_are_used() {
+        let used_session_ids = HashSet::from(["session-a".to_string()]);
+        let binding = select_panel_launch_binding(PanelKind::Codex, Some("/repo"), &used_session_ids, |kind, cwd| {
+            assert_eq!(kind, PanelKind::Codex);
+            assert_eq!(cwd, Some("/repo"));
+            vec![horizon_core::AgentSessionRecord {
+                kind: PanelKind::Codex,
+                session_id: "session-a".to_string(),
+                cwd: Some("/repo".to_string()),
+                label: None,
+                updated_at: 20,
+            }]
+        });
+
+        assert!(binding.is_none());
     }
 }
