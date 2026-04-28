@@ -167,7 +167,9 @@ jobs:
   snap-build:
     name: Snap Build
     needs: snap-build-inputs
-    if: needs.snap-build-inputs.outputs.run_snap_build == 'true'
+    # Disabled: Snap packaging paused. Re-enable by restoring the previous
+    # condition: needs.snap-build-inputs.outputs.run_snap_build == 'true'
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

@@ -519,7 +519,9 @@ jobs:
 
   publish-snap:
     name: Publish Snap
-    if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && (github.event_name == 'release' || inputs.publish_snap) }}
+    # Disabled: Snap Store publication paused. Re-enable by restoring the previous
+    # condition: ${{ needs.validate-release.outputs.release_prerelease == 'false' && (github.event_name == 'release' || inputs.publish_snap) }}
+    if: false
     needs: [validate-release]
     runs-on: ubuntu-latest
     steps:
