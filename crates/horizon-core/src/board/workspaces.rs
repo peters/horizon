@@ -59,7 +59,27 @@ impl Board {
     /// # Errors
     ///
     /// Returns an error if the underlying PTY-backed panel cannot be spawned.
-    pub fn create_panel(&mut self, mut opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
+    pub fn create_panel(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
+        self.create_panel_with(opts, workspace, Panel::spawn)
+    }
+
+    pub(super) fn create_failed_restore_panel(
+        &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+        error_message: &str,
+    ) -> Result<PanelId> {
+        self.create_panel_with(opts, workspace, |id, workspace, opts| {
+            Panel::restore_failure(id, workspace, opts, error_message)
+        })
+    }
+
+    fn create_panel_with(
+        &mut self,
+        mut opts: PanelOptions,
+        workspace: WorkspaceId,
+        spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
+    ) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
         let explicit_position = opts.position.is_some();
@@ -80,7 +100,7 @@ impl Board {
 
         let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
         let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
-        let mut panel = Panel::spawn(id, workspace, opts)?;
+        let mut panel = spawn_panel(id, workspace, opts)?;
         panel.move_to(layout_position);
         panel.resize_layout(layout_size);
         self.panels.push(panel);

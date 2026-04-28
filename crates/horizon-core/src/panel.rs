@@ -243,6 +243,20 @@ impl Panel {
         spawn_panel(id, workspace_id, opts)
     }
 
+    /// Build a terminal-backed placeholder for a panel that failed to restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the placeholder terminal runtime cannot be created.
+    pub(crate) fn restore_failure(
+        id: PanelId,
+        workspace_id: WorkspaceId,
+        opts: PanelOptions,
+        error_message: &str,
+    ) -> Result<Self> {
+        spawn::restore_failure_panel(id, workspace_id, opts, error_message)
+    }
+
     /// Drain pending terminal events. Returns `true` if any output was processed.
     #[profiling::function]
     pub fn process_output(&mut self) -> PanelProcessOutput {
