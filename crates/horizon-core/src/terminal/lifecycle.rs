@@ -81,6 +81,7 @@ impl Terminal {
             pending_pty_resize: None,
             pty_resized: false,
             child_exited: false,
+            child_exit_status: None,
             bell_pending: false,
             pending_notification: None,
         };

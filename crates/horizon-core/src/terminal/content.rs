@@ -171,6 +171,14 @@ impl Terminal {
         self.child_exited
     }
 
+    /// Returns the exit status of the child process if it has exited *and* a
+    /// status was reported. `None` while the child is still running, or after
+    /// an `Event::Exit` that didn't carry a status (e.g. internal teardown).
+    #[must_use]
+    pub fn child_exit_status(&self) -> Option<std::process::ExitStatus> {
+        self.child_exit_status
+    }
+
     pub fn with_renderable_content<R>(&self, render: impl FnOnce(RenderableContent<'_>) -> R) -> R {
         let term = self.term.lock();
         render(term.renderable_content())

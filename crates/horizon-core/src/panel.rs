@@ -336,9 +336,18 @@ impl Panel {
         self.content.terminal().is_some_and(Terminal::child_exited)
     }
 
+    /// Returns `true` only when the panel should be auto-removed after its
+    /// child process exits.
+    ///
+    /// SSH panels never auto-close (the user often wants to see the
+    /// disconnection message). For every other kind we keep the panel open
+    /// unless the child reported a *successful* exit (status code `0`):
+    /// a missing binary, crash, or signal kill leaves the panel around so
+    /// the user can read the error instead of having it vanish silently.
     #[must_use]
     pub fn should_close_after_exit(&self) -> bool {
-        !matches!(self.kind, PanelKind::Ssh)
+        let exit_status = self.content.terminal().and_then(Terminal::child_exit_status);
+        should_close_for_exit_status(self.kind, exit_status)
     }
 
     /// Returns `true` if the terminal bell has fired since the last call.
@@ -588,6 +597,13 @@ impl Panel {
     }
 }
 
+fn should_close_for_exit_status(kind: PanelKind, exit_status: Option<std::process::ExitStatus>) -> bool {
+    if matches!(kind, PanelKind::Ssh) {
+        return false;
+    }
+    exit_status.is_some_and(|status| status.success())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -595,7 +611,7 @@ mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent,
         PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind,
-        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind, should_close_for_exit_status,
     };
     use crate::ssh::SshConnection;
 
@@ -664,6 +680,56 @@ mod tests {
         panel.kind = PanelKind::Ssh;
 
         assert!(!panel.should_close_after_exit());
+    }
+
+    #[cfg(unix)]
+    fn exit_status_with_code(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        // Wait status format on Unix: low 8 bits hold the signal (0 here),
+        // next 8 bits hold the exit code.
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn exit_status_with_code(code: i32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code as u32)
+    }
+
+    #[test]
+    fn agent_panel_with_no_reported_exit_status_stays_open() {
+        // Mirrors the "binary not found" / "child still running" case where
+        // `Terminal::child_exit_status` returns `None`.
+        assert!(!should_close_for_exit_status(PanelKind::Codex, None));
+        assert!(!should_close_for_exit_status(PanelKind::Shell, None));
+    }
+
+    #[test]
+    fn agent_panel_with_failure_exit_stays_open() {
+        // 127 is the canonical "command not found" status from a shell — the
+        // exact case where we don't want the panel to vanish before the user
+        // can read the error.
+        let failure = exit_status_with_code(127);
+        assert!(!should_close_for_exit_status(PanelKind::Codex, Some(failure)));
+        assert!(!should_close_for_exit_status(PanelKind::Gemini, Some(failure)));
+        assert!(!should_close_for_exit_status(PanelKind::Shell, Some(failure)));
+    }
+
+    #[test]
+    fn agent_panel_with_clean_exit_auto_closes() {
+        let success = exit_status_with_code(0);
+        assert!(should_close_for_exit_status(PanelKind::Codex, Some(success)));
+        assert!(should_close_for_exit_status(PanelKind::Claude, Some(success)));
+        assert!(should_close_for_exit_status(PanelKind::Shell, Some(success)));
+    }
+
+    #[test]
+    fn ssh_panels_never_auto_close_regardless_of_exit_status() {
+        let success = exit_status_with_code(0);
+        let failure = exit_status_with_code(1);
+        assert!(!should_close_for_exit_status(PanelKind::Ssh, None));
+        assert!(!should_close_for_exit_status(PanelKind::Ssh, Some(success)));
+        assert!(!should_close_for_exit_status(PanelKind::Ssh, Some(failure)));
     }
 
     #[test]
