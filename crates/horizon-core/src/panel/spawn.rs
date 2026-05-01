@@ -170,6 +170,64 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
     }
 }
 
+pub(super) fn restore_failure_panel(
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    opts: PanelOptions,
+    error_message: &str,
+) -> Result<Panel> {
+    let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+    let PanelOptions {
+        name,
+        command,
+        args,
+        cwd,
+        ssh_connection,
+        rows,
+        cols,
+        kind,
+        resume,
+        position,
+        size,
+        session_binding,
+        template,
+        ..
+    } = opts;
+
+    let saved_ssh_connection = ssh_connection.clone();
+    let has_custom_name = name.is_some();
+    let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
+    let replay_bytes = restore_failure_replay_bytes(&title, error_message);
+    let terminal = spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, replay_bytes)?;
+    let ssh_status = if kind == PanelKind::Ssh {
+        Some(SshConnectionStatus::Disconnected)
+    } else {
+        None
+    };
+
+    Ok(build_terminal_panel(
+        TerminalPanelBuildArgs {
+            id,
+            local_id,
+            title,
+            kind,
+            resume,
+            position,
+            size,
+            workspace_id,
+            session_binding,
+            template,
+            has_custom_name,
+            launch_command: command,
+            launch_args: args,
+            launch_cwd: cwd,
+            ssh_connection: saved_ssh_connection,
+        },
+        terminal,
+        ssh_status,
+    ))
+}
+
 fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts: PanelOptions) -> Result<Panel> {
     let PanelOptions {
         name,
@@ -256,6 +314,44 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     })?;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
     Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
+}
+
+fn spawn_restore_failure_snapshot_terminal(
+    id: PanelId,
+    kind: PanelKind,
+    rows: u16,
+    cols: u16,
+    replay_bytes: Vec<u8>,
+) -> Result<Terminal> {
+    let (program, args) = disconnected_snapshot_launch_command();
+    Terminal::spawn(TerminalSpawnOptions {
+        program,
+        args,
+        cwd: None,
+        rows,
+        cols,
+        cell_width: DEFAULT_CELL_WIDTH,
+        cell_height: DEFAULT_CELL_HEIGHT,
+        scrollback_limit: scrollback_limit_for_kind(kind),
+        window_id: id.0,
+        replay_bytes,
+        env: HashMap::new(),
+        kitty_keyboard: kitty_keyboard_for_kind(kind),
+    })
+}
+
+fn restore_failure_replay_bytes(title: &str, error_message: &str) -> Vec<u8> {
+    format!(
+        concat!(
+            "Horizon could not restore this panel.\r\n\r\n",
+            "Panel: {title}\r\n",
+            "Error: {error_message}\r\n\r\n",
+            "Fix the command or binary, then restart the panel.\r\n"
+        ),
+        title = title,
+        error_message = error_message
+    )
+    .into_bytes()
 }
 
 fn spawn_disconnected_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {

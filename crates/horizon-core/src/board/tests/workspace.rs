@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
-use crate::config::WorkspaceConfig;
+use crate::config::{WindowConfig, WorkspaceConfig};
 use crate::layout::{TILE_GAP, WS_COLLISION_GAP, WS_INNER_PAD};
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState, WorkspaceTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
+use crate::view::CanvasViewState;
 
 use super::super::*;
 use super::editor_panel_options;
@@ -621,6 +622,91 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
         panel.terminal().expect("terminal").last_lines_text(1),
         "restored ssh prompt"
     );
+}
+
+#[test]
+fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
+    let invalid_command = "bad\0codex";
+    let state = RuntimeState {
+        active_workspace_local_id: Some("workspace".to_string()),
+        focused_panel_local_id: Some("broken-codex".to_string()),
+        workspaces: vec![WorkspaceState {
+            local_id: "workspace".to_string(),
+            name: "Workspace".to_string(),
+            cwd: None,
+            position: Some([0.0, 40.0]),
+            template: None,
+            layout: Some(WorkspaceLayout::Grid),
+            panels: vec![
+                PanelState {
+                    local_id: "notes".to_string(),
+                    name: "Notes".to_string(),
+                    kind: PanelKind::Editor,
+                    command: None,
+                    args: Vec::new(),
+                    cwd: None,
+                    ssh_connection: None,
+                    rows: 24,
+                    cols: 80,
+                    resume: PanelResume::Fresh,
+                    position: Some([0.0, 40.0]),
+                    size: Some([320.0, 220.0]),
+                    session_binding: None,
+                    template: None,
+                    editor_content: None,
+                },
+                PanelState {
+                    local_id: "broken-codex".to_string(),
+                    name: "Broken Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    command: Some(invalid_command.to_string()),
+                    args: vec!["--no-alt-screen".to_string()],
+                    cwd: None,
+                    ssh_connection: None,
+                    rows: 24,
+                    cols: 80,
+                    resume: PanelResume::Fresh,
+                    position: Some([360.0, 40.0]),
+                    size: Some([320.0, 220.0]),
+                    session_binding: None,
+                    template: None,
+                    editor_content: None,
+                },
+            ],
+        }],
+        ..RuntimeState::default()
+    };
+
+    let mut board = Board::from_runtime_state(&state).expect("board");
+
+    assert_eq!(board.panels.len(), 2);
+    assert!(board.panel_id_by_local_id("notes").is_some());
+    let failed_panel_id = board
+        .panel_id_by_local_id("broken-codex")
+        .expect("failed panel placeholder");
+    let failed_panel = board.panel(failed_panel_id).expect("failed panel");
+    assert_eq!(failed_panel.kind, PanelKind::Codex);
+    assert_eq!(failed_panel.launch_command.as_deref(), Some(invalid_command));
+    assert_eq!(failed_panel.launch_args, vec!["--no-alt-screen".to_string()]);
+    assert_eq!(board.focused, Some(failed_panel_id));
+    let placeholder_text = failed_panel
+        .terminal()
+        .expect("placeholder terminal")
+        .last_lines_text(24);
+    assert!(placeholder_text.contains("Horizon could not restore this panel"));
+    assert!(board.unresolved_attention_for_panel(failed_panel_id).is_some());
+
+    let saved_state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    let saved_failed_panel = saved_state
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.panels)
+        .find(|panel| panel.local_id == "broken-codex")
+        .expect("saved failed panel");
+    assert_eq!(saved_failed_panel.command.as_deref(), Some(invalid_command));
+    assert_eq!(saved_failed_panel.kind, PanelKind::Codex);
+
+    board.shutdown_terminal_panels();
 }
 
 #[test]
