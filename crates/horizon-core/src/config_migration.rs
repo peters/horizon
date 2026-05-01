@@ -537,7 +537,7 @@ presets:
         assert_eq!(codex_presets[0].name, "Codex");
         assert_eq!(codex_presets[0].alias.as_deref(), Some("cx"));
         assert_eq!(codex_presets[0].args, vec!["--no-alt-screen".to_string()]);
-        assert_eq!(codex_presets[0].resume, PanelResume::Last);
+        assert_eq!(codex_presets[0].resume, PanelResume::Fresh);
 
         let claude_presets: Vec<_> = config
             .presets
@@ -551,7 +551,7 @@ presets:
             claude_presets[0].args,
             vec!["--permission-mode".to_string(), "auto".to_string()]
         );
-        assert_eq!(claude_presets[0].resume, PanelResume::Last);
+        assert_eq!(claude_presets[0].resume, PanelResume::Fresh);
 
         let opencode_presets: Vec<_> = config
             .presets

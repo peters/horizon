@@ -211,7 +211,8 @@ pub(crate) fn insert_missing_kilo_presets(presets: &mut Vec<PresetConfig>) {
 
 /// Single Codex preset. Codex 0.128's default invocation is auto mode
 /// (`--sandbox workspace-write --ask-for-approval on-request`), so
-/// `--no-alt-screen` is the only flag we need to set.
+/// `--no-alt-screen` is the only flag we need to set. Menu launches always
+/// start a fresh session — same as every other coding-agent default.
 pub(crate) fn default_codex_preset() -> PresetConfig {
     PresetConfig {
         name: "Codex".to_string(),
@@ -219,7 +220,7 @@ pub(crate) fn default_codex_preset() -> PresetConfig {
         kind: PanelKind::Codex,
         command: None,
         args: vec!["--no-alt-screen".to_string()],
-        resume: PanelResume::Last,
+        resume: PanelResume::Fresh,
         ssh_connection: None,
     }
 }
@@ -227,6 +228,7 @@ pub(crate) fn default_codex_preset() -> PresetConfig {
 /// Single Claude Code preset. `--permission-mode auto` (Claude Code v2.1.83+)
 /// routes actions through a separate classifier model; safer than the old
 /// `--dangerously-skip-permissions` and the right default for hands-off use.
+/// Menu launches always start a fresh session.
 pub(crate) fn default_claude_preset() -> PresetConfig {
     PresetConfig {
         name: "Claude Code".to_string(),
@@ -234,7 +236,7 @@ pub(crate) fn default_claude_preset() -> PresetConfig {
         kind: PanelKind::Claude,
         command: None,
         args: vec!["--permission-mode".to_string(), "auto".to_string()],
-        resume: PanelResume::Last,
+        resume: PanelResume::Fresh,
         ssh_connection: None,
     }
 }
