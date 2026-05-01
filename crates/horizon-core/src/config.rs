@@ -132,27 +132,20 @@ impl Default for WindowConfig {
     }
 }
 
-pub(crate) fn default_opencode_presets() -> [PresetConfig; 2] {
-    [
-        PresetConfig {
-            name: "OpenCode".to_string(),
-            alias: Some("oc".to_string()),
-            kind: PanelKind::OpenCode,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Last,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "OpenCode (Fresh)".to_string(),
-            alias: Some("ocf".to_string()),
-            kind: PanelKind::OpenCode,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-    ]
+pub(crate) fn default_opencode_presets() -> [PresetConfig; 1] {
+    [default_opencode_preset()]
+}
+
+pub(crate) fn default_opencode_preset() -> PresetConfig {
+    PresetConfig {
+        name: "OpenCode".to_string(),
+        alias: Some("oc".to_string()),
+        kind: PanelKind::OpenCode,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }
 }
 
 pub(crate) fn default_gemini_presets() -> [PresetConfig; 1] {
@@ -167,27 +160,20 @@ pub(crate) fn default_gemini_presets() -> [PresetConfig; 1] {
     }]
 }
 
-pub(crate) fn default_kilo_presets() -> [PresetConfig; 2] {
-    [
-        PresetConfig {
-            name: "KiloCode".to_string(),
-            alias: Some("kc".to_string()),
-            kind: PanelKind::KiloCode,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Last,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "KiloCode (Fresh)".to_string(),
-            alias: Some("kcf".to_string()),
-            kind: PanelKind::KiloCode,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-    ]
+pub(crate) fn default_kilo_presets() -> [PresetConfig; 1] {
+    [default_kilo_preset()]
+}
+
+pub(crate) fn default_kilo_preset() -> PresetConfig {
+    PresetConfig {
+        name: "KiloCode".to_string(),
+        alias: Some("kc".to_string()),
+        kind: PanelKind::KiloCode,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }
 }
 
 fn insert_missing_agent_presets(presets: &mut Vec<PresetConfig>, defaults: impl IntoIterator<Item = PresetConfig>) {
@@ -223,6 +209,36 @@ pub(crate) fn insert_missing_kilo_presets(presets: &mut Vec<PresetConfig>) {
     insert_missing_agent_presets(presets, default_kilo_presets());
 }
 
+/// Single Codex preset. Codex 0.128's default invocation is auto mode
+/// (`--sandbox workspace-write --ask-for-approval on-request`), so
+/// `--no-alt-screen` is the only flag we need to set.
+pub(crate) fn default_codex_preset() -> PresetConfig {
+    PresetConfig {
+        name: "Codex".to_string(),
+        alias: Some("cx".to_string()),
+        kind: PanelKind::Codex,
+        command: None,
+        args: vec!["--no-alt-screen".to_string()],
+        resume: PanelResume::Last,
+        ssh_connection: None,
+    }
+}
+
+/// Single Claude Code preset. `--permission-mode auto` (Claude Code v2.1.83+)
+/// routes actions through a separate classifier model; safer than the old
+/// `--dangerously-skip-permissions` and the right default for hands-off use.
+pub(crate) fn default_claude_preset() -> PresetConfig {
+    PresetConfig {
+        name: "Claude Code".to_string(),
+        alias: Some("cc".to_string()),
+        kind: PanelKind::Claude,
+        command: None,
+        args: vec!["--permission-mode".to_string(), "auto".to_string()],
+        resume: PanelResume::Last,
+        ssh_connection: None,
+    }
+}
+
 fn default_presets() -> Vec<PresetConfig> {
     let mut presets = vec![
         PresetConfig {
@@ -234,42 +250,8 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
-        PresetConfig {
-            name: "Codex".to_string(),
-            alias: Some("cx".to_string()),
-            kind: PanelKind::Codex,
-            command: None,
-            args: vec!["--no-alt-screen".to_string()],
-            resume: PanelResume::Last,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "Codex (YOLO)".to_string(),
-            alias: Some("cxy".to_string()),
-            kind: PanelKind::Codex,
-            command: None,
-            args: vec!["--full-auto".to_string(), "--no-alt-screen".to_string()],
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "Claude Code".to_string(),
-            alias: Some("cc".to_string()),
-            kind: PanelKind::Claude,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Last,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "Claude Code (Auto)".to_string(),
-            alias: Some("cca".to_string()),
-            kind: PanelKind::Claude,
-            command: None,
-            args: vec!["--permission-mode".to_string(), "auto".to_string()],
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
+        default_codex_preset(),
+        default_claude_preset(),
     ];
     presets.extend(default_opencode_presets());
     presets.extend(default_gemini_presets());
