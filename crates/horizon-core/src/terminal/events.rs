@@ -117,8 +117,12 @@ impl Terminal {
             Event::TextAreaSizeRequest(formatter) => {
                 self.write_input(formatter(self.window_size()).as_bytes());
             }
-            Event::Exit | Event::ChildExit(_) => {
+            Event::Exit => {
                 self.child_exited = true;
+            }
+            Event::ChildExit(status) => {
+                self.child_exited = true;
+                self.child_exit_status = Some(status);
             }
             Event::Bell => {
                 self.bell_pending = true;

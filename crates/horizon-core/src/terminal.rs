@@ -131,6 +131,7 @@ pub struct Terminal {
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,
     child_exited: bool,
+    child_exit_status: Option<std::process::ExitStatus>,
     bell_pending: bool,
     pending_notification: Option<AgentNotification>,
 }
