@@ -24,7 +24,7 @@ horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.6" }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-profiling = "1.0.17"
+profiling = "1.0.18"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.149"
