@@ -304,16 +304,6 @@ impl Board {
         output
     }
 
-    /// Returns IDs of panels whose child process has exited.
-    #[must_use]
-    pub fn exited_panels(&self) -> Vec<PanelId> {
-        self.panels
-            .iter()
-            .filter(|panel| panel.child_exited() && panel.should_close_after_exit())
-            .map(|panel| panel.id)
-            .collect()
-    }
-
     pub fn focus(&mut self, id: PanelId) {
         self.focused = Some(id);
         self.active_workspace = self.panel_workspace_id(id);

@@ -139,10 +139,6 @@ impl HorizonApp {
         }
         let had_terminal_output = panel_output.had_terminal_output;
 
-        for panel_id in self.board.exited_panels() {
-            self.panels_to_close.push(panel_id);
-        }
-
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
         self.maybe_refresh_session_catalog();
