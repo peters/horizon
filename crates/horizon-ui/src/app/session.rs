@@ -45,7 +45,7 @@ fn collect_dynamic_binding_updates(
     let mut assignments = Vec::new();
     for ((kind, cwd), panels) in grouped_panels {
         let mut candidates = recent_for(kind, empty_string_as_none(&cwd));
-        candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
 
         let active_bound_panels: Vec<_> = panels
             .iter()
@@ -75,7 +75,7 @@ fn collect_dynamic_binding_updates(
             continue;
         }
 
-        unbound_panels.sort_by(|left, right| right.launched_at_millis.cmp(&left.launched_at_millis));
+        unbound_panels.sort_by_key(|panel| std::cmp::Reverse(panel.launched_at_millis));
         let oldest_launch = unbound_panels
             .iter()
             .map(|panel| panel.launched_at_millis)
@@ -459,25 +459,16 @@ impl HorizonApp {
             .collect()
     }
 
-    pub(super) fn apply_pending_session_rebinds(&mut self) {
-        if self.pending_session_rebinds.is_empty() {
-            return;
-        }
+    pub(super) fn rebind_panel_session(&mut self, panel_id: PanelId, binding: AgentSessionBinding) -> bool {
+        let Some(panel) = self.board.panel_mut(panel_id) else {
+            return false;
+        };
 
-        let mut changed = false;
-        for (panel_id, binding) in self.pending_session_rebinds.drain(..) {
-            if let Some(panel) = self.board.panel_mut(panel_id) {
-                panel.resume = PanelResume::Session {
-                    session_id: binding.session_id.clone(),
-                };
-                panel.set_session_binding(Some(binding));
-                changed = true;
-            }
-        }
-
-        if changed {
-            self.mark_runtime_dirty();
-        }
+        panel.resume = PanelResume::Session {
+            session_id: binding.session_id.clone(),
+        };
+        panel.set_session_binding(Some(binding));
+        true
     }
 }
 

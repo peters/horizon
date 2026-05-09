@@ -430,10 +430,8 @@ impl HorizonApp {
         if let Some(pos) = outer_rect {
             let new_x = pos.min.x;
             let new_y = pos.min.y;
-            let moved = window_config.x.is_none()
-                || window_config.x.is_some_and(|x| (x - new_x).abs() > 1.0)
-                || window_config.y.is_none()
-                || window_config.y.is_some_and(|y| (y - new_y).abs() > 1.0);
+            let moved = window_config.x.is_none_or(|x| (x - new_x).abs() > 1.0)
+                || window_config.y.is_none_or(|y| (y - new_y).abs() > 1.0);
             if moved {
                 window_config.x = Some(new_x);
                 window_config.y = Some(new_y);

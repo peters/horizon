@@ -315,7 +315,6 @@ impl HorizonApp {
         for (panel_id, workspace_id) in self.workspace_assignments.drain(..) {
             self.board.assign_panel_to_workspace(panel_id, workspace_id);
         }
-        self.apply_pending_session_rebinds();
     }
 
     #[profiling::function]

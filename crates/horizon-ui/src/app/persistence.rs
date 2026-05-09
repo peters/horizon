@@ -62,10 +62,8 @@ impl HorizonApp {
             if let Some(pos) = input.viewport().outer_rect {
                 let new_x = pos.min.x;
                 let new_y = pos.min.y;
-                let changed = self.window_config.x.is_none()
-                    || self.window_config.x.is_some_and(|x| (x - new_x).abs() > 1.0)
-                    || self.window_config.y.is_none()
-                    || self.window_config.y.is_some_and(|y| (y - new_y).abs() > 1.0);
+                let changed = self.window_config.x.is_none_or(|x| (x - new_x).abs() > 1.0)
+                    || self.window_config.y.is_none_or(|y| (y - new_y).abs() > 1.0);
                 if changed {
                     self.window_config.x = Some(new_x);
                     self.window_config.y = Some(new_y);

@@ -332,7 +332,7 @@ fn visible_attention_items(attention: &[AttentionItem], now: SystemTime) -> Vec<
         .iter()
         .filter(|item| is_visible_attention_item(item, now))
         .collect();
-    items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
     items.truncate(10);
     items
 }

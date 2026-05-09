@@ -144,7 +144,7 @@ fn select_adapter(adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>
         })
         .collect();
 
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
 
     if let Some((best, _)) = candidates.into_iter().next() {
         let info = best.get_info();

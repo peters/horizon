@@ -226,7 +226,6 @@ impl HorizonApp {
         self.panels_to_restart.clear();
         self.workspace_assignments.clear();
         self.workspace_creates.clear();
-        self.pending_session_rebinds.clear();
         self.panel_screen_rects.clear();
         self.terminal_body_screen_rects.clear();
         self.panel_screen_order.clear();

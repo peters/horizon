@@ -1,5 +1,8 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus, WorkspaceId};
+use horizon_core::{
+    AgentSessionBinding, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus,
+    WorkspaceId,
+};
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::git_changes_widget::GitChangesView;
@@ -46,6 +49,7 @@ struct PanelUiOutcome {
     resize_delta: Vec2,
     commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
+    session_rebind: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
 }
@@ -583,17 +587,16 @@ impl HorizonApp {
             // actually open instead of every frame for every panel.
             let rebind_options = self.session_rebind_options(panel_id);
             if !rebind_options.is_empty() {
-                ui.menu_button("Rebind Session", |ui| {
-                    ui.set_min_width(220.0);
-                    for (label, binding) in &rebind_options {
-                        let button = egui::Button::new(egui::RichText::new(label).size(12.0).color(theme::FG_SOFT()))
-                            .frame(false);
-                        if ui.add(button).clicked() {
-                            self.pending_session_rebinds.push((panel_id, binding.clone()));
-                            ui.close();
-                        }
+                ui.set_min_width(260.0);
+                for (label, binding) in &rebind_options {
+                    let text = format!("Rebind Session · {label}");
+                    let button =
+                        egui::Button::new(egui::RichText::new(text).size(12.0).color(theme::FG_SOFT())).frame(false);
+                    if ui.add(button).clicked() {
+                        outcome.session_rebind = Some(binding.clone());
+                        ui.close();
                     }
-                });
+                }
                 ui.separator();
             }
             if ui.button("New Workspace").clicked() {
@@ -687,6 +690,12 @@ impl HorizonApp {
         }
         if let Some(workspace_id) = outcome.workspace_assignment {
             self.workspace_assignments.push((panel_id, workspace_id));
+        }
+        if let Some(binding) = outcome.session_rebind.clone()
+            && self.rebind_panel_session(panel_id, binding)
+        {
+            self.mark_runtime_dirty();
+            ctx.request_repaint();
         }
 
         matches!(outcome.command, Some(PanelCommand::Close))

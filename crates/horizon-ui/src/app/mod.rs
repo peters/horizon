@@ -33,9 +33,9 @@ use std::time::Instant;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config,
-    GitWatcher, ManagedInstall, PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease,
-    SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
+    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
+    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -204,7 +204,6 @@ pub struct HorizonApp {
     remote_hosts_last_refresh: Option<Instant>,
     last_session_catalog_refresh: Option<Instant>,
     last_terminal_output_at: Option<Instant>,
-    pending_session_rebinds: Vec<(PanelId, AgentSessionBinding)>,
     settings: Option<SettingsEditor>,
     session_manager: Option<RuntimeSessionManagerState>,
     managed_install: Option<ManagedInstall>,
@@ -351,7 +350,6 @@ impl HorizonApp {
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
-            pending_session_rebinds: Vec::new(),
             settings: None,
             session_manager: None,
             managed_install,
