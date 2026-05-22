@@ -27,7 +27,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 alacritty_terminal = "0.26.0"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.33.3"
