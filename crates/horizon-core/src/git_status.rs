@@ -91,7 +91,9 @@ pub fn compute_status(repo_path: &Path) -> Result<GitStatus> {
 }
 
 fn resolve_branch(repo: &Repository) -> Option<String> {
-    repo.head().ok().and_then(|head| head.shorthand().map(String::from))
+    repo.head()
+        .ok()
+        .and_then(|head| head.shorthand().ok().map(String::from))
 }
 
 type ChangesResult = (Vec<FileChange>, HashMap<String, FileDiff>, usize, usize);
