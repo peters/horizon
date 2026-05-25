@@ -6,6 +6,9 @@ use serde::Deserialize;
 
 use crate::opencode_paths::opencode_db_path;
 
+mod claude;
+use claude::{ClaudeLiveLoader, ClaudeLiveStats};
+
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Snapshot of usage statistics for Claude Code, Codex CLI, and `OpenCode`.
@@ -48,8 +51,9 @@ pub fn spawn_usage_poll() -> mpsc::Receiver<UsageSnapshot> {
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
+        let mut claude_loader = ClaudeLiveLoader::new();
         loop {
-            let snapshot = collect_snapshot();
+            let snapshot = collect_snapshot(&mut claude_loader);
             if tx.send(snapshot).is_err() {
                 break;
             }
@@ -98,7 +102,7 @@ fn format_scaled_tokens(n: u64, divisor: u64, suffix: char) -> String {
     }
 }
 
-fn collect_snapshot() -> UsageSnapshot {
+fn collect_snapshot(loader: &mut ClaudeLiveLoader) -> UsageSnapshot {
     let today = today_date_string();
     let week_dates = last_n_days_dates(7);
     let fortnight_dates = last_n_days_dates(14);
@@ -106,13 +110,26 @@ fn collect_snapshot() -> UsageSnapshot {
     let claude_data = load_claude_stats();
     let codex_data = load_codex_stats();
     let opencode_data = load_opencode_stats();
+    let claude_live = loader.collect(&fortnight_dates);
 
     let claude_today_extra_sessions = count_claude_today_sessions();
 
-    let claude = build_tool_usage(&claude_data, &today, &week_dates, claude_today_extra_sessions);
+    let claude = build_tool_usage(
+        &claude_data,
+        &claude_live,
+        &today,
+        &week_dates,
+        claude_today_extra_sessions,
+    );
     let codex = build_tool_usage_codex(&codex_data, &today, &week_dates);
     let opencode = build_tool_usage_opencode(&opencode_data, &today, &week_dates);
-    let daily = build_daily(&claude_data, &codex_data, &opencode_data, &fortnight_dates);
+    let daily = build_daily(
+        &claude_data,
+        &claude_live,
+        &codex_data,
+        &opencode_data,
+        &fortnight_dates,
+    );
 
     UsageSnapshot {
         claude,
@@ -123,9 +140,11 @@ fn collect_snapshot() -> UsageSnapshot {
     }
 }
 
-/// Build `ToolUsage` for Claude Code from the stats cache.
+/// Build `ToolUsage` for Claude Code from the stats cache and the live
+/// jsonl parser (the latter is the source of truth for token totals).
 fn build_tool_usage(
     data: &ClaudeStatsCache,
+    live: &ClaudeLiveStats,
     today: &str,
     week_dates: &[String],
     extra_today_sessions: u32,
@@ -153,13 +172,12 @@ fn build_tool_usage(
         usage.week_messages = usage.today_messages;
     }
 
-    for day in &data.daily_model_tokens {
-        let day_total: u64 = day.tokens_by_model.values().sum();
-        if day.date == today {
-            usage.today_tokens = day_total;
-        }
-        if week_dates.iter().any(|d| d == &day.date) {
-            usage.week_tokens = usage.week_tokens.saturating_add(day_total);
+    if let Some(totals) = live.by_day.get(today) {
+        usage.today_tokens = totals.tokens;
+    }
+    for date in week_dates {
+        if let Some(totals) = live.by_day.get(date) {
+            usage.week_tokens = usage.week_tokens.saturating_add(totals.tokens);
         }
     }
 
@@ -206,6 +224,7 @@ fn build_tool_usage_opencode(data: &[OpenCodeDayRow], today: &str, week_dates: &
 
 fn build_daily(
     claude_data: &ClaudeStatsCache,
+    claude_live: &ClaudeLiveStats,
     codex_data: &[CodexDayRow],
     opencode_data: &[OpenCodeDayRow],
     dates: &[String],
@@ -218,11 +237,7 @@ fn build_daily(
                 .iter()
                 .find(|d| d.date == *date)
                 .map_or(0, |d| d.session_count);
-            let claude_tokens: u64 = claude_data
-                .daily_model_tokens
-                .iter()
-                .find(|d| d.date == *date)
-                .map_or(0, |d| d.tokens_by_model.values().sum());
+            let claude_tokens = claude_live.by_day.get(date).map_or(0, |t| t.tokens);
             let codex_row = codex_data.iter().find(|r| r.day == *date);
             let codex_sessions = codex_row.map_or(0, |r| r.sessions);
             let codex_tokens = codex_row.map_or(0, |r| r.total_tokens);
@@ -251,7 +266,6 @@ fn build_daily(
 #[serde(default, rename_all = "camelCase")]
 struct ClaudeStatsCache {
     daily_activity: Vec<ClaudeDailyActivity>,
-    daily_model_tokens: Vec<ClaudeDailyModelTokens>,
 }
 
 #[derive(Deserialize)]
@@ -262,14 +276,6 @@ struct ClaudeDailyActivity {
     message_count: u32,
     #[serde(default)]
     session_count: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeDailyModelTokens {
-    date: String,
-    #[serde(default)]
-    tokens_by_model: std::collections::HashMap<String, u64>,
 }
 
 fn load_claude_stats() -> ClaudeStatsCache {
