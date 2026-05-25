@@ -21,6 +21,7 @@ mod runtime_state;
 pub mod search;
 mod session_store;
 mod shortcuts;
+mod squad;
 mod ssh;
 mod terminal;
 mod transcript;
@@ -61,6 +62,10 @@ pub use session_store::{
     StartupDecision, StartupPromptReason,
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
+pub use squad::{
+    AGENT_SQUAD_VERSION, AgentPanelLink, AgentSquad, IsolationMode, PerformerReport, PerformerSlot, RunStatus,
+    SquadRun, WorkItem, WorkStatus,
+};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{AgentNotification, Terminal, open_url};
 pub use transcript::PanelTranscript;

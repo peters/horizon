@@ -41,6 +41,27 @@ cargo test -p horizon-core worktree
 3. Confirm the source repository still has its original worktree intact and
    that no performer worktree was mutated by applying into `_review`.
 
+## Current Slice: Data Model And Persistence
+
+1. Validate the model, transition helpers, and per-session persistence:
+
+```bash
+cargo test -p horizon-core squad
+cargo test -p horizon-core session_store::tests::agent_squad
+```
+
+2. Inspect a saved `squad.json` fixture from an isolated smoke session and
+   confirm it contains:
+   - `version: 1`
+   - one or more `runs`
+   - researcher and reviewer `AgentPanelLink` fields
+   - performer slot `work_item`, `scratch`, `panel_local_id`, and `report`
+     fields
+   - `primary_worktree` when review worktree creation has run
+
+3. Exercise one transition through `SessionStore::update_agent_squad` and
+   confirm the changed run status survives a fresh `load_agent_squad` call.
+
 ## UI Shell Slices
 
 Run these once the composer and dashboard are wired.

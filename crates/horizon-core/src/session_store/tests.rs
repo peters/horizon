@@ -1,3 +1,7 @@
+use crate::panel::PanelKind;
+use crate::squad::{AgentPanelLink, PerformerSlot, RunStatus, WorkItem};
+use std::path::PathBuf;
+
 use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
 
 #[test]
@@ -95,6 +99,55 @@ fn delete_session_rejects_live_sessions() {
 
     assert!(error.to_string().contains("cannot delete live session"));
     assert!(home.session_dir(&created.session_id).exists());
+}
+
+#[test]
+fn agent_squad_state_round_trips_per_session() {
+    let root = test_root("squad-round-trip");
+    let home = HorizonHome::from_root(root);
+    let store = SessionStore::new(home, PathBuf::from("/tmp/horizon-config.yaml"));
+    let created = store.create_new_session(&Config::default()).expect("create session");
+
+    let mut squad = store.load_agent_squad(&created.session_id).expect("load empty squad");
+    squad.create_run("Find bugs", 42);
+    store.save_agent_squad(&created.session_id, &squad).expect("save squad");
+
+    let loaded = store.load_agent_squad(&created.session_id).expect("load saved squad");
+
+    assert_eq!(loaded, squad);
+}
+
+#[test]
+fn update_agent_squad_persists_one_transition() {
+    let root = test_root("squad-transition");
+    let home = HorizonHome::from_root(root);
+    let store = SessionStore::new(home, PathBuf::from("/tmp/horizon-config.yaml"));
+    let created = store.create_new_session(&Config::default()).expect("create session");
+
+    let updated = store
+        .update_agent_squad(&created.session_id, |squad| {
+            let run = squad.create_run("Parallelize bug fixes", 100);
+            run.start_decomposing(AgentPanelLink::new(PanelKind::Claude, Some("panel-r".to_string())));
+            run.queue_plan("one item", vec![slot("s1")]);
+            Ok(())
+        })
+        .expect("update squad");
+
+    let loaded = store
+        .load_agent_squad(&created.session_id)
+        .expect("load persisted squad");
+
+    assert_eq!(loaded, updated);
+    assert_eq!(loaded.runs[0].status, RunStatus::FanningOut);
+}
+
+fn slot(id: &str) -> PerformerSlot {
+    PerformerSlot::new(
+        id,
+        WorkItem::new(id, format!("Task {id}"), "Do the thing"),
+        PanelKind::Codex,
+        PathBuf::from(format!("/tmp/squad/{id}")),
+    )
 }
 
 fn test_root(label: &str) -> std::path::PathBuf {

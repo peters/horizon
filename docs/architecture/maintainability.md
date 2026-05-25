@@ -23,6 +23,8 @@ back into large multi-purpose modules.
 - `worktree.rs` owns Agent Squad git isolation primitives only: creating slot
   worktrees, collecting diffs, applying diffs into a review checkout, and
   pruning worktree directories.
+- `squad.rs` owns the Agent Squad data model and state transitions; session
+  persistence stays in `session_store.rs`.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

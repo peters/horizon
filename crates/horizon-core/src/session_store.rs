@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::RuntimeState;
+use crate::squad::AgentSquad;
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
 
 pub use model::{
@@ -234,6 +235,43 @@ impl SessionStore {
         index.touch_profile_session(&self.profile_id, session_id);
         self.save_session_index(&index)?;
         Ok(())
+    }
+
+    /// Load the Agent Squad state for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the per-session `squad.json` exists but cannot be
+    /// read or decoded.
+    pub fn load_agent_squad(&self, session_id: &str) -> Result<AgentSquad> {
+        AgentSquad::load(&self.home.session_squad_path(session_id))
+    }
+
+    /// Persist the Agent Squad state for a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the squad state cannot be serialized or atomically
+    /// written to the session directory.
+    pub fn save_agent_squad(&self, session_id: &str, squad: &AgentSquad) -> Result<()> {
+        let json = squad.to_json()?;
+        atomic_write(&self.home.session_squad_path(session_id), &json)
+    }
+
+    /// Load, mutate, and atomically persist Agent Squad state for one transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current state cannot be loaded, the transition
+    /// fails, or the updated state cannot be written.
+    pub fn update_agent_squad<F>(&self, session_id: &str, update: F) -> Result<AgentSquad>
+    where
+        F: FnOnce(&mut AgentSquad) -> Result<()>,
+    {
+        let mut squad = self.load_agent_squad(session_id)?;
+        update(&mut squad)?;
+        self.save_agent_squad(session_id, &squad)?;
+        Ok(squad)
     }
 
     /// Create or replace the lease file for an active session.
