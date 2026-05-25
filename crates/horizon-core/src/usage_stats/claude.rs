@@ -181,7 +181,7 @@ fn parse_file(path: &Path) -> HashMap<String, ClaudeDayTotals> {
     };
     let reader = BufReader::new(file);
     for line in reader.lines().map_while(Result::ok) {
-        if !line.contains("\"type\":\"assistant\"") {
+        if !line_has_assistant_type(&line) {
             continue;
         }
         let Ok(parsed) = serde_json::from_str::<AssistantLine>(&line) else {
@@ -205,6 +205,17 @@ fn parse_file(path: &Path) -> HashMap<String, ClaudeDayTotals> {
         entry.messages = entry.messages.saturating_add(1);
     }
     per_day
+}
+
+fn line_has_assistant_type(line: &str) -> bool {
+    line.match_indices("\"type\"").any(|(start, _)| {
+        let rest = &line[start + "\"type\"".len()..];
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix(':') else {
+            return false;
+        };
+        rest.trim_start().starts_with("\"assistant\"")
+    })
 }
 
 #[cfg(test)]
@@ -272,6 +283,24 @@ mod tests {
         let day = stats.by_day.get("2026-05-24").copied().expect("2026-05-24 totals");
         assert_eq!(day.tokens, 30);
         assert_eq!(day.messages, 3);
+    }
+
+    #[test]
+    fn parse_file_accepts_whitespace_around_type_separator() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("session.jsonl");
+        write_lines(
+            &path,
+            &[
+                r#"{ "type" : "assistant", "timestamp":"2026-05-24T10:00:00.000Z","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"output_tokens":4}}}"#,
+            ],
+        );
+
+        let per_day = parse_file(&path);
+
+        let day = per_day.get("2026-05-24").copied().expect("2026-05-24 bucket");
+        assert_eq!(day.tokens, 10);
+        assert_eq!(day.messages, 1);
     }
 
     #[test]
