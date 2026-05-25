@@ -136,9 +136,7 @@ pub(super) fn handle_terminal_pointer_input(
         ui_ctx: ui.ctx().clone(),
     };
 
-    if !mouse_mode_active(terminal_mode, current_modifiers) {
-        handle_terminal_body_pointer_actions(panel, &pointer_context, body_primary_press_pos, body_middle_press_pos);
-    }
+    handle_terminal_body_pointer_actions(panel, &pointer_context, body_primary_press_pos, body_middle_press_pos);
     handle_pointer_events(&events, panel, &pointer_context);
     maybe_copy_selection_to_primary(panel, interaction, support.primary_selection);
 
@@ -154,8 +152,75 @@ pub(super) fn handle_terminal_pointer_input(
     }
 }
 
-fn mouse_mode_active(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
+fn pty_mouse_reporting_enabled(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
     !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
+}
+
+fn pointer_button_checks_clickable_target(
+    button: egui::PointerButton,
+    pressed: bool,
+    modifiers: egui::Modifiers,
+) -> bool {
+    (modifiers.ctrl || modifiers.command) && button == egui::PointerButton::Primary && pressed
+}
+
+fn local_primary_selection_allowed(modifiers: egui::Modifiers) -> bool {
+    !modifiers.alt && !modifiers.ctrl && !modifiers.command
+}
+
+fn pointer_button_uses_local_selection(
+    terminal_mode: TermMode,
+    button: egui::PointerButton,
+    modifiers: egui::Modifiers,
+) -> bool {
+    button == egui::PointerButton::Primary
+        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
+}
+
+fn pointer_button_starts_local_selection(
+    terminal_mode: TermMode,
+    button: egui::PointerButton,
+    pressed: bool,
+    modifiers: egui::Modifiers,
+) -> bool {
+    pressed && pointer_button_uses_local_selection(terminal_mode, button, modifiers)
+}
+
+fn pointer_drag_updates_local_selection(
+    terminal_mode: TermMode,
+    buttons: input::PointerButtons,
+    modifiers: egui::Modifiers,
+) -> bool {
+    buttons.primary
+        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
+}
+
+fn pointer_button_routes_to_pty_mouse(
+    terminal_mode: TermMode,
+    button: egui::PointerButton,
+    modifiers: egui::Modifiers,
+) -> bool {
+    pty_mouse_reporting_enabled(terminal_mode, modifiers)
+        && !pointer_button_uses_local_selection(terminal_mode, button, modifiers)
+}
+
+fn pointer_button_event_needs_handling(
+    terminal_mode: TermMode,
+    button: egui::PointerButton,
+    pressed: bool,
+    modifiers: egui::Modifiers,
+) -> bool {
+    pointer_button_checks_clickable_target(button, pressed, modifiers)
+        || pointer_button_routes_to_pty_mouse(terminal_mode, button, modifiers)
+}
+
+fn pointer_motion_routes_to_pty_mouse(
+    terminal_mode: TermMode,
+    buttons: input::PointerButtons,
+    modifiers: egui::Modifiers,
+) -> bool {
+    pty_mouse_reporting_enabled(terminal_mode, modifiers)
+        && !pointer_drag_updates_local_selection(terminal_mode, buttons, modifiers)
 }
 
 fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &PointerContext<'_>) {
@@ -167,7 +232,7 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 pressed,
                 modifiers,
             } => {
-                if !mouse_mode_active(pointer.terminal_mode, *modifiers) {
+                if !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers) {
                     continue;
                 }
                 let pos = transform_pos(pointer.from_global, *pos);
@@ -183,7 +248,11 @@ fn handle_pointer_events(events: &[egui::Event], panel: &mut Panel, pointer: &Po
                 let pos = transform_pos(pointer.from_global, *pos);
                 let inside = pointer.interaction.layout.body.contains(pos);
                 if inside
-                    && mouse_mode_active(pointer.terminal_mode, pointer.current_modifiers)
+                    && pointer_motion_routes_to_pty_mouse(
+                        pointer.terminal_mode,
+                        pointer.pointer_buttons,
+                        pointer.current_modifiers,
+                    )
                     && let Some(point) = grid_point_from_position(
                         pointer.interaction.layout.body,
                         pos,
@@ -238,21 +307,8 @@ fn handle_terminal_body_pointer_actions(
         .active_pointer_pos
         .or_else(|| response_pointer_pos(&pointer.interaction.body));
 
-    if (pointer.current_modifiers.ctrl || pointer.current_modifiers.command)
-        && let Some(pos) = body_primary_press_pos
-    {
-        handle_pointer_button(
-            panel,
-            pointer,
-            pos,
-            PointerButton::Primary,
-            true,
-            pointer.current_modifiers,
-        );
-        return;
-    }
-
     if body_middle_press_pos.is_some()
+        && !pty_mouse_reporting_enabled(pointer.terminal_mode, pointer.current_modifiers)
         && should_request_primary_paste(PointerButton::Middle, true, pointer.current_modifiers)
     {
         pointer
@@ -261,7 +317,14 @@ fn handle_terminal_body_pointer_actions(
         return;
     }
 
-    if let Some(pos) = body_primary_press_pos {
+    if let Some(pos) = body_primary_press_pos
+        && pointer_button_starts_local_selection(
+            pointer.terminal_mode,
+            PointerButton::Primary,
+            true,
+            pointer.current_modifiers,
+        )
+    {
         handle_pointer_button(
             panel,
             pointer,
@@ -273,6 +336,11 @@ fn handle_terminal_body_pointer_actions(
     }
 
     if pointer.pointer_buttons.primary
+        && pointer_drag_updates_local_selection(
+            pointer.terminal_mode,
+            pointer.pointer_buttons,
+            pointer.current_modifiers,
+        )
         && pointer.interaction.body.is_pointer_button_down_on()
         && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
         && let Some(pos) = body_pointer_pos
@@ -314,20 +382,27 @@ fn handle_pointer_button(
         return;
     }
 
-    if mouse_mode_active(pointer.terminal_mode, modifiers) {
+    if pointer_button_starts_local_selection(pointer.terminal_mode, button, pressed, modifiers) {
         if let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,
             pos,
             pointer.metrics,
             pointer.visible_rows,
             pointer.visible_cols,
-        ) && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, pointer.terminal_mode, point)
-            && !bytes.is_empty()
-        {
-            panel.write_input(&bytes);
+        ) {
+            let sel_type = if pointer.interaction.body.triple_clicked() {
+                SelectionType::Lines
+            } else if pointer.interaction.body.double_clicked() {
+                SelectionType::Semantic
+            } else {
+                SelectionType::Simple
+            };
+            let side = cell_side(pos, pointer.interaction.layout.body, pointer.metrics, point);
+            if let Some(terminal) = panel.terminal_mut() {
+                terminal.start_selection(sel_type, point.line, point.column, side);
+            }
         }
-    } else if button == egui::PointerButton::Primary
-        && pressed
+    } else if pointer_button_routes_to_pty_mouse(pointer.terminal_mode, button, modifiers)
         && let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,
             pos,
@@ -335,18 +410,10 @@ fn handle_pointer_button(
             pointer.visible_rows,
             pointer.visible_cols,
         )
+        && let Some(bytes) = input::mouse_button_report(button, pressed, modifiers, pointer.terminal_mode, point)
+        && !bytes.is_empty()
     {
-        let sel_type = if pointer.interaction.body.triple_clicked() {
-            SelectionType::Lines
-        } else if pointer.interaction.body.double_clicked() {
-            SelectionType::Semantic
-        } else {
-            SelectionType::Simple
-        };
-        let side = cell_side(pos, pointer.interaction.layout.body, pointer.metrics, point);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.start_selection(sel_type, point.line, point.column, side);
-        }
+        panel.write_input(&bytes);
     }
 }
 
@@ -810,12 +877,17 @@ impl InputEmission {
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested, pointer_button_event_pos,
-        pointer_event_targets_rect, selection_copy_completed, should_request_primary_paste,
+        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested,
+        pointer_button_checks_clickable_target, pointer_button_event_needs_handling, pointer_button_event_pos,
+        pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection,
+        pointer_drag_updates_local_selection, pointer_event_targets_rect, pointer_motion_routes_to_pty_mouse,
+        selection_copy_completed, should_request_primary_paste,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
     use horizon_core::{PanelKind, SshConnectionStatus};
+
+    use crate::input::PointerButtons;
 
     #[test]
     fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
@@ -869,6 +941,119 @@ mod tests {
         let events = vec![Event::PointerMoved(Pos2::new(12.0, 6.0))];
 
         assert!(pointer_event_targets_rect(&events, None, rect));
+    }
+
+    #[test]
+    fn plain_primary_drag_selects_locally_in_mouse_mode() {
+        let buttons = PointerButtons {
+            primary: true,
+            middle: false,
+            secondary: false,
+        };
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG;
+
+        assert!(pointer_button_starts_local_selection(
+            mode,
+            PointerButton::Primary,
+            true,
+            Modifiers::NONE
+        ));
+        assert!(pointer_drag_updates_local_selection(mode, buttons, Modifiers::NONE));
+        assert!(!pointer_button_routes_to_pty_mouse(
+            mode,
+            PointerButton::Primary,
+            Modifiers::NONE
+        ));
+        assert!(!pointer_motion_routes_to_pty_mouse(mode, buttons, Modifiers::NONE));
+    }
+
+    #[test]
+    fn shift_primary_drag_selects_locally_in_mouse_mode() {
+        let buttons = PointerButtons {
+            primary: true,
+            middle: false,
+            secondary: false,
+        };
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG;
+
+        assert!(pointer_button_starts_local_selection(
+            mode,
+            PointerButton::Primary,
+            true,
+            Modifiers::SHIFT
+        ));
+        assert!(pointer_drag_updates_local_selection(mode, buttons, Modifiers::SHIFT));
+        assert!(!pointer_button_routes_to_pty_mouse(
+            mode,
+            PointerButton::Primary,
+            Modifiers::SHIFT
+        ));
+        assert!(!pointer_motion_routes_to_pty_mouse(mode, buttons, Modifiers::SHIFT));
+    }
+
+    #[test]
+    fn ctrl_or_cmd_primary_click_still_checks_clickable_targets() {
+        let mode = TermMode::MOUSE_REPORT_CLICK;
+
+        assert!(pointer_button_checks_clickable_target(
+            PointerButton::Primary,
+            true,
+            Modifiers::CTRL
+        ));
+        assert!(pointer_button_checks_clickable_target(
+            PointerButton::Primary,
+            true,
+            Modifiers::COMMAND
+        ));
+        assert!(!pointer_button_starts_local_selection(
+            mode,
+            PointerButton::Primary,
+            true,
+            Modifiers::CTRL
+        ));
+        assert!(!pointer_button_starts_local_selection(
+            mode,
+            PointerButton::Primary,
+            true,
+            Modifiers::COMMAND
+        ));
+        assert!(pointer_button_event_needs_handling(
+            mode,
+            PointerButton::Primary,
+            true,
+            Modifiers::CTRL
+        ));
+    }
+
+    #[test]
+    fn non_selection_mouse_reporting_remains_available() {
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION;
+        let secondary_drag = PointerButtons {
+            primary: false,
+            middle: false,
+            secondary: true,
+        };
+
+        assert!(pointer_button_routes_to_pty_mouse(
+            mode,
+            PointerButton::Secondary,
+            Modifiers::NONE
+        ));
+        assert!(pointer_button_routes_to_pty_mouse(
+            mode,
+            PointerButton::Primary,
+            Modifiers::ALT
+        ));
+        assert!(pointer_motion_routes_to_pty_mouse(
+            mode,
+            secondary_drag,
+            Modifiers::NONE
+        ));
+        assert!(pointer_motion_routes_to_pty_mouse(
+            mode,
+            PointerButtons::default(),
+            Modifiers::NONE
+        ));
     }
 
     #[test]
