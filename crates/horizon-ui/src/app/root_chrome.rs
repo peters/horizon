@@ -21,6 +21,7 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
     QuickNav,
+    ReviewQueue,
     RemoteHosts,
     Sessions,
     Update,
@@ -28,11 +29,12 @@ pub(super) enum ToolbarAction {
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 1] = [Self::RemoteHosts];
+    const SECONDARY: [Self; 2] = [Self::ReviewQueue, Self::RemoteHosts];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::QuickNav => "Quick Nav",
+            Self::ReviewQueue => "Review Queue",
             Self::RemoteHosts => "Remote Hosts",
             Self::Sessions => "Sessions",
             Self::Update => "Update",
@@ -94,7 +96,8 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
     );
 
     let states = [
-        (true, 1_usize, true),
+        (true, 2_usize, true),
+        (false, 2_usize, true),
         (false, 1_usize, true),
         (false, 0_usize, true),
         (false, 1_usize, false),
@@ -229,6 +232,11 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::ReviewQueue))
+        );
         assert!(layout.search_rect.width() >= 180.0);
     }
 
@@ -238,7 +246,10 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::ReviewQueue, ToolbarAction::RemoteHosts]
+        );
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
@@ -276,6 +287,9 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Update))
         );
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::ReviewQueue, ToolbarAction::RemoteHosts]
+        );
     }
 }

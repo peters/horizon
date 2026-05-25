@@ -1,4 +1,5 @@
 use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
+use crate::agent_pair::{AgentPairQueue, AgentPairRole, FindingStatus, RegressionEvidencePacket};
 
 #[test]
 fn empty_store_creates_new_session() {
@@ -95,6 +96,80 @@ fn delete_session_rejects_live_sessions() {
 
     assert!(error.to_string().contains("cannot delete live session"));
     assert!(home.session_dir(&created.session_id).exists());
+}
+
+#[test]
+fn review_queue_defaults_to_empty_when_file_is_missing() {
+    let root = test_root("missing-review-queue");
+    let home = HorizonHome::from_root(root);
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).expect("create session");
+
+    let queue = store.load_agent_pair_queue(&created.session_id).expect("load queue");
+
+    assert!(queue.cards.is_empty());
+    assert!(queue.researcher.is_none());
+    assert!(queue.performer.is_none());
+}
+
+#[test]
+fn review_queue_persists_cards_links_statuses_and_evidence() {
+    let root = test_root("persist-review-queue");
+    let home = HorizonHome::from_root(root);
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).expect("create session");
+    let mut queue = AgentPairQueue::new();
+    queue
+        .link_panel(AgentPairRole::Researcher, "researcher-local-id")
+        .expect("link researcher");
+    queue
+        .link_panel(AgentPairRole::Performer, "performer-local-id")
+        .expect("link performer");
+    let id = queue
+        .create_candidate(
+            "Regression risk",
+            "Accepted finding should persist.",
+            "Review evidence.",
+            vec!["crates/horizon-core/src/session_store.rs".to_string()],
+            vec!["cargo test --workspace".to_string()],
+        )
+        .expect("candidate");
+    queue.accept_candidate(&id).expect("accept");
+    queue.dispatch_to_performer(&id).expect("dispatch");
+    queue
+        .verify_with_evidence(
+            &id,
+            RegressionEvidencePacket {
+                verification_summary: "Verified after implementation.".to_string(),
+                validation_commands: vec!["cargo test --workspace".to_string()],
+                validation_result: "Passed.".to_string(),
+                regression_scope: "Session persistence and dispatch.".to_string(),
+            },
+        )
+        .expect("verify");
+
+    store
+        .save_agent_pair_queue(&created.session_id, &queue)
+        .expect("save queue");
+    let loaded = store.load_agent_pair_queue(&created.session_id).expect("load queue");
+
+    assert_eq!(
+        loaded
+            .link_for(AgentPairRole::Researcher)
+            .expect("researcher")
+            .panel_local_id,
+        "researcher-local-id"
+    );
+    assert_eq!(
+        loaded
+            .link_for(AgentPairRole::Performer)
+            .expect("performer")
+            .panel_local_id,
+        "performer-local-id"
+    );
+    let card = loaded.card(&id).expect("card");
+    assert_eq!(card.status, FindingStatus::Verified);
+    assert!(card.regression_evidence.is_some());
 }
 
 fn test_root(label: &str) -> std::path::PathBuf {

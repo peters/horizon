@@ -55,6 +55,11 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn session_agent_pair_queue_path(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("agent-pair-review-queue.json")
+    }
+
+    #[must_use]
     pub fn session_lease_path(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("lease.json")
     }
@@ -103,6 +108,10 @@ mod tests {
         assert_eq!(
             home.session_runtime_path("session-1"),
             PathBuf::from("/tmp/horizon-home/sessions/session-1/runtime.yaml")
+        );
+        assert_eq!(
+            home.session_agent_pair_queue_path("session-1"),
+            PathBuf::from("/tmp/horizon-home/sessions/session-1/agent-pair-review-queue.json")
         );
         assert_eq!(
             home.session_transcripts_dir("session-1"),

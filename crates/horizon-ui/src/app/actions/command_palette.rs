@@ -126,6 +126,7 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
+            CommandId::OpenReviewQueue => self.open_agent_pair_review_queue(),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus
                 // if it doesn't exist yet).
@@ -174,5 +175,49 @@ impl HorizonApp {
         if let Some(command_id) = triggered_command {
             self.execute_command(ctx, &command_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::CreationContext;
+    use egui::Context;
+    use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+
+    use crate::app::HorizonApp;
+    use crate::command_registry::CommandId;
+    use crate::input;
+
+    fn test_app() -> HorizonApp {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let session_store = SessionStore::new(home, config_path.clone());
+        let config = Config::default();
+        let ctx = Context::default();
+        let cc = CreationContext::_new_kittest(ctx);
+
+        HorizonApp::new(
+            &cc,
+            &config,
+            config_path,
+            session_store,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+            input::ObservedKeyboardInputs::default(),
+        )
+    }
+
+    #[test]
+    fn review_queue_command_palette_action_opens_without_toggling_closed() {
+        let ctx = Context::default();
+        let mut app = test_app();
+
+        app.execute_command(&ctx, &CommandId::OpenReviewQueue);
+        assert!(app.agent_pair_review_queue_open);
+
+        app.execute_command(&ctx, &CommandId::OpenReviewQueue);
+        assert!(app.agent_pair_review_queue_open);
     }
 }

@@ -5,6 +5,7 @@ use egui::containers::panel::PanelState;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
+use crate::app::agent_pair::{AGENT_PAIR_REVIEW_QUEUE_DEFAULT_WIDTH, AGENT_PAIR_REVIEW_QUEUE_PANEL_ID};
 use crate::app::attention_feed::estimated_outer_rect;
 use crate::app::root_chrome::effective_sidebar_width;
 use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
@@ -49,13 +50,15 @@ impl HorizonApp {
     pub(in crate::app) fn canvas_rect(&self, ctx: &Context) -> Rect {
         let viewport = viewport_local_rect(ctx);
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
+        let agent_pair_queue_rect = self.agent_pair_review_queue_rect(ctx, viewport);
+        let right_panel_rect = rightmost_reserved_panel_rect(settings_panel_rect, agent_pair_queue_rect);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
         } else {
             0.0
         };
-        canvas_rect_for_layout(viewport, sidebar_width, settings_panel_rect, settings_bar_rect)
+        canvas_rect_for_layout(viewport, sidebar_width, right_panel_rect, settings_bar_rect)
     }
 
     pub(in crate::app) fn fixed_overlays_visible(&self) -> bool {
@@ -68,6 +71,24 @@ impl HorizonApp {
             self.settings.is_some(),
             PanelState::load(ctx, Id::new(SETTINGS_PANEL_ID)).map(|state| state.rect),
         )
+    }
+
+    fn agent_pair_review_queue_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
+        if !self.agent_pair_review_queue_open {
+            return None;
+        }
+
+        PanelState::load(ctx, Id::new(AGENT_PAIR_REVIEW_QUEUE_PANEL_ID))
+            .map(|state| state.rect)
+            .or_else(|| {
+                Some(Rect::from_min_max(
+                    Pos2::new(
+                        viewport.max.x - AGENT_PAIR_REVIEW_QUEUE_DEFAULT_WIDTH,
+                        viewport.min.y + TOOLBAR_HEIGHT,
+                    ),
+                    viewport.max,
+                ))
+            })
     }
 
     fn settings_bar_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
@@ -97,12 +118,22 @@ impl HorizonApp {
             ));
         }
 
-        if let Some(rect) = self.settings_panel_rect(ctx, viewport) {
+        let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
+        let agent_pair_queue_rect = self.agent_pair_review_queue_rect(ctx, viewport);
+        let right_panel_rect = rightmost_reserved_panel_rect(settings_panel_rect, agent_pair_queue_rect);
+        let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
+
+        if let Some(rect) = settings_panel_rect {
             zones.push(rect);
         }
-        if let Some(rect) = self.settings_bar_rect(ctx, viewport) {
+        if let Some(rect) = agent_pair_queue_rect {
             zones.push(rect);
         }
+        if let Some(rect) = settings_bar_rect {
+            zones.push(rect);
+        }
+
+        let canvas_rect = canvas_rect_for_layout(viewport, sidebar_width, right_panel_rect, settings_bar_rect);
 
         let minimap_height =
             if self.fixed_overlays_visible() && self.minimap_visible && !self.board.workspaces.is_empty() {
@@ -111,8 +142,8 @@ impl HorizonApp {
                 let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
                 zones.push(Rect::from_min_size(
                     Pos2::new(
-                        viewport.max.x - MINIMAP_MARGIN - width,
-                        viewport.max.y - MINIMAP_MARGIN - height,
+                        (canvas_rect.max.x - MINIMAP_MARGIN - width).max(canvas_rect.min.x + MINIMAP_MARGIN),
+                        (canvas_rect.max.y - MINIMAP_MARGIN - height).max(canvas_rect.min.y + MINIMAP_MARGIN),
                     ),
                     Vec2::new(width, height),
                 ));
@@ -165,17 +196,28 @@ impl HorizonApp {
 pub(super) fn canvas_rect_for_layout(
     viewport: Rect,
     sidebar_width: f32,
-    settings_panel_rect: Option<Rect>,
+    right_panel_rect: Option<Rect>,
     settings_bar_rect: Option<Rect>,
 ) -> Rect {
     let left = viewport.min.x + sidebar_width;
-    let right = settings_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
+    let right = right_panel_rect.map_or(viewport.max.x, |rect| rect.min.x);
     let bottom = settings_bar_rect.map_or(viewport.max.y, |rect| rect.min.y);
 
     Rect::from_min_max(
         Pos2::new(left, viewport.min.y + TOOLBAR_HEIGHT),
         Pos2::new(right, bottom),
     )
+}
+
+fn rightmost_reserved_panel_rect(first: Option<Rect>, second: Option<Rect>) -> Option<Rect> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(Rect::from_min_max(
+            Pos2::new(first.min.x.min(second.min.x), first.min.y.min(second.min.y)),
+            Pos2::new(first.max.x.max(second.max.x), first.max.y.max(second.max.y)),
+        )),
+        (Some(rect), None) | (None, Some(rect)) => Some(rect),
+        (None, None) => None,
+    }
 }
 
 pub(super) fn estimated_settings_panel_rect(

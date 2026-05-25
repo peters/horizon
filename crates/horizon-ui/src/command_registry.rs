@@ -28,6 +28,7 @@ pub enum CommandId {
 
     // Settings
     ToggleSettings,
+    OpenReviewQueue,
 
     // Search
     ToggleSearch,
@@ -66,6 +67,15 @@ fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]
         id,
         label: label.into(),
         shortcut: Some(shortcut),
+        keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
+    }
+}
+
+fn command_entry_without_shortcut(id: CommandId, label: &str, keywords: &[&str]) -> CommandEntry {
+    CommandEntry {
+        id,
+        label: label.into(),
+        shortcut: None,
         keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
     }
 }
@@ -181,6 +191,11 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
             shortcuts.toggle_settings.display_label(primary_label),
             &["settings", "config", "preferences"],
         ),
+        command_entry_without_shortcut(
+            CommandId::OpenReviewQueue,
+            "Review Queue",
+            &["review", "queue", "agent", "pair", "findings", "handoff"],
+        ),
         command_entry(
             CommandId::ToggleSearch,
             "Search Terminals",
@@ -207,10 +222,26 @@ mod tests {
     }
 
     #[test]
-    fn action_commands_all_have_shortcuts() {
+    fn action_commands_have_shortcuts_unless_intentionally_global() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            if entry.id == CommandId::OpenReviewQueue {
+                assert!(entry.shortcut.is_none());
+            } else {
+                assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            }
         }
+    }
+
+    #[test]
+    fn action_commands_include_review_queue() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::OpenReviewQueue)
+            .expect("review queue command");
+
+        assert_eq!(entry.label, "Review Queue");
+        assert!(entry.keywords.iter().any(|keyword| keyword == "handoff"));
     }
 
     #[test]

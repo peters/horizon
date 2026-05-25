@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent_pair;
 mod agents;
 mod attention;
 mod board;
@@ -29,6 +30,9 @@ mod usage_stats;
 mod view;
 mod workspace;
 
+pub use agent_pair::{
+    AgentPairQueue, AgentPairRole, AgentPanelLink, FindingCard, FindingStatus, RegressionEvidencePacket,
+};
 pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;

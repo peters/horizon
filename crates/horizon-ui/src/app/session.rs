@@ -144,6 +144,7 @@ impl HorizonApp {
             last_lease_refresh: Some(Instant::now()),
             persistent: true,
         });
+        self.load_agent_pair_queue_for_active_session();
         self.apply_runtime_state(&session.runtime_state);
     }
 
@@ -157,6 +158,7 @@ impl HorizonApp {
         });
         self.transcript_root = None;
         self.startup_chooser = None;
+        self.load_agent_pair_queue_for_active_session();
         self.apply_runtime_state(runtime_state);
     }
 

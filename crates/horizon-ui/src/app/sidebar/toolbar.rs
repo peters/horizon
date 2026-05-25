@@ -182,7 +182,7 @@ impl HorizonApp {
                     response
                 }
             }
-            ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
+            ToolbarAction::ReviewQueue | ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
             ),
@@ -217,6 +217,7 @@ impl HorizonApp {
     fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
+            ToolbarAction::ReviewQueue => self.toggle_agent_pair_review_queue(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
@@ -232,9 +233,54 @@ fn fps_meter_width() -> f32 {
 fn action_button_width(action: ToolbarAction) -> f32 {
     match action {
         ToolbarAction::QuickNav => 102.0,
+        ToolbarAction::ReviewQueue => 122.0,
         ToolbarAction::RemoteHosts => 120.0,
         ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::CreationContext;
+    use egui::Context;
+    use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+
+    use super::ToolbarAction;
+    use crate::app::HorizonApp;
+    use crate::input;
+
+    fn test_app() -> HorizonApp {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let session_store = SessionStore::new(home, config_path.clone());
+        let config = Config::default();
+        let ctx = Context::default();
+        let cc = CreationContext::_new_kittest(ctx);
+
+        HorizonApp::new(
+            &cc,
+            &config,
+            config_path,
+            session_store,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+            input::ObservedKeyboardInputs::default(),
+        )
+    }
+
+    #[test]
+    fn review_queue_toolbar_action_opens_queue_state() {
+        let ctx = Context::default();
+        let mut app = test_app();
+
+        assert!(!app.agent_pair_review_queue_open);
+
+        app.perform_toolbar_action(&ctx, ToolbarAction::ReviewQueue);
+
+        assert!(app.agent_pair_review_queue_open);
     }
 }

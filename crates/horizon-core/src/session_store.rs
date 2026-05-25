@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::agent_pair::AgentPairQueue;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
@@ -139,6 +140,10 @@ impl SessionStore {
             &self.home.session_transcripts_dir(source_session_id),
             &self.home.session_transcripts_dir(&session.session_id),
         )?;
+        copy_file_if_exists(
+            &self.home.session_agent_pair_queue_path(source_session_id),
+            &self.home.session_agent_pair_queue_path(&session.session_id),
+        )?;
         Ok(session)
     }
 
@@ -233,6 +238,36 @@ impl SessionStore {
         let mut index = self.load_session_index()?;
         index.touch_profile_session(&self.profile_id, session_id);
         self.save_session_index(&index)?;
+        Ok(())
+    }
+
+    /// Load the Review Queue for a saved session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue file exists but cannot be read or parsed.
+    pub fn load_agent_pair_queue(&self, session_id: &str) -> Result<AgentPairQueue> {
+        let path = self.home.session_agent_pair_queue_path(session_id);
+        if !path.exists() {
+            return Ok(AgentPairQueue::new());
+        }
+
+        let contents = fs::read_to_string(path)?;
+        let mut queue =
+            serde_json::from_str::<AgentPairQueue>(&contents).map_err(|error| Error::State(error.to_string()))?;
+        queue.normalize();
+        Ok(queue)
+    }
+
+    /// Persist the Review Queue for a saved session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue cannot be serialized or written.
+    pub fn save_agent_pair_queue(&self, session_id: &str, queue: &AgentPairQueue) -> Result<()> {
+        let path = self.home.session_agent_pair_queue_path(session_id);
+        let json = serde_json::to_vec_pretty(queue).map_err(|error| Error::State(error.to_string()))?;
+        atomic_write(&path, &json)?;
         Ok(())
     }
 
@@ -527,6 +562,18 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
             fs::copy(source_path, destination_path)?;
         }
     }
+    Ok(())
+}
+
+fn copy_file_if_exists(source: &Path, destination: &Path) -> Result<()> {
+    if !source.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, destination)?;
     Ok(())
 }
 

@@ -1,4 +1,5 @@
 mod actions;
+mod agent_pair;
 mod attention_feed;
 mod canvas;
 mod detached_viewports;
@@ -33,11 +34,12 @@ use std::time::Instant;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentPairQueue, AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher,
+    ManagedInstall, PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease,
+    SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
+use self::agent_pair::AgentPairReviewQueueUiState;
 use self::canvas::CanvasGridCache;
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
@@ -206,6 +208,9 @@ pub struct HorizonApp {
     last_terminal_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
     session_manager: Option<RuntimeSessionManagerState>,
+    agent_pair_queue: AgentPairQueue,
+    agent_pair_ui: AgentPairReviewQueueUiState,
+    agent_pair_review_queue_open: bool,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_available_update: Option<AvailableUpdate>,
@@ -352,6 +357,9 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             settings: None,
             session_manager: None,
+            agent_pair_queue: AgentPairQueue::new(),
+            agent_pair_ui: AgentPairReviewQueueUiState::default(),
+            agent_pair_review_queue_open: false,
             managed_install,
             surge_update_check_rx: None,
             surge_available_update: None,

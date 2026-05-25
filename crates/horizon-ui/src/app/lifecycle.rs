@@ -329,6 +329,7 @@ impl HorizonApp {
         if self.settings.is_some() {
             self.render_settings(ctx);
         }
+        self.render_agent_pair_review_queue(ctx);
 
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan(ctx);

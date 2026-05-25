@@ -86,7 +86,7 @@ fn render_scoped_minimap(
     let minimap_height = model.outer_size.y;
 
     let response = egui::Area::new(overlay_id)
-        .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))
+        .fixed_pos(minimap_origin(canvas_rect, model.outer_size))
         .order(Order::Foreground)
         .show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(model.outer_size, Sense::click_and_drag());
@@ -112,6 +112,13 @@ fn render_scoped_minimap(
     }
 
     minimap_height
+}
+
+fn minimap_origin(canvas_rect: Rect, outer_size: Vec2) -> Pos2 {
+    Pos2::new(
+        (canvas_rect.max.x - MINIMAP_MARGIN - outer_size.x).max(canvas_rect.min.x + MINIMAP_MARGIN),
+        (canvas_rect.max.y - MINIMAP_MARGIN - outer_size.y).max(canvas_rect.min.y + MINIMAP_MARGIN),
+    )
 }
 
 fn minimap_model(
