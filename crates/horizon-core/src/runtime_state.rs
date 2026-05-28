@@ -21,9 +21,13 @@ const RUNTIME_STATE_VERSION: u32 = 2;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_CLAUDE_SESSION_FILES: usize = 64;
+const MAX_PI_SESSION_FILES: usize = 128;
 const CLAUDE_SESSION_HEAD_LINE_LIMIT: usize = 48;
 const CLAUDE_SESSION_TAIL_LINE_LIMIT: usize = 24;
 const CLAUDE_SESSION_TAIL_BYTES: u64 = 32 * 1024;
+const PI_SESSION_HEAD_LINE_LIMIT: usize = 64;
+const PI_SESSION_TAIL_LINE_LIMIT: usize = 64;
+const PI_SESSION_TAIL_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
@@ -722,6 +726,48 @@ workspaces:
 
         assert_eq!(state.workspaces.len(), 2);
         assert!(state.workspaces.iter().all(|workspace| workspace.layout.is_none()));
+    }
+
+    #[test]
+    fn pi_panel_state_round_trips_through_runtime_yaml() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Pi".to_string(),
+                    kind: PanelKind::Pi,
+                    resume: PanelResume::Session {
+                        session_id: "pi-session-123".to_string(),
+                    },
+                    session_binding: Some(AgentSessionBinding::new(
+                        PanelKind::Pi,
+                        "pi-session-123".to_string(),
+                        Some("/repo".to_string()),
+                        Some("Fix the build".to_string()),
+                        Some(42),
+                    )),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        let yaml = state.to_yaml().expect("serialize runtime state");
+        assert!(yaml.contains("kind: pi"));
+
+        let reloaded: RuntimeState = serde_yaml::from_str(&yaml).expect("deserialize runtime state");
+        let panel = &reloaded.workspaces[0].panels[0];
+        assert_eq!(panel.kind, PanelKind::Pi);
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("pi-session-123")
+        );
     }
 
     #[test]

@@ -3,12 +3,13 @@ use std::path::Path;
 use crate::config::{
     Config, PresetConfig, default_claude_preset, default_codex_preset, default_kilo_preset, default_opencode_preset,
     insert_missing_gemini_presets, insert_missing_kilo_presets, insert_missing_opencode_presets,
+    insert_missing_pi_presets,
 };
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 7;
+pub const CURRENT_CONFIG_VERSION: u32 = 8;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -31,6 +32,7 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
             4 => migrate_v4_to_v5(config),
             5 => migrate_v5_to_v6(config),
             6 => migrate_v6_to_v7(config),
+            7 => migrate_v7_to_v8(config),
             _ => {
                 return Err(Error::Config(format!(
                     "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
@@ -122,6 +124,12 @@ fn migrate_v6_to_v7(config: &mut Config) {
         matches_default_opencode_pair,
     );
     collapse_agent_presets(config, "KiloCode", default_kilo_preset, matches_default_kilo_pair);
+}
+
+/// v7 -> v8: add the default `Pi` coding-agent preset when no Pi preset
+/// already exists by name, alias, or kind.
+fn migrate_v7_to_v8(config: &mut Config) {
+    insert_missing_pi_presets(&mut config.presets);
 }
 
 /// Remove every preset matching `should_remove`, then insert `replacement()`
@@ -361,7 +369,7 @@ presets:
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
         let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains("version: 7"));
+        assert!(reloaded.contains("version: 8"));
         assert!(reloaded.contains("Ctrl+Shift+K"));
         assert!(reloaded.contains("zoom_reset: Ctrl+0"));
         assert!(reloaded.contains("appearance:"));
@@ -370,7 +378,7 @@ presets:
     #[test]
     fn serialized_config_includes_version() {
         let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains("version: 7"));
+        assert!(yaml.contains("version: 8"));
     }
 
     #[test]
@@ -784,6 +792,67 @@ presets:
             .find(|preset| preset.name == "Codex")
             .expect("codex preset");
         assert_eq!(codex.args.last().map(String::as_str), Some("gpt-5"));
+    }
+
+    #[test]
+    fn migration_v7_to_v8_adds_missing_pi_preset() {
+        let mut config: Config = serde_yaml::from_str(
+            "\
+version: 7
+presets:
+  - name: Shell
+    alias: sh
+    kind: shell
+",
+        )
+        .expect("should deserialize");
+
+        migrate_v7_to_v8(&mut config);
+
+        let pi = config
+            .presets
+            .iter()
+            .find(|preset| preset.kind == PanelKind::Pi)
+            .expect("Pi preset");
+        assert_eq!(pi.name, "Pi");
+        assert_eq!(pi.alias.as_deref(), Some("pi"));
+        assert_eq!(pi.command, None);
+        assert!(pi.args.is_empty());
+        assert_eq!(pi.resume, PanelResume::Fresh);
+    }
+
+    #[test]
+    fn migration_v7_to_v8_does_not_duplicate_existing_pi_preset() {
+        for existing in [
+            "\
+version: 7
+presets:
+  - name: Pi
+    alias: custom-pi
+    kind: shell
+",
+            "\
+version: 7
+presets:
+  - name: Custom Pi
+    alias: pi
+    kind: shell
+",
+            "\
+version: 7
+presets:
+  - name: Custom Agent
+    alias: custom
+    kind: pi
+    resume: last
+",
+        ] {
+            let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
+
+            migrate_v7_to_v8(&mut config);
+
+            assert_eq!(config.presets.len(), 1);
+        }
     }
 
     #[test]

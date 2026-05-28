@@ -42,6 +42,7 @@ pub enum PanelKind {
     OpenCode,
     Gemini,
     KiloCode,
+    Pi,
     Command,
     Editor,
     GitChanges,
@@ -72,7 +73,9 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
-            Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode => unreachable!(),
+            Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi => {
+                unreachable!()
+            }
         }
     }
 }
@@ -665,12 +668,19 @@ mod tests {
 
     #[test]
     fn agent_panels_keep_original_launch_cwd() {
-        let mut panel = test_panel("Codex", "", false);
-        panel.kind = PanelKind::Codex;
+        let mut panel = test_panel("Pi", "", false);
+        panel.kind = PanelKind::Pi;
         panel.launch_cwd = Some(PathBuf::from("/workspace"));
 
         assert!(!panel.update_tracked_cwd(Some(PathBuf::from("/workspace/subdir"))));
         assert_eq!(panel.launch_cwd, Some(PathBuf::from("/workspace")));
+    }
+
+    #[test]
+    fn pi_kind_is_agent_with_display_name() {
+        assert!(PanelKind::Pi.is_agent());
+        assert!(PanelKind::Pi.supports_session_binding());
+        assert_eq!(PanelKind::Pi.display_name(), "Pi");
     }
 
     #[test]
@@ -823,6 +833,34 @@ mod tests {
     }
 
     #[test]
+    fn pi_fresh_without_binding_starts_without_session_flag() {
+        let (_program, args) =
+            resolve_launch_command(None, Vec::new(), None, PanelKind::Pi, &PanelResume::Fresh, None, false);
+
+        assert_eq!(args, vec!["-ic".to_string(), "pi".to_string()]);
+    }
+
+    #[test]
+    fn pi_session_resume_uses_session_flag_before_custom_args() {
+        let binding = AgentSessionBinding::new(PanelKind::Pi, "session-42".to_string(), None, None, None);
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--model".to_string(), "fast".to_string()],
+            None,
+            PanelKind::Pi,
+            &PanelResume::Session {
+                session_id: "session-42".to_string(),
+            },
+            Some(&binding),
+            true,
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert_eq!(args[1], "pi --session session-42 --model fast");
+    }
+
+    #[test]
     fn gemini_panels_start_without_implicit_resume_flags() {
         let (_program, args) = resolve_launch_command(
             None,
@@ -910,6 +948,7 @@ mod tests {
             scrollback_limit_for_kind(PanelKind::KiloCode),
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
+        assert_eq!(scrollback_limit_for_kind(PanelKind::Pi), AGENT_PANEL_SCROLLBACK_LIMIT);
     }
 
     #[test]
@@ -919,6 +958,7 @@ mod tests {
         assert!(kitty_keyboard_for_kind(PanelKind::OpenCode));
         assert!(!kitty_keyboard_for_kind(PanelKind::Gemini));
         assert!(kitty_keyboard_for_kind(PanelKind::KiloCode));
+        assert!(kitty_keyboard_for_kind(PanelKind::Pi));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
         assert!(kitty_keyboard_for_kind(PanelKind::Ssh));
     }

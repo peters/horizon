@@ -85,7 +85,12 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::Editor => ("MD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::GitChanges => ("GC", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Usage => ("US", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
-        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
+        PanelKind::Codex
+        | PanelKind::Claude
+        | PanelKind::OpenCode
+        | PanelKind::Gemini
+        | PanelKind::KiloCode
+        | PanelKind::Pi => {
             unreachable!()
         }
     }

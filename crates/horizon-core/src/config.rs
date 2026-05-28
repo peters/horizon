@@ -176,6 +176,18 @@ pub(crate) fn default_kilo_preset() -> PresetConfig {
     }
 }
 
+pub(crate) fn default_pi_preset() -> PresetConfig {
+    PresetConfig {
+        name: "Pi".to_string(),
+        alias: Some("pi".to_string()),
+        kind: PanelKind::Pi,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }
+}
+
 fn insert_missing_agent_presets(presets: &mut Vec<PresetConfig>, defaults: impl IntoIterator<Item = PresetConfig>) {
     for default_preset in defaults {
         let expected_name = default_preset.name.to_ascii_lowercase();
@@ -207,6 +219,22 @@ pub(crate) fn insert_missing_gemini_presets(presets: &mut Vec<PresetConfig>) {
 
 pub(crate) fn insert_missing_kilo_presets(presets: &mut Vec<PresetConfig>) {
     insert_missing_agent_presets(presets, default_kilo_presets());
+}
+
+pub(crate) fn insert_missing_pi_presets(presets: &mut Vec<PresetConfig>) {
+    let default_preset = default_pi_preset();
+    let exists = presets.iter().any(|preset| {
+        preset.name.eq_ignore_ascii_case(&default_preset.name)
+            || preset
+                .alias
+                .as_deref()
+                .is_some_and(|alias| alias.eq_ignore_ascii_case("pi"))
+            || preset.kind == PanelKind::Pi
+    });
+
+    if !exists {
+        presets.push(default_preset);
+    }
 }
 
 /// Single Codex preset. Codex 0.128's default invocation is auto mode
@@ -258,6 +286,7 @@ fn default_presets() -> Vec<PresetConfig> {
     presets.extend(default_opencode_presets());
     presets.extend(default_gemini_presets());
     presets.extend(default_kilo_presets());
+    insert_missing_pi_presets(&mut presets);
     presets.extend([
         PresetConfig {
             name: "Git Changes".to_string(),
@@ -754,6 +783,23 @@ mod tests {
     fn features_default_enables_attention_feed() {
         assert!(FeaturesConfig::default().attention_feed);
         assert!(Config::default().features.attention_feed);
+    }
+
+    #[test]
+    fn default_config_includes_one_pi_preset() {
+        let config = Config::default();
+        let pi_presets: Vec<_> = config
+            .presets
+            .iter()
+            .filter(|preset| preset.kind == PanelKind::Pi)
+            .collect();
+
+        assert_eq!(pi_presets.len(), 1);
+        assert_eq!(pi_presets[0].name, "Pi");
+        assert_eq!(pi_presets[0].alias.as_deref(), Some("pi"));
+        assert_eq!(pi_presets[0].command, None);
+        assert!(pi_presets[0].args.is_empty());
+        assert_eq!(pi_presets[0].resume, super::PanelResume::Fresh);
     }
 
     #[test]

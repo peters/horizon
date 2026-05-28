@@ -616,7 +616,12 @@ pub(super) fn resolve_launch_command(
                 (default_shell(), args)
             }
         }
-        PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
+        PanelKind::Codex
+        | PanelKind::Claude
+        | PanelKind::OpenCode
+        | PanelKind::Gemini
+        | PanelKind::KiloCode
+        | PanelKind::Pi => {
             resolve_agent_launch_command(command, args, kind, resume, session_binding, should_resume_binding)
         }
     }
@@ -826,9 +831,12 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
             PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
-            PanelKind::Codex | PanelKind::Claude | PanelKind::OpenCode | PanelKind::Gemini | PanelKind::KiloCode => {
-                unreachable!()
-            }
+            PanelKind::Codex
+            | PanelKind::Claude
+            | PanelKind::OpenCode
+            | PanelKind::Gemini
+            | PanelKind::KiloCode
+            | PanelKind::Pi => unreachable!(),
         }
     }
 }

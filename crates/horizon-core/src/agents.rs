@@ -104,12 +104,27 @@ const KILO_CODE: AgentDefinition = AgentDefinition {
     kitty_keyboard: true,
 };
 
-pub const BUILTIN_AGENT_KINDS: [PanelKind; 5] = [
+const PI: AgentDefinition = AgentDefinition {
+    id: "pi",
+    display_name: "Pi",
+    icon_label: "PI",
+    accent_rgb: [250, 179, 135],
+    default_command: "pi",
+    resume_mode: AgentResumeMode::ExactFlag {
+        flag: "--session",
+        fresh_session_flag: None,
+    },
+    integration: AgentIntegrationKind::None,
+    kitty_keyboard: true,
+};
+
+pub const BUILTIN_AGENT_KINDS: [PanelKind; 6] = [
     PanelKind::Codex,
     PanelKind::Claude,
     PanelKind::OpenCode,
     PanelKind::Gemini,
     PanelKind::KiloCode,
+    PanelKind::Pi,
 ];
 
 #[must_use]
@@ -125,6 +140,7 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         PanelKind::OpenCode => Some(OPENCODE),
         PanelKind::Gemini => Some(GEMINI),
         PanelKind::KiloCode => Some(KILO_CODE),
+        PanelKind::Pi => Some(PI),
         PanelKind::Shell
         | PanelKind::Ssh
         | PanelKind::Command
@@ -156,6 +172,11 @@ mod tests {
                 .supports_session_binding()
         );
         assert!(
+            agent_definition(PanelKind::Pi)
+                .expect("pi agent")
+                .supports_session_binding()
+        );
+        assert!(
             !agent_definition(PanelKind::Gemini)
                 .expect("gemini agent")
                 .supports_session_binding()
@@ -173,5 +194,23 @@ mod tests {
             agent_definition(PanelKind::KiloCode).expect("kilo agent").resume_mode,
             AgentResumeMode::ContinueFlag { flag: "--continue" }
         );
+    }
+
+    #[test]
+    fn pi_definition_uses_exact_session_flag() {
+        let definition = agent_definition(PanelKind::Pi).expect("pi agent");
+
+        assert_eq!(definition.id, "pi");
+        assert_eq!(definition.display_name, "Pi");
+        assert_eq!(definition.icon_label, "PI");
+        assert_eq!(definition.default_command, "pi");
+        assert_eq!(
+            definition.resume_mode,
+            AgentResumeMode::ExactFlag {
+                flag: "--session",
+                fresh_session_flag: None,
+            }
+        );
+        assert!(definition.kitty_keyboard);
     }
 }

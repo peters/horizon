@@ -18,7 +18,7 @@ pub struct AgentSessionCatalog {
 }
 
 impl AgentSessionCatalog {
-    /// Load recent Claude, Codex, and `OpenCode` sessions from their local stores.
+    /// Load recent Claude, Codex, `OpenCode`, and Pi sessions from their local stores.
     ///
     /// # Errors
     ///
@@ -27,6 +27,7 @@ impl AgentSessionCatalog {
         let mut sessions = load_claude_sessions()?;
         sessions.extend(load_codex_sessions()?);
         sessions.extend(load_opencode_sessions()?);
+        sessions.extend(load_pi_sessions()?);
         sessions.sort_by_key(|session| Reverse(session.updated_at));
         Ok(Self { sessions })
     }
@@ -355,6 +356,246 @@ fn load_opencode_sessions_from_path(sqlite_path: &Path) -> Result<Vec<AgentSessi
     Ok(sessions)
 }
 
+fn load_pi_sessions() -> Result<Vec<AgentSessionRecord>> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(Vec::new());
+    };
+    let sessions_dir = home.join(".pi/agent/sessions");
+    if !sessions_dir.exists() {
+        return Ok(Vec::new());
+    }
+    load_pi_sessions_from_dir(&sessions_dir)
+}
+
+fn load_pi_sessions_from_dir(sessions_dir: &Path) -> Result<Vec<AgentSessionRecord>> {
+    let mut session_paths = Vec::new();
+    collect_pi_session_files(sessions_dir, &mut session_paths)?;
+    session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
+    session_paths.truncate(super::MAX_PI_SESSION_FILES);
+
+    let mut sessions = Vec::new();
+    for (path, updated_at) in session_paths {
+        match load_pi_session_summary(&path, updated_at) {
+            Ok(Some(session)) => sessions.push(session),
+            Ok(None) => {}
+            Err(error) => tracing::warn!("failed loading Pi session {}: {error}", path.display()),
+        }
+    }
+    sessions.sort_by_key(|session| Reverse(session.updated_at));
+    Ok(sessions)
+}
+
+fn collect_pi_session_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::debug!("skipping unreadable Pi session dir {}: {error}", dir.display());
+            return Ok(());
+        }
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_pi_session_files(&path, files)?;
+        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
+            && let Ok(updated_at) = file_updated_at_millis(&path)
+        {
+            files.push((path, updated_at));
+        }
+    }
+    Ok(())
+}
+
+fn load_pi_session_summary(path: &Path, updated_at: i64) -> Result<Option<AgentSessionRecord>> {
+    let fallback_session_id = path
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::State(format!("invalid Pi session path {}", path.display())))?;
+    let mut file = std::fs::File::open(path)?;
+    let mut summary = PiSessionSummary::default();
+    scan_pi_session_reader(
+        BufReader::new(file.try_clone()?),
+        Some(super::PI_SESSION_HEAD_LINE_LIMIT),
+        &mut summary,
+    );
+    scan_pi_session_tail(&mut file, &mut summary)?;
+    Ok(summary.into_record(&fallback_session_id, updated_at))
+}
+
+#[derive(Default)]
+struct PiSessionSummary {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    last_user_message: Option<String>,
+}
+
+impl PiSessionSummary {
+    fn apply_line(&mut self, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+
+        if self.session_id.is_none()
+            && let Some(found_session_id) = extract_pi_session_id(&value)
+            && !found_session_id.is_empty()
+        {
+            self.session_id = Some(found_session_id.to_string());
+        }
+
+        if self.cwd.is_none()
+            && let Some(found_cwd) = extract_pi_cwd(&value)
+        {
+            self.cwd = normalize_cwd(Some(found_cwd));
+        }
+
+        if let Some(user_message) = extract_pi_user_message(&value) {
+            self.last_user_message = Some(truncate_session_label(&user_message));
+        }
+    }
+
+    fn into_record(self, fallback_session_id: &str, fallback_updated_at: i64) -> Option<AgentSessionRecord> {
+        let session_id = self
+            .session_id
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback_session_id.to_string());
+
+        if session_id.is_empty() {
+            return None;
+        }
+
+        Some(AgentSessionRecord {
+            kind: PanelKind::Pi,
+            session_id,
+            cwd: self.cwd,
+            label: self.last_user_message.or(Some("Pi session".to_string())),
+            updated_at: fallback_updated_at,
+        })
+    }
+}
+
+fn scan_pi_session_reader<R: BufRead>(mut reader: R, limit: Option<usize>, summary: &mut PiSessionSummary) {
+    let mut buffer = Vec::new();
+    let mut index = 0usize;
+    loop {
+        if limit.is_some_and(|line_limit| index >= line_limit) {
+            break;
+        }
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buffer);
+                summary.apply_line(line.trim_end_matches(['\r', '\n']));
+                index += 1;
+            }
+        }
+    }
+}
+
+fn scan_pi_session_tail(file: &mut std::fs::File, summary: &mut PiSessionSummary) -> Result<()> {
+    let file_len = file.metadata()?.len();
+    let start = file_len.saturating_sub(super::PI_SESSION_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))?;
+
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    let text = String::from_utf8_lossy(&buffer);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let tail_start = lines.len().saturating_sub(super::PI_SESSION_TAIL_LINE_LIMIT);
+    for line in &lines[tail_start..] {
+        summary.apply_line(line);
+    }
+    Ok(())
+}
+
+fn extract_pi_session_id(value: &Value) -> Option<&str> {
+    string_field(value, &["session_id", "sessionId", "sessionID"])
+        .or_else(|| nested_string_field(value, "session", &["id", "session_id", "sessionId"]))
+        .or_else(|| {
+            let record_kind = string_field(value, &["type", "event", "kind"])?;
+            let normalized_kind = record_kind.to_ascii_lowercase();
+            let is_session_record = normalized_kind.contains("session")
+                || matches!(normalized_kind.as_str(), "agent_start" | "conversation_start");
+            is_session_record.then(|| string_field(value, &["id"])).flatten()
+        })
+}
+
+fn extract_pi_cwd(value: &Value) -> Option<&str> {
+    string_field(value, &["cwd", "working_directory", "workingDirectory"])
+        .or_else(|| nested_string_field(value, "session", &["cwd", "working_directory", "workingDirectory"]))
+        .or_else(|| nested_string_field(value, "metadata", &["cwd", "working_directory", "workingDirectory"]))
+        .or_else(|| nested_string_field(value, "context", &["cwd", "working_directory", "workingDirectory"]))
+}
+
+fn extract_pi_user_message(value: &Value) -> Option<String> {
+    let root_role = string_field(value, &["role"]);
+    let message_role = nested_string_field(value, "message", &["role"]);
+    let record_kind = string_field(value, &["type", "event", "kind"]);
+    let is_user = root_role
+        .or(message_role)
+        .is_some_and(|role| role.eq_ignore_ascii_case("user"))
+        || record_kind.is_some_and(|kind| matches!(kind.to_ascii_lowercase().as_str(), "user" | "user_message"));
+
+    if !is_user {
+        return None;
+    }
+
+    for key in ["text", "content", "prompt", "message"] {
+        if let Some(text) = value.get(key).and_then(text_from_json_value) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_str))
+}
+
+fn nested_string_field<'a>(value: &'a Value, object_key: &str, keys: &[&str]) -> Option<&'a str> {
+    value.get(object_key).and_then(|nested| string_field(nested, keys))
+}
+
+fn text_from_json_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => non_empty_text(text),
+        Value::Array(values) => {
+            let parts: Vec<_> = values.iter().filter_map(text_from_json_value).collect();
+            (!parts.is_empty()).then(|| parts.join(" "))
+        }
+        Value::Object(_) => {
+            for key in ["text", "content", "message", "value", "input"] {
+                if let Some(text) = value.get(key).and_then(text_from_json_value) {
+                    return Some(text);
+                }
+            }
+            value.get("parts").and_then(text_from_json_value)
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => None,
+    }
+}
+
+fn non_empty_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -364,8 +605,9 @@ mod tests {
 
     use super::super::{PanelResume, PanelState, RuntimeState, WorkspaceState};
     use super::{
-        AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, load_claude_project_session_summary,
-        load_opencode_sessions_from_path, scan_claude_session_reader,
+        AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, PiSessionSummary,
+        load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
+        scan_claude_session_reader, scan_pi_session_reader,
     };
 
     fn parse_claude_project_session<R: std::io::BufRead>(
@@ -375,6 +617,16 @@ mod tests {
     ) -> Option<AgentSessionRecord> {
         let mut summary = ClaudeSessionSummary::default();
         scan_claude_session_reader(reader, None, &mut summary);
+        summary.into_record(fallback_session_id, fallback_updated_at)
+    }
+
+    fn parse_pi_session<R: std::io::BufRead>(
+        reader: R,
+        fallback_session_id: &str,
+        fallback_updated_at: i64,
+    ) -> Option<AgentSessionRecord> {
+        let mut summary = PiSessionSummary::default();
+        scan_pi_session_reader(reader, None, &mut summary);
         summary.into_record(fallback_session_id, fallback_updated_at)
     }
 
@@ -525,5 +777,69 @@ INSERT INTO session (id, title, directory, parent_id, time_updated, time_archive
         assert_eq!(sessions[0].cwd.as_deref(), Some("/other"));
         assert_eq!(sessions[1].session_id, "session-root");
         assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn parse_pi_session_uses_header_metadata_and_latest_user_message() {
+        let jsonl = concat!(
+            "{\"type\":\"session\",\"id\":\"pi-session-123\",\"cwd\":\"/repo\"}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first prompt\"}]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"working\"}}\n",
+            "{\"type\":\"user_message\",\"text\":\"latest prompt\"}\n",
+        );
+
+        let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 42).expect("session");
+
+        assert_eq!(session.kind, PanelKind::Pi);
+        assert_eq!(session.session_id, "pi-session-123");
+        assert_eq!(session.cwd.as_deref(), Some("/repo"));
+        assert_eq!(session.label.as_deref(), Some("latest prompt"));
+        assert_eq!(session.updated_at, 42);
+    }
+
+    #[test]
+    fn parse_pi_session_falls_back_to_filename_id_and_default_label() {
+        let jsonl = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}\n";
+
+        let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
+
+        assert_eq!(session.kind, PanelKind::Pi);
+        assert_eq!(session.session_id, "fallback-id");
+        assert_eq!(session.cwd, None);
+        assert_eq!(session.label.as_deref(), Some("Pi session"));
+        assert_eq!(session.updated_at, 7);
+    }
+
+    #[test]
+    fn load_pi_sessions_recurses_and_filters_by_cwd() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let nested = temp_dir.path().join("project/subdir");
+        std::fs::create_dir_all(&nested).expect("create nested session dir");
+        std::fs::write(
+            nested.join("pi-session-123.jsonl"),
+            concat!(
+                "{\"session_id\":\"pi-session-123\",\"metadata\":{\"cwd\":\"/repo\"}}\n",
+                "{\"role\":\"user\",\"content\":\"Fix the build\"}\n",
+            ),
+        )
+        .expect("write pi session");
+        std::fs::write(
+            temp_dir.path().join("pi-session-other.jsonl"),
+            concat!(
+                "{\"session_id\":\"pi-session-other\",\"cwd\":\"/other\"}\n",
+                "{\"role\":\"user\",\"content\":\"Other repo\"}\n",
+            ),
+        )
+        .expect("write other pi session");
+
+        let sessions = load_pi_sessions_from_dir(temp_dir.path()).expect("pi sessions");
+        let catalog = AgentSessionCatalog { sessions };
+        let repo_sessions = catalog.recent_for(PanelKind::Pi, Some("/repo"));
+
+        assert_eq!(repo_sessions.len(), 1);
+        assert_eq!(repo_sessions[0].session_id, "pi-session-123");
+        assert_eq!(repo_sessions[0].label.as_deref(), Some("Fix the build"));
+        assert!(catalog.recent_for(PanelKind::Pi, Some("/missing")).is_empty());
+        assert!(catalog.recent_for(PanelKind::Claude, Some("/repo")).is_empty());
     }
 }
