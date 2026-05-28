@@ -476,7 +476,7 @@ impl PiSessionSummary {
             kind: PanelKind::Pi,
             session_id,
             cwd: self.cwd,
-            label: self.last_user_message.or(Some("Pi session".to_string())),
+            label: self.last_user_message.or_else(|| Some("Pi session".to_string())),
             updated_at: fallback_updated_at,
         })
     }
