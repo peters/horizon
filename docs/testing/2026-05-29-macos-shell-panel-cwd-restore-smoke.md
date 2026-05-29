@@ -105,15 +105,24 @@ the workspace directory.
 
 ## Test 3 - Transcript-disabled fallback (optional)
 
-Confirm the wrapper-skip logic does not misbehave when `script` is unavailable:
+Confirm the wrapper-skip logic does not misbehave when `script` is unavailable.
+Horizon discovers `script` by scanning `PATH`, so the directory that contains it
+(`/usr/bin` on macOS) must be excluded. Point `PATH` at an empty directory; the
+shell itself is launched by absolute path, and `cd`/`pwd -P` are shell builtins,
+so the panel still works.
 
 ```bash
-PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="$SMOKE_HOME" target/debug/horizon \
-  --config "$SMOKE_HOME/.horizon/config.yaml"
+command -v script                                  # confirms the real path, e.g. /usr/bin/script
+export NOSCRIPT_BIN="$(mktemp -d /tmp/horizon-noscript.XXXXXX)"
+PATH="$NOSCRIPT_BIN" command -v script || echo "script not resolvable (good)"
+PATH="$NOSCRIPT_BIN" HOME="$SMOKE_HOME" RUST_LOG=horizon_core=info \
+  target/debug/horizon --config "$SMOKE_HOME/.horizon/config.yaml"
 ```
 
-`cd` in `Roamer`, quit, relaunch, and confirm the panel still restores the cd'd
-directory (cwd is read directly from the shell when there is no `script` wrapper).
+Confirm the log shows `transcript capture disabled: \`script\` was not found in PATH`
+(so there is genuinely no wrapper). Then `cd` in `Roamer`, quit, relaunch, and
+confirm the panel still restores the cd'd directory (with no wrapper, cwd is read
+directly from the shell pid).
 
 ## Evidence To Attach To PR
 
