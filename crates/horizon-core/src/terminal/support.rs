@@ -93,7 +93,10 @@ fn replay_mode_reset_bytes(mode: TermMode) -> Vec<u8> {
 pub(super) fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+        let target_pid = shell_pid_behind_wrapper(pid);
+        std::fs::read_link(format!("/proc/{target_pid}/cwd"))
+            .or_else(|_| std::fs::read_link(format!("/proc/{pid}/cwd")))
+            .ok()
     }
 
     #[cfg(target_os = "macos")]
@@ -106,6 +109,39 @@ pub(super) fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
         let _ = pid;
         None
     }
+}
+
+/// The transcript wrapper (`script`) is the PTY's direct child but never changes
+/// its own working directory, so reading its cwd would always report the panel's
+/// original spawn directory. When `pid` is that wrapper, return the shell it
+/// launched so callers read the shell's live cwd (which tracks `cd`). Returns
+/// `pid` unchanged when it is not a `script` wrapper (transcript capture
+/// disabled), in which case the PTY child already is the shell.
+#[cfg(target_os = "linux")]
+fn shell_pid_behind_wrapper(pid: u32) -> u32 {
+    if proc_comm(pid).as_deref() != Some("script") {
+        return pid;
+    }
+    first_child_pid(pid).unwrap_or(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn proc_comm(pid: u32) -> Option<String> {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(comm.trim_end().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn first_child_pid(pid: u32) -> Option<u32> {
+    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+    parse_first_child_pid(&children)
+}
+
+/// Parse the space-separated PID list from `/proc/<pid>/task/<pid>/children`,
+/// returning the first child (the shell launched by the wrapper).
+#[cfg(any(target_os = "linux", test))]
+fn parse_first_child_pid(children: &str) -> Option<u32> {
+    children.split_whitespace().find_map(|token| token.parse().ok())
 }
 
 #[cfg(target_os = "macos")]
@@ -352,5 +388,16 @@ mod tests {
         let output = "12027\n12099\n";
 
         assert_eq!(super::parse_pgrep_pid(output), Some(12027));
+    }
+
+    #[test]
+    fn parse_first_child_pid_extracts_first_child() {
+        assert_eq!(super::parse_first_child_pid("31219 31300\n"), Some(31219));
+    }
+
+    #[test]
+    fn parse_first_child_pid_returns_none_when_empty() {
+        assert_eq!(super::parse_first_child_pid(""), None);
+        assert_eq!(super::parse_first_child_pid("\n"), None);
     }
 }
