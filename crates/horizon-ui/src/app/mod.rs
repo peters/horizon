@@ -160,6 +160,7 @@ pub struct HorizonApp {
     canvas_pan_input_claimed: bool,
     pending_space_pan_key: CanvasPanSpaceKeyState,
     observed_keyboard_inputs: input::ObservedKeyboardInputs,
+    ime_commit_normalizer: input::ImeCommitNormalizer,
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     panel_screen_rects: HashMap<PanelId, Rect>,
@@ -374,6 +375,7 @@ impl HorizonApp {
             canvas_pan_input_claimed: false,
             pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
             observed_keyboard_inputs,
+            ime_commit_normalizer: input::ImeCommitNormalizer::default(),
             frame_keyboard_events: HashMap::new(),
             terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
@@ -493,6 +495,7 @@ impl eframe::App for HorizonApp {
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let viewport_id = raw_input.viewport_id;
+        self.ime_commit_normalizer.normalize(viewport_id, &mut raw_input.events);
         let frame_keyboard_events = self.observed_keyboard_inputs.take_frame_key_events(raw_input);
         if frame_keyboard_events.is_empty() {
             self.frame_keyboard_events.remove(&viewport_id);
