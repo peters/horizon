@@ -37,10 +37,10 @@ wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulka
 egui_commonmark = { version = "0.22.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 tempfile = "3.20.0"
-rusqlite = { version = "0.40.0", features = ["bundled"] }
-uuid = { version = "1.23.1", features = ["serde", "v4"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
-regex = "1.12.3"
+regex = "1.12.4"
 arboard = "3.6.1"
 tokio = { version = "1.52.3", features = ["rt", "macros"] }
 surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.41", package = "surge-core" }
