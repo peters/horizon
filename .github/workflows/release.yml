@@ -180,7 +180,7 @@ jobs:
           key: ${{ matrix.cache_key }}
       - name: Restore Surge toolchain cache
         if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             .surge/toolchain-src
@@ -403,7 +403,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.sha }}"
           git checkout "${{ github.sha }}" -- scripts
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             .surge/toolchain-src
