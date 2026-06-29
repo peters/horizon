@@ -3449,7 +3449,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surge-core"
 version = "1.0.0"
-source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.41#21e1844039f14ee255bba2735cbd23e0cd6c9308"
+source = "git+https://github.com/fintermobilityas/surge.git?tag=v1.0.0-beta.50#d3e2ee967c53e4da5315b7bdb58c562ec4efe25d"
 dependencies = [
  "async-trait",
  "base64",
@@ -3524,7 +3524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
