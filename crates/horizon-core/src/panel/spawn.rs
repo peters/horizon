@@ -46,6 +46,18 @@ struct ResolvedTerminalLaunch {
     launch_args: Vec<String>,
 }
 
+/// Session-related inputs for building an agent launch command.
+#[derive(Clone, Copy)]
+pub(super) struct AgentLaunchContext<'a> {
+    pub(super) resume: &'a PanelResume,
+    pub(super) session_binding: Option<&'a AgentSessionBinding>,
+    pub(super) should_resume_binding: bool,
+    /// True when reconnecting an existing panel (restore or restart) rather
+    /// than launching a newly added one; continue-style agents only pass
+    /// their continue flag when reconnecting.
+    pub(super) is_restore: bool,
+}
+
 struct TerminalPanelBuildArgs {
     id: PanelId,
     local_id: String,
@@ -245,6 +257,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         template,
         transcript_root,
         restore_as_disconnected_snapshot,
+        is_restore,
         ..
     } = opts;
 
@@ -265,6 +278,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         session_binding,
         saved_cwd.as_ref(),
         transcript.as_ref(),
+        is_restore,
     );
     let ResolvedTerminalLaunch {
         session_binding,
@@ -414,6 +428,7 @@ fn resolve_terminal_launch(
     session_binding: Option<AgentSessionBinding>,
     saved_cwd: Option<&PathBuf>,
     transcript: Option<&PanelTranscript>,
+    is_restore: bool,
 ) -> ResolvedTerminalLaunch {
     let saved_cwd_string = saved_cwd.map(|path| path.display().to_string());
     let (session_binding, should_resume_binding) = resolve_session_binding(
@@ -429,9 +444,12 @@ fn resolve_terminal_launch(
         args,
         ssh_connection,
         kind,
-        resume,
-        session_binding.as_ref(),
-        should_resume_binding,
+        AgentLaunchContext {
+            resume,
+            session_binding: session_binding.as_ref(),
+            should_resume_binding,
+            is_restore,
+        },
     );
 
     let launch_trace = TerminalLaunchTrace {
@@ -600,9 +618,7 @@ pub(super) fn resolve_launch_command(
     args: Vec<String>,
     ssh_connection: Option<SshConnection>,
     kind: PanelKind,
-    resume: &PanelResume,
-    session_binding: Option<&AgentSessionBinding>,
-    should_resume_binding: bool,
+    launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
@@ -627,9 +643,7 @@ pub(super) fn resolve_launch_command(
         | PanelKind::OpenCode
         | PanelKind::Gemini
         | PanelKind::KiloCode
-        | PanelKind::Pi => {
-            resolve_agent_launch_command(command, args, kind, resume, session_binding, should_resume_binding)
-        }
+        | PanelKind::Pi => resolve_agent_launch_command(command, args, kind, launch),
     }
 }
 
@@ -637,9 +651,7 @@ fn resolve_agent_launch_command(
     command: Option<String>,
     args: Vec<String>,
     kind: PanelKind,
-    resume: &PanelResume,
-    session_binding: Option<&AgentSessionBinding>,
-    should_resume_binding: bool,
+    launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     let Some(definition) = agent_definition(kind) else {
         unreachable!("agent launch requested for non-agent panel: {kind:?}");
@@ -653,11 +665,11 @@ fn resolve_agent_launch_command(
     match definition.resume_mode {
         AgentResumeMode::ExactSubcommand { subcommand } => {
             launch_args.extend(args);
-            if should_resume_binding {
-                if let Some(binding) = session_binding {
+            if launch.should_resume_binding {
+                if let Some(binding) = launch.session_binding {
                     launch_args.extend([subcommand.to_string(), binding.session_id.clone()]);
                 }
-            } else if let PanelResume::Session { session_id } = resume {
+            } else if let PanelResume::Session { session_id } = launch.resume {
                 launch_args.extend([subcommand.to_string(), session_id.clone()]);
             }
         }
@@ -665,15 +677,15 @@ fn resolve_agent_launch_command(
             flag,
             fresh_session_flag,
         } => {
-            if should_resume_binding {
-                if let Some(binding) = session_binding {
+            if launch.should_resume_binding {
+                if let Some(binding) = launch.session_binding {
                     launch_args.extend([flag.to_string(), binding.session_id.clone()]);
                 }
-            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, session_binding) {
+            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, launch.session_binding) {
                 // Fresh launch under the panel's pre-assigned session id so
                 // the binding matches the session the CLI will create.
                 launch_args.extend([fresh_session_flag.to_string(), binding.session_id.clone()]);
-            } else if let PanelResume::Session { session_id } = resume {
+            } else if let PanelResume::Session { session_id } = launch.resume {
                 launch_args.extend([flag.to_string(), session_id.clone()]);
             } else if let Some(fresh_session_flag) = fresh_session_flag {
                 launch_args.extend([fresh_session_flag.to_string(), Uuid::new_v4().to_string()]);
@@ -682,7 +694,10 @@ fn resolve_agent_launch_command(
         }
         AgentResumeMode::ContinueFlag { flag } => {
             launch_args.extend(args);
-            if matches!(resume, PanelResume::Last) {
+            // Continue-style agents have no per-session ids, so `resume:
+            // last` maps to the continue flag, and only when reconnecting an
+            // existing panel; a newly added panel always starts fresh.
+            if launch.is_restore && matches!(launch.resume, PanelResume::Last) {
                 launch_args.push(flag.to_string());
             }
         }
@@ -928,6 +943,15 @@ mod tests {
         assert!(had_persisted_state);
     }
 
+    fn fresh_launch_context(resume: &PanelResume) -> AgentLaunchContext<'_> {
+        AgentLaunchContext {
+            resume,
+            session_binding: None,
+            should_resume_binding: false,
+            is_restore: false,
+        }
+    }
+
     #[test]
     fn resolve_launch_command_preserves_custom_shell_without_args() {
         let (program, args) = resolve_launch_command(
@@ -935,9 +959,7 @@ mod tests {
             Vec::new(),
             None,
             PanelKind::Shell,
-            &PanelResume::Fresh,
-            None,
-            false,
+            fresh_launch_context(&PanelResume::Fresh),
         );
 
         assert_eq!(program, "/usr/local/bin/custom-shell");
@@ -951,9 +973,7 @@ mod tests {
             Vec::new(),
             None,
             PanelKind::Shell,
-            &PanelResume::Fresh,
-            None,
-            false,
+            fresh_launch_context(&PanelResume::Fresh),
         );
 
         assert_eq!(program, default_shell());
@@ -978,9 +998,7 @@ mod tests {
             vec!["--ignored".to_string()],
             Some(connection),
             PanelKind::Ssh,
-            &PanelResume::Fresh,
-            None,
-            false,
+            fresh_launch_context(&PanelResume::Fresh),
         );
 
         assert_eq!(program, "ssh");
@@ -1068,9 +1086,12 @@ mod tests {
             Vec::new(),
             None,
             PanelKind::Claude,
-            &PanelResume::Fresh,
-            Some(&binding),
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: Some(&binding),
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         let joined = args.join(" ");

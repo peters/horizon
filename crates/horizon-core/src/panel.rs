@@ -10,7 +10,7 @@ use crate::agent_definition;
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, claude_session_transcript_exists};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
@@ -19,7 +19,10 @@ use crate::workspace::WorkspaceId;
 pub use self::spawn::current_unix_millis;
 #[cfg(test)]
 use self::spawn::platform_default_shell;
-use self::spawn::{agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind, spawn_panel};
+use self::spawn::{
+    AgentLaunchContext, agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind,
+    spawn_panel,
+};
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
@@ -123,6 +126,9 @@ pub struct PanelOptions {
     pub template: Option<PanelTemplateRef>,
     pub transcript_root: Option<PathBuf>,
     pub restore_as_disconnected_snapshot: bool,
+    /// True when this panel is being restored from persisted state rather
+    /// than newly added; continue-style agents only reconnect on restore.
+    pub is_restore: bool,
 }
 
 impl Default for PanelOptions {
@@ -144,6 +150,7 @@ impl Default for PanelOptions {
             template: None,
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
+            is_restore: false,
         }
     }
 }
@@ -440,15 +447,24 @@ impl Panel {
         // Graceful shutdown of the old terminal.
         let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
 
-        let should_resume = self.kind.supports_session_binding() && self.session_binding.is_some();
+        // A pre-assigned Claude binding may not have a transcript yet (panel
+        // never received a message); resuming it would fail, so relaunch
+        // fresh under the same session id instead.
+        let should_resume = self.kind.supports_session_binding()
+            && self.session_binding.as_ref().is_some_and(|binding| {
+                self.kind != PanelKind::Claude || claude_session_transcript_exists(&binding.session_id)
+            });
         let (program, launch_args) = resolve_launch_command(
             self.launch_command.clone(),
             self.launch_args.clone(),
             self.ssh_connection.clone(),
             self.kind,
-            &self.resume,
-            self.session_binding.as_ref(),
-            should_resume,
+            AgentLaunchContext {
+                resume: &self.resume,
+                session_binding: self.session_binding.as_ref(),
+                should_resume_binding: should_resume,
+                is_restore: true,
+            },
         );
 
         if self.kind.is_agent() {
@@ -591,9 +607,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent,
-        PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind,
-        platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel,
+        PanelContent, PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId,
+        kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
 
@@ -690,9 +706,12 @@ mod tests {
             Vec::new(),
             None,
             PanelKind::Codex,
-            &PanelResume::Last,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         // Codex is launched via login shell without resume when no exact session is bound.
@@ -710,11 +729,14 @@ mod tests {
             Vec::new(),
             None,
             PanelKind::Claude,
-            &PanelResume::Session {
-                session_id: "session-42".to_string(),
+            AgentLaunchContext {
+                resume: &PanelResume::Session {
+                    session_id: "session-42".to_string(),
+                },
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
             },
-            Some(&binding),
-            true,
         );
 
         // Claude is launched via login shell: shell -lc "claude --resume session-42"
@@ -731,9 +753,12 @@ mod tests {
             vec!["--dangerously-skip-permissions".to_string()],
             None,
             PanelKind::Claude,
-            &PanelResume::Fresh,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         assert_eq!(args.len(), 2);
@@ -755,9 +780,12 @@ mod tests {
             vec!["--dangerously-skip-permissions".to_string()],
             None,
             PanelKind::Claude,
-            &PanelResume::Fresh,
-            Some(&binding),
-            true,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
+            },
         );
 
         assert_eq!(args.len(), 2);
@@ -775,9 +803,12 @@ mod tests {
             vec!["--no-alt-screen".to_string()],
             None,
             PanelKind::Codex,
-            &PanelResume::Last,
-            Some(&binding),
-            true,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
+            },
         );
 
         let cmd = &args[1];
@@ -797,11 +828,14 @@ mod tests {
             vec!["--agent".to_string(), "build".to_string()],
             None,
             PanelKind::OpenCode,
-            &PanelResume::Session {
-                session_id: "session-42".to_string(),
+            AgentLaunchContext {
+                resume: &PanelResume::Session {
+                    session_id: "session-42".to_string(),
+                },
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
             },
-            Some(&binding),
-            true,
         );
 
         assert_eq!(args.len(), 2);
@@ -819,9 +853,12 @@ mod tests {
             vec!["--agent".to_string(), "build".to_string()],
             None,
             PanelKind::OpenCode,
-            &PanelResume::Fresh,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         assert_eq!(args.len(), 2);
@@ -834,8 +871,18 @@ mod tests {
 
     #[test]
     fn pi_fresh_without_binding_starts_without_session_flag() {
-        let (_program, args) =
-            resolve_launch_command(None, Vec::new(), None, PanelKind::Pi, &PanelResume::Fresh, None, false);
+        let (_program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Pi,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
+        );
 
         assert_eq!(args, vec!["-ic".to_string(), "pi".to_string()]);
     }
@@ -848,11 +895,14 @@ mod tests {
             vec!["--model".to_string(), "fast".to_string()],
             None,
             PanelKind::Pi,
-            &PanelResume::Session {
-                session_id: "session-42".to_string(),
+            AgentLaunchContext {
+                resume: &PanelResume::Session {
+                    session_id: "session-42".to_string(),
+                },
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
             },
-            Some(&binding),
-            true,
         );
 
         assert_eq!(args.len(), 2);
@@ -867,9 +917,12 @@ mod tests {
             vec!["--model".to_string(), "gemini-2.5-pro".to_string()],
             None,
             PanelKind::Gemini,
-            &PanelResume::Fresh,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         assert_eq!(args.len(), 2);
@@ -882,21 +935,43 @@ mod tests {
     }
 
     #[test]
-    fn kilocode_last_resume_uses_continue_flag() {
-        let (_program, args) = resolve_launch_command(
+    fn kilocode_last_resume_uses_continue_flag_only_on_restore() {
+        let (_program, restored_args) = resolve_launch_command(
             None,
             Vec::new(),
             None,
             PanelKind::KiloCode,
-            &PanelResume::Last,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: true,
+            },
         );
 
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], "-ic");
-        assert!(args[1].contains("kilo"));
-        assert!(args[1].contains("--continue"));
+        assert_eq!(restored_args.len(), 2);
+        assert_eq!(restored_args[0], "-ic");
+        assert!(restored_args[1].contains("kilo"));
+        assert!(restored_args[1].contains("--continue"));
+
+        let (_program, added_args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::KiloCode,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
+        );
+
+        assert!(
+            !added_args[1].contains("--continue"),
+            "newly added KiloCode panels must start a fresh conversation: {}",
+            added_args[1]
+        );
     }
 
     #[test]
@@ -906,9 +981,12 @@ mod tests {
             vec!["-m".to_string(), "http.server".to_string()],
             None,
             PanelKind::Codex,
-            &PanelResume::Last,
-            None,
-            false,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
         );
 
         // Explicit command is still wrapped in login shell for agent kinds

@@ -5,8 +5,9 @@ use horizon_core::{PanelId, PanelOptions, PanelResume, PanelTranscript, PresetCo
 use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
 
 /// Newly added agent panels always start a new session. `resume: last` on a
-/// preset only governs how existing panels reconnect on restore and how
-/// `--continue` style agents without session catalogs launch.
+/// preset only governs how existing panels reconnect when they are restored.
+/// Continue-style agents (`KiloCode`) keep `last` on the panel because their
+/// reconnect flag is applied only on restore, not on the initial launch.
 fn normalize_new_panel_resume(options: &mut PanelOptions) {
     if options.kind.supports_session_binding() && matches!(options.resume, PanelResume::Last) {
         options.resume = PanelResume::Fresh;

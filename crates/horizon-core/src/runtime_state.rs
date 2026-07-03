@@ -488,6 +488,7 @@ impl PanelState {
             template: self.template.clone(),
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
+            is_restore: true,
         }
     }
 }
