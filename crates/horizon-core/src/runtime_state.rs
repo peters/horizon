@@ -17,7 +17,7 @@ use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
 pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
-pub use claude_live_sessions::live_claude_session_ids;
+pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 
 const RUNTIME_STATE_VERSION: u32 = 2;
 const DEFAULT_ROWS: u16 = 24;

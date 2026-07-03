@@ -15,9 +15,12 @@ to the most recent catalog session for that cwd, with no check for whether
 another process already had the session open. Before Claude Code v2.1.199
 this was masked by empty leftover session files; from v2.1.199 the CLI no
 longer creates or refreshes those, so new panels visibly resumed real old
-conversations. New panels now always launch with a fresh `--session-id`.
-Reconnecting to an old session is explicit only: the panel context menu
-rebind, or restart restore of a panel that already owns a session.
+conversations. New panels now always launch with a fresh `--session-id`, and
+that id is stored as the panel's session binding from the start, so a restart
+resumes exactly each panel's own conversation (`--resume` when the transcript
+exists, a same-id fresh launch when the panel was never used). Reconnecting
+to an old session is explicit only: the panel context menu rebind, or restart
+restore of a panel's own binding.
 
 Note on liveness: the pid check for stale registry entries is Linux-only
 (`/proc`). On macOS every `~/.claude/sessions/` entry is treated as live,
@@ -68,10 +71,17 @@ wait; the point is that even a seconds-old session must not be picked up.
    shows the seeded conversation. Explicit selection remains the only way to
    attach an old session to a new panel.
 
-4. **Restart resume is unaffected.** Send a prompt in one fresh panel so it
-   owns a session, quit Horizon normally, and relaunch it. Expected: that
-   panel reconnects to its own session via `--resume` and shows its previous
-   conversation; panels that never received a prompt come back fresh.
+4. **Restart resumes each panel's own session.** Send distinct prompts in two
+   fresh Claude panels in the same workspace (for example "remember apple" and
+   "remember banana"), quit Horizon normally, and relaunch it. Expected: each
+   panel reconnects to its own conversation via `--resume` with no
+   cross-swapping between the two panels.
+
+5. **Never-used panels restart fresh without errors.** Add a Claude Code
+   panel, type nothing, quit Horizon, and relaunch. Expected: the panel comes
+   back as a working fresh Claude prompt; it must not show a
+   "No conversation found with session ID" error. The relaunch log shows
+   `--session-id` with the panel's original id.
 
 ## Cleanup
 

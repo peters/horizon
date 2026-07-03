@@ -62,11 +62,39 @@ fn process_is_alive(_pid: u64) -> bool {
     true
 }
 
+/// Returns true if a Claude Code transcript exists on disk for `session_id`.
+///
+/// Claude Code refuses `--resume` for session ids without an on-disk
+/// transcript and `--session-id` for ids that already have one, so launch
+/// commands must pick between the two based on what the store contains.
+/// Transcripts live one level below `~/.claude/projects/`, named
+/// `<session_id>.jsonl`; the project directory is scanned instead of derived
+/// from the panel cwd because the cwd munging scheme is Claude Code's
+/// implementation detail.
+#[must_use]
+pub fn claude_session_transcript_exists(session_id: &str) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    claude_session_transcript_exists_in(&home.join(".claude/projects"), session_id)
+}
+
+fn claude_session_transcript_exists_in(projects_dir: &Path, session_id: &str) -> bool {
+    if session_id.is_empty() || session_id.contains(['/', '\\', '.']) {
+        return false;
+    }
+    let file_name = format!("{session_id}.jsonl");
+    let Ok(entries) = std::fs::read_dir(projects_dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| entry.path().join(&file_name).is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::collect_live_session_ids;
+    use super::{claude_session_transcript_exists_in, collect_live_session_ids};
 
     fn write_entry(dir: &std::path::Path, name: &str, contents: &str) {
         std::fs::write(dir.join(name), contents).expect("write registry entry");
@@ -113,5 +141,22 @@ mod tests {
         let ids = collect_live_session_ids(&missing, |_| true);
 
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn transcript_lookup_finds_session_files_across_projects() {
+        let projects = tempfile::tempdir().expect("tempdir");
+        let project_dir = projects.path().join("-repo-one");
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        std::fs::write(project_dir.join("session-1.jsonl"), "{}\n").expect("write transcript");
+
+        assert!(claude_session_transcript_exists_in(projects.path(), "session-1"));
+        assert!(!claude_session_transcript_exists_in(projects.path(), "session-2"));
+        assert!(!claude_session_transcript_exists_in(projects.path(), ""));
+        assert!(!claude_session_transcript_exists_in(projects.path(), "../session-1"));
+        assert!(!claude_session_transcript_exists_in(
+            &projects.path().join("missing"),
+            "session-1"
+        ));
     }
 }

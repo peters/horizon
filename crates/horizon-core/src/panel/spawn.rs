@@ -8,7 +8,7 @@ use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
 use crate::horizon_home::HorizonHome;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, claude_session_transcript_exists, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
@@ -416,8 +416,14 @@ fn resolve_terminal_launch(
     transcript: Option<&PanelTranscript>,
 ) -> ResolvedTerminalLaunch {
     let saved_cwd_string = saved_cwd.map(|path| path.display().to_string());
-    let (session_binding, should_resume_binding) =
-        resolve_session_binding(kind, resume, session_binding, saved_cwd_string.as_deref(), name);
+    let (session_binding, should_resume_binding) = resolve_session_binding(
+        kind,
+        resume,
+        session_binding,
+        saved_cwd_string.as_deref(),
+        name,
+        claude_session_transcript_exists,
+    );
     let (program, launch_args) = resolve_launch_command(
         command,
         args,
@@ -663,6 +669,10 @@ fn resolve_agent_launch_command(
                 if let Some(binding) = session_binding {
                     launch_args.extend([flag.to_string(), binding.session_id.clone()]);
                 }
+            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, session_binding) {
+                // Fresh launch under the panel's pre-assigned session id so
+                // the binding matches the session the CLI will create.
+                launch_args.extend([fresh_session_flag.to_string(), binding.session_id.clone()]);
             } else if let PanelResume::Session { session_id } = resume {
                 launch_args.extend([flag.to_string(), session_id.clone()]);
             } else if let Some(fresh_session_flag) = fresh_session_flag {
@@ -724,13 +734,10 @@ fn resolve_session_binding(
     mut session_binding: Option<AgentSessionBinding>,
     cwd: Option<&str>,
     label: Option<&str>,
+    transcript_exists: impl Fn(&str) -> bool,
 ) -> (Option<AgentSessionBinding>, bool) {
     let had_existing_session_binding = session_binding.is_some();
     if session_binding.is_none() {
-        // Claude fresh launches intentionally start without a synthetic
-        // binding. The CLI only writes a real session record after the
-        // first user message, so preassigning an ID would not match any
-        // on-disk session state.
         session_binding = match (resume, kind) {
             (PanelResume::Session { session_id }, kind) if kind.supports_session_binding() => {
                 Some(AgentSessionBinding::new(
@@ -741,16 +748,39 @@ fn resolve_session_binding(
                     None,
                 ))
             }
+            // Claude accepts a caller-chosen id for fresh launches, so the
+            // panel is bound to its session before the CLI writes any session
+            // record; a restart then resumes exactly this panel's
+            // conversation instead of guessing from catalog timestamps.
+            (PanelResume::Fresh | PanelResume::Last, PanelKind::Claude) => Some(AgentSessionBinding::new(
+                kind,
+                Uuid::new_v4().to_string(),
+                cwd.map(str::to_string),
+                label.map(str::to_string),
+                Some(current_unix_millis()),
+            )),
             _ => None,
         };
     }
 
-    let should_resume_binding = if kind == PanelKind::Claude {
+    let mut should_resume_binding = if kind == PanelKind::Claude {
         session_binding.is_some()
             && (had_existing_session_binding || matches!(resume, PanelResume::Last | PanelResume::Session { .. }))
     } else {
         session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
     };
+
+    // Claude refuses `--resume` for ids without an on-disk transcript (a
+    // bound panel that never received a message) and `--session-id` for ids
+    // that already have one, so the launch mode follows the store: resume
+    // when the transcript exists, otherwise relaunch fresh under the same id.
+    if kind == PanelKind::Claude
+        && should_resume_binding
+        && let Some(binding) = &session_binding
+        && !transcript_exists(&binding.session_id)
+    {
+        should_resume_binding = false;
+    }
 
     (session_binding, should_resume_binding)
 }
@@ -966,5 +996,88 @@ mod tests {
                 "deploy@prod-api".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn claude_fresh_launch_preassigns_session_binding() {
+        let (binding, should_resume) = resolve_session_binding(
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            None,
+            Some("/repo"),
+            None,
+            |_| false,
+        );
+
+        let binding = binding.expect("fresh Claude panels are bound to their session at launch");
+        assert!(!should_resume);
+        assert_eq!(binding.kind, PanelKind::Claude);
+        assert_eq!(binding.cwd.as_deref(), Some("/repo"));
+        assert!(!binding.session_id.is_empty());
+        assert!(binding.updated_at.is_some());
+    }
+
+    #[test]
+    fn non_claude_fresh_launch_stays_unbound() {
+        let (binding, should_resume) =
+            resolve_session_binding(PanelKind::Codex, &PanelResume::Fresh, None, Some("/repo"), None, |_| {
+                false
+            });
+
+        assert!(binding.is_none());
+        assert!(!should_resume);
+    }
+
+    #[test]
+    fn claude_binding_resumes_only_when_transcript_exists() {
+        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-1".to_string(), None, None, None);
+
+        let (_, resume_with_missing_transcript) = resolve_session_binding(
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            Some(binding.clone()),
+            None,
+            None,
+            |_| false,
+        );
+        let (_, resume_with_existing_transcript) = resolve_session_binding(
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            Some(binding),
+            None,
+            None,
+            |_| true,
+        );
+
+        assert!(!resume_with_missing_transcript);
+        assert!(resume_with_existing_transcript);
+    }
+
+    #[test]
+    fn claude_fresh_launch_command_uses_preassigned_session_id() {
+        let binding = AgentSessionBinding::new(
+            PanelKind::Claude,
+            "11111111-2222-3333-4444-555555555555".to_string(),
+            None,
+            None,
+            None,
+        );
+
+        let (_, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Claude,
+            &PanelResume::Fresh,
+            Some(&binding),
+            false,
+        );
+
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--session-id 11111111-2222-3333-4444-555555555555"),
+            "{joined}"
+        );
+        assert!(!joined.contains("--resume"), "{joined}");
     }
 }
