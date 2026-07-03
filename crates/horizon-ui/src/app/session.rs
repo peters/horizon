@@ -46,6 +46,10 @@ fn collect_dynamic_binding_updates(
 
     let mut assignments = Vec::new();
     for ((kind, cwd), panels) in grouped_panels {
+        if kind == PanelKind::Claude {
+            continue;
+        }
+
         let mut candidates = recent_for(kind, empty_string_as_none(&cwd));
         candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
 
@@ -592,17 +596,17 @@ mod tests {
     fn collect_dynamic_binding_updates_assigns_unbound_panels() {
         let panels = vec![DynamicPanelBindingState {
             panel_id: PanelId(7),
-            kind: PanelKind::Claude,
+            kind: PanelKind::Codex,
             cwd: "/repo".to_string(),
             launched_at_millis: 10,
             session_binding: None,
             recent_output: false,
         }];
         let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
-            assert_eq!(kind, PanelKind::Claude);
+            assert_eq!(kind, PanelKind::Codex);
             assert_eq!(cwd, Some("/repo"));
             vec![horizon_core::AgentSessionRecord {
-                kind: PanelKind::Claude,
+                kind: PanelKind::Codex,
                 session_id: "session-1".to_string(),
                 cwd: Some("/repo".to_string()),
                 label: None,
@@ -619,11 +623,11 @@ mod tests {
     fn collect_dynamic_binding_updates_refreshes_single_recently_active_panel() {
         let panels = vec![DynamicPanelBindingState {
             panel_id: PanelId(7),
-            kind: PanelKind::Claude,
+            kind: PanelKind::Codex,
             cwd: "/repo".to_string(),
             launched_at_millis: 10,
             session_binding: Some(horizon_core::AgentSessionBinding::new(
-                PanelKind::Claude,
+                PanelKind::Codex,
                 "session-old".to_string(),
                 Some("/repo".to_string()),
                 None,
@@ -632,18 +636,18 @@ mod tests {
             recent_output: true,
         }];
         let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
-            assert_eq!(kind, PanelKind::Claude);
+            assert_eq!(kind, PanelKind::Codex);
             assert_eq!(cwd, Some("/repo"));
             vec![
                 horizon_core::AgentSessionRecord {
-                    kind: PanelKind::Claude,
+                    kind: PanelKind::Codex,
                     session_id: "session-new".to_string(),
                     cwd: Some("/repo".to_string()),
                     label: None,
                     updated_at: 20,
                 },
                 horizon_core::AgentSessionRecord {
-                    kind: PanelKind::Claude,
+                    kind: PanelKind::Codex,
                     session_id: "session-old".to_string(),
                     cwd: Some("/repo".to_string()),
                     label: None,
@@ -695,6 +699,37 @@ mod tests {
             vec![horizon_core::AgentSessionRecord {
                 kind: PanelKind::Codex,
                 session_id: "session-c".to_string(),
+                cwd: Some("/repo".to_string()),
+                label: None,
+                updated_at: 20,
+            }]
+        });
+
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn collect_dynamic_binding_updates_does_not_reassign_claude_bindings() {
+        let panels = vec![DynamicPanelBindingState {
+            panel_id: PanelId(7),
+            kind: PanelKind::Claude,
+            cwd: "/repo".to_string(),
+            launched_at_millis: 10,
+            session_binding: Some(horizon_core::AgentSessionBinding::new(
+                PanelKind::Claude,
+                "preassigned-session".to_string(),
+                Some("/repo".to_string()),
+                None,
+                Some(12),
+            )),
+            recent_output: true,
+        }];
+        let updates = collect_dynamic_binding_updates(&panels, &HashSet::new(), |kind, cwd| {
+            assert_eq!(kind, PanelKind::Claude);
+            assert_eq!(cwd, Some("/repo"));
+            vec![horizon_core::AgentSessionRecord {
+                kind: PanelKind::Claude,
+                session_id: "external-newer-session".to_string(),
                 cwd: Some("/repo".to_string()),
                 label: None,
                 updated_at: 20,
