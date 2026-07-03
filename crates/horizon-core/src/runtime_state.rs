@@ -1,4 +1,5 @@
 mod agent_sessions;
+mod claude_live_sessions;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -16,6 +17,7 @@ use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
 pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
+pub use claude_live_sessions::live_claude_session_ids;
 
 const RUNTIME_STATE_VERSION: u32 = 2;
 const DEFAULT_ROWS: u16 = 24;
