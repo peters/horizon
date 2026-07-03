@@ -2,24 +2,27 @@
 
 ## Scope
 
-Validate that adding a new Claude Code panel starts a **new** Claude session
-instead of resuming an old conversation, on macOS with Claude Code v2.1.199 or
-newer. This exercises the launch-binding selection fix in
-`crates/horizon-ui/src/app/session.rs` (reattach recency window) and the new
-live-session registry reader in
+Validate that adding a Claude Code panel to a workspace **always** starts a
+new Claude session, never resuming an old conversation, on macOS with Claude
+Code v2.1.199 or newer. This exercises the add-panel normalization in
+`crates/horizon-ui/src/app/actions/panels.rs`, the removal of launch-time
+session scavenging in `crates/horizon-ui/src/app/session.rs`, and the new
+live-session registry guard in
 `crates/horizon-core/src/runtime_state/claude_live_sessions.rs`.
 
-Background: presets with `resume: last` used to reattach a newly added panel to
-the most recent catalog session for that cwd with no recency limit and no check
-for whether another process already had the session open. Before Claude Code
-v2.1.199 this was masked by empty leftover session files; from v2.1.199 the CLI
-no longer refreshes or creates those, so new panels visibly resumed real old
-conversations, including sessions live in other panels.
+Background: presets with `resume: last` used to reattach a newly added panel
+to the most recent catalog session for that cwd, with no check for whether
+another process already had the session open. Before Claude Code v2.1.199
+this was masked by empty leftover session files; from v2.1.199 the CLI no
+longer creates or refreshes those, so new panels visibly resumed real old
+conversations. New panels now always launch with a fresh `--session-id`.
+Reconnecting to an old session is explicit only: the panel context menu
+rebind, or restart restore of a panel that already owns a session.
 
 Note on liveness: the pid check for stale registry entries is Linux-only
-(`/proc`). On macOS every registry entry is treated as live, which only ever
-biases toward starting a fresh session; clean exits remove registry entries, so
-the common paths behave identically. Step 4 covers this.
+(`/proc`). On macOS every `~/.claude/sessions/` entry is treated as live,
+which only ever biases toward starting a fresh session; clean exits remove
+registry entries, so the common paths behave identically.
 
 ## Prerequisites
 
@@ -33,42 +36,42 @@ the common paths behave identically. Step 4 covers this.
 
 ## Test Project Setup
 
-Use a scratch project directory with pre-existing old Claude sessions:
+Use a scratch project directory with a pre-existing recent Claude session:
 
 ```bash
 export SMOKE_PROJ="$(mktemp -d "$HOME/horizon-claude-smoke.XXXXXX")"
 cd "$SMOKE_PROJ"
 claude --model claude-haiku-4-5 -p "Reply with exactly: seeded" >/dev/null
+ls ~/.claude/projects/ | grep horizon-claude-smoke
 ```
 
-The print-mode call above leaves one completed session on disk for this cwd
-(verify with `ls ~/.claude/projects/ | grep horizon-claude-smoke`). Wait at
-least 5 minutes after seeding (or backdate the file mtime with `touch -t`) so
-the seeded session falls outside the reattach window.
+The print-mode call leaves one completed session on disk for this cwd. Do not
+wait; the point is that even a seconds-old session must not be picked up.
 
 ## Steps
 
 1. **Fresh session on add (the reported bug).** Launch the built Horizon,
    create a workspace with cwd `$SMOKE_PROJ`, and add a panel from the
-   `Claude Code` preset (`resume: last`). Expected: the panel shows a brand-new
-   empty Claude conversation, not the seeded one. The launch log line
-   (`launching agent panel`) must show `should_resume=false` and a
-   `--session-id` argument, not `--resume`.
+   `Claude Code` preset (`resume: last`). Expected: the panel shows a
+   brand-new empty Claude conversation, not the seeded one, even though the
+   seeded session is recent. The launch log line (`launching agent panel`)
+   must show `should_resume=false` and a `--session-id` argument, not
+   `--resume`.
 
-2. **No double-attach to a live session.** In the panel from step 1, send any
-   short prompt so its session file exists. Add a second Claude Code panel in
-   the same workspace. Expected: the second panel is also a fresh conversation;
-   it must not open the first panel's conversation, because that session id is
-   listed in `~/.claude/sessions/` while the first panel runs.
+2. **Every add is fresh.** Send a short prompt in the first panel, then add a
+   second and a third Claude Code panel to the same workspace. Expected: each
+   panel is a fresh empty conversation; none shows another panel's
+   conversation.
 
-3. **Reattach still recovers recent work.** Close the second panel (its claude
-   process exits, freeing its registry entry), then within 5 minutes add a new
-   Claude Code panel. Expected: the new panel resumes the session the closed
-   panel had, restoring its conversation (`--resume <id>` in the launch log).
+3. **Explicit rebind still works.** Open a panel's context menu and rebind it
+   to the seeded session. Expected: the panel relaunches with `--resume` and
+   shows the seeded conversation. Explicit selection remains the only way to
+   attach an old session to a new panel.
 
-4. **Restart resume is unaffected.** Quit Horizon normally and relaunch it.
-   Expected: the surviving Claude panels reconnect to their own sessions via
-   `--resume` and show their previous conversations.
+4. **Restart resume is unaffected.** Send a prompt in one fresh panel so it
+   owns a session, quit Horizon normally, and relaunch it. Expected: that
+   panel reconnects to its own session via `--resume` and shows its previous
+   conversation; panels that never received a prompt come back fresh.
 
 ## Cleanup
 

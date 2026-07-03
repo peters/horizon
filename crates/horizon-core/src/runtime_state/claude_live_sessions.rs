@@ -7,8 +7,8 @@ use serde_json::Value;
 ///
 /// Claude Code maintains a live-session registry under `~/.claude/sessions/`,
 /// one `<pid>.json` entry per running process, removed again on clean exit.
-/// Sessions listed there are already open in some terminal, so resuming one
-/// of them from a new panel would attach two UIs to the same conversation.
+/// Sessions listed there are already open in some terminal, so automatically
+/// resuming one of them would attach two UIs to the same conversation.
 ///
 /// Entries whose process is no longer alive (stale files left by crashed
 /// processes) are ignored on Linux. On other platforms every entry is treated

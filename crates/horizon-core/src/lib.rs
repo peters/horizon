@@ -45,9 +45,7 @@ pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, Fil
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use managed_install::ManagedInstall;
-pub use panel::{
-    DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, current_unix_millis,
-};
+pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,

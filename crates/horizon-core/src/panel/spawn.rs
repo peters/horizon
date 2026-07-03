@@ -682,7 +682,6 @@ fn resolve_agent_launch_command(
     wrap_in_login_shell(program, launch_args)
 }
 
-#[must_use]
 pub fn current_unix_millis() -> i64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -1,8 +1,17 @@
 use crate::app::HorizonApp;
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
-use horizon_core::{PanelId, PanelOptions, PanelTranscript, PresetConfig, WorkspaceId};
+use horizon_core::{PanelId, PanelOptions, PanelResume, PanelTranscript, PresetConfig, WorkspaceId};
 
 use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
+
+/// Newly added agent panels always start a new session. `resume: last` on a
+/// preset only governs how existing panels reconnect on restore and how
+/// `--continue` style agents without session catalogs launch.
+fn normalize_new_panel_resume(options: &mut PanelOptions) {
+    if options.kind.supports_session_binding() && matches!(options.resume, PanelResume::Last) {
+        options.resume = PanelResume::Fresh;
+    }
+}
 
 impl HorizonApp {
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
@@ -19,7 +28,7 @@ impl HorizonApp {
     ) -> horizon_core::Result<PanelId> {
         let workspace_cwd = workspace_cwd(&self.board, workspace_id);
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
-        self.resolve_panel_launch_binding(&mut options);
+        normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
         self.board.create_panel(options, workspace_id)
     }
@@ -131,5 +140,60 @@ impl HorizonApp {
             },
             workspace_cwd.as_deref(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{PanelKind, PanelOptions, PanelResume};
+
+    use super::normalize_new_panel_resume;
+
+    #[test]
+    fn new_agent_panels_always_start_fresh_sessions() {
+        for kind in [PanelKind::Claude, PanelKind::Codex, PanelKind::OpenCode, PanelKind::Pi] {
+            let mut options = PanelOptions {
+                kind,
+                resume: PanelResume::Last,
+                ..PanelOptions::default()
+            };
+
+            normalize_new_panel_resume(&mut options);
+
+            assert_eq!(options.resume, PanelResume::Fresh, "kind {kind:?}");
+        }
+    }
+
+    #[test]
+    fn continue_style_agents_keep_last_resume() {
+        let mut options = PanelOptions {
+            kind: PanelKind::KiloCode,
+            resume: PanelResume::Last,
+            ..PanelOptions::default()
+        };
+
+        normalize_new_panel_resume(&mut options);
+
+        assert_eq!(options.resume, PanelResume::Last);
+    }
+
+    #[test]
+    fn explicitly_requested_sessions_are_preserved() {
+        let mut options = PanelOptions {
+            kind: PanelKind::Claude,
+            resume: PanelResume::Session {
+                session_id: "session-1".to_string(),
+            },
+            ..PanelOptions::default()
+        };
+
+        normalize_new_panel_resume(&mut options);
+
+        assert_eq!(
+            options.resume,
+            PanelResume::Session {
+                session_id: "session-1".to_string(),
+            }
+        );
     }
 }
