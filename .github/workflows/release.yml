@@ -37,7 +37,7 @@ jobs:
       release_version: ${{ steps.validate.outputs.release_version }}
       release_prerelease: ${{ steps.validate.outputs.release_prerelease }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag_name }}
           fetch-depth: 0
@@ -165,7 +165,7 @@ jobs:
             surge_installer_asset: horizon-installer-win-x64.exe
             surge_installer_ext: exe
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
@@ -180,7 +180,7 @@ jobs:
           key: ${{ matrix.cache_key }}
       - name: Restore Surge toolchain cache
         if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             .surge/toolchain-src
@@ -392,7 +392,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
@@ -403,7 +403,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.sha }}"
           git checkout "${{ github.sha }}" -- scripts
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             .surge/toolchain-src
@@ -535,7 +535,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
@@ -575,7 +575,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
@@ -587,7 +587,7 @@ jobs:
           git checkout "${{ github.sha }}" -- scripts
 
       - name: Checkout Homebrew tap repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: peters/homebrew-horizon
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -650,7 +650,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
@@ -662,7 +662,7 @@ jobs:
           git checkout "${{ github.sha }}" -- scripts
 
       - name: Checkout WinGet fork
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.WINGET_PKGS_REPOSITORY }}
           token: ${{ secrets.WINGET_PKGS_TOKEN }}
