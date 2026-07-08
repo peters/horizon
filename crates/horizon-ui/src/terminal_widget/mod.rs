@@ -9,6 +9,7 @@ use horizon_core::Panel;
 
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
+pub(crate) use self::input::TerminalSelectionDragState;
 use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 pub(crate) use self::render::TerminalGridCache;
@@ -43,6 +44,7 @@ impl<'a> TerminalView<'a> {
         ui: &mut egui::Ui,
         is_active_panel: bool,
         interactive: bool,
+        selection_drag: &mut TerminalSelectionDragState,
         keyboard: TerminalKeyboardContext<'_>,
     ) -> bool {
         let metrics = grid_metrics(ui.ctx());
@@ -68,6 +70,7 @@ impl<'a> TerminalView<'a> {
                     visible_rows: new_rows,
                     visible_cols: new_cols,
                     primary_selection: keyboard.primary_selection,
+                    selection_drag,
                 },
             );
         }

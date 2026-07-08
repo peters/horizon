@@ -9,7 +9,7 @@ use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
-    TerminalGridCache, TerminalKeyboardContext, TerminalView, viewport_for_available_space,
+    TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView, viewport_for_available_space,
 };
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
@@ -108,6 +108,7 @@ struct PanelBodyContext<'a> {
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
     reconnect_requested: &'a mut bool,
+    terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
 }
 
@@ -130,6 +131,7 @@ fn show_panel_body_contents(
             ui,
             is_focused,
             interactive,
+            body_context.terminal_selection_drag,
             TerminalKeyboardContext {
                 keyboard_events: body_context.keyboard_events,
                 primary_selection: body_context.primary_selection,
@@ -242,6 +244,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                 },
                             );
@@ -476,6 +479,7 @@ impl HorizonApp {
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.editor_preview_cache;
                         let terminal_grid_cache = &mut self.terminal_grid_cache;
+                        let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(editor_preview_cache.entry(panel_id).or_default())
@@ -499,6 +503,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                 },
                             );

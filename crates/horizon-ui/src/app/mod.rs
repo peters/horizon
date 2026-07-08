@@ -47,7 +47,7 @@ use super::input;
 use super::primary_selection::PrimarySelection;
 use super::remote_hosts_overlay::RemoteHostsOverlay;
 use super::search_overlay::SearchOverlay;
-use super::terminal_widget::TerminalGridCache;
+use super::terminal_widget::{TerminalGridCache, TerminalSelectionDragState};
 use super::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
@@ -169,6 +169,7 @@ pub struct HorizonApp {
     panel_render_order: Vec<(PanelId, usize)>,
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
+    terminal_selection_drag: TerminalSelectionDragState,
     terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
     canvas_grid_cache: CanvasGridCache,
@@ -381,6 +382,7 @@ impl HorizonApp {
             git_watchers: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
             primary_selection: PrimarySelection::new(),
+            terminal_selection_drag: TerminalSelectionDragState::default(),
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,
