@@ -1,4 +1,5 @@
 mod agent_sessions;
+mod claude_live_sessions;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -16,6 +17,7 @@ use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
 pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
+pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 
 const RUNTIME_STATE_VERSION: u32 = 2;
 const DEFAULT_ROWS: u16 = 24;
@@ -139,10 +141,21 @@ impl RuntimeState {
         self.pan_offset = None;
     }
 
-    pub fn bootstrap_missing_agent_bindings(&mut self, catalog: &AgentSessionCatalog) {
+    /// Assigns catalog sessions to legacy `resume: last` panels that were
+    /// persisted without a session binding.
+    ///
+    /// `busy_session_ids` lists sessions currently open in a running agent
+    /// process (see [`live_claude_session_ids`]); those are never assigned so
+    /// a restored panel cannot attach to a conversation that is already open
+    /// elsewhere.
+    pub fn bootstrap_missing_agent_bindings(
+        &mut self,
+        catalog: &AgentSessionCatalog,
+        busy_session_ids: &HashSet<String>,
+    ) {
         self.ensure_local_ids();
 
-        let mut used_session_ids = HashSet::new();
+        let mut used_session_ids = busy_session_ids.clone();
 
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
             if !panel.kind.supports_session_binding() {
@@ -475,6 +488,7 @@ impl PanelState {
             template: self.template.clone(),
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
+            is_restore: true,
         }
     }
 }

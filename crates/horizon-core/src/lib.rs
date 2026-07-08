@@ -52,7 +52,7 @@ pub use remote_hosts::{
 };
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState, PanelState, PanelTemplateRef,
-    RuntimeState, WorkspaceState, WorkspaceTemplateRef, new_local_id,
+    RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids, new_local_id,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

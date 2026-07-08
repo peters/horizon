@@ -5,6 +5,9 @@ updates:
     schedule:
       interval: daily
       time: "04:00"
+    ignore:
+      # wgpu is feature-only here and must stay aligned with eframe/egui-wgpu.
+      - dependency-name: "wgpu"
 
   - package-ecosystem: "github-actions"
     directory: "/"

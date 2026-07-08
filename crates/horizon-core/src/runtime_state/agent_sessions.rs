@@ -598,6 +598,7 @@ fn non_empty_text(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::io::Cursor;
 
     use rusqlite::Connection;
@@ -680,7 +681,7 @@ mod tests {
             ],
         };
 
-        state.bootstrap_missing_agent_bindings(&catalog);
+        state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new());
 
         let bindings: Vec<_> = state.workspaces[0]
             .panels
@@ -689,6 +690,56 @@ mod tests {
             .collect();
         assert_eq!(bindings.len(), 2);
         assert_ne!(bindings[0], bindings[1]);
+    }
+
+    #[test]
+    fn bootstrap_never_assigns_sessions_open_in_other_processes() {
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "termgalore".to_string(),
+                cwd: Some("/repo".to_string()),
+                position: None,
+                template: None,
+                layout: None,
+                panels: vec![PanelState {
+                    local_id: "a".to_string(),
+                    name: "Claude A".to_string(),
+                    kind: PanelKind::Claude,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                }],
+            }],
+            ..RuntimeState::default()
+        };
+        let catalog = AgentSessionCatalog {
+            sessions: vec![
+                AgentSessionRecord {
+                    kind: PanelKind::Claude,
+                    session_id: "session-live".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 2,
+                },
+                AgentSessionRecord {
+                    kind: PanelKind::Claude,
+                    session_id: "session-free".to_string(),
+                    cwd: Some("/repo".to_string()),
+                    label: None,
+                    updated_at: 1,
+                },
+            ],
+        };
+        let busy = HashSet::from(["session-live".to_string()]);
+
+        state.bootstrap_missing_agent_bindings(&catalog, &busy);
+
+        let binding = state.workspaces[0].panels[0]
+            .session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.clone());
+        assert_eq!(binding.as_deref(), Some("session-free"));
     }
 
     #[test]
