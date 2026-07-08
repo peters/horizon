@@ -42,11 +42,25 @@ fn selection_drag_state_only_reports_copy_after_movement() {
     let mut state = TerminalSelectionDragState::default();
 
     state.start(panel_id, Pos2::new(4.0, 4.0));
-    state.mark_dragged(panel_id, Pos2::new(4.0, 4.0));
+    state.mark_dragged(panel_id, Pos2::new(4.0, 4.0), 6.0);
     assert!(!state.finish(panel_id));
 
     state.start(panel_id, Pos2::new(4.0, 4.0));
-    state.mark_dragged(panel_id, Pos2::new(16.0, 4.0));
+    state.mark_dragged(panel_id, Pos2::new(16.0, 4.0), 6.0);
     assert!(state.finish(panel_id));
     assert!(!state.active_for(panel_id));
+}
+
+#[test]
+fn selection_drag_state_uses_click_movement_threshold() {
+    let panel_id = PanelId(42);
+    let mut state = TerminalSelectionDragState::default();
+
+    state.start(panel_id, Pos2::new(4.0, 4.0));
+    state.mark_dragged(panel_id, Pos2::new(9.0, 4.0), 6.0);
+    assert!(!state.finish(panel_id));
+
+    state.start(panel_id, Pos2::new(4.0, 4.0));
+    state.mark_dragged(panel_id, Pos2::new(11.0, 4.0), 6.0);
+    assert!(state.finish(panel_id));
 }

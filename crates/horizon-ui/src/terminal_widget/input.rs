@@ -124,6 +124,7 @@ pub(super) fn handle_terminal_pointer_input(
         primary_selection,
         ui_ctx: ui.ctx().clone(),
     };
+    let selection_drag_threshold = ui.ctx().options(|options| options.input_options.max_click_dist);
 
     let selection_outcome = handle_terminal_body_pointer_actions(
         panel,
@@ -132,6 +133,7 @@ pub(super) fn handle_terminal_pointer_input(
         primary_release_pos,
         body_middle_press_pos,
         selection_drag,
+        selection_drag_threshold,
     );
     handle_pointer_events(
         &events,
@@ -346,6 +348,7 @@ fn handle_terminal_body_pointer_actions(
     primary_release_pos: Option<Pos2>,
     body_middle_press_pos: Option<Pos2>,
     selection_drag: &mut TerminalSelectionDragState,
+    selection_drag_threshold: f32,
 ) -> SelectionFrameOutcome {
     let mut outcome = SelectionFrameOutcome {
         claimed_primary_pointer: selection_drag.active_for(panel.id),
@@ -391,7 +394,7 @@ fn handle_terminal_body_pointer_actions(
         && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
         && let Some(pos) = body_pointer_pos
     {
-        selection_drag.mark_dragged(panel.id, pos);
+        selection_drag.mark_dragged(panel.id, pos, selection_drag_threshold);
         handle_pointer_selection_drag(
             panel,
             pos,
@@ -407,7 +410,7 @@ fn handle_terminal_body_pointer_actions(
         && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
         && let Some(pos) = primary_release_pos.or(body_pointer_pos)
     {
-        selection_drag.mark_dragged(panel.id, pos);
+        selection_drag.mark_dragged(panel.id, pos, selection_drag_threshold);
         handle_pointer_selection_drag(
             panel,
             pos,

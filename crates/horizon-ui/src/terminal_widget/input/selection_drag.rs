@@ -25,11 +25,13 @@ impl TerminalSelectionDragState {
         self.active.as_ref().is_some_and(|drag| drag.panel_id == panel_id)
     }
 
-    pub(crate) fn mark_dragged(&mut self, panel_id: PanelId, pos: Pos2) {
+    pub(crate) fn mark_dragged(&mut self, panel_id: PanelId, pos: Pos2, movement_threshold: f32) {
         let Some(active) = self.active.as_mut().filter(|drag| drag.panel_id == panel_id) else {
             return;
         };
-        if active.start_pos.distance_sq(pos) > f32::EPSILON {
+        let movement_threshold = movement_threshold.max(0.0);
+        if movement_threshold.is_finite() && active.start_pos.distance_sq(pos) > movement_threshold * movement_threshold
+        {
             active.dragged = true;
         }
     }
