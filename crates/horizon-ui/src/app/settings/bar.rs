@@ -19,7 +19,7 @@ pub(super) fn render(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 8))
-                .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 100))),
+                .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 100))),
         )
         .show(ctx, |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -45,7 +45,7 @@ pub(super) fn render(
                         .add(
                             Button::new(egui::RichText::new("Close").size(12.0).color(theme::FG_SOFT()))
                                 .fill(theme::PANEL_BG_ALT())
-                                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
                                 .corner_radius(8),
                         )
                         .clicked()

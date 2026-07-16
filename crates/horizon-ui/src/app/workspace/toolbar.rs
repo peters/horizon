@@ -36,7 +36,7 @@ pub(super) fn render_workspace_layout_toolbar(
                     theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.08),
                     228,
                 ))
-                .stroke(Stroke::new(1.0, theme::alpha(workspace.color, 112)))
+                .stroke(Stroke::new(1.0_f32, theme::alpha(workspace.color, 112)))
                 .corner_radius(10.0)
                 .inner_margin(Margin::symmetric(
                     WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X,
@@ -63,7 +63,7 @@ pub(super) fn render_workspace_layout_toolbar(
                                     theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
                                 })
                                 .stroke(Stroke::new(
-                                    1.0,
+                                    1.0_f32,
                                     if is_default {
                                         theme::alpha(workspace.color, 224)
                                     } else {
@@ -96,7 +96,7 @@ pub(super) fn render_workspace_layout_toolbar(
                                         theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
                                     })
                                     .stroke(Stroke::new(
-                                        1.0,
+                                        1.0_f32,
                                         if is_selected {
                                             theme::alpha(workspace.color, 224)
                                         } else {
@@ -231,7 +231,7 @@ fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool 
                 220,
             ))
             .stroke(Stroke::new(
-                1.0,
+                1.0_f32,
                 theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
             ))
             .corner_radius(8),

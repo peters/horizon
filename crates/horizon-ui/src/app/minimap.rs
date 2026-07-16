@@ -156,7 +156,7 @@ fn paint_minimap_contents(
     painter.rect_stroke(
         rect,
         CornerRadius::same(8),
-        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+        Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Outside,
     );
 
@@ -201,7 +201,7 @@ fn paint_minimap_workspaces(
         painter.rect_stroke(
             workspace_rect,
             CornerRadius::same(2),
-            Stroke::new(0.8, theme::alpha(workspace_color, if is_active { 140 } else { 80 })),
+            Stroke::new(0.8_f32, theme::alpha(workspace_color, if is_active { 140 } else { 80 })),
             StrokeKind::Outside,
         );
     }
@@ -467,7 +467,7 @@ fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: b
         theme::blend(theme::BG_ELEVATED(), color, if is_active { 0.24 } else { 0.14 }),
         236,
     );
-    let stroke = Stroke::new(1.0, theme::alpha(color, if is_active { 210 } else { 140 }));
+    let stroke = Stroke::new(1.0_f32, theme::alpha(color, if is_active { 210 } else { 140 }));
     painter.rect_filled(rect, CornerRadius::same(4), fill);
     painter.rect_stroke(rect, CornerRadius::same(4), stroke, StrokeKind::Outside);
 }
@@ -613,7 +613,7 @@ fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel)
     painter.rect_stroke(
         viewport_rect,
         CornerRadius::same(1),
-        Stroke::new(1.0, theme::alpha(theme::FG(), 90)),
+        Stroke::new(1.0_f32, theme::alpha(theme::FG(), 90)),
         StrokeKind::Inside,
     );
 }

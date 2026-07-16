@@ -199,7 +199,7 @@ pub(super) fn render_cursor(
     let y = rect.min.y + usize_to_f32(point.line) * metrics.line_height;
     let cursor_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(metrics.char_width, metrics.line_height));
     let painter = ui.painter_at(rect);
-    let stroke = egui::Stroke::new(1.2, theme::CURSOR().gamma_multiply(0.82));
+    let stroke = egui::Stroke::new(1.2_f32, theme::CURSOR().gamma_multiply(0.82));
 
     if !has_focus {
         painter.rect_stroke(cursor_rect, CornerRadius::same(1), stroke, StrokeKind::Outside);
@@ -422,7 +422,7 @@ fn append_cell_decoration(
         let y = cell_rect.max.y - 1.5;
         shapes.push(Shape::line_segment(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
-            egui::Stroke::new(1.0, underline_color),
+            egui::Stroke::new(1.0_f32, underline_color),
         ));
     }
 
@@ -430,7 +430,7 @@ fn append_cell_decoration(
         let y = cell_rect.center().y;
         shapes.push(Shape::line_segment(
             [Pos2::new(cell_rect.min.x, y), Pos2::new(cell_rect.max.x, y)],
-            egui::Stroke::new(1.0, color),
+            egui::Stroke::new(1.0_f32, color),
         ));
     }
 }

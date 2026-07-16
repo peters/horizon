@@ -78,7 +78,7 @@ fn render_startup_chooser_panel(ctx: &Context, state: &mut StartupChooserState) 
             ui.centered_and_justified(|ui| {
                 egui::Frame::default()
                     .fill(theme::BG_ELEVATED())
-                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
                     .corner_radius(18)
                     .inner_margin(Margin::same(22))
                     .show(ui, |ui| {
@@ -149,7 +149,7 @@ fn render_session_card(ui: &mut egui::Ui, session: &horizon_core::SessionSummary
             theme::PANEL_BG()
         })
         .stroke(Stroke::new(
-            1.0,
+            1.0_f32,
             if selected {
                 theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.75)
             } else {

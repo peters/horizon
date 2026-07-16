@@ -35,13 +35,13 @@ pub(crate) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
     painter.rect_stroke(
         card_rect,
         CornerRadius::same(20),
-        Stroke::new(1.5, theme::alpha(theme::ACCENT(), 80)),
+        Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)),
         StrokeKind::Outside,
     );
     painter.rect_stroke(
         card_rect.expand(2.0),
         CornerRadius::same(22),
-        Stroke::new(2.0, theme::alpha(theme::ACCENT(), 25)),
+        Stroke::new(2.0_f32, theme::alpha(theme::ACCENT(), 25)),
         StrokeKind::Outside,
     );
 }
@@ -151,7 +151,7 @@ fn paint_shortcut_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, shortcut: &s
     ui.painter_at(row_rect).rect_stroke(
         badge_rect,
         CornerRadius::same(5),
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+        Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
     ui.painter_at(row_rect).text(

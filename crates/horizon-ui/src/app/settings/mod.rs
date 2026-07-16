@@ -255,7 +255,7 @@ fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut Settings
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 16))
-                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
         )
         .show(ctx, |ui| {
             ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
@@ -315,7 +315,7 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
             };
 
             let stroke = if selected {
-                Stroke::new(1.0, theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5))
+                Stroke::new(1.0_f32, theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5))
             } else {
                 Stroke::NONE
             };
@@ -348,7 +348,7 @@ fn section_heading(ui: &mut egui::Ui, title: &str) {
 fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::default()
         .fill(theme::PANEL_BG())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(10)
         .inner_margin(Margin::same(16))
         .show(ui, |ui| {

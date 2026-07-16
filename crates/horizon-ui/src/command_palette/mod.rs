@@ -202,7 +202,7 @@ impl CommandPalette {
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT(), 70)),
+            Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 70)),
             StrokeKind::Inside,
         );
 

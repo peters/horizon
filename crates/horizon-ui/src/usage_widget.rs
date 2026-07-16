@@ -162,7 +162,7 @@ fn render_stat_card(
     painter.rect_stroke(
         rect,
         CornerRadius::same(CARD_CORNER),
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
+        egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
         egui::StrokeKind::Outside,
     );
 

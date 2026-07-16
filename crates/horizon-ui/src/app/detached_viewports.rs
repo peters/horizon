@@ -248,7 +248,7 @@ impl HorizonApp {
                     Pos2::new(ui.max_rect().min.x, ui.max_rect().max.y),
                     Pos2::new(ui.max_rect().max.x, ui.max_rect().max.y),
                 ],
-                Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 170)),
+                Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 170)),
             );
 
             ui.horizontal(|ui| {

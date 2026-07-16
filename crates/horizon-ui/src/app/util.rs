@@ -176,7 +176,7 @@ pub(super) fn primary_button(text: &str) -> Button<'_> {
     Button::new(egui::RichText::new(text).size(11.5).color(theme::FG()))
         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28))
         .stroke(Stroke::new(
-            1.0,
+            1.0_f32,
             theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.72),
         ))
         .corner_radius(10)
@@ -185,7 +185,7 @@ pub(super) fn primary_button(text: &str) -> Button<'_> {
 pub(super) fn chrome_button(text: &str) -> Button<'_> {
     Button::new(egui::RichText::new(text).size(11.0).color(theme::FG_SOFT()))
         .fill(theme::PANEL_BG_ALT())
-        .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 210)))
         .corner_radius(10)
 }
 
@@ -193,7 +193,7 @@ pub(super) fn danger_button(text: &str) -> Button<'_> {
     Button::new(egui::RichText::new(text).size(11.0).color(theme::FG()))
         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_RED(), 0.22))
         .stroke(Stroke::new(
-            1.0,
+            1.0_f32,
             theme::blend(theme::BORDER_STRONG(), theme::PALETTE_RED(), 0.68),
         ))
         .corner_radius(10)

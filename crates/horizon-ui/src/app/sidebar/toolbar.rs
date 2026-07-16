@@ -32,7 +32,7 @@ impl HorizonApp {
                         Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT),
                         Pos2::new(viewport.max.x, viewport.min.y + TOOLBAR_HEIGHT),
                     ],
-                    Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 170)),
+                    Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 170)),
                 );
 
                 Self::render_toolbar_brand(ui, &layout);
@@ -119,7 +119,7 @@ impl HorizonApp {
         painter.rect_stroke(
             rect,
             CornerRadius::same(10),
-            Stroke::new(1.0, stroke_color),
+            Stroke::new(1.0_f32, stroke_color),
             egui::StrokeKind::Outside,
         );
         painter.circle_filled(dot_center, 3.0, theme::alpha(accent, 230));

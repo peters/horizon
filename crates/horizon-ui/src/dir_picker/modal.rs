@@ -188,7 +188,7 @@ impl PickerModalState {
         ui.painter().rect_stroke(
             input_rect,
             CornerRadius::same(12),
-            Stroke::new(1.0, theme::alpha(theme::ACCENT(), 70)),
+            Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 70)),
             StrokeKind::Inside,
         );
 
@@ -335,13 +335,13 @@ fn paint_picker_card(ui: &egui::Ui, card_rect: Rect) {
     painter.rect_stroke(
         card_rect,
         CornerRadius::same(20),
-        Stroke::new(1.5, theme::alpha(theme::ACCENT(), 80)),
+        Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)),
         StrokeKind::Outside,
     );
     painter.rect_stroke(
         card_rect.expand(2.0),
         CornerRadius::same(22),
-        Stroke::new(2.0, theme::alpha(theme::ACCENT(), 25)),
+        Stroke::new(2.0_f32, theme::alpha(theme::ACCENT(), 25)),
         StrokeKind::Outside,
     );
 }
@@ -353,7 +353,7 @@ fn keyboard_hint(ui: &mut egui::Ui, key: &str, desc: &str) {
             .fill(theme::BG_ELEVATED())
             .corner_radius(4)
             .inner_margin(Margin::symmetric(5, 2))
-            .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 160)))
+            .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 160)))
             .show(ui, |ui| {
                 ui.label(egui::RichText::new(key).monospace().size(10.0).color(theme::FG()));
             });
