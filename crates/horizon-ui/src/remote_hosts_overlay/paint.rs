@@ -43,7 +43,7 @@ pub(super) fn render_column_headers(ui: &mut Ui, width: f32, columns: &Columns) 
     let x = rect.min.x;
     let font = FontId::monospace(10.0);
     let color = theme::FG_DIM();
-    let underline_stroke = Stroke::new(1.0, theme::alpha(theme::ACCENT(), 40));
+    let underline_stroke = Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 40));
     let headers = [
         ("Alias", columns.alias),
         ("IPv4", columns.ipv4),
@@ -90,7 +90,7 @@ pub(super) fn render_host_details(
 ) {
     egui::Frame::new()
         .fill(details_fill())
-        .stroke(Stroke::new(1.0, details_stroke()))
+        .stroke(Stroke::new(1.0_f32, details_stroke()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
@@ -315,7 +315,7 @@ fn render_status_badge(ui: &mut Ui, status: Option<SshConnectionStatus>) {
 
     egui::Frame::new()
         .fill(theme::alpha(color, 24))
-        .stroke(Stroke::new(1.0, theme::alpha(color, 120)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(color, 120)))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
@@ -326,7 +326,7 @@ fn render_status_badge(ui: &mut Ui, status: Option<SshConnectionStatus>) {
 fn render_meta_badge(ui: &mut Ui, text: String, color: Color32) {
     egui::Frame::new()
         .fill(theme::alpha(theme::BG_ELEVATED(), 170))
-        .stroke(Stroke::new(1.0, theme::alpha(color, 70)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(color, 70)))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {

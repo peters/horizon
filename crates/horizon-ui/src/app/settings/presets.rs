@@ -34,7 +34,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                     egui::Button::new(egui::RichText::new("+ Add Preset").size(11.0).color(theme::ACCENT()))
                         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.08))
                         .stroke(Stroke::new(
-                            1.0,
+                            1.0_f32,
                             theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.3),
                         ))
                         .corner_radius(8),
@@ -83,7 +83,7 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
 
     egui::Frame::default()
         .fill(theme::PANEL_BG())
-        .stroke(Stroke::new(1.0, border_color))
+        .stroke(Stroke::new(1.0_f32, border_color))
         .corner_radius(8)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {

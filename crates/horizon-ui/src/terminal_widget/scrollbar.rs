@@ -24,7 +24,7 @@ pub(super) fn render_scrollbar(
     painter.rect_stroke(
         rect,
         CornerRadius::same(u8::MAX),
-        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+        egui::Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Outside,
     );
 

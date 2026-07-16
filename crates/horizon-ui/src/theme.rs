@@ -409,7 +409,7 @@ fn visuals(theme: ResolvedTheme) -> Visuals {
         spread: 2,
         color: Color32::from_black_alpha(window_shadow_alpha),
     };
-    visuals.window_stroke = Stroke::new(1.0, palette.border_subtle);
+    visuals.window_stroke = Stroke::new(1.0_f32, palette.border_subtle);
     visuals.window_fill = palette.panel_bg;
     visuals.window_highlight_topmost = false;
 
@@ -423,26 +423,26 @@ fn visuals(theme: ResolvedTheme) -> Visuals {
 
     visuals.widgets.noninteractive.bg_fill = palette.bg_elevated;
     visuals.widgets.noninteractive.weak_bg_fill = palette.panel_bg_alt;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.fg_dim);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.fg_dim);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.inactive.bg_fill = palette.panel_bg_alt;
     visuals.widgets.inactive.weak_bg_fill = palette.bg_elevated;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.fg_soft);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.fg_soft);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.hovered.bg_fill = blend(palette.panel_bg_alt, palette.accent, 0.16);
     visuals.widgets.hovered.weak_bg_fill = palette.bg_elevated;
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.fg);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.fg);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(12);
 
     visuals.widgets.active.bg_fill = blend(palette.panel_bg_alt, palette.accent, 0.22);
     visuals.widgets.active.weak_bg_fill = palette.bg_elevated;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.fg);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.fg);
     visuals.widgets.active.corner_radius = CornerRadius::same(12);
 
     visuals.selection.bg_fill = alpha(palette.accent, 54);
-    visuals.selection.stroke = Stroke::new(1.0, palette.accent);
+    visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
     visuals.popup_shadow = Shadow {
         offset: [0, 6],
         blur: 22,

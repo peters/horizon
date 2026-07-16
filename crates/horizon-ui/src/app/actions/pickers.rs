@@ -124,7 +124,7 @@ impl HorizonApp {
             .show(ctx, |ui| {
                 egui::Frame::default()
                     .fill(theme::PANEL_BG())
-                    .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_STRONG()))
                     .corner_radius(8)
                     .inner_margin(Margin::symmetric(8, 6))
                     .show(ui, |ui| {

@@ -77,7 +77,7 @@ impl HorizonApp {
                 egui::Frame::default()
                     .fill(theme::alpha(theme::PANEL_BG(), 236))
                     .inner_margin(Margin::symmetric(12, 10))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_STRONG(), 210)))
+                    .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_STRONG(), 210)))
                     .corner_radius(12)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("Canvas HUD").color(theme::FG()).size(11.5).strong());
@@ -140,7 +140,7 @@ impl HorizonApp {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(theme::alpha(theme::PANEL_BG(), 238))
-                    .stroke(Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
+                    .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 210)))
                     .corner_radius(20)
                     .inner_margin(Margin::same(20))
                     .show(ui, |ui| {

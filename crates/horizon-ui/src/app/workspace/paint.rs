@@ -15,7 +15,7 @@ pub(super) fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color3
     painter.rect_stroke(
         rect,
         corner_radius,
-        Stroke::new(1.0, theme::alpha(color, border_alpha)),
+        Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
     );
 }
@@ -46,7 +46,7 @@ pub(super) fn paint_workspace_label_bg(
     painter.rect_stroke(
         rect,
         CornerRadius::same(10),
-        Stroke::new(1.0, theme::alpha(color, border_alpha)),
+        Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
         StrokeKind::Outside,
     );
 }

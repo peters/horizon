@@ -36,7 +36,7 @@ impl HorizonApp {
                 let (_, painter) = ui.allocate_painter(rect.size(), egui::Sense::hover());
                 let local_rect = painter.clip_rect();
                 let fill = theme::alpha(theme::blend(theme::PANEL_BG(), accent, 0.22), 48);
-                let stroke = Stroke::new(2.5, theme::alpha(accent, 180));
+                let stroke = Stroke::new(2.5_f32, theme::alpha(accent, 180));
                 painter.rect_filled(local_rect, corner_radius, fill);
                 painter.rect_stroke(local_rect, corner_radius, stroke, StrokeKind::Inside);
             });

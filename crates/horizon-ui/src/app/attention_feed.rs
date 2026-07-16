@@ -56,7 +56,7 @@ pub fn render_attention_feed(
             let frame = egui::Frame::new()
                 .fill(theme::BG_ELEVATED())
                 .stroke(egui::Stroke::new(
-                    1.0,
+                    1.0_f32,
                     theme::blend(theme::BG_ELEVATED(), theme::FG_DIM(), 0.15),
                 ))
                 .corner_radius(10.0)

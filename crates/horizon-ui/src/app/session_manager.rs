@@ -277,7 +277,7 @@ fn render_session_manager_window(
         .frame(
             egui::Frame::NONE
                 .fill(theme::PANEL_BG())
-                .stroke(Stroke::new(1.5, theme::alpha(theme::ACCENT(), 80)))
+                .stroke(Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)))
                 .corner_radius(CornerRadius::same(20))
                 .shadow(egui::Shadow {
                     offset: [0, 12],
@@ -457,7 +457,7 @@ fn render_remove_all_actions(
 fn render_header(ui: &mut egui::Ui, action: &mut SessionManagerAction) {
     egui::Frame::NONE
         .fill(theme::BG_ELEVATED())
-        .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 48)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 48)))
         .corner_radius(CornerRadius::same(14))
         .inner_margin(Margin::symmetric(20, 16))
         .show(ui, |ui| {
@@ -483,7 +483,7 @@ fn render_header(ui: &mut egui::Ui, action: &mut SessionManagerAction) {
 fn render_empty_state(ui: &mut egui::Ui) {
     egui::Frame::NONE
         .fill(theme::PANEL_BG_ALT())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(CornerRadius::same(12))
         .inner_margin(Margin::same(18))
         .show(ui, |ui| {
@@ -513,7 +513,7 @@ fn render_session_card(
             theme::PANEL_BG_ALT()
         })
         .stroke(Stroke::new(
-            1.0,
+            1.0_f32,
             if selected {
                 theme::blend(theme::BORDER_STRONG(), theme::ACCENT(), 0.78)
             } else {

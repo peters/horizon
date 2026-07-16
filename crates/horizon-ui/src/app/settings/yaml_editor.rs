@@ -25,7 +25,7 @@ pub(super) fn render(ui: &mut Ui, config_path: &str, buffer: &mut String, availa
 
     egui::Frame::default()
         .fill(theme::PANEL_BG())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(8)
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {

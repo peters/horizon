@@ -66,7 +66,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
         .frame(
             egui::Frame::NONE
                 .fill(theme::PANEL_BG())
-                .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_STRONG()))
                 .corner_radius(CornerRadius::same(14))
                 .shadow(egui::Shadow {
                     offset: [0, 12],
@@ -158,7 +158,7 @@ fn paint_upload_icon(ui: &egui::Ui, rect: Rect, color: Color32) {
     let shaft_bottom = cy + half * 0.55;
     painter.line_segment(
         [egui::pos2(cx, shaft_top), egui::pos2(cx, shaft_bottom)],
-        Stroke::new(2.0, color),
+        Stroke::new(2.0_f32, color),
     );
 
     // Arrow head chevron
@@ -169,21 +169,21 @@ fn paint_upload_icon(ui: &egui::Ui, rect: Rect, color: Color32) {
             egui::pos2(cx - head_spread, shaft_top + head_drop),
             egui::pos2(cx, shaft_top),
         ],
-        Stroke::new(2.0, color),
+        Stroke::new(2.0_f32, color),
     );
     painter.line_segment(
         [
             egui::pos2(cx + head_spread, shaft_top + head_drop),
             egui::pos2(cx, shaft_top),
         ],
-        Stroke::new(2.0, color),
+        Stroke::new(2.0_f32, color),
     );
 
     // Base tray
     let tray_y = shaft_bottom + 2.0;
     painter.line_segment(
         [egui::pos2(cx - half * 0.6, tray_y), egui::pos2(cx + half * 0.6, tray_y)],
-        Stroke::new(2.0, theme::alpha(color, 120)),
+        Stroke::new(2.0_f32, theme::alpha(color, 120)),
     );
 }
 
@@ -229,7 +229,7 @@ fn render_file_pills(ui: &mut egui::Ui, files: &[super::worker::LocalUploadFile]
             let remaining = files.len() - visible_count;
             egui::Frame::NONE
                 .fill(surface_tint())
-                .stroke(Stroke::new(1.0, surface_border()))
+                .stroke(Stroke::new(1.0_f32, surface_border()))
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::symmetric(10, 4))
                 .show(ui, |ui| {
@@ -246,7 +246,7 @@ fn render_file_pills(ui: &mut egui::Ui, files: &[super::worker::LocalUploadFile]
 fn render_single_file_pill(ui: &mut egui::Ui, name: &str, size_bytes: u64) {
     egui::Frame::NONE
         .fill(surface_tint())
-        .stroke(Stroke::new(1.0, surface_border()))
+        .stroke(Stroke::new(1.0_f32, surface_border()))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(10, 4))
         .show(ui, |ui| {
@@ -281,7 +281,7 @@ fn render_transport_choice(ui: &mut egui::Ui, flow: &mut SshUploadFlow) {
 
     egui::Frame::NONE
         .fill(segment_bg())
-        .stroke(Stroke::new(1.0, surface_border()))
+        .stroke(Stroke::new(1.0_f32, surface_border()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::same(3))
         .show(ui, |ui| {
@@ -319,7 +319,7 @@ fn render_segment_button(ui: &mut egui::Ui, label: &str, active: bool, enabled: 
         theme::FG_DIM()
     };
     let stroke = if active {
-        Stroke::new(1.0, theme::alpha(theme::ACCENT(), 80))
+        Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 80))
     } else {
         Stroke::NONE
     };
@@ -350,7 +350,7 @@ fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, action
 
     egui::Frame::NONE
         .fill(theme::BG_ELEVATED())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
@@ -377,7 +377,7 @@ fn styled_small_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
         egui::Button::new(RichText::new(label).size(11.0).color(theme::FG_SOFT()))
             .fill(theme::alpha(theme::ACCENT(), 16))
-            .stroke(Stroke::new(1.0, theme::alpha(theme::ACCENT(), 40)))
+            .stroke(Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 40)))
             .corner_radius(CornerRadius::same(6)),
     )
     .clicked()
@@ -393,7 +393,7 @@ pub(super) fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
     painter.rect_stroke(
         body,
         2.0,
-        Stroke::new(1.0, theme::alpha(color, 120)),
+        Stroke::new(1.0_f32, theme::alpha(color, 120)),
         StrokeKind::Inside,
     );
 
@@ -420,7 +420,7 @@ pub(super) fn paint_folder_icon(painter: &egui::Painter, rect: Rect) {
 fn render_taildrop_info(ui: &mut egui::Ui, target: &str) {
     egui::Frame::NONE
         .fill(theme::alpha(theme::PALETTE_CYAN(), 10))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_CYAN(), 30)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(theme::PALETTE_CYAN(), 30)))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
@@ -495,7 +495,7 @@ fn ghost_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
         egui::Button::new(RichText::new(label).size(12.0).color(theme::FG_DIM()))
             .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
             .corner_radius(CornerRadius::same(10))
             .min_size(Vec2::new(80.0, 34.0)),
     )
@@ -679,14 +679,14 @@ fn paint_checkmark_icon(ui: &egui::Ui, rect: Rect, color: Color32) {
 
     painter.line_segment(
         [egui::pos2(cx - s, cy), egui::pos2(cx - s * 0.1, cy + s * 0.8)],
-        Stroke::new(2.5, color),
+        Stroke::new(2.5_f32, color),
     );
     painter.line_segment(
         [
             egui::pos2(cx - s * 0.1, cy + s * 0.8),
             egui::pos2(cx + s * 1.2, cy - s * 0.6),
         ],
-        Stroke::new(2.5, color),
+        Stroke::new(2.5_f32, color),
     );
 }
 
@@ -700,7 +700,7 @@ fn paint_cancel_icon(ui: &egui::Ui, rect: Rect, color: Color32) {
 
     painter.line_segment(
         [egui::pos2(cx - s, cy), egui::pos2(cx + s, cy)],
-        Stroke::new(2.5, color),
+        Stroke::new(2.5_f32, color),
     );
 }
 
@@ -729,7 +729,7 @@ fn render_failed_state(ui: &mut egui::Ui, error: &str, no_files: bool, actions: 
 
     egui::Frame::NONE
         .fill(theme::alpha(theme::PALETTE_RED(), 8))
-        .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 25)))
+        .stroke(Stroke::new(1.0_f32, theme::alpha(theme::PALETTE_RED(), 25)))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
@@ -764,11 +764,11 @@ fn paint_error_icon(ui: &egui::Ui, rect: Rect, color: Color32) {
 
     painter.line_segment(
         [egui::pos2(cx - s, cy - s), egui::pos2(cx + s, cy + s)],
-        Stroke::new(2.5, color),
+        Stroke::new(2.5_f32, color),
     );
     painter.line_segment(
         [egui::pos2(cx + s, cy - s), egui::pos2(cx - s, cy + s)],
-        Stroke::new(2.5, color),
+        Stroke::new(2.5_f32, color),
     );
 }
 

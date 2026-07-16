@@ -69,7 +69,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
     painter.rect_stroke(
         rect.expand(3.0),
         CornerRadius::same(13),
-        Stroke::new(3.0, theme::alpha(theme::ACCENT(), glow_alpha)),
+        Stroke::new(3.0_f32, theme::alpha(theme::ACCENT(), glow_alpha)),
         StrokeKind::Outside,
     );
     painter.rect_filled(rect, CornerRadius::same(10), shell_fill);
@@ -79,7 +79,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
     painter.rect_stroke(
         core_rect,
         CornerRadius::same(9),
-        Stroke::new(1.0, border),
+        Stroke::new(1.0_f32, border),
         StrokeKind::Inside,
     );
 
@@ -88,7 +88,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
             Pos2::new(core_rect.min.x + 16.0, core_rect.min.y + 1.5),
             Pos2::new(core_rect.max.x - 16.0, core_rect.min.y + 1.5),
         ],
-        Stroke::new(1.0, theme::alpha(theme::FG(), if focused { 28 } else { 16 })),
+        Stroke::new(1.0_f32, theme::alpha(theme::FG(), if focused { 28 } else { 16 })),
     );
 
     let badge_rect = Rect::from_center_size(
@@ -99,7 +99,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
     painter.rect_stroke(
         badge_rect,
         CornerRadius::same(7),
-        Stroke::new(1.0, icon_stroke),
+        Stroke::new(1.0_f32, icon_stroke),
         StrokeKind::Inside,
     );
     paint_search_icon(painter, badge_rect.center(), icon_color);
@@ -111,13 +111,13 @@ pub(super) fn paint_dropdown_frame(ui: &egui::Ui, rect: Rect) {
     painter.rect_stroke(
         rect,
         CornerRadius::same(14),
-        Stroke::new(1.0, theme::alpha(theme::ACCENT(), 60)),
+        Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 60)),
         StrokeKind::Outside,
     );
     painter.rect_stroke(
         rect.expand(1.5),
         CornerRadius::same(15),
-        Stroke::new(1.5, theme::alpha(theme::ACCENT(), 18)),
+        Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 18)),
         StrokeKind::Outside,
     );
 }
@@ -234,7 +234,7 @@ pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool,
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(5),
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+        Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
     ui.painter().text(
@@ -275,7 +275,7 @@ fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
     ui.painter_at(row_rect).rect_stroke(
         badge_rect,
         CornerRadius::same(4),
-        Stroke::new(0.5, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+        Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
     ui.painter_at(row_rect).text(
@@ -294,13 +294,13 @@ fn estimate_text_width(text: &str, font_size: f32) -> f32 {
 
 fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
     let loop_center = Pos2::new(center.x - 1.5, center.y - 1.5);
-    painter.circle_stroke(loop_center, 4.5, Stroke::new(1.35, color));
+    painter.circle_stroke(loop_center, 4.5, Stroke::new(1.35_f32, color));
     painter.line_segment(
         [
             Pos2::new(loop_center.x + 3.5, loop_center.y + 3.5),
             Pos2::new(loop_center.x + 7.0, loop_center.y + 7.0),
         ],
-        Stroke::new(1.35, color),
+        Stroke::new(1.35_f32, color),
     );
 }
 

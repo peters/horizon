@@ -110,7 +110,7 @@ fn render_header(ui: &mut egui::Ui, status: &GitStatus) {
     let sep_y = header_rect.max.y;
     ui.painter().line_segment(
         [Pos2::new(header_rect.min.x, sep_y), Pos2::new(header_rect.max.x, sep_y)],
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
+        egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
     );
 }
 
@@ -151,7 +151,7 @@ fn render_summary(ui: &mut egui::Ui, status: &GitStatus) {
             Pos2::new(summary_rect.min.x, sep_y),
             Pos2::new(summary_rect.max.x, sep_y),
         ],
-        egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 128)),
+        egui::Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 128)),
     );
 }
 
@@ -333,7 +333,7 @@ fn render_inline_diff(ui: &mut egui::Ui, diff: &horizon_core::FileDiff, panel_id
     let frame = egui::Frame::new()
         .fill(theme::BG_ELEVATED())
         .corner_radius(CornerRadius::same(6))
-        .stroke(egui::Stroke::new(1.0, theme::BORDER_SUBTLE()))
+        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .inner_margin(egui::Margin::same(0));
 
     ui.horizontal(|ui| {
@@ -372,7 +372,7 @@ fn render_diff_hunk(ui: &mut egui::Ui, hunk: &horizon_core::DiffHunk) {
     let sep_y = hunk_rect.max.y;
     ui.painter().line_segment(
         [Pos2::new(hunk_rect.min.x, sep_y), Pos2::new(hunk_rect.max.x, sep_y)],
-        egui::Stroke::new(1.0, theme::BORDER_SUBTLE()),
+        egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
     );
 
     // Diff lines

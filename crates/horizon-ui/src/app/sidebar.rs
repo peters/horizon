@@ -167,7 +167,7 @@ impl HorizonApp {
                 Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y),
                 Pos2::new(sidebar_origin.x + sidebar_width, sidebar_origin.y + sidebar_size.y),
             ],
-            Stroke::new(1.0, theme::BORDER_SUBTLE()),
+            Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
         );
     }
 
@@ -762,7 +762,7 @@ fn paint_workspace_drop_indicator(
     let right = workspace_rect.max.x - 12.0;
     ui.painter().line_segment(
         [Pos2::new(left, y), Pos2::new(right, y)],
-        Stroke::new(2.0, theme::alpha(workspace_color, 220)),
+        Stroke::new(2.0_f32, theme::alpha(workspace_color, 220)),
     );
 }
 

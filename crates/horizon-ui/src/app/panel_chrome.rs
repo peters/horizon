@@ -48,7 +48,10 @@ fn panel_fill(accent: Color32, focused: bool) -> Color32 {
 }
 
 fn panel_border_stroke(accent: Color32, focused: bool) -> Stroke {
-    Stroke::new(if focused { 1.8 } else { 1.2 }, theme::panel_border(accent, focused))
+    Stroke::new(
+        if focused { 1.8_f32 } else { 1.2_f32 },
+        theme::panel_border(accent, focused),
+    )
 }
 
 fn panel_titlebar_fill(accent: Color32, focused: bool) -> Color32 {
@@ -60,7 +63,7 @@ fn panel_title_color(focused: bool) -> Color32 {
 }
 
 fn focus_ring_stroke(accent: Color32, focused: bool) -> Option<Stroke> {
-    focused.then(|| Stroke::new(3.0, theme::alpha(theme::blend(theme::ACCENT(), accent, 0.35), 56)))
+    focused.then(|| Stroke::new(3.0_f32, theme::alpha(theme::blend(theme::ACCENT(), accent, 0.35), 56)))
 }
 
 fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
@@ -225,7 +228,7 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
         },
     );
 
-    let handle_stroke = Stroke::new(1.0, theme::alpha(theme::FG_DIM(), 170));
+    let handle_stroke = Stroke::new(1.0_f32, theme::alpha(theme::FG_DIM(), 170));
     painter.line_segment(
         [
             resize_rect.right_bottom(),
@@ -328,7 +331,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
         badge_rect,
         CornerRadius::same(7),
         Stroke::new(
-            1.0,
+            1.0_f32,
             theme::alpha(theme::blend(theme::BORDER_SUBTLE(), meter.accent, 0.34), 180),
         ),
         StrokeKind::Outside,
@@ -442,7 +445,7 @@ fn paint_ssh_status_badge(
     painter.rect_stroke(
         badge_rect,
         CornerRadius::same(4),
-        Stroke::new(1.0, theme::alpha(color, 140)),
+        Stroke::new(1.0_f32, theme::alpha(color, 140)),
         StrokeKind::Inside,
     );
     painter.text(
