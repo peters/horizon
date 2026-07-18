@@ -119,6 +119,12 @@ fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
     !modifiers.ctrl && !modifiers.command && !modifiers.alt
 }
 
+// egui feeds every wheel/trackpad event into both raw_scroll_delta and
+// smooth_scroll_delta; summing them would pan the canvas twice per event.
+fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
+    input.smooth_scroll_delta
+}
+
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
@@ -179,7 +185,7 @@ impl HorizonApp {
                 input.pointer.primary_down(),
                 input.key_down(egui::Key::Space),
                 input.modifiers,
-                input.smooth_scroll_delta + input.raw_scroll_delta,
+                wheel_pan_scroll_input(input),
                 input.pointer.delta(),
                 input.zoom_delta(),
             )
@@ -326,7 +332,32 @@ mod tests {
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
-    use super::{MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active};
+    use super::{
+        MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active,
+        wheel_pan_scroll_input,
+    };
+
+    #[test]
+    fn wheel_pan_scroll_input_counts_each_wheel_event_once() {
+        let delta = Vec2::new(3.0, -5.0);
+        let raw_input = egui::RawInput {
+            events: vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta,
+                modifiers: Modifiers::NONE,
+            }],
+            ..egui::RawInput::default()
+        };
+
+        let input = egui::InputState::default().begin_pass(raw_input, false, 1.0, egui::InputOptions::default());
+
+        // A point-unit delta below egui's smoothing threshold lands in full in
+        // both raw_scroll_delta and smooth_scroll_delta within the same pass,
+        // so reading both would double every trackpad gesture.
+        assert_eq!(input.raw_scroll_delta, delta);
+        assert_eq!(input.smooth_scroll_delta, delta);
+        assert_eq!(wheel_pan_scroll_input(&input), delta);
+    }
 
     #[test]
     fn plain_space_is_delayed_until_release() {
