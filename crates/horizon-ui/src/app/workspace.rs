@@ -220,11 +220,22 @@ impl HorizonApp {
         if let Some(workspace_id) = focus_workspace {
             self.board.focus_workspace(workspace_id);
         }
+        // Focus/fit for the workspace shown in a detached window must target
+        // that window's canvas rect; the visible-canvas helpers reject
+        // detached workspaces because they only pan the main canvas.
         if let Some(workspace_id) = focus_workspace_view {
-            let _ = self.focus_workspace_visible(ctx, workspace_id, false);
+            if visible_detached_workspace == Some(workspace_id) {
+                let _ = self.focus_workspace_in_rect(workspace_id, canvas_rect);
+            } else {
+                let _ = self.focus_workspace_visible(ctx, workspace_id, false);
+            }
         }
         if let Some(workspace_id) = fit_workspace_view {
-            let _ = self.fit_workspace_visible(ctx, workspace_id);
+            if visible_detached_workspace == Some(workspace_id) {
+                let _ = self.fit_workspace_in_rect(workspace_id, canvas_rect);
+            } else {
+                let _ = self.fit_workspace_visible(ctx, workspace_id);
+            }
         }
         if let Some(workspace_id) = clear_workspace_layout
             && self.board.clear_workspace_layout(workspace_id)
