@@ -35,6 +35,9 @@ back into large multi-purpose modules.
     dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
+  - `minimap`: minimap scope/model orchestration, viewport painting, and
+    panning dispatch, with label layout and workspace spotlight
+    aggregation/painting/hit-testing split into `minimap/` leaf modules
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,

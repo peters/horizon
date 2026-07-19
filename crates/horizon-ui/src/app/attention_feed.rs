@@ -337,7 +337,7 @@ fn visible_attention_items(attention: &[AttentionItem], now: SystemTime) -> Vec<
     items
 }
 
-fn is_visible_attention_item(item: &AttentionItem, now: SystemTime) -> bool {
+pub(super) fn is_visible_attention_item(item: &AttentionItem, now: SystemTime) -> bool {
     if item.is_open() {
         return true;
     }

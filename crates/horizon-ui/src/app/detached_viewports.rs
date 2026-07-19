@@ -170,7 +170,6 @@ impl HorizonApp {
             self.workspace_screen_rects = saved_workspace_screen_rects;
             return;
         }
-
         self.handle_detached_shortcuts(ctx, workspace_id);
         self.render_detached_toolbar(ctx, workspace_id, workspace_local_id, &workspace_name);
 

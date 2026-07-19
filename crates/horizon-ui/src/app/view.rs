@@ -141,7 +141,23 @@ impl HorizonApp {
     pub(super) fn focus_panel_visible(&mut self, ctx: &Context, panel_id: PanelId, left_align: bool) {
         self.board.focus(panel_id);
         if let Some((pos, size)) = self.panel_focus_frame(panel_id) {
-            self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
+            self.pan_target = Some(aligned_pan_offset(
+                self.canvas_rect(ctx),
+                pos,
+                size,
+                self.canvas_view.zoom,
+                left_align,
+            ));
+        }
+    }
+
+    pub(super) fn focus_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
+        self.board.focus(panel_id);
+        if let Some((pos, size)) = self.panel_focus_frame(panel_id) {
+            let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, false);
+            self.pan_target = None;
+            self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+            self.mark_runtime_dirty();
         }
     }
 
@@ -169,7 +185,13 @@ impl HorizonApp {
         };
 
         self.board.focus_workspace(workspace_id);
-        self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
+        self.pan_target = Some(aligned_pan_offset(
+            self.canvas_rect(ctx),
+            pos,
+            size,
+            self.canvas_view.zoom,
+            left_align,
+        ));
         true
     }
 

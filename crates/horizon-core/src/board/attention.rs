@@ -145,6 +145,12 @@ impl Board {
         id
     }
 
+    pub(super) fn reassign_panel_attention(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        for item in self.attention.iter_mut().filter(|item| item.panel_id == Some(panel_id)) {
+            item.workspace_id = workspace_id;
+        }
+    }
+
     #[must_use]
     pub fn resolve_attention(&mut self, id: AttentionId) -> bool {
         if let Some(item) = self.attention.iter_mut().find(|item| item.id == id) {

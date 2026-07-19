@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Horizon minimap workspace and attention concepts</title>
+  <style>
+    :root {
+      --bg: #070a10;
+      --bg-elevated: #0c1018;
+      --panel: #0f131c;
+      --panel-alt: #151a25;
+      --fg: #e0e6f1;
+      --fg-soft: #aab5c7;
+      --fg-dim: #6c788e;
+      --accent: #74a2f7;
+      --border: #252e3d;
+      --border-strong: #3f4e65;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --yellow: #e9be6d;
+      --cyan: #66d4d6;
+      --shadow: rgba(0, 0, 0, 0.38);
+      --radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      min-width: 320px;
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% -8%, rgba(116, 162, 247, 0.13), transparent 32rem),
+        radial-gradient(circle at 92% 12%, rgba(255, 146, 80, 0.08), transparent 28rem),
+        var(--bg);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .page-shell {
+      width: min(1480px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 54px 0 72px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 920px;
+      margin: 0;
+      font-size: clamp(34px, 5vw, 66px);
+      font-weight: 660;
+      letter-spacing: -0.045em;
+      line-height: 0.98;
+    }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+      gap: 34px;
+      align-items: end;
+      margin-top: 24px;
+    }
+
+    .intro-copy {
+      max-width: 810px;
+      margin: 0;
+      color: var(--fg-soft);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .signal-note {
+      border: 1px solid rgba(102, 212, 214, 0.19);
+      border-radius: 14px;
+      padding: 16px 18px;
+      background: rgba(102, 212, 214, 0.055);
+      color: var(--fg-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .signal-note strong {
+      color: var(--fg);
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-weight: 650;
+    }
+
+    .recommendation {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      margin: 34px 0 24px;
+      border: 1px solid rgba(116, 162, 247, 0.24);
+      border-radius: 16px;
+      padding: 15px 18px;
+      background: linear-gradient(100deg, rgba(116, 162, 247, 0.12), rgba(116, 162, 247, 0.035));
+      color: var(--fg-soft);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .recommendation .pick {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: var(--accent);
+      color: #07101f;
+      font-size: 10px;
+      font-weight: 820;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .demo-toolbar {
+      position: sticky;
+      top: 14px;
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 26px;
+      border: 1px solid rgba(63, 78, 101, 0.8);
+      border-radius: 16px;
+      padding: 10px;
+      background: rgba(12, 16, 24, 0.88);
+      box-shadow: 0 14px 44px var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .scenario-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .scenario-button {
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 0 14px;
+      background: transparent;
+      color: var(--fg-soft);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .scenario-button:hover {
+      background: rgba(116, 162, 247, 0.08);
+      color: var(--fg);
+    }
+
+    .scenario-button[aria-pressed="true"] {
+      border-color: rgba(116, 162, 247, 0.32);
+      background: rgba(116, 162, 247, 0.14);
+      color: #dbe8ff;
+      box-shadow: inset 0 0 0 1px rgba(116, 162, 247, 0.05);
+    }
+
+    .toolbar-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      padding-right: 4px;
+      color: var(--fg-dim);
+      font-size: 11px;
+    }
+
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .concept-card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(160deg, rgba(21, 26, 37, 0.82), rgba(12, 16, 24, 0.96));
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+    }
+
+    .concept-card.recommended {
+      border-color: rgba(116, 162, 247, 0.42);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24), 0 0 50px rgba(116, 162, 247, 0.055);
+    }
+
+    .card-header {
+      min-height: 194px;
+      padding: 23px 24px 18px;
+    }
+
+    .card-index-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 17px;
+      color: var(--fg-dim);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .card-tag {
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: var(--fg-soft);
+      letter-spacing: 0.06em;
+    }
+
+    .recommended .card-tag {
+      border-color: rgba(116, 162, 247, 0.32);
+      background: rgba(116, 162, 247, 0.09);
+      color: #cfe0ff;
+    }
+
+    h2 {
+      margin: 0 0 9px;
+      font-size: 24px;
+      font-weight: 650;
+      letter-spacing: -0.025em;
+    }
+
+    .card-description {
+      margin: 0;
+      color: var(--fg-soft);
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .preview-shell {
+      position: relative;
+      border-block: 1px solid var(--border);
+      padding: 14px;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.012), rgba(255, 255, 255, 0)),
+        #080b12;
+    }
+
+    .preview-label {
+      position: absolute;
+      top: 22px;
+      left: 24px;
+      z-index: 2;
+      color: rgba(170, 181, 199, 0.68);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 8px;
+      letter-spacing: 0.14em;
+      pointer-events: none;
+      text-transform: uppercase;
+    }
+
+    .minimap-preview {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 16 / 9;
+    }
+
+    .minimap-preview text {
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      user-select: none;
+    }
+
+    .minimap-preview .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .minimap-preview .workspace-shape,
+    .minimap-preview .panel-shape,
+    .minimap-preview .state-stroke,
+    .minimap-preview .viewport {
+      vector-effect: non-scaling-stroke;
+    }
+
+    .card-notes {
+      display: grid;
+      gap: 13px;
+      padding: 19px 24px 24px;
+    }
+
+    .note-row {
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 12px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .note-label {
+      color: var(--fg-dim);
+      font-size: 9px;
+      font-weight: 760;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .note-value {
+      color: var(--fg-soft);
+    }
+
+    .comparison {
+      margin-top: 32px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      background: rgba(12, 16, 24, 0.76);
+    }
+
+    .comparison h2 {
+      margin-bottom: 8px;
+    }
+
+    .comparison-intro {
+      max-width: 760px;
+      margin: 0 0 22px;
+      color: var(--fg-soft);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .decision-cell {
+      min-height: 76px;
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 14px;
+      color: var(--fg-soft);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .decision-cell:nth-child(4n) {
+      border-right: 0;
+    }
+
+    .decision-cell:nth-last-child(-n + 4) {
+      border-bottom: 0;
+    }
+
+    .decision-cell.heading {
+      min-height: auto;
+      background: rgba(21, 26, 37, 0.78);
+      color: var(--fg);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .decision-cell.row-label {
+      color: var(--fg);
+      font-weight: 620;
+    }
+
+    .good {
+      color: var(--green);
+    }
+
+    .caution {
+      color: var(--yellow);
+    }
+
+    .implementation-note {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .principle {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 15px;
+      background: rgba(15, 19, 28, 0.6);
+    }
+
+    .principle strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--fg);
+      font-size: 11px;
+    }
+
+    .principle span {
+      color: var(--fg-dim);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .page-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      margin-top: 24px;
+      padding: 0 4px;
+      color: var(--fg-dim);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 1120px) {
+      .concept-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .card-header {
+        min-height: auto;
+      }
+
+      .preview-shell {
+        padding: 18px;
+      }
+
+      .minimap-preview {
+        max-height: 540px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page-shell {
+        width: min(100% - 22px, 1480px);
+        padding-top: 30px;
+      }
+
+      .intro,
+      .implementation-note {
+        grid-template-columns: 1fr;
+      }
+
+      .recommendation {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .demo-toolbar {
+        position: static;
+      }
+
+      .decision-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .decision-cell,
+      .decision-cell:nth-child(4n),
+      .decision-cell:nth-last-child(-n + 4) {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .decision-cell:last-child {
+        border-bottom: 0;
+      }
+
+      .decision-cell.heading:not(:first-child) {
+        display: none;
+      }
+
+      .page-footer {
+        flex-direction: column;
+      }
+    }
+
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <p class="eyebrow">Horizon UI exploration · 19 July 2026</p>
+    <h1>Make the minimap answer “where should I look?”</h1>
+
+    <div class="recommendation">
+      <span class="pick">Temporary exploration</span>
+      <span>
+        This pre-implementation artifact is retained only for draft-PR context. Motion was evaluated and rejected:
+        the accepted workspace spotlight and attention cues are fully static, with no pulse or continuous repaint.
+      </span>
+    </div>
+
+    <section class="intro" aria-label="Design brief">
+      <p class="intro-copy">
+        The current minimap is good at preserving board geometry, but workspace identity colors, focus,
+        labels, panels, and the viewport all compete at the same tiny scale. These concepts separate the
+        two important questions: <strong>which workspace is active</strong>, and <strong>which workspace or
+        panel needs attention</strong>. Each preview uses the same simulated board and the same Horizon dark
+        theme tokens.
+      </p>
+      <div class="signal-note">
+        <strong>Already available in the model</strong><br>
+        board.active_workspace<br>
+        board.attention { workspace_id, panel_id,<br>
+        severity, state, summary, created_at }
+      </div>
+    </section>
+
+    <div class="recommendation">
+      <span class="pick">Start here</span>
+      <span>
+        Prototype <strong>Workspace spotlight</strong> first. It is the smallest change to the current map,
+        keeps spatial meaning intact, and uses outline + icon + count so state is not communicated by color alone.
+      </span>
+    </div>
+
+    <section class="demo-toolbar" aria-label="Preview controls">
+      <div class="scenario-group" role="group" aria-label="Attention scenario">
+        <button class="scenario-button" type="button" data-scenario="calm" aria-pressed="false">Focus only</button>
+        <button class="scenario-button" type="button" data-scenario="mixed" aria-pressed="true">Mixed signals</button>
+        <button class="scenario-button" type="button" data-scenario="busy" aria-pressed="false">Busy board</button>
+      </div>
+      <div class="toolbar-meta">
+        <span id="scenario-summary" aria-live="polite">1 active · 3 attention workspaces · 4 items</span>
+      </div>
+    </section>
+
+    <section class="concept-grid" aria-label="Three minimap concepts">
+      <article class="concept-card recommended">
+        <header class="card-header">
+          <div class="card-index-row">
+            <span>Concept 01</span>
+            <span class="card-tag">Recommended</span>
+          </div>
+          <h2>Workspace spotlight</h2>
+          <p class="card-description">
+            A neutral blue double ring marks the active workspace. Exact panels get shaped attention
+            beacons, while a count pill keeps the signal legible when the panel becomes too small.
+          </p>
+        </header>
+        <div class="preview-shell">
+          <span class="preview-label">2× design preview · target 320 × 180</span>
+          <div id="spotlight-preview" aria-live="polite"></div>
+        </div>
+        <div class="card-notes">
+          <div class="note-row"><span class="note-label">Active</span><span class="note-value">Double outline, brighter fill, and an <strong>ACTIVE</strong> tab.</span></div>
+          <div class="note-row"><span class="note-label">Attention</span><span class="note-value">Panel beacon plus workspace count. High = !, done = ✓, info = i.</span></div>
+          <div class="note-row"><span class="note-label">Best for</span><span class="note-value">A familiar default that adds strong state without changing minimap layout.</span></div>
+        </div>
+      </article>
+
+      <article class="concept-card">
+        <header class="card-header">
+          <div class="card-index-row">
+            <span>Concept 02</span>
+            <span class="card-tag">Dense scale</span>
+          </div>
+          <h2>Orthogonal edge rails</h2>
+          <p class="card-description">
+            Active and attention use different edges: a left-side focus rail and a top-side severity rail.
+            Their width stays constant even when a workspace collapses into a narrow sliver.
+          </p>
+        </header>
+        <div class="preview-shell">
+          <span class="preview-label">2× design preview · constant-pixel cues</span>
+          <div id="rails-preview" aria-live="polite"></div>
+        </div>
+        <div class="card-notes">
+          <div class="note-row"><span class="note-label">Active</span><span class="note-value">Blue left rail and corner brackets; independent of workspace accent.</span></div>
+          <div class="note-row"><span class="note-label">Attention</span><span class="note-value">Red, green, or cyan top rail with icon and count at its endpoint.</span></div>
+          <div class="note-row"><span class="note-label">Best for</span><span class="note-value">Very dense boards where fills, glows, and text disappear at minimap scale.</span></div>
+        </div>
+      </article>
+
+      <article class="concept-card">
+        <header class="card-header">
+          <div class="card-index-row">
+            <span>Concept 03</span>
+            <span class="card-tag">Attention-first</span>
+          </div>
+          <h2>Attention radar</h2>
+          <p class="card-description">
+            The spatial map stays quiet while numbered urgent beacons connect to a compact workspace rail.
+            It trades some canvas area for fast scanning and larger, more reliable click targets.
+          </p>
+        </header>
+        <div class="preview-shell">
+          <span class="preview-label">2× design preview · map + status rail</span>
+          <div id="radar-preview" aria-live="polite"></div>
+        </div>
+        <div class="card-notes">
+          <div class="note-row"><span class="note-label">Active</span><span class="note-value">Persistent target glyph and underline on the workspace chip.</span></div>
+          <div class="note-row"><span class="note-label">Attention</span><span class="note-value">Numbered urgent pins map to rail chips; completed work uses a check.</span></div>
+          <div class="note-row"><span class="note-label">Best for</span><span class="note-value">Agent-heavy boards where triage order matters more than maximum map area.</span></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="comparison" aria-labelledby="comparison-title">
+      <h2 id="comparison-title">Decision guide</h2>
+      <p class="comparison-intro">
+        All three can be built from current board state. The main decision is how much of the minimap should
+        remain a pure spatial overview versus becoming an operational status surface.
+      </p>
+
+      <div class="decision-grid" role="table" aria-label="Concept comparison">
+        <div class="decision-cell heading" role="columnheader">Concept</div>
+        <div class="decision-cell heading" role="columnheader">Read at 320 × 180</div>
+        <div class="decision-cell heading" role="columnheader">Implementation</div>
+        <div class="decision-cell heading" role="columnheader">Main tradeoff</div>
+
+        <div class="decision-cell row-label" role="rowheader">Workspace spotlight</div>
+        <div class="decision-cell"><span class="good">Strong</span> unless many badges overlap</div>
+        <div class="decision-cell"><span class="good">Smallest change</span>; aggregate existing attention by workspace</div>
+        <div class="decision-cell">Tiny panel beacons still need adaptive collapse</div>
+
+        <div class="decision-cell row-label" role="rowheader">Edge rails</div>
+        <div class="decision-cell"><span class="good">Strongest at narrow widths</span></div>
+        <div class="decision-cell">Moderate; paint constant-pixel rails above fills</div>
+        <div class="decision-cell">Less expressive when many severities share one workspace</div>
+
+        <div class="decision-cell row-label" role="rowheader">Attention radar</div>
+        <div class="decision-cell"><span class="good">Strongest for triage</span></div>
+        <div class="decision-cell"><span class="caution">Largest change</span>; adds chip hit-testing and ordering</div>
+        <div class="decision-cell">Consumes map area and changes the interaction model</div>
+      </div>
+
+      <div class="implementation-note">
+        <div class="principle">
+          <strong>Use more than color</strong>
+          <span>Ring or rail for active; !, ✓, and i plus a count for severity. This remains readable with color-vision differences.</span>
+        </div>
+        <div class="principle">
+          <strong>Collapse adaptively</strong>
+          <span>Paint panel-level markers only above a size threshold. Otherwise show one workspace count outside the geometry.</span>
+        </div>
+        <div class="principle">
+          <strong>Stay static</strong>
+          <span>Attention cues do not pulse or animate. A normal UI event refreshes time-windowed state without adding a repaint loop.</span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <span>Self-contained design artifact — no external fonts, scripts, or assets.</span>
+      <span>Simulated state uses Horizon’s dark theme palette and current attention semantics.</span>
+    </footer>
+  </main>
+
+  <script>
+    const workspaces = [
+      {
+        id: "youpark",
+        name: "youpark.no",
+        short: "YP",
+        accent: "#a6e3a1",
+        x: 28, y: 91, w: 76, h: 190,
+        panels: [
+          { x: 0.12, y: 0.14, w: 0.30, h: 0.70 },
+          { x: 0.50, y: 0.10, w: 0.34, h: 0.82 }
+        ]
+      },
+      {
+        id: "billing",
+        name: "Billing",
+        short: "BL",
+        accent: "#e9be6d",
+        x: 117, y: 75, w: 82, h: 151,
+        panels: [
+          { x: 0.10, y: 0.18, w: 0.33, h: 0.66 },
+          { x: 0.51, y: 0.10, w: 0.38, h: 0.74 }
+        ]
+      },
+      {
+        id: "api",
+        name: "API v2",
+        short: "API",
+        accent: "#f38ba8",
+        x: 212, y: 94, w: 75, h: 172,
+        panels: [
+          { x: 0.10, y: 0.08, w: 0.35, h: 0.78 },
+          { x: 0.54, y: 0.18, w: 0.34, h: 0.69 }
+        ]
+      },
+      {
+        id: "ci",
+        name: "CI runners",
+        short: "CI",
+        accent: "#74a2f7",
+        x: 300, y: 72, w: 104, h: 181,
+        panels: [
+          { x: 0.08, y: 0.12, w: 0.24, h: 0.73 },
+          { x: 0.38, y: 0.08, w: 0.24, h: 0.82 },
+          { x: 0.68, y: 0.16, w: 0.24, h: 0.68 }
+        ]
+      },
+      {
+        id: "docs",
+        name: "Docs",
+        short: "DOC",
+        accent: "#ca97ea",
+        x: 417, y: 89, w: 85, h: 153,
+        panels: [
+          { x: 0.10, y: 0.13, w: 0.35, h: 0.74 },
+          { x: 0.54, y: 0.08, w: 0.35, h: 0.65 }
+        ]
+      },
+      {
+        id: "horizon",
+        name: "Horizon",
+        short: "HZ",
+        accent: "#66d4d6",
+        x: 515, y: 79, w: 98, h: 194,
+        panels: [
+          { x: 0.08, y: 0.09, w: 0.25, h: 0.75 },
+          { x: 0.38, y: 0.16, w: 0.25, h: 0.74 },
+          { x: 0.68, y: 0.07, w: 0.24, h: 0.82 }
+        ]
+      }
+    ];
+
+    const scenarios = {
+      calm: {
+        label: "Focus only",
+        summary: "1 active · no open attention",
+        recent: ["api"],
+        statuses: {}
+      },
+      mixed: {
+        label: "Mixed signals",
+        summary: "1 active · 3 attention workspaces · 4 items",
+        recent: ["horizon"],
+        statuses: {
+          billing: { severity: "high", count: 1, panels: [1], summary: "Needs input" },
+          api: { severity: "medium", count: 1, panels: [0], summary: "Done" },
+          docs: { severity: "high", count: 2, panels: [0, 1], summary: "Needs input" }
+        }
+      },
+      busy: {
+        label: "Busy board",
+        summary: "1 active · 6 attention workspaces · 11 items",
+        recent: [],
+        statuses: {
+          youpark: { severity: "low", count: 2, panels: [0], summary: "Info" },
+          billing: { severity: "high", count: 1, panels: [1], summary: "Needs input" },
+          api: { severity: "medium", count: 2, panels: [0, 1], summary: "Done" },
+          ci: { severity: "high", count: 1, panels: [1], summary: "Needs input" },
+          docs: { severity: "high", count: 3, panels: [0, 1], summary: "Needs input" },
+          horizon: { severity: "medium", count: 2, panels: [2], summary: "Done" }
+        }
+      }
+    };
+
+    const activeWorkspaceId = "ci";
+    const severity = {
+      high: { color: "#f38ba8", icon: "!", label: "needs input" },
+      medium: { color: "#a6e3a1", icon: "✓", label: "done" },
+      low: { color: "#74a2f7", icon: "i", label: "info" }
+    };
+
+    let selectedScenario = "mixed";
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function panelRect(workspace, panel) {
+      return {
+        x: workspace.x + workspace.w * panel.x,
+        y: workspace.y + workspace.h * panel.y,
+        w: workspace.w * panel.w,
+        h: workspace.h * panel.h
+      };
+    }
+
+    function svgDefinitions(id) {
+      return `
+        <defs>
+          <pattern id="grid-${id}" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="1.15" fill="#252e3d" fill-opacity="0.72" />
+          </pattern>
+          <filter id="blue-glow-${id}" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="5" result="blur" />
+            <feFlood flood-color="#74a2f7" flood-opacity="0.36" />
+            <feComposite in2="blur" operator="in" />
+            <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <filter id="red-glow-${id}" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feFlood flood-color="#f38ba8" flood-opacity="0.32" />
+            <feComposite in2="blur" operator="in" />
+            <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>`;
+    }
+
+    function svgFrame(id, title, description, content) {
+      return `
+        <svg class="minimap-preview" viewBox="0 0 640 360" role="img" aria-labelledby="${id}-title ${id}-description">
+          <title id="${id}-title">${escapeHtml(title)}</title>
+          <desc id="${id}-description">${escapeHtml(description)}</desc>
+          ${svgDefinitions(id)}
+          <rect x="10" y="34" width="620" height="310" rx="14" fill="#0c1018" fill-opacity="0.96" stroke="#252e3d" />
+          <rect x="18" y="42" width="604" height="294" rx="10" fill="url(#grid-${id})" />
+          <text x="616" y="24" text-anchor="end" fill="#6c788e" font-size="9" letter-spacing="1.3" class="mono">${escapeHtml(scenarios[selectedScenario].label.toUpperCase())}</text>
+          ${content}
+        </svg>`;
+    }
+
+    function basePanels(workspace, opacity, status, mode) {
+      return workspace.panels.map((panel, index) => {
+        const rect = panelRect(workspace, panel);
+        const affected = status && status.panels.includes(index);
+        const fillOpacity = affected ? Math.min(opacity + 0.22, 0.82) : opacity;
+        return `
+          <rect class="panel-shape" x="${rect.x.toFixed(1)}" y="${rect.y.toFixed(1)}"
+            width="${rect.w.toFixed(1)}" height="${rect.h.toFixed(1)}" rx="3"
+            fill="${workspace.accent}" fill-opacity="${fillOpacity}"
+            stroke="${workspace.accent}" stroke-opacity="${mode === "radar" ? 0.22 : 0.42}" stroke-width="0.8">
+            <title>${escapeHtml(workspace.name)} panel ${index + 1}${affected ? ` — ${escapeHtml(status.summary)}` : ""}</title>
+          </rect>`;
+      }).join("");
+    }
+
+    function marker(workspace, status, panelIndex, markerIndex, id, compact = false) {
+      const panel = panelRect(workspace, workspace.panels[panelIndex] ?? workspace.panels[0]);
+      const meta = severity[status.severity];
+      const cx = panel.x + panel.w - 1;
+      const cy = panel.y + 3;
+      const radius = compact ? 9 : 10;
+      const label = markerIndex ?? meta.icon;
+      return `
+        <g aria-label="${escapeHtml(workspace.name)}: ${escapeHtml(status.summary)}, ${status.count}">
+          <circle cx="${cx}" cy="${cy}" r="${radius}" fill="#0c1018" stroke="${meta.color}" stroke-width="2" ${status.severity === "high" ? `filter="url(#red-glow-${id})"` : ""} />
+          <text x="${cx}" y="${cy + 3.4}" text-anchor="middle" fill="${meta.color}" font-size="${compact ? 9 : 10}" font-weight="800">${escapeHtml(label)}</text>
+        </g>`;
+    }
+
+    function workspaceCountBadge(workspace, status, id) {
+      const meta = severity[status.severity];
+      const text = `${meta.icon}${status.count}`;
+      const width = status.count > 9 ? 31 : 26;
+      const x = workspace.x + workspace.w - width + 5;
+      const y = workspace.y - 14;
+      return `
+        <g aria-label="${escapeHtml(status.count)} ${escapeHtml(meta.label)} items in ${escapeHtml(workspace.name)}">
+          <rect x="${x}" y="${y}" width="${width}" height="16" rx="8" fill="#0c1018" stroke="${meta.color}" stroke-width="1.4" />
+          <text x="${x + width / 2}" y="${y + 11.3}" text-anchor="middle" fill="${meta.color}" font-size="8.5" font-weight="800" class="mono">${escapeHtml(text)}</text>
+        </g>`;
+    }
+
+    function renderSpotlight() {
+      const state = scenarios[selectedScenario];
+      const id = "spotlight";
+      const workspaceMarkup = workspaces.map((workspace) => {
+        const isActive = workspace.id === activeWorkspaceId;
+        const status = state.statuses[workspace.id];
+        const opacity = isActive ? 1 : (status ? 0.78 : 0.42);
+        const labelWidth = Math.min(workspace.w - 8, Math.max(26, workspace.short.length * 8 + 12));
+        const activeRing = isActive ? `
+          <rect x="${workspace.x - 5}" y="${workspace.y - 5}" width="${workspace.w + 10}" height="${workspace.h + 10}" rx="7"
+            fill="none" stroke="#74a2f7" stroke-opacity="0.25" stroke-width="7" filter="url(#blue-glow-${id})" />
+          <rect class="state-stroke" x="${workspace.x - 2}" y="${workspace.y - 2}" width="${workspace.w + 4}" height="${workspace.h + 4}" rx="5"
+            fill="none" stroke="#dbe8ff" stroke-width="2.2" />
+          <rect x="${workspace.x + 4}" y="${workspace.y - 19}" width="48" height="16" rx="8" fill="#74a2f7" />
+          <text x="${workspace.x + 28}" y="${workspace.y - 8}" text-anchor="middle" fill="#07101f" font-size="8" font-weight="850" letter-spacing="0.8">ACTIVE</text>` : "";
+
+        const statusMarkers = status
+          ? status.panels.slice(0, 2).map((panelIndex) => marker(workspace, status, panelIndex, null, id)).join("") + workspaceCountBadge(workspace, status, id)
+          : "";
+
+        return `
+          <g opacity="${opacity}">
+            ${activeRing}
+            <rect class="workspace-shape" x="${workspace.x}" y="${workspace.y}" width="${workspace.w}" height="${workspace.h}" rx="4"
+              fill="${workspace.accent}" fill-opacity="${isActive ? 0.18 : 0.10}" stroke="${workspace.accent}" stroke-opacity="${isActive ? 0.88 : 0.54}" stroke-width="1.1">
+              <title>${escapeHtml(workspace.name)}${isActive ? " — active workspace" : ""}</title>
+            </rect>
+            ${basePanels(workspace, isActive ? 0.38 : 0.22, status, "spotlight")}
+            <rect x="${workspace.x + 4}" y="${workspace.y + 5}" width="${labelWidth}" height="16" rx="5" fill="#0c1018" fill-opacity="0.88" stroke="${workspace.accent}" stroke-opacity="0.65" />
+            <text x="${workspace.x + 4 + labelWidth / 2}" y="${workspace.y + 16}" text-anchor="middle" fill="${isActive ? "#e0e6f1" : "#aab5c7"}" font-size="8.5" font-weight="720">${escapeHtml(workspace.short)}</text>
+            ${statusMarkers}
+          </g>`;
+      }).join("");
+
+      const viewport = `
+        <rect class="viewport" x="280" y="57" width="152" height="218" rx="5" fill="#e0e6f1" fill-opacity="0.025"
+          stroke="#e0e6f1" stroke-opacity="0.28" stroke-width="1" stroke-dasharray="4 4" />
+        <text x="428" y="287" text-anchor="end" fill="#6c788e" font-size="7" letter-spacing="0.8" class="mono">VIEWPORT</text>`;
+
+      document.getElementById("spotlight-preview").innerHTML = svgFrame(
+        id,
+        "Workspace spotlight minimap concept",
+        "The active CI runners workspace has a double outline. Attention markers identify exact panels and counts by workspace.",
+        `${workspaceMarkup}${viewport}`
+      );
+    }
+
+    function railStatusMarkup(workspace, status, id) {
+      if (!status) return "";
+      const meta = severity[status.severity];
+      const railStart = workspace.x + 5;
+      const railEnd = workspace.x + workspace.w - 5;
+      const badgeX = Math.max(workspace.x + 9, railEnd - 13);
+      return `
+        <line class="state-stroke" x1="${railStart}" y1="${workspace.y + 1}" x2="${railEnd}" y2="${workspace.y + 1}"
+          stroke="${meta.color}" stroke-width="5" stroke-linecap="round" />
+        <circle cx="${badgeX}" cy="${workspace.y + 1}" r="8" fill="#0c1018" stroke="${meta.color}" stroke-width="1.7" />
+        <text x="${badgeX}" y="${workspace.y + 4}" text-anchor="middle" fill="${meta.color}" font-size="8" font-weight="850">${escapeHtml(status.count > 1 ? status.count : meta.icon)}</text>`;
+    }
+
+    function activeBrackets(workspace) {
+      const x = workspace.x - 4;
+      const y = workspace.y - 4;
+      const right = workspace.x + workspace.w + 4;
+      const bottom = workspace.y + workspace.h + 4;
+      return `
+        <line class="state-stroke" x1="${x}" y1="${y + 18}" x2="${x}" y2="${bottom - 18}" stroke="#74a2f7" stroke-width="4" stroke-linecap="round" />
+        <path class="state-stroke" d="M ${x} ${y + 11} V ${y} H ${x + 11} M ${right - 11} ${y} H ${right} V ${y + 11}
+          M ${x} ${bottom - 11} V ${bottom} H ${x + 11} M ${right - 11} ${bottom} H ${right} V ${bottom - 11}"
+          fill="none" stroke="#dbe8ff" stroke-width="1.6" stroke-linecap="round" />`;
+    }
+
+    function renderRails() {
+      const state = scenarios[selectedScenario];
+      const id = "rails";
+      const workspaceMarkup = workspaces.map((workspace) => {
+        const isActive = workspace.id === activeWorkspaceId;
+        const status = state.statuses[workspace.id];
+        const recent = state.recent.includes(workspace.id);
+        return `
+          <g opacity="${isActive || status ? 1 : 0.62}">
+            <rect class="workspace-shape" x="${workspace.x}" y="${workspace.y}" width="${workspace.w}" height="${workspace.h}" rx="3"
+              fill="#151a25" fill-opacity="0.92" stroke="${workspace.accent}" stroke-opacity="0.42" stroke-width="1">
+              <title>${escapeHtml(workspace.name)}${isActive ? " — active workspace" : ""}${status ? ` — ${escapeHtml(status.summary)}` : ""}</title>
+            </rect>
+            ${basePanels(workspace, 0.20, status, "rails")}
+            <rect x="${workspace.x + 7}" y="${workspace.y + 10}" width="${Math.max(24, workspace.short.length * 8 + 10)}" height="17" rx="4"
+              fill="${workspace.accent}" fill-opacity="0.13" stroke="${workspace.accent}" stroke-opacity="0.42" />
+            <text x="${workspace.x + 7 + Math.max(24, workspace.short.length * 8 + 10) / 2}" y="${workspace.y + 21.5}"
+              text-anchor="middle" fill="#c5cede" font-size="8.5" font-weight="720">${escapeHtml(workspace.short)}</text>
+            ${recent ? `<circle cx="${workspace.x + workspace.w - 10}" cy="${workspace.y + workspace.h - 10}" r="3" fill="#e9be6d"><title>Recently active</title></circle>` : ""}
+            ${railStatusMarkup(workspace, status, id)}
+            ${isActive ? activeBrackets(workspace) : ""}
+          </g>`;
+      }).join("");
+
+      const legend = `
+        <g transform="translate(30 312)">
+          <line x1="0" y1="0" x2="18" y2="0" stroke="#74a2f7" stroke-width="4" stroke-linecap="round" />
+          <text x="25" y="3" fill="#aab5c7" font-size="8" class="mono">LEFT = ACTIVE</text>
+          <line x1="124" y1="0" x2="142" y2="0" stroke="#f38ba8" stroke-width="4" stroke-linecap="round" />
+          <text x="149" y="3" fill="#aab5c7" font-size="8" class="mono">TOP = NEEDS INPUT</text>
+          <line x1="292" y1="0" x2="310" y2="0" stroke="#a6e3a1" stroke-width="4" stroke-linecap="round" />
+          <text x="317" y="3" fill="#aab5c7" font-size="8" class="mono">TOP = DONE</text>
+          <circle cx="424" cy="0" r="3" fill="#e9be6d" />
+          <text x="434" y="3" fill="#aab5c7" font-size="8" class="mono">RECENT</text>
+        </g>`;
+
+      document.getElementById("rails-preview").innerHTML = svgFrame(
+        id,
+        "Orthogonal edge rails minimap concept",
+        "A blue left rail marks the active workspace while red, green, and blue top rails represent attention independently.",
+        `${workspaceMarkup}${legend}`
+      );
+    }
+
+    function radarQueue(state) {
+      const urgent = workspaces
+        .filter((workspace) => {
+          const status = state.statuses[workspace.id];
+          return status && status.severity !== "medium";
+        })
+        .sort((left, right) => {
+          const leftSeverity = state.statuses[left.id].severity === "high" ? 0 : 1;
+          const rightSeverity = state.statuses[right.id].severity === "high" ? 0 : 1;
+          return leftSeverity - rightSeverity || left.x - right.x;
+        });
+      return new Map(urgent.map((workspace, index) => [workspace.id, index + 1]));
+    }
+
+    function renderRadar() {
+      const state = scenarios[selectedScenario];
+      const id = "radar";
+      const queue = radarQueue(state);
+      const shifted = workspaces.map((workspace) => ({
+        ...workspace,
+        y: 66 + (workspace.y - 72) * 0.77,
+        h: workspace.h * 0.72
+      }));
+
+      const workspaceMarkup = shifted.map((workspace) => {
+        const isActive = workspace.id === activeWorkspaceId;
+        const status = state.statuses[workspace.id];
+        const queueNumber = queue.get(workspace.id);
+        const activeOpacity = isActive ? 0.95 : (status ? 0.68 : 0.30);
+        const statusMarker = status
+          ? marker(workspace, status, status.panels[0] ?? 0, queueNumber ?? severity[status.severity].icon, id, true)
+          : "";
+        return `
+          <g opacity="${activeOpacity}">
+            ${isActive ? `<rect x="${workspace.x - 4}" y="${workspace.y - 4}" width="${workspace.w + 8}" height="${workspace.h + 8}" rx="7"
+              fill="#74a2f7" fill-opacity="0.05" stroke="#dbe8ff" stroke-width="1.8" filter="url(#blue-glow-${id})" />` : ""}
+            <rect class="workspace-shape" x="${workspace.x}" y="${workspace.y}" width="${workspace.w}" height="${workspace.h}" rx="4"
+              fill="${workspace.accent}" fill-opacity="0.08" stroke="${workspace.accent}" stroke-opacity="0.42" stroke-width="1">
+              <title>${escapeHtml(workspace.name)}${isActive ? " — active workspace" : ""}</title>
+            </rect>
+            ${basePanels(workspace, 0.17, status, "radar")}
+            ${statusMarker}
+          </g>`;
+      }).join("");
+
+      const chipWidth = 91;
+      const chipGap = 8;
+      const chipStart = 25;
+      const chips = workspaces.map((workspace, index) => {
+        const status = state.statuses[workspace.id];
+        const meta = status ? severity[status.severity] : null;
+        const isActive = workspace.id === activeWorkspaceId;
+        const queueNumber = queue.get(workspace.id);
+        const x = chipStart + index * (chipWidth + chipGap);
+        const markerText = status ? (queueNumber ?? meta.icon) : "";
+        const markerColor = meta?.color ?? "#6c788e";
+        return `
+          <g>
+            <rect x="${x}" y="294" width="${chipWidth}" height="34" rx="8" fill="${isActive ? "#151f31" : "#0f131c"}"
+              stroke="${isActive ? "#74a2f7" : "#252e3d"}" stroke-width="${isActive ? 1.4 : 1}" />
+            ${isActive ? `<line x1="${x + 10}" y1="328" x2="${x + chipWidth - 10}" y2="328" stroke="#74a2f7" stroke-width="3" stroke-linecap="round" />` : ""}
+            <circle cx="${x + 14}" cy="311" r="3.2" fill="${workspace.accent}" />
+            <text x="${x + 23}" y="314" fill="${isActive ? "#e0e6f1" : "#aab5c7"}" font-size="8.5" font-weight="720">${escapeHtml(workspace.short)}</text>
+            ${isActive ? `<text x="${x + chipWidth - 28}" y="314" fill="#74a2f7" font-size="12" font-weight="800">◎</text>` : ""}
+            ${status ? `
+              <circle cx="${x + chipWidth - 12}" cy="311" r="8" fill="#0c1018" stroke="${markerColor}" stroke-width="1.5" />
+              <text x="${x + chipWidth - 12}" y="314" text-anchor="middle" fill="${markerColor}" font-size="8" font-weight="850">${escapeHtml(markerText)}</text>` : ""}
+          </g>`;
+      }).join("");
+
+      const queueLabel = queue.size > 0
+        ? `<text x="616" y="282" text-anchor="end" fill="#f38ba8" font-size="8" font-weight="750" letter-spacing="1" class="mono">${queue.size} IN QUEUE</text>`
+        : `<text x="616" y="282" text-anchor="end" fill="#a6e3a1" font-size="8" font-weight="750" letter-spacing="1" class="mono">QUEUE CLEAR</text>`;
+
+      document.getElementById("radar-preview").innerHTML = svgFrame(
+        id,
+        "Attention radar minimap concept",
+        "Numbered attention beacons in the spatial map correspond to larger workspace chips in a bottom status rail.",
+        `${workspaceMarkup}<line x1="24" y1="282" x2="616" y2="282" stroke="#252e3d" />${queueLabel}${chips}`
+      );
+    }
+
+    function renderAll() {
+      renderSpotlight();
+      renderRails();
+      renderRadar();
+      document.getElementById("scenario-summary").textContent = scenarios[selectedScenario].summary;
+    }
+
+    document.querySelectorAll("[data-scenario]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedScenario = button.dataset.scenario;
+        document.querySelectorAll("[data-scenario]").forEach((candidate) => {
+          candidate.setAttribute("aria-pressed", String(candidate === button));
+        });
+        renderAll();
+      });
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>
