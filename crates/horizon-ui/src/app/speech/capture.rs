@@ -280,10 +280,13 @@ mod tests {
         assert_eq!(to_mono_16k(&samples, 16_000, 1), samples);
     }
 
-    /// A8 smoke check: on a machine with no input device, starting capture
-    /// must surface the "no microphone found" error over the channel without
-    /// panicking (the mic returns to idle). Gated on an env var so
-    /// `cargo test --features speech` stays green on machines that have a
+    /// A8 smoke check: on a machine with no usable input device, starting
+    /// capture must surface an error over the channel without panicking — the
+    /// worker keeps running and the mic returns to idle. This covers both the
+    /// "no default input device" case and a phantom device whose input config
+    /// cannot be opened (a Mac Studio with no mic reports the latter); the
+    /// frame loop logs either as a `speech input error`. Gated on an env var so
+    /// `cargo test --features speech` stays green on machines with a working
     /// microphone:
     ///
     /// ```sh
@@ -308,13 +311,10 @@ mod tests {
         }
         match received {
             Some(Err(message)) => {
-                eprintln!("no-mic error surfaced: {message}");
-                assert!(
-                    message.contains("no microphone"),
-                    "expected a no-microphone error, got: {message}"
-                );
+                eprintln!("capture-start error surfaced without panic: {message}");
+                assert!(!message.trim().is_empty(), "error message should not be empty");
             }
-            Some(Ok(_)) => panic!("expected an error with no input device present, got audio"),
+            Some(Ok(_)) => panic!("expected an error with no usable input device, got audio"),
             None => panic!("capture worker sent no result within the timeout"),
         }
     }
