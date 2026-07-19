@@ -82,14 +82,16 @@ pub(super) fn render_grid(
         }
 
         let shapes = build_grid_shapes(ui, rect, content, metrics);
-        painter.extend(shapes.iter().cloned());
         if has_selection {
             // Copy/cut clear the model selection outside this render pass, and
             // the cache key tracks only geometry and scroll offset. Retaining
             // highlighted shapes would replay a stale selection highlight on
-            // the next cache-eligible frame.
+            // the next cache-eligible frame. Nothing outlives this pass, so the
+            // shapes move straight into the painter instead of being cloned.
+            painter.extend(shapes);
             grid_cache.invalidate();
         } else {
+            painter.extend(shapes.iter().cloned());
             grid_cache.key = Some(key);
             grid_cache.shapes = shapes;
         }
