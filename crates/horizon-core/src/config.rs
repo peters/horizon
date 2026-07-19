@@ -453,12 +453,81 @@ impl Default for OverlaysConfig {
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
+    pub speech: SpeechConfig,
 }
 
 impl Default for FeaturesConfig {
     fn default() -> Self {
-        Self { attention_feed: true }
+        Self {
+            attention_feed: true,
+            speech: SpeechConfig::default(),
+        }
     }
+}
+
+/// Speech-to-text input (push-to-talk dictation into the focused panel).
+///
+/// The config always parses so a `speech:` block never breaks a build made
+/// without the `speech` cargo feature; the runtime simply ignores it there.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct SpeechConfig {
+    pub enabled: bool,
+    /// Path to a transcribe.cpp GGUF model (e.g. nb-whisper-large-Q8_0.gguf).
+    pub model: String,
+    /// Source language hint (ISO code such as `no`, `nn`, `en`) or `auto`.
+    pub language: String,
+    pub task: SpeechTask,
+    pub backend: SpeechBackend,
+    /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
+    pub hotkey: String,
+    pub hotkey_mode: SpeechHotkeyMode,
+}
+
+impl Default for SpeechConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: String::new(),
+            language: "auto".to_string(),
+            task: SpeechTask::Transcribe,
+            backend: SpeechBackend::Auto,
+            hotkey: "F9".to_string(),
+            hotkey_mode: SpeechHotkeyMode::Hold,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechTask {
+    #[default]
+    Transcribe,
+    /// Translate speech into English (requires a model whose translate task
+    /// works, e.g. stock whisper-large-v3).
+    Translate,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechBackend {
+    /// Probe GPUs (discrete before integrated) and fall back to CPU.
+    #[default]
+    Auto,
+    Cpu,
+    Cuda,
+    Vulkan,
+    Metal,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechHotkeyMode {
+    /// Ventrilo-style: record while the hotkey is held, transcribe on release.
+    #[default]
+    Hold,
+    /// Press once to start recording, press again to stop and transcribe.
+    Toggle,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -777,6 +846,49 @@ mod tests {
                 .any(|path| path.ends_with(".config/horizon/config.yaml"))
         );
         assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
+    }
+
+    #[test]
+    fn speech_config_defaults_are_disabled_hold_f9() {
+        let speech = FeaturesConfig::default().speech;
+        assert!(!speech.enabled);
+        assert_eq!(speech.language, "auto");
+        assert_eq!(speech.task, super::SpeechTask::Transcribe);
+        assert_eq!(speech.backend, super::SpeechBackend::Auto);
+        assert_eq!(speech.hotkey, "F9");
+        assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Hold);
+    }
+
+    #[test]
+    fn speech_config_parses_from_yaml_and_roundtrips() {
+        let yaml = r"
+features:
+  speech:
+    enabled: true
+    model: /models/nb-whisper-large-Q8_0.gguf
+    language: no
+    task: translate
+    backend: cuda
+    hotkey: F9
+    hotkey_mode: toggle
+";
+        let config = Config::from_yaml(yaml).expect("speech config should parse");
+        let speech = &config.features.speech;
+        assert!(speech.enabled);
+        assert_eq!(speech.model, "/models/nb-whisper-large-Q8_0.gguf");
+        assert_eq!(speech.language, "no");
+        assert_eq!(speech.task, super::SpeechTask::Translate);
+        assert_eq!(speech.backend, super::SpeechBackend::Cuda);
+        assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Toggle);
+
+        let round_tripped = Config::from_yaml(&config.to_yaml().expect("serialize")).expect("re-parse");
+        assert_eq!(round_tripped.features.speech, *speech);
+    }
+
+    #[test]
+    fn config_without_speech_block_still_parses() {
+        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
+        assert!(!config.features.speech.enabled);
     }
 
     #[test]

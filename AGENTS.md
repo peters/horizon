@@ -182,6 +182,26 @@ When cutting a new release, generate concise release notes from the commits sinc
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
 - Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
 
+### Cross-Machine Smoke-Test Handoff
+
+Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is coordinated **through PR comments**, so agents on different machines can hand work to each other asynchronously:
+
+- The implementing agent opens the PR, adds a smoke-test plan under `docs/testing/`, and posts a comment:
+  `SMOKE-TEST REQUEST <machine/os> — plan: docs/testing/<file>.md — scope: <which lanes>`
+- The executing agent on the target machine checks out the PR branch, runs its lane of the plan, **fixes what it can and pushes those commits to the PR branch**, then replies with a report:
+
+  ```
+  SMOKE-TEST REPORT (<machine/os>)
+  - <step>: pass | fail — short note
+  - ...
+  Summary: <what was fixed, what remains, anything the next agent must know>
+  SMOKE-TEST: DONE
+  ```
+
+  The final line must be exactly `SMOKE-TEST: DONE` — waiting agents poll the PR for that marker. Never put the marker in a REQUEST comment; only in a completed REPORT.
+- Any agent may then post a further `SMOKE-TEST REQUEST` (more scope, another machine) and the loop repeats — request → report → request → report — until every requested lane passes and the PR is ready.
+- An agent resuming work on a PR must read the newest `SMOKE-TEST REPORT` comment before continuing.
+
 ### Smoke Test Reliability
 
 - Treat motion-sensitive UI bugs as motion-sensitive validation problems: detached-window drag, resize feedback, hover jitter, and oscillation bugs are not reliably caught by still screenshots alone

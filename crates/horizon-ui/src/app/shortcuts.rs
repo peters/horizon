@@ -9,6 +9,42 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
     events.iter().any(|event| shortcut_event_matches(event, binding))
 }
 
+/// Scan a frame's events for a press (initial, non-repeat) and a release of
+/// `binding`. The release matches on the key alone because modifiers are
+/// often released before the main key in push-to-talk usage.
+pub(crate) fn press_and_release_in_events(events: &[Event], binding: ShortcutBinding) -> (bool, bool) {
+    let mut pressed = false;
+    let mut released = false;
+    for event in events {
+        if let Event::Key {
+            key,
+            physical_key,
+            pressed: is_pressed,
+            repeat,
+            ..
+        } = event
+        {
+            if *is_pressed && !repeat && shortcut_event_matches(event, binding) {
+                pressed = true;
+            }
+            if !is_pressed && key_matches(*key, *physical_key, binding.key) {
+                released = true;
+            }
+        }
+    }
+    (pressed, released)
+}
+
+/// Whether an event is a key event (press, repeat, or release) for the
+/// binding's key, regardless of modifiers. Used to keep a push-to-talk
+/// chord out of the terminal input stream.
+pub(crate) fn event_uses_shortcut_key(event: &Event, binding: ShortcutBinding) -> bool {
+    matches!(
+        event,
+        Event::Key { key, physical_key, .. } if key_matches(*key, *physical_key, binding.key)
+    )
+}
+
 pub(crate) fn shortcut_event_matches(event: &Event, binding: ShortcutBinding) -> bool {
     let modifiers = egui_modifiers(binding.modifiers);
     matches!(

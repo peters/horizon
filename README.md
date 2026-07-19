@@ -313,6 +313,38 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ---
 
+## Speech Input (opt-in)
+
+Dictate straight into a terminal: every panel title bar gets a mic button, and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
+
+It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you only need **CMake and a C++ compiler**:
+
+```bash
+cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)
+cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
+cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
+```
+
+GPU use at runtime is automatic either way: the `auto` backend probes discrete GPUs first and always falls back to CPU.
+
+```yaml
+features:
+  speech:
+    enabled: true
+    model: /path/to/models/whisper-large-v3-Q8_0.gguf  # any transcribe.cpp GGUF
+    language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
+    task: transcribe     # translate = speak any language, insert English text
+    backend: auto        # auto | cpu | cuda | vulkan | metal
+    hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
+    hotkey_mode: hold    # hold (Ventrilo-style) | toggle
+```
+
+Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
+
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml`, restart Horizon, and verify the mic button appears in panel title bars.
+
+---
+
 ## Built With
 
 | | |

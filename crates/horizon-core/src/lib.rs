@@ -36,7 +36,7 @@ pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionStat
 pub use board::{Board, ShutdownProgress, WorkspaceDockSide, WorkspaceLayout};
 pub use config::{
     AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig,
-    TerminalConfig, WindowConfig, WorkspaceConfig,
+    SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechTask, TerminalConfig, WindowConfig, WorkspaceConfig,
 };
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};

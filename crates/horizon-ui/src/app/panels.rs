@@ -14,8 +14,9 @@ use super::super::terminal_widget::{
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
-    PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
+    MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
+use super::speech::MicState;
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
 use super::util::clamp_panel_size;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
@@ -52,6 +53,7 @@ struct PanelUiOutcome {
     session_rebind: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
+    mic_clicked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +68,9 @@ struct PanelFrame {
     titlebar: Rect,
     body: Rect,
     close: Rect,
+    /// Mic control slot left of the close button; only interactive/painted
+    /// when speech input is enabled.
+    mic: Rect,
     resize: Rect,
 }
 
@@ -83,6 +88,10 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
+        let mic = Rect::from_center_size(
+            Pos2::new(panel_rect.max.x - 40.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
+            Vec2::splat(16.0),
+        );
         let resize = Rect::from_min_size(
             Pos2::new(
                 panel_rect.max.x - RESIZE_HANDLE_SIZE,
@@ -96,6 +105,7 @@ impl PanelFrame {
             titlebar,
             body,
             close,
+            mic,
             resize,
         }
     }
@@ -399,6 +409,13 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
+                let mic_response = self.speech.is_some().then(|| {
+                    ui.interact(
+                        rects.mic.expand2(Vec2::splat(4.0)),
+                        ui.make_persistent_id(("panel_mic", panel_id.0)),
+                        if interactive { Sense::click() } else { Sense::hover() },
+                    )
+                });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
                     ui.make_persistent_id(("panel_resize", panel_id.0)),
@@ -414,6 +431,7 @@ impl HorizonApp {
                         snapshot.is_renaming,
                         &drag_response,
                         &close_response,
+                        mic_response.as_ref(),
                         &resize_response,
                         &mut outcome,
                     );
@@ -455,6 +473,14 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
+                        mic: mic_response.as_ref().map(|response| MicControl {
+                            rect: rects.mic,
+                            hovered: response.hovered(),
+                            state: self
+                                .speech
+                                .as_ref()
+                                .map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id)),
+                        }),
                     },
                 );
 
@@ -522,9 +548,14 @@ impl HorizonApp {
         is_renaming: bool,
         drag_response: &egui::Response,
         close_response: &egui::Response,
+        mic_response: Option<&egui::Response>,
         resize_response: &egui::Response,
         outcome: &mut PanelUiOutcome,
     ) {
+        if mic_response.is_some_and(egui::Response::clicked) {
+            outcome.mic_clicked = true;
+            outcome.focus_requested = true;
+        }
         if resize_response.drag_started() || resize_response.clicked() {
             outcome.focus_requested = true;
         }
@@ -689,6 +720,11 @@ impl HorizonApp {
         }
         if outcome.focus_requested {
             self.board.focus(panel_id);
+        }
+        if outcome.mic_clicked
+            && let Some(speech) = self.speech.as_mut()
+        {
+            speech.toggle(panel_id);
         }
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);

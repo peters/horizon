@@ -132,6 +132,7 @@ impl HorizonApp {
         self.sync_panel_focus_from_pointer_press(ctx);
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
+        self.handle_speech_input(ctx);
         self.handle_root_file_drop(ctx);
         let panel_output = self.board.process_output();
         if panel_output.cwd_changed {
@@ -150,6 +151,72 @@ impl HorizonApp {
         self.maybe_start_update_check();
 
         had_terminal_output
+    }
+
+    /// Push-to-talk hotkey handling plus draining speech results into the
+    /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
+    fn handle_speech_input(&mut self, ctx: &Context) {
+        let Some(speech) = self.speech.as_mut() else {
+            return;
+        };
+
+        if let Some(binding) = speech.hotkey_binding() {
+            let (pressed, released) =
+                ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
+            match speech.hotkey_mode() {
+                horizon_core::SpeechHotkeyMode::Hold => {
+                    if pressed
+                        && speech.recording_target().is_none()
+                        && let Some(focused) = self.board.focused
+                    {
+                        speech.start(focused);
+                    }
+                    if released {
+                        // No-op unless a recording is active.
+                        speech.stop();
+                    }
+                }
+                horizon_core::SpeechHotkeyMode::Toggle => {
+                    if pressed {
+                        if speech.recording_target().is_some() {
+                            speech.stop();
+                        } else if let Some(focused) = self.board.focused {
+                            speech.start(focused);
+                        }
+                    }
+                }
+            }
+        }
+
+        if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            speech.cancel();
+        }
+        if speech.is_active() {
+            // Keep frames coming so the pulse animates and poll() runs
+            // promptly even when the terminal is otherwise idle.
+            ctx.request_repaint();
+        }
+
+        let events = speech.poll();
+        for event in events {
+            match event {
+                super::speech::SpeechEvent::Text { target, text } => {
+                    let Some(panel) = self.board.panel_mut(target) else {
+                        tracing::warn!("speech target panel closed before transcription finished");
+                        continue;
+                    };
+                    let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+                        continue;
+                    };
+                    // Trailing space so consecutive dictations don't fuse words.
+                    let bytes = input::paste_bytes(&format!("{text} "), mode, true);
+                    panel.write_input(&bytes);
+                }
+                super::speech::SpeechEvent::Error(message) => {
+                    tracing::warn!(%message, "speech input error");
+                }
+            }
+        }
     }
 
     fn poll_primary_selection_paste(&mut self) {

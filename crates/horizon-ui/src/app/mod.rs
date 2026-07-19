@@ -18,6 +18,7 @@ mod settings;
 mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
 mod updates;
@@ -163,6 +164,7 @@ pub struct HorizonApp {
     ime_commit_normalizer: input::ImeCommitNormalizer,
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
+    speech: Option<speech::SpeechSystem>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -336,6 +338,7 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
+            speech: speech::SpeechSystem::from_config(&config.features.speech),
             shortcuts,
             presets: config.resolved_presets(),
             window_config: config.window.clone(),

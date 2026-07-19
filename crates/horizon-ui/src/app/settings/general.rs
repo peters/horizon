@@ -1,6 +1,7 @@
 use egui::Ui;
-use horizon_core::{AppearanceTheme, Config};
+use horizon_core::{AppearanceTheme, Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
+use crate::app::speech::built_with_speech;
 use crate::theme;
 
 /// Render the General settings tab: window dimensions, feature toggles,
@@ -107,7 +108,111 @@ fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
             )
             .changed();
         super::dim_label(ui, "Show a notification feed for agent activity.");
+
+        ui.add_space(10.0);
+        changed |= render_speech_settings(ui, config);
     });
+    changed
+}
+
+fn render_speech_settings(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    let speech = &mut config.features.speech;
+
+    changed |= ui
+        .checkbox(
+            &mut speech.enabled,
+            egui::RichText::new("Speech Input").color(theme::FG()).size(12.0),
+        )
+        .changed();
+    if built_with_speech() {
+        super::dim_label(
+            ui,
+            "Dictate into the focused panel with the mic button or the push-to-talk hotkey. Applies on restart.",
+        );
+    } else {
+        super::dim_label(
+            ui,
+            "This build has no speech support. Rebuild with: cargo run --release --features speech",
+        );
+    }
+
+    if !speech.enabled {
+        return changed;
+    }
+
+    ui.add_space(6.0);
+    egui::Grid::new("settings_speech_grid")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut speech.model).desired_width(260.0))
+                .changed();
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Language").color(theme::FG_SOFT()).size(12.0));
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut speech.language).desired_width(70.0))
+                .changed();
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Task").color(theme::FG_SOFT()).size(12.0));
+            egui::ComboBox::from_id_salt("settings_speech_task")
+                .selected_text(match speech.task {
+                    SpeechTask::Transcribe => "Transcribe",
+                    SpeechTask::Translate => "Translate to English",
+                })
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut speech.task, SpeechTask::Transcribe, "Transcribe")
+                        .changed();
+                    changed |= ui
+                        .selectable_value(&mut speech.task, SpeechTask::Translate, "Translate to English")
+                        .changed();
+                });
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Backend").color(theme::FG_SOFT()).size(12.0));
+            egui::ComboBox::from_id_salt("settings_speech_backend")
+                .selected_text(format!("{:?}", speech.backend))
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (SpeechBackend::Auto, "Auto"),
+                        (SpeechBackend::Cpu, "CPU"),
+                        (SpeechBackend::Cuda, "CUDA"),
+                        (SpeechBackend::Vulkan, "Vulkan"),
+                        (SpeechBackend::Metal, "Metal"),
+                    ] {
+                        changed |= ui.selectable_value(&mut speech.backend, value, label).changed();
+                    }
+                });
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Push-to-talk").color(theme::FG_SOFT()).size(12.0));
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut speech.hotkey).desired_width(70.0))
+                .changed();
+            ui.end_row();
+
+            ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
+            egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
+                .selected_text(match speech.hotkey_mode {
+                    SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
+                    SpeechHotkeyMode::Toggle => "Toggle",
+                })
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Hold, "Hold (Ventrilo-style)")
+                        .changed();
+                    changed |= ui
+                        .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Toggle, "Toggle")
+                        .changed();
+                });
+            ui.end_row();
+        });
+
     changed
 }
 

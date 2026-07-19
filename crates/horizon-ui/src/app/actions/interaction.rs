@@ -4,7 +4,7 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
-use super::super::shortcuts::shortcut_pressed;
+use super::super::shortcuts::{event_uses_shortcut_key, shortcut_pressed};
 use super::super::{CanvasPanSpaceKeyState, HorizonApp};
 
 impl CanvasPanSpaceKeyState {
@@ -274,6 +274,16 @@ impl HorizonApp {
         events: &[Event],
     ) -> Vec<TerminalInputEvent> {
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
+        // The push-to-talk chord is an app-level control; keep every press,
+        // repeat, and release of its key out of the PTY input stream.
+        if let Some(binding) = self.speech.as_ref().and_then(super::super::speech::SpeechSystem::hotkey_binding) {
+            let filtered: Vec<Event> = events
+                .iter()
+                .filter(|event| !event_uses_shortcut_key(event, binding))
+                .cloned()
+                .collect();
+            return terminal_input_events(&filtered, frame_keyboard_events);
+        }
         terminal_input_events(events, frame_keyboard_events)
     }
 }
