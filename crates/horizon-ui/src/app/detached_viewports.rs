@@ -1,3 +1,5 @@
+mod shortcut_actions;
+
 use std::collections::BTreeSet;
 
 use egui::{
@@ -8,9 +10,9 @@ use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
-use super::shortcuts::shortcut_pressed;
 use super::util::{chrome_button, primary_shortcut_label, viewport_local_rect};
 use super::{DetachedWorkspaceViewportState, HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+use shortcut_actions::detached_shortcut_actions;
 
 const DETACHED_WINDOW_OFFSET: f32 = 48.0;
 
@@ -227,17 +229,12 @@ impl HorizonApp {
     // shortcuts advertised in the detached toolbar are handled here with the
     // detached viewport's own input state.
     fn handle_detached_shortcuts(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
-        let (fit_pressed, minimap_pressed) = ctx.input(|input| {
-            (
-                shortcut_pressed(input, self.shortcuts.fit_active_workspace),
-                shortcut_pressed(input, self.shortcuts.toggle_minimap),
-            )
-        });
+        let actions = ctx.input(|input| detached_shortcut_actions(&input.events, &self.shortcuts));
 
-        if fit_pressed {
+        if actions.fit_workspace {
             let _ = self.fit_workspace_in_rect(workspace_id, detached_canvas_rect(ctx));
         }
-        if minimap_pressed {
+        if actions.toggle_minimap {
             self.minimap_visible = !self.minimap_visible;
         }
     }

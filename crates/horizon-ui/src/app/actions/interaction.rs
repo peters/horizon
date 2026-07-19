@@ -6,6 +6,7 @@ use horizon_core::WorkspaceId;
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::shortcuts::shortcut_pressed;
 use super::super::{CanvasPanSpaceKeyState, HorizonApp};
+use super::support::fullscreen_panel_is_renderable;
 
 impl CanvasPanSpaceKeyState {
     fn filter_terminal_events(
@@ -143,7 +144,7 @@ impl HorizonApp {
         }
 
         if let Some(panel_id) = self.fullscreen_panel
-            && self.board.panel(panel_id).is_none()
+            && !fullscreen_panel_is_renderable(&self.board, &self.detached_workspaces, panel_id)
         {
             self.fullscreen_panel = None;
         }

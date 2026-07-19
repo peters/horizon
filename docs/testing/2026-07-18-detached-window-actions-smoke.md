@@ -72,6 +72,24 @@ Verify three detached-workspace fixes:
 - Repeat both actions from the MAIN window on a non-detached workspace:
   behavior must be unchanged (animated pan / fit on the main canvas).
 
+## Primary Flow: Fullscreen Is Refused For Detached Panels
+
+Detaching a workspace leaves `board.focused` pointing at that workspace's last
+panel, so the root window's fullscreen shortcut would otherwise target a panel
+the detached window is already painting. Now that both passes run in the same
+frame, that panel would be rendered twice per frame at two different sizes,
+reflowing a single PTY between two grid geometries.
+
+- Detach a workspace, click a terminal inside the detached window, then focus
+  the MAIN window by its title bar and press F11.
+- The main window must stay on its normal canvas. It must NOT go fullscreen on
+  the detached workspace's panel, and the detached window must keep rendering
+  that panel at its own size.
+- Click a panel that lives in the main window and press F11: that panel goes
+  fullscreen as usual, and the detached window keeps rendering live.
+- `fullscreen_panel_is_renderable` also clears a fullscreen panel that is closed
+  or whose workspace is detached mid-session.
+
 ## Interaction Edge Cases
 
 - Fullscreen a panel while the detached window is focused instead of the main

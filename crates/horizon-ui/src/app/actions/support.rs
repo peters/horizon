@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Button, Color32, FontId, Ui};
-use horizon_core::{PanelKind, PresetConfig, WorkspaceId};
+use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
 use crate::theme;
@@ -202,6 +202,21 @@ pub(super) fn detached_workspace_ids(
         .keys()
         .filter_map(|local_id| board.workspace_id_by_local_id(local_id))
         .collect()
+}
+
+// A detached workspace paints its own panels inside its own viewport, so a
+// panel from one can never be fullscreened in the root window: both passes run
+// in the same frame and would reflow the one PTY to two different grid sizes.
+pub(super) fn fullscreen_panel_is_renderable(
+    board: &horizon_core::Board,
+    detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
+    panel_id: PanelId,
+) -> bool {
+    board.panel(panel_id).is_some_and(|panel| {
+        board
+            .workspace(panel.workspace_id)
+            .is_some_and(|workspace| !detached_workspaces.contains_key(&workspace.local_id))
+    })
 }
 
 pub(super) fn command_palette_workspace_entries(
