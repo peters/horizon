@@ -360,6 +360,28 @@ mod tests {
     }
 
     #[test]
+    fn wheel_pan_scroll_input_reads_only_the_smoothed_delta_for_notched_wheels() {
+        let raw_input = egui::RawInput {
+            events: vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -14.0),
+                modifiers: Modifiers::NONE,
+            }],
+            ..egui::RawInput::default()
+        };
+
+        let input = egui::InputState::default().begin_pass(raw_input, false, 1.0 / 60.0, egui::InputOptions::default());
+
+        // Line-unit notches bypass egui's smoothing threshold, so the raw and
+        // smoothed deltas diverge within one pass. That divergence is what makes
+        // this assertion discriminating: the point-unit case above passes for
+        // either field, so without this a regression to the raw delta — the
+        // exact doubling this fix removes — would go undetected.
+        assert_ne!(input.raw_scroll_delta, input.smooth_scroll_delta);
+        assert_eq!(wheel_pan_scroll_input(&input), input.smooth_scroll_delta);
+    }
+
+    #[test]
     fn plain_space_is_delayed_until_release() {
         let mut state = CanvasPanSpaceKeyState::default();
         let press = space_press();
