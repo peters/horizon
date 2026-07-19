@@ -265,9 +265,9 @@ mod tests {
     fn mono_44100_resamples_to_16k_length() {
         let samples = vec![0.25_f32; 44_100];
         let out = to_mono_16k(&samples, 44_100, 1);
-        let expected = 16_000;
+        let expected = 16_000_usize;
         assert!(
-            (out.len() as i64 - expected).abs() <= 2,
+            out.len().abs_diff(expected) <= 2,
             "expected ~{expected} samples, got {}",
             out.len()
         );

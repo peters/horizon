@@ -104,6 +104,30 @@ fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<Wo
     }
 }
 
+fn ensure_session<'a>(settings: &Settings, session: &'a mut Option<Session>) -> Result<&'a mut Session, String> {
+    if session.is_none() {
+        if settings.model_path.trim().is_empty() {
+            return Err("no speech model configured (features.speech.model)".to_string());
+        }
+        let options = ModelOptions {
+            backend: settings.backend,
+            ..ModelOptions::default()
+        };
+        let model = Model::load_with(&settings.model_path, &options)
+            .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
+        tracing::info!(
+            model = %settings.model_path,
+            backend = %model.backend(),
+            "speech model loaded"
+        );
+        let new_session = model
+            .session()
+            .map_err(|error| format!("failed to create transcription session: {error}"))?;
+        *session = Some(new_session);
+    }
+    Ok(session.as_mut().expect("session initialized above"))
+}
+
 #[cfg(test)]
 mod tests {
     use transcribe_cpp::{Model, RunOptions};
@@ -172,28 +196,4 @@ mod tests {
         }
         panic!("no data chunk found in {path}");
     }
-}
-
-fn ensure_session<'a>(settings: &Settings, session: &'a mut Option<Session>) -> Result<&'a mut Session, String> {
-    if session.is_none() {
-        if settings.model_path.trim().is_empty() {
-            return Err("no speech model configured (features.speech.model)".to_string());
-        }
-        let options = ModelOptions {
-            backend: settings.backend,
-            ..ModelOptions::default()
-        };
-        let model = Model::load_with(&settings.model_path, &options)
-            .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
-        tracing::info!(
-            model = %settings.model_path,
-            backend = %model.backend(),
-            "speech model loaded"
-        );
-        let new_session = model
-            .session()
-            .map_err(|error| format!("failed to create transcription session: {error}"))?;
-        *session = Some(new_session);
-    }
-    Ok(session.as_mut().expect("session initialized above"))
 }
