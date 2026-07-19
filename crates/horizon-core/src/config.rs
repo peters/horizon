@@ -689,7 +689,8 @@ impl Config {
     ///
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
-        self.shortcuts.resolve()?;
+        let shortcuts = self.shortcuts.resolve()?;
+        validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }
@@ -734,6 +735,45 @@ impl Config {
 
         presets
     }
+}
+
+fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -> Result<()> {
+    if !speech.enabled || speech.hotkey.trim().is_empty() {
+        return Ok(());
+    }
+    let binding = ShortcutBinding::parse(&speech.hotkey)
+        .map_err(|error| Error::Config(format!("features.speech.hotkey: {error}")))?;
+
+    // The push-to-talk chord is consumed before other handlers; a binding
+    // that overlaps a global shortcut would trigger both actions.
+    let global_bindings = [
+        ("command_palette", shortcuts.command_palette),
+        ("new_terminal", shortcuts.new_terminal),
+        ("focus_active_workspace", shortcuts.focus_active_workspace),
+        ("fit_active_workspace", shortcuts.fit_active_workspace),
+        ("open_remote_hosts", shortcuts.open_remote_hosts),
+        ("toggle_sessions", shortcuts.toggle_sessions),
+        ("toggle_sidebar", shortcuts.toggle_sidebar),
+        ("toggle_hud", shortcuts.toggle_hud),
+        ("toggle_minimap", shortcuts.toggle_minimap),
+        ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
+        ("toggle_settings", shortcuts.toggle_settings),
+        ("zoom_reset", shortcuts.zoom_reset),
+        ("zoom_in", shortcuts.zoom_in),
+        ("zoom_out", shortcuts.zoom_out),
+        ("fullscreen_panel", shortcuts.fullscreen_panel),
+        ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
+        ("fullscreen_window", shortcuts.fullscreen_window),
+        ("save_editor", shortcuts.save_editor),
+        ("search", shortcuts.search),
+    ];
+    if let Some((name, _)) = global_bindings.iter().find(|(_, global)| binding.overlaps(*global)) {
+        return Err(Error::Config(format!(
+            "features.speech.hotkey `{}` overlaps the `{name}` shortcut; choose an unused key",
+            speech.hotkey
+        )));
+    }
+    Ok(())
 }
 
 fn validate_ssh_connections(presets: &[PresetConfig], workspaces: &[WorkspaceConfig]) -> Result<()> {
@@ -889,6 +929,31 @@ features:
     fn config_without_speech_block_still_parses() {
         let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
         assert!(!config.features.speech.enabled);
+    }
+
+    #[test]
+    fn validate_rejects_malformed_speech_hotkey_only_when_enabled() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        config.features.speech.hotkey = "Ctrl++".to_string();
+        let error = config.validate().expect_err("malformed hotkey must be rejected");
+        assert!(error.to_string().contains("features.speech.hotkey"));
+
+        config.features.speech.enabled = false;
+        config.validate().expect("disabled speech skips hotkey validation");
+
+        config.features.speech.enabled = true;
+        config.features.speech.hotkey = "F9".to_string();
+        config.validate().expect("valid hotkey passes");
+    }
+
+    #[test]
+    fn validate_rejects_speech_hotkey_overlapping_global_shortcut() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        config.features.speech.hotkey = "F11".to_string(); // fullscreen_panel default
+        let error = config.validate().expect_err("overlapping hotkey must be rejected");
+        assert!(error.to_string().contains("fullscreen_panel"));
     }
 
     #[test]

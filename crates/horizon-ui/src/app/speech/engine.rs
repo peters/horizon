@@ -21,6 +21,9 @@ pub struct SpeechSystem {
     state: State,
     binding: Option<ShortcutBinding>,
     hotkey_mode: SpeechHotkeyMode,
+    /// Monotonic recording generation; results tagged with an older value
+    /// are stale (from a cancelled/failed recording) and are ignored.
+    generation: u64,
 }
 
 impl SpeechSystem {
@@ -40,12 +43,27 @@ impl SpeechSystem {
                 }
             },
         };
+        let capture = match CaptureHandle::spawn() {
+            Ok(capture) => capture,
+            Err(error) => {
+                tracing::error!(%error, "failed to start speech capture thread; speech input disabled");
+                return None;
+            }
+        };
+        let worker = match WorkerHandle::spawn(config) {
+            Ok(worker) => worker,
+            Err(error) => {
+                tracing::error!(%error, "failed to start speech transcription thread; speech input disabled");
+                return None;
+            }
+        };
         Some(Self {
-            capture: CaptureHandle::spawn(),
-            worker: WorkerHandle::spawn(config),
+            capture,
+            worker,
             state: State::Idle,
             binding,
             hotkey_mode: config.hotkey_mode,
+            generation: 0,
         })
     }
 
@@ -95,7 +113,8 @@ impl SpeechSystem {
 
     pub fn start(&mut self, target: PanelId) {
         if matches!(self.state, State::Idle) {
-            self.capture.send(CaptureCmd::Start);
+            self.generation += 1;
+            self.capture.send(CaptureCmd::Start(self.generation));
             self.state = State::Recording { target };
         }
     }
@@ -118,7 +137,11 @@ impl SpeechSystem {
     pub fn poll(&mut self) -> Vec<SpeechEvent> {
         let mut events = Vec::new();
 
-        while let Some(pcm) = self.capture.try_recv_pcm() {
+        while let Some((generation, pcm)) = self.capture.try_recv_pcm() {
+            if generation != self.generation {
+                tracing::debug!(generation, current = self.generation, "stale capture result ignored");
+                continue;
+            }
             match pcm {
                 Ok(pcm) => {
                     if let State::Busy { target } = self.state {
@@ -131,6 +154,11 @@ impl SpeechSystem {
                     }
                 }
                 Err(message) => {
+                    // A stream that died mid-recording leaves the capture
+                    // thread holding a broken stream; tear it down too.
+                    if matches!(self.state, State::Recording { .. }) {
+                        self.capture.send(CaptureCmd::Cancel);
+                    }
                     self.state = State::Idle;
                     events.push(SpeechEvent::Error(message));
                 }

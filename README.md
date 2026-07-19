@@ -317,7 +317,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 Dictate straight into a terminal: every panel title bar gets a mic button, and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
 
-It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you only need **CMake and a C++ compiler**:
+It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
 
 ```bash
 cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)
@@ -338,6 +338,8 @@ features:
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
 ```
+
+The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button.
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
 

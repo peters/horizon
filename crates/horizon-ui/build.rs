@@ -40,11 +40,11 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-/// Workaround for transcribe-cpp-sys 0.1.3: its transcribe-link.json manifest
-/// omits the CUDA runtime libraries for TRANSCRIBE_CUDA builds (system_libs
-/// carries only stdc++/m/pthread/dl), so every downstream bin/test target
-/// fails to link with undefined `cuda*` symbols. Emit them here until a -sys
-/// release records the CUDA deps in the manifest itself.
+/// Workaround for transcribe-cpp-sys 0.1.3: its `transcribe-link.json`
+/// manifest omits the CUDA runtime libraries for `TRANSCRIBE_CUDA` builds
+/// (`system_libs` carries only stdc++/m/pthread/dl), so every downstream
+/// bin/test target fails to link with undefined `cuda*` symbols. Emit them
+/// here until a -sys release records the CUDA deps in the manifest itself.
 fn emit_cuda_runtime_link_workaround() {
     if env::var_os("CARGO_FEATURE_SPEECH_CUDA").is_none() {
         return;

@@ -4,7 +4,7 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
-use super::super::shortcuts::{event_uses_shortcut_key, shortcut_pressed};
+use super::super::shortcuts::{event_uses_shortcut_key, shortcut_event_matches, shortcut_pressed};
 use super::super::{CanvasPanSpaceKeyState, HorizonApp};
 
 impl CanvasPanSpaceKeyState {
@@ -138,7 +138,7 @@ impl HorizonApp {
             } else {
                 self.board.focused
             };
-        } else if exit_fullscreen && self.fullscreen_panel.is_some() {
+        } else if exit_fullscreen && self.fullscreen_panel.is_some() && !self.speech_escape_cancelled {
             self.fullscreen_panel = None;
         }
 
@@ -274,21 +274,69 @@ impl HorizonApp {
         events: &[Event],
     ) -> Vec<TerminalInputEvent> {
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
-        // The push-to-talk chord is an app-level control; keep every press,
-        // repeat, and release of its key out of the PTY input stream.
-        if let Some(binding) = self
-            .speech
-            .as_ref()
-            .and_then(super::super::speech::SpeechSystem::hotkey_binding)
-        {
-            let filtered: Vec<Event> = events
-                .iter()
-                .filter(|event| !event_uses_shortcut_key(event, binding))
-                .cloned()
-                .collect();
-            return terminal_input_events(&filtered, frame_keyboard_events);
+        // The push-to-talk chord is an app-level control on the root viewport
+        // (where the hotkey handler listens); keep its presses, repeats, and
+        // release out of the PTY stream without swallowing unrelated keys.
+        // Detached-viewport terminals receive their events unfiltered.
+        let speech_binding = (viewport_id == egui::ViewportId::ROOT)
+            .then(|| {
+                self.speech
+                    .as_ref()
+                    .and_then(super::super::speech::SpeechSystem::hotkey_binding)
+            })
+            .flatten();
+        let Some(binding) = speech_binding else {
+            return terminal_input_events(events, frame_keyboard_events);
+        };
+        let mut filtered = Vec::with_capacity(events.len());
+        for event in events {
+            if self.swallow_speech_hotkey_event(event, binding) {
+                continue;
+            }
+            filtered.push(event.clone());
         }
-        terminal_input_events(events, frame_keyboard_events)
+        terminal_input_events(&filtered, frame_keyboard_events)
+    }
+
+    /// Whether a root-viewport event belongs to the push-to-talk chord (or to
+    /// an Escape that cancelled dictation) and must not reach the terminal.
+    ///
+    /// Presses are swallowed only on a full chord match, so a modifier hotkey
+    /// like `Ctrl+K` does not eat bare `K` keystrokes. Once the chord has been
+    /// pressed, the key is swallowed regardless of modifier state until its
+    /// release is seen — modifiers are often released before the main key.
+    fn swallow_speech_hotkey_event(&mut self, event: &Event, binding: horizon_core::ShortcutBinding) -> bool {
+        match event {
+            Event::Key { pressed, .. } => {
+                if self.speech_escape_cancelled && matches!(event, Event::Key { key: Key::Escape, .. }) {
+                    return *pressed;
+                }
+                if !event_uses_shortcut_key(event, binding) {
+                    return false;
+                }
+                if *pressed {
+                    if shortcut_event_matches(event, binding) {
+                        self.speech_hotkey_held = true;
+                        return true;
+                    }
+                    // Mid-hold repeats can carry drifted modifiers.
+                    self.speech_hotkey_held
+                } else if self.speech_hotkey_held {
+                    self.speech_hotkey_held = false;
+                    true
+                } else {
+                    false
+                }
+            }
+            Event::Text(text) => {
+                // A bare-letter hotkey also produces text events while held.
+                self.speech_hotkey_held
+                    && binding.modifiers == horizon_core::ShortcutModifiers::NONE
+                    && matches!(binding.key, horizon_core::ShortcutKey::Letter(letter)
+                        if text.eq_ignore_ascii_case(&letter.to_string()))
+            }
+            _ => false,
+        }
     }
 }
 

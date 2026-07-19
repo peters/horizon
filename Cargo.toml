@@ -48,7 +48,7 @@ surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
 transcribe-cpp = "0.1.3"
-cpal = "0.16"
+cpal = "0.18.1"
 
 [profile.release]
 lto = true

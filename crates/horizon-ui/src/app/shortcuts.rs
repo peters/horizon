@@ -184,7 +184,58 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
-    use super::shortcut_pressed;
+    use super::{event_uses_shortcut_key, press_and_release_in_events, shortcut_pressed};
+
+    fn key_event(key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn initial_press_detected_but_repeats_ignored() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(9));
+        let initial = [key_event(Key::F9, true, false, Modifiers::NONE)];
+        assert_eq!(press_and_release_in_events(&initial, binding), (true, false));
+
+        let repeat = [key_event(Key::F9, true, true, Modifiers::NONE)];
+        assert_eq!(press_and_release_in_events(&repeat, binding), (false, false));
+    }
+
+    #[test]
+    fn release_matches_on_key_alone_even_with_modifiers_dropped() {
+        let binding = ShortcutBinding::new(
+            ShortcutModifiers::CTRL.plus(ShortcutModifiers::SHIFT),
+            ShortcutKey::Letter('K'),
+        );
+        // Modifiers already released before the main key: still a release.
+        let events = [key_event(Key::K, false, false, Modifiers::NONE)];
+        assert_eq!(press_and_release_in_events(&events, binding), (false, true));
+    }
+
+    #[test]
+    fn press_requires_full_chord() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let bare = [key_event(Key::K, true, false, Modifiers::NONE)];
+        assert_eq!(press_and_release_in_events(&bare, binding), (false, false));
+    }
+
+    #[test]
+    fn event_uses_shortcut_key_ignores_modifiers_but_not_key() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        assert!(event_uses_shortcut_key(
+            &key_event(Key::K, true, false, Modifiers::SHIFT),
+            binding
+        ));
+        assert!(!event_uses_shortcut_key(
+            &key_event(Key::J, true, false, Modifiers::CTRL),
+            binding
+        ));
+    }
 
     #[test]
     fn plus_shortcuts_accept_equals_keypress() {

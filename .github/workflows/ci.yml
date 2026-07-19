@@ -55,7 +55,12 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # `speech` (CPU) is the widest feature set a plain runner can build:
+      # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
+      # Rust surface is identical to `speech` (they only toggle native
+      # backends). cpal needs the ALSA headers on Linux.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo clippy --all-targets --features speech -- -D warnings
 
   clippy-strict:
     name: Clippy (strict)
@@ -79,9 +84,10 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: Run pedantic audit (non-blocking)
         run: |
-          cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic || {
+          cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic || {
             echo "::warning::Pedantic lint debt detected (non-blocking advisory job)."
           }
 

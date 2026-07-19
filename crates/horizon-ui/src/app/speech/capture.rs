@@ -1,10 +1,12 @@
 //! Microphone capture thread. cpal streams are not `Send`, so the stream is
 //! created, owned, and dropped entirely on this thread; the frame loop talks
-//! to it over mpsc channels.
+//! to it over mpsc channels. Every result message is tagged with the
+//! recording generation so a stale error or buffer from an earlier,
+//! cancelled recording can never affect a newer one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use cpal::SampleFormat;
@@ -15,7 +17,8 @@ pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MAX_RECORD_SECONDS: usize = 600;
 
 pub enum CaptureCmd {
-    Start,
+    /// Begin recording under the given generation.
+    Start(u64),
     /// Stop and deliver the captured audio as 16 kHz mono f32.
     Stop,
     /// Stop and discard.
@@ -24,25 +27,24 @@ pub enum CaptureCmd {
 
 pub struct CaptureHandle {
     cmd_tx: Sender<CaptureCmd>,
-    pcm_rx: Receiver<Result<Vec<f32>, String>>,
+    pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
 }
 
 impl CaptureHandle {
-    pub fn spawn() -> Self {
+    pub fn spawn() -> std::io::Result<Self> {
         let (cmd_tx, cmd_rx) = channel();
         let (pcm_tx, pcm_rx) = channel();
         thread::Builder::new()
             .name("speech-capture".into())
-            .spawn(move || capture_loop(&cmd_rx, &pcm_tx))
-            .expect("spawn speech capture thread");
-        Self { cmd_tx, pcm_rx }
+            .spawn(move || capture_loop(&cmd_rx, &pcm_tx))?;
+        Ok(Self { cmd_tx, pcm_rx })
     }
 
     pub fn send(&self, cmd: CaptureCmd) {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    pub fn try_recv_pcm(&self) -> Option<Result<Vec<f32>, String>> {
+    pub fn try_recv_pcm(&self) -> Option<(u64, Result<Vec<f32>, String>)> {
         self.pcm_rx.try_recv().ok()
     }
 }
@@ -50,28 +52,36 @@ impl CaptureHandle {
 struct ActiveRecording {
     // Keeps the input stream alive; dropped to stop capture.
     _stream: cpal::Stream,
+    generation: u64,
     samples: Arc<Mutex<Vec<f32>>>,
     sample_rate: u32,
     channels: usize,
     overflowed: Arc<AtomicBool>,
 }
 
-fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<Result<Vec<f32>, String>>) {
+/// Recover a poisoned buffer lock instead of panicking: the protected data
+/// is plain PCM samples, valid regardless of where another thread panicked.
+fn lock_samples(samples: &Mutex<Vec<f32>>) -> MutexGuard<'_, Vec<f32>> {
+    samples.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<(u64, Result<Vec<f32>, String>)>) {
     let mut active: Option<ActiveRecording> = None;
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            CaptureCmd::Start => {
+            CaptureCmd::Start(generation) => {
                 if active.is_none() {
-                    match start_recording() {
+                    match start_recording(generation, pcm_tx.clone()) {
                         Ok(recording) => active = Some(recording),
                         Err(error) => {
-                            let _ = pcm_tx.send(Err(error));
+                            let _ = pcm_tx.send((generation, Err(error)));
                         }
                     }
                 }
             }
             CaptureCmd::Stop => {
                 if let Some(recording) = active.take() {
+                    let generation = recording.generation;
                     let samples = Arc::clone(&recording.samples);
                     let sample_rate = recording.sample_rate;
                     let channels = recording.channels;
@@ -79,11 +89,11 @@ fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<Result<Vec<f32>, 
                     // Dropping the recording tears down the stream before the
                     // buffer is drained, so no samples race the drain.
                     drop(recording);
-                    let raw = std::mem::take(&mut *samples.lock().expect("capture buffer lock"));
+                    let raw = std::mem::take(&mut *lock_samples(&samples));
                     if overflowed {
                         tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; truncated");
                     }
-                    let _ = pcm_tx.send(Ok(to_mono_16k(&raw, sample_rate, channels)));
+                    let _ = pcm_tx.send((generation, Ok(to_mono_16k(&raw, sample_rate, channels))));
                 }
             }
             CaptureCmd::Cancel => {
@@ -93,17 +103,22 @@ fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<Result<Vec<f32>, 
     }
 }
 
-fn start_recording() -> Result<ActiveRecording, String> {
+fn start_recording(
+    generation: u64,
+    pcm_tx: Sender<(u64, Result<Vec<f32>, String>)>,
+) -> Result<ActiveRecording, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
         .ok_or_else(|| "no microphone found (no default input device)".to_string())?;
-    let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
+    let device_name = device
+        .description()
+        .map_or_else(|_| "unknown".to_string(), |description| description.name().to_string());
     let supported = device
         .default_input_config()
         .map_err(|error| format!("microphone `{device_name}`: {error}"))?;
 
-    let sample_rate = supported.sample_rate().0;
+    let sample_rate = supported.sample_rate();
     let channels = usize::from(supported.channels());
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
@@ -112,13 +127,20 @@ fn start_recording() -> Result<ActiveRecording, String> {
     let overflowed = Arc::new(AtomicBool::new(false));
     let max_samples = MAX_RECORD_SECONDS * sample_rate as usize * channels;
 
-    let error_cb = |error: cpal::StreamError| tracing::warn!(%error, "speech capture stream error");
+    // Runtime stream failures (e.g. the microphone being unplugged) must
+    // reach the engine over the channel, not just the log, or the UI would
+    // stay in Recording until manually cancelled.
+    let error_device = device_name.clone();
+    let error_cb = move |error: cpal::Error| {
+        tracing::warn!(%error, "speech capture stream error");
+        let _ = pcm_tx.send((generation, Err(format!("microphone `{error_device}`: {error}"))));
+    };
     let stream = match sample_format {
         SampleFormat::F32 => {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     push_samples(&sink, &full, max_samples, data.iter().copied());
                 },
@@ -130,7 +152,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     push_samples(
                         &sink,
@@ -147,7 +169,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     push_samples(
                         &sink,
@@ -175,6 +197,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
 
     Ok(ActiveRecording {
         _stream: stream,
+        generation,
         samples,
         sample_rate,
         channels,
@@ -301,8 +324,8 @@ mod tests {
             eprintln!("skipped: HORIZON_SPEECH_TEST_NO_MIC not set");
             return;
         }
-        let handle = CaptureHandle::spawn();
-        handle.send(CaptureCmd::Start);
+        let handle = CaptureHandle::spawn().expect("spawn capture thread");
+        handle.send(CaptureCmd::Start(7));
         let mut received = None;
         for _ in 0..200 {
             if let Some(pcm) = handle.try_recv_pcm() {
@@ -312,11 +335,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         match received {
-            Some(Err(message)) => {
+            Some((generation, Err(message))) => {
+                assert_eq!(generation, 7, "error must carry the requesting generation");
                 eprintln!("capture-start error surfaced without panic: {message}");
                 assert!(!message.trim().is_empty(), "error message should not be empty");
             }
-            Some(Ok(_)) => panic!("expected an error with no usable input device, got audio"),
+            Some((_, Ok(_))) => panic!("expected an error with no usable input device, got audio"),
             None => panic!("capture worker sent no result within the timeout"),
         }
     }

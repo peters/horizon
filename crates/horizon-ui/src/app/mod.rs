@@ -165,6 +165,11 @@ pub struct HorizonApp {
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     speech: Option<speech::SpeechSystem>,
+    /// Push-to-talk chord is currently held (used to keep its key events,
+    /// repeats, and release out of the terminal input stream).
+    speech_hotkey_held: bool,
+    /// Escape was consumed to cancel a recording this frame.
+    speech_escape_cancelled: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -339,6 +344,8 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
+            speech_hotkey_held: false,
+            speech_escape_cancelled: false,
             shortcuts,
             presets: config.resolved_presets(),
             window_config: config.window.clone(),

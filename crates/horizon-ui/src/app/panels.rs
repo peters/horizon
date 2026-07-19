@@ -88,8 +88,10 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
+        // 26 px from the close button's center: both 16 px rects expand by
+        // 4 px for hit-testing, so the hit targets stay disjoint.
         let mic = Rect::from_center_size(
-            Pos2::new(panel_rect.max.x - 40.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
+            Pos2::new(panel_rect.max.x - 44.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
         let resize = Rect::from_min_size(
@@ -409,12 +411,20 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
-                let mic_response = self.speech.is_some().then(|| {
+                // Dictation needs a PTY to type into: Editor/GitChanges/Usage
+                // panels have no terminal, so they get no mic control.
+                let mic_eligible = self.speech.is_some()
+                    && !matches!(
+                        snapshot.kind,
+                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
+                    );
+                let mic_response = mic_eligible.then(|| {
                     ui.interact(
                         rects.mic.expand2(Vec2::splat(4.0)),
                         ui.make_persistent_id(("panel_mic", panel_id.0)),
                         if interactive { Sense::click() } else { Sense::hover() },
                     )
+                    .on_hover_text("Dictate into this panel (click to start/stop; hold the push-to-talk key)")
                 });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),

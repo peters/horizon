@@ -73,8 +73,10 @@ cd -
 Agent-run (headless only):
 
 - **B1 — CUDA build**: `cargo build --release --features speech-cuda`.
-- **B2 — pipeline on GPU**: A5's command (CUDA build) — expect
-  `backend: CUDA0`-style output and a sane transcript.
+- **B2 — pipeline on GPU**: A5's command but with
+  `--release --features speech-cuda` (running it verbatim would rebuild
+  and test the CPU feature set) — expect `backend: CUDA0`-style output
+  and a sane transcript.
 
 User-driven (agents must not run GUI smoke on the Linux desktop):
 

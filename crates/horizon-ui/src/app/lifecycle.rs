@@ -130,9 +130,11 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.sync_panel_focus_from_pointer_press(ctx);
+        // Speech runs before the fullscreen handler so that Escape cancels an
+        // active recording instead of also exiting panel fullscreen.
+        self.handle_speech_input(ctx);
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
-        self.handle_speech_input(ctx);
         self.handle_root_file_drop(ctx);
         let panel_output = self.board.process_output();
         if panel_output.cwd_changed {
@@ -155,7 +157,17 @@ impl HorizonApp {
 
     /// Push-to-talk hotkey handling plus draining speech results into the
     /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
+    ///
+    /// The hotkey listens on the root viewport only; panels in detached
+    /// windows still dictate via their mic button.
     fn handle_speech_input(&mut self, ctx: &Context) {
+        self.speech_escape_cancelled = false;
+        // The hotkey targets the focused panel, but only terminal-backed
+        // panels can receive typed text.
+        let focused_terminal = self
+            .board
+            .focused
+            .filter(|id| self.board.panel(*id).is_some_and(|panel| panel.terminal().is_some()));
         let Some(speech) = self.speech.as_mut() else {
             return;
         };
@@ -163,11 +175,13 @@ impl HorizonApp {
         if let Some(binding) = speech.hotkey_binding() {
             let (pressed, released) =
                 ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
+            // `speech_hotkey_held` is owned by the terminal event filter
+            // (`swallow_speech_hotkey_event`), which runs later in the frame.
             match speech.hotkey_mode() {
                 horizon_core::SpeechHotkeyMode::Hold => {
                     if pressed
                         && speech.recording_target().is_none()
-                        && let Some(focused) = self.board.focused
+                        && let Some(focused) = focused_terminal
                     {
                         speech.start(focused);
                     }
@@ -180,7 +194,7 @@ impl HorizonApp {
                     if pressed {
                         if speech.recording_target().is_some() {
                             speech.stop();
-                        } else if let Some(focused) = self.board.focused {
+                        } else if let Some(focused) = focused_terminal {
                             speech.start(focused);
                         }
                     }
@@ -190,11 +204,15 @@ impl HorizonApp {
 
         if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             speech.cancel();
+            // Consume the Escape: fullscreen exit and the terminal must not
+            // also react to a keypress that meant "cancel dictation".
+            self.speech_escape_cancelled = true;
         }
         if speech.is_active() {
             // Keep frames coming so the pulse animates and poll() runs
-            // promptly even when the terminal is otherwise idle.
-            ctx.request_repaint();
+            // promptly even when the terminal is otherwise idle, but bounded
+            // so a long transcription doesn't spin the render loop.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         let events = speech.poll();

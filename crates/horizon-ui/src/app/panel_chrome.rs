@@ -251,6 +251,19 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     reason = "pulse alpha math stays within [0, 255]"
 )]
 fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
+    // Cradle polyline offsets (radius 4.5, 22.5° steps) — precomputed so the
+    // hot chrome path allocates nothing per frame.
+    const CRADLE_OFFSETS: [Vec2; 9] = [
+        Vec2::new(4.5, 0.0),
+        Vec2::new(4.157, 1.722),
+        Vec2::new(3.182, 3.182),
+        Vec2::new(1.722, 4.157),
+        Vec2::new(0.0, 4.5),
+        Vec2::new(-1.722, 4.157),
+        Vec2::new(-3.182, 3.182),
+        Vec2::new(-4.157, 1.722),
+        Vec2::new(-4.5, 0.0),
+    ];
     let center = mic.rect.center();
     let time = ui.input(|input| input.time);
     let pulse = (0.5 + 0.5 * (time * 5.0).sin() as f32).clamp(0.0, 1.0);
@@ -281,16 +294,12 @@ fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
         CornerRadius::same(3),
         color,
     );
-    // Cradle: sampled semicircle under the body.
+    // Cradle: semicircle under the body.
     let cradle_center = center + Vec2::new(0.0, 0.5);
-    let cradle_radius = 4.5;
-    let points: Vec<Pos2> = (0..=8)
-        .map(|step| {
-            let angle = std::f32::consts::PI * usize_to_f32(step) / 8.0;
-            cradle_center + Vec2::new(cradle_radius * angle.cos(), cradle_radius * angle.sin())
-        })
-        .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(1.3_f32, color)));
+    let cradle_stroke = Stroke::new(1.3_f32, color);
+    for pair in CRADLE_OFFSETS.windows(2) {
+        painter.line_segment([cradle_center + pair[0], cradle_center + pair[1]], cradle_stroke);
+    }
     // Stem.
     painter.line_segment(
         [center + Vec2::new(0.0, 5.0), center + Vec2::new(0.0, 7.0)],

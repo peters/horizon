@@ -122,6 +122,8 @@ ${VERSION_FIELDS}  <key>CFBundleExecutable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Horizon uses the microphone for push-to-talk speech input into terminal panels.</string>
 </dict>
 </plist>
 PLIST

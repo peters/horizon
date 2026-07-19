@@ -24,15 +24,14 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub fn spawn(config: &SpeechConfig) -> Self {
+    pub fn spawn(config: &SpeechConfig) -> std::io::Result<Self> {
         let (job_tx, job_rx) = channel();
         let (event_tx, event_rx) = channel();
         let settings = Settings::from_config(config);
         thread::Builder::new()
             .name("speech-transcribe".into())
-            .spawn(move || worker_loop(&settings, &job_rx, &event_tx))
-            .expect("spawn speech transcribe thread");
-        Self { job_tx, event_rx }
+            .spawn(move || worker_loop(&settings, &job_rx, &event_tx))?;
+        Ok(Self { job_tx, event_rx })
     }
 
     pub fn submit(&self, job: Job) {
@@ -79,7 +78,10 @@ fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<Wo
     let mut session: Option<Session> = None;
     while let Ok(job) = job_rx.recv() {
         let target = job.target;
-        let result = ensure_session(settings, &mut session).and_then(|session| {
+        let result = ensure_session(settings, &mut session).and_then(|()| {
+            let Some(session) = session.as_mut() else {
+                return Err("transcription session unavailable".to_string());
+            };
             let options = RunOptions {
                 task: settings.task,
                 language: settings.language.clone(),
@@ -93,7 +95,7 @@ fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<Wo
         let event = match result {
             Ok(text) => WorkerEvent::Done {
                 target,
-                text: text.trim().to_string(),
+                text: sanitize_transcript(&text),
             },
             Err(message) => {
                 tracing::warn!(%message, "speech transcription error");
@@ -104,28 +106,38 @@ fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<Wo
     }
 }
 
-fn ensure_session<'a>(settings: &Settings, session: &'a mut Option<Session>) -> Result<&'a mut Session, String> {
-    if session.is_none() {
-        if settings.model_path.trim().is_empty() {
-            return Err("no speech model configured (features.speech.model)".to_string());
-        }
-        let options = ModelOptions {
-            backend: settings.backend,
-            ..ModelOptions::default()
-        };
-        let model = Model::load_with(&settings.model_path, &options)
-            .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
-        tracing::info!(
-            model = %settings.model_path,
-            backend = %model.backend(),
-            "speech model loaded"
-        );
-        let new_session = model
-            .session()
-            .map_err(|error| format!("failed to create transcription session: {error}"))?;
-        *session = Some(new_session);
+/// Collapse all internal whitespace (including newlines) to single spaces.
+/// Dictated text must never carry `\n`/`\r`: on terminals without bracketed
+/// paste those bytes become Enter and would execute a partial command.
+fn sanitize_transcript(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Lazily create the model-backed session on first use; leaves `session`
+/// populated on success so later jobs reuse it.
+fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<(), String> {
+    if session.is_some() {
+        return Ok(());
     }
-    Ok(session.as_mut().expect("session initialized above"))
+    if settings.model_path.trim().is_empty() {
+        return Err("no speech model configured (features.speech.model)".to_string());
+    }
+    let options = ModelOptions {
+        backend: settings.backend,
+        ..ModelOptions::default()
+    };
+    let model = Model::load_with(&settings.model_path, &options)
+        .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
+    tracing::info!(
+        model = %settings.model_path,
+        backend = %model.backend(),
+        "speech model loaded"
+    );
+    let new_session = model
+        .session()
+        .map_err(|error| format!("failed to create transcription session: {error}"))?;
+    *session = Some(new_session);
+    Ok(())
 }
 
 #[cfg(test)]
