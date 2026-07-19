@@ -10,8 +10,11 @@ Machine lanes:
 - **Lane A — macOS arm64 (Metal)**: steps A1–A9. Fully automatable except
   A9 (live mic; a Mac Studio has no built-in microphone — A8 covers the
   no-device error path instead, which is equally load-bearing).
-- **Lane B — Linux x86_64 + NVIDIA (CUDA)**: steps B1–B5, run by the
-  originating agent after Lane A reports `SMOKE-TEST: DONE`.
+- **Lane B — Linux x86_64 + NVIDIA (CUDA)**: headless build/link/pipeline
+  verification only (B1–B2), run by the originating agent after Lane A
+  reports `SMOKE-TEST: DONE`. Agent-driven GUI smoke testing happens ONLY
+  on macOS — agents must not launch Horizon instances on the Linux
+  desktop; the remaining desktop checks (B3–B5) are user-driven.
 
 ## Shared setup (both lanes)
 
@@ -67,10 +70,15 @@ cd -
 
 ## Lane B — Linux + NVIDIA (CUDA)
 
+Agent-run (headless only):
+
 - **B1 — CUDA build**: `cargo build --release --features speech-cuda`.
 - **B2 — pipeline on GPU**: A5's command (CUDA build) — expect
   `backend: CUDA0`-style output and a sane transcript.
-- **B3 — launch + mic button**: as A6 on the Linux desktop.
+
+User-driven (agents must not run GUI smoke on the Linux desktop):
+
+- **B3 — launch + mic button**: as A6, verified by the user.
 - **B4 — live dictation (RØDE mic present)**: as A9, in Norwegian with the
   NB-Whisper model, `language: "no"`; verify dialect speech lands as
   bokmål text in the focused panel. Also verify `task: translate` +
