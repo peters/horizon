@@ -250,7 +250,7 @@ fn usize_to_f32(value: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{TARGET_SAMPLE_RATE, to_mono_16k};
+    use super::{CaptureCmd, CaptureHandle, TARGET_SAMPLE_RATE, to_mono_16k};
 
     #[test]
     fn stereo_48k_downmixes_and_decimates() {
@@ -278,5 +278,44 @@ mod tests {
     fn native_rate_passes_through() {
         let samples = vec![0.1_f32; 1600];
         assert_eq!(to_mono_16k(&samples, 16_000, 1), samples);
+    }
+
+    /// A8 smoke check: on a machine with no input device, starting capture
+    /// must surface the "no microphone found" error over the channel without
+    /// panicking (the mic returns to idle). Gated on an env var so
+    /// `cargo test --features speech` stays green on machines that have a
+    /// microphone:
+    ///
+    /// ```sh
+    /// HORIZON_SPEECH_TEST_NO_MIC=1 \
+    ///   cargo test --features speech no_microphone -- --nocapture
+    /// ```
+    #[test]
+    fn no_microphone_start_reports_error_without_panicking() {
+        if std::env::var_os("HORIZON_SPEECH_TEST_NO_MIC").is_none() {
+            eprintln!("skipped: HORIZON_SPEECH_TEST_NO_MIC not set");
+            return;
+        }
+        let handle = CaptureHandle::spawn();
+        handle.send(CaptureCmd::Start);
+        let mut received = None;
+        for _ in 0..200 {
+            if let Some(pcm) = handle.try_recv_pcm() {
+                received = Some(pcm);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        match received {
+            Some(Err(message)) => {
+                eprintln!("no-mic error surfaced: {message}");
+                assert!(
+                    message.contains("no microphone"),
+                    "expected a no-microphone error, got: {message}"
+                );
+            }
+            Some(Ok(_)) => panic!("expected an error with no input device present, got audio"),
+            None => panic!("capture worker sent no result within the timeout"),
+        }
     }
 }
