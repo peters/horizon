@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::attention::AttentionSeverity;
 use crate::config::{WindowConfig, WorkspaceConfig};
 use crate::layout::{TILE_GAP, WS_COLLISION_GAP, WS_INNER_PAD};
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelKind, PanelOptions, PanelResume};
@@ -56,6 +57,34 @@ fn assign_panel_moves_it_to_target_workspace() {
     let panel = board.panel(panel_id).expect("panel");
     assert_eq!(panel.workspace_id, target_workspace);
     assert!(panel.layout.position[0] >= target_position[0]);
+}
+
+#[test]
+fn assign_panel_moves_its_attention_to_target_workspace() {
+    let mut board = Board::new();
+    let source_workspace = board.create_workspace("source");
+    let target_workspace = board.create_workspace("target");
+    let panel_id = board
+        .create_panel(editor_panel_options(), source_workspace)
+        .expect("panel should spawn");
+    let attention_id = board.create_attention(
+        source_workspace,
+        Some(panel_id),
+        "system",
+        "Review panel",
+        AttentionSeverity::High,
+    );
+
+    board.assign_panel_to_workspace(panel_id, target_workspace);
+    board.remove_empty_workspaces();
+
+    let attention = board
+        .attention
+        .iter()
+        .find(|item| item.id == attention_id)
+        .expect("moved panel attention");
+    assert_eq!(attention.workspace_id, target_workspace);
+    assert!(board.workspace(target_workspace).is_some());
 }
 
 #[test]

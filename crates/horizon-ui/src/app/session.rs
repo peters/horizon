@@ -168,7 +168,8 @@ impl HorizonApp {
                 },
             )
         };
-        self.board.attention_enabled = self.template_config.features.attention_feed;
+        self.board
+            .set_attention_enabled(self.template_config.features.attention_feed);
     }
 
     pub(super) fn runtime_state_needs_session_bootstrap(runtime_state: &horizon_core::RuntimeState) -> bool {
@@ -225,7 +226,8 @@ impl HorizonApp {
                     tracing::error!("failed to restore runtime state: {error}");
                     Board::new()
                 });
-                self.board.attention_enabled = self.template_config.features.attention_feed;
+                self.board
+                    .set_attention_enabled(self.template_config.features.attention_feed);
                 true
             }
             Err(TryRecvError::Empty) => {

@@ -1,6 +1,8 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::{PanelId, WorkspaceId};
+
+pub const RESOLVED_ATTENTION_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AttentionId(pub u64);
@@ -67,7 +69,12 @@ impl AttentionItem {
 
     #[must_use]
     pub fn is_agent_ready_for_input(&self) -> bool {
-        self.source == "agent" && self.summary == "Ready for input"
+        self.is_agent_heuristic() && self.summary == "Ready for input"
+    }
+
+    #[must_use]
+    pub fn is_agent_heuristic(&self) -> bool {
+        self.source == "agent"
     }
 
     pub fn resolve(&mut self) {

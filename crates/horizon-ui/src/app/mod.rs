@@ -257,7 +257,7 @@ impl HorizonApp {
             super::command_registry::action_commands(&shortcuts, self::util::primary_shortcut_label());
         cc.egui_ctx.set_fonts(configure_fonts());
         let mut board = Board::new();
-        board.attention_enabled = config.features.attention_feed;
+        board.set_attention_enabled(config.features.attention_feed);
         let resolved_theme = theme::resolve_theme(config.appearance.theme, cc.egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 

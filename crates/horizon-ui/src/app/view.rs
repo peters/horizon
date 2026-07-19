@@ -247,7 +247,7 @@ impl HorizonApp {
         })
     }
 
-    fn panel_focus_frame(&self, panel_id: PanelId) -> Option<(Pos2, Vec2)> {
+    pub(super) fn panel_focus_frame(&self, panel_id: PanelId) -> Option<(Pos2, Vec2)> {
         self.board
             .panel(panel_id)
             .map(|panel| panel_focus_frame(panel.layout.position, panel.layout.size))
@@ -273,7 +273,13 @@ fn fit_zoom_for_frame(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 
     horizon_core::clamp_canvas_zoom((available_size.x / frame_size.x).min(available_size.y / frame_size.y))
 }
 
-fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
+pub(super) fn aligned_pan_offset(
+    canvas_rect: Rect,
+    canvas_pos: Pos2,
+    canvas_size: Vec2,
+    zoom: f32,
+    left_align: bool,
+) -> Vec2 {
     let pan_margin = 40.0;
     let x = if left_align {
         pan_margin - canvas_pos.x * zoom

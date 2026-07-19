@@ -17,7 +17,7 @@ pub(super) use super::panel_chrome::{
     PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
-use super::util::clamp_panel_size;
+use super::util::{OverlayExclusion, clamp_panel_size};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
 #[derive(Clone, Copy)]
@@ -108,6 +108,7 @@ struct PanelBodyContext<'a> {
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
     reconnect_requested: &'a mut bool,
+    terminal_pointer_input_allowed: bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
 }
@@ -131,6 +132,7 @@ fn show_panel_body_contents(
             ui,
             is_focused,
             interactive,
+            body_context.terminal_pointer_input_allowed,
             body_context.terminal_selection_drag,
             TerminalKeyboardContext {
                 keyboard_events: body_context.keyboard_events,
@@ -150,6 +152,20 @@ fn clip_screen_rect_to_canvas(raw_rect: Rect, canvas_rect: Rect) -> Option<Rect>
         && clipped.max.x.is_finite()
         && clipped.max.y.is_finite())
     .then_some(clipped)
+}
+
+fn allows_terminal_pointer_input(
+    pointer_position: Option<Pos2>,
+    events: &[egui::Event],
+    overlay_exclusion: &OverlayExclusion,
+) -> bool {
+    pointer_position.is_none_or(|position| !overlay_exclusion.contains(position))
+        && events.iter().all(|event| match event {
+            egui::Event::PointerButton { pos, .. } | egui::Event::PointerMoved(pos) => {
+                !overlay_exclusion.contains(*pos)
+            }
+            _ => true,
+        })
 }
 
 impl HorizonApp {
@@ -244,6 +260,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    terminal_pointer_input_allowed: true,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                 },
@@ -292,11 +309,22 @@ impl HorizonApp {
             .sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
         let canvas_rect = self.canvas_rect(ctx);
+        let overlay_exclusion = self.overlay_exclusion_zones(ctx);
+        let terminal_pointer_input_allowed = ctx.input(|input| {
+            allows_terminal_pointer_input(input.pointer.interact_pos(), &input.events, &overlay_exclusion)
+        });
         let mut panels_to_close = Vec::new();
 
         for i in 0..self.panel_render_order.len() {
             let (panel_id, fallback_index) = self.panel_render_order[i];
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspace_collision_ids,
+                terminal_pointer_input_allowed,
+            ) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -312,11 +340,12 @@ impl HorizonApp {
         panel_id: PanelId,
         _fallback_index: usize,
         workspace_collision_ids: &[WorkspaceId],
+        terminal_pointer_input_allowed: bool,
     ) -> bool {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, terminal_pointer_input_allowed);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
@@ -367,6 +396,7 @@ impl HorizonApp {
         canvas_rect: Rect,
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
+        terminal_pointer_input_allowed: bool,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
@@ -464,7 +494,15 @@ impl HorizonApp {
                 if snapshot.is_renaming {
                     outcome.rename_action = show_inline_rename_editor(
                         ui,
-                        panel_title_content_rect(rects.titlebar, rects.close, snapshot.workspace_accent.is_some()),
+                        panel_title_content_rect(
+                            ui.painter(),
+                            rects.titlebar,
+                            rects.close,
+                            snapshot.workspace_accent.is_some(),
+                            snapshot.scrollback_limit,
+                            snapshot.attention_badge.as_ref(),
+                            snapshot.ssh_status,
+                        ),
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
                     );
@@ -503,6 +541,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     reconnect_requested: &mut reconnect_requested,
+                                    terminal_pointer_input_allowed,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                 },
@@ -709,8 +748,9 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
-    use super::clip_screen_rect_to_canvas;
-    use egui::{Pos2, Rect, Vec2};
+    use super::{allows_terminal_pointer_input, clip_screen_rect_to_canvas};
+    use crate::app::util::OverlayExclusion;
+    use egui::{Event, Pos2, Rect, Vec2};
 
     #[test]
     fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {
@@ -729,5 +769,22 @@ mod tests {
         let raw_rect = Rect::from_min_size(Pos2::new(430.0, 90.0), Vec2::new(80.0, 80.0));
 
         assert_eq!(clip_screen_rect_to_canvas(raw_rect, canvas_rect), None);
+    }
+
+    #[test]
+    fn terminal_pointer_input_is_blocked_by_overlay_pointer_events() {
+        let overlay_rect = Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(420.0, 320.0));
+        let exclusion = OverlayExclusion::new(vec![overlay_rect]);
+
+        assert!(!allows_terminal_pointer_input(
+            None,
+            &[Event::PointerMoved(overlay_rect.center())],
+            &exclusion,
+        ));
+        assert!(allows_terminal_pointer_input(
+            Some(Pos2::new(40.0, 40.0)),
+            &[],
+            &exclusion,
+        ));
     }
 }

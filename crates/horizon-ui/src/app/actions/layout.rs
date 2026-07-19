@@ -60,6 +60,17 @@ impl HorizonApp {
 
     pub(in crate::app) fn fixed_overlays_visible(&self) -> bool {
         self.settings.is_none()
+            && self.startup_chooser.is_none()
+            && self.command_palette.is_none()
+            && self.remote_hosts_overlay.is_none()
+            && self.session_manager.is_none()
+            && self.dir_picker.is_none()
+            && self.pending_preset_pick.is_none()
+            && self.ssh_upload_flow.is_none()
+            && !self
+                .search_overlay
+                .as_ref()
+                .is_some_and(crate::search_overlay::SearchOverlay::dropdown_visible)
     }
 
     fn settings_panel_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
@@ -83,6 +94,7 @@ impl HorizonApp {
     /// elements (e.g. workspace labels) so they stay clear.
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
         let viewport = viewport_local_rect(ctx);
+        let canvas_rect = self.canvas_rect(ctx);
         let mut zones = Vec::new();
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
@@ -104,27 +116,31 @@ impl HorizonApp {
             zones.push(rect);
         }
 
-        let minimap_height =
-            if self.fixed_overlays_visible() && self.minimap_visible && !self.board.workspaces.is_empty() {
-                let overlays = &self.template_config.overlays;
-                let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
-                let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
-                zones.push(Rect::from_min_size(
-                    Pos2::new(
-                        viewport.max.x - MINIMAP_MARGIN - width,
-                        viewport.max.y - MINIMAP_MARGIN - height,
-                    ),
-                    Vec2::new(width, height),
-                ));
-                height
-            } else {
-                0.0
-            };
+        let has_attached_workspace = self
+            .board
+            .workspaces
+            .iter()
+            .any(|workspace| !self.workspace_is_detached(workspace.id));
+        let minimap_height = if self.fixed_overlays_visible() && self.minimap_visible && has_attached_workspace {
+            let overlays = &self.template_config.overlays;
+            let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
+            let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
+            zones.push(Rect::from_min_size(
+                Pos2::new(
+                    viewport.max.x - MINIMAP_MARGIN - width,
+                    viewport.max.y - MINIMAP_MARGIN - height,
+                ),
+                Vec2::new(width, height),
+            ));
+            height
+        } else {
+            0.0
+        };
 
         if self.fixed_overlays_visible()
             && self.template_config.features.attention_feed
             && let Some(rect) =
-                estimated_outer_rect(viewport, minimap_height, &self.template_config.overlays, &self.board)
+                estimated_outer_rect(canvas_rect, minimap_height, &self.template_config.overlays, &self.board)
         {
             zones.push(rect);
         }
@@ -146,6 +162,9 @@ impl HorizonApp {
         }) else {
             return;
         };
+        if self.overlay_exclusion_zones(ctx).contains(pointer_pos) {
+            return;
+        }
 
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(self.canvas_rect(ctx), None);
         let panel_order: Vec<_> = panel_geometry.iter().map(|(panel_id, _)| *panel_id).collect();

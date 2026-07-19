@@ -1,6 +1,7 @@
 mod spawn;
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -172,6 +173,7 @@ pub struct Panel {
     /// Set by `process_output` each frame; read by attention detection to skip
     /// the expensive `last_lines_text` scan for panels without new content.
     pub(crate) had_recent_output: bool,
+    attention_initial_scan_pending: bool,
     last_output_at_millis: Option<i64>,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
@@ -189,6 +191,32 @@ pub struct Panel {
 pub struct PanelProcessOutput {
     pub had_output: bool,
     pub cwd_changed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentAttentionSignal {
+    pub(crate) summary: &'static str,
+    pub(crate) fingerprint: String,
+}
+
+impl AgentAttentionSignal {
+    fn prompt(summary: &'static str, prompt: &str) -> Self {
+        Self {
+            summary,
+            fingerprint: format!("{summary}\0{prompt}"),
+        }
+    }
+
+    fn stable(summary: &'static str) -> Self {
+        Self {
+            summary,
+            fingerprint: summary.to_string(),
+        }
+    }
+
+    pub(crate) fn is_ready_for_input(&self) -> bool {
+        self.summary == "Ready for input"
+    }
 }
 
 impl Panel {
@@ -211,6 +239,14 @@ impl Panel {
     #[must_use]
     pub const fn had_recent_output(&self) -> bool {
         self.had_recent_output
+    }
+
+    pub(crate) fn take_initial_attention_scan_pending(&mut self) -> bool {
+        std::mem::take(&mut self.attention_initial_scan_pending)
+    }
+
+    pub(crate) fn mark_initial_attention_scan_pending(&mut self) {
+        self.attention_initial_scan_pending = true;
     }
 
     #[must_use]
@@ -351,8 +387,10 @@ impl Panel {
         self.content.terminal_mut().is_some_and(Terminal::take_bell)
     }
 
-    pub fn take_notification(&mut self) -> Option<AgentNotification> {
-        self.content.terminal_mut()?.take_notification()
+    pub fn take_notifications(&mut self) -> VecDeque<AgentNotification> {
+        self.content
+            .terminal_mut()
+            .map_or_else(VecDeque::new, Terminal::take_notifications)
     }
 
     #[must_use]
@@ -497,6 +535,7 @@ impl Panel {
         })?);
 
         self.launched_at_millis = current_unix_millis();
+        self.attention_initial_scan_pending = self.kind.is_agent();
         self.ssh_status = if self.kind == PanelKind::Ssh {
             Some(SshConnectionStatus::Connecting)
         } else {
@@ -541,44 +580,18 @@ impl Panel {
     }
 
     /// Check if this panel's terminal output suggests it needs user attention.
-    ///
-    /// Suppressed for the first 10 seconds after launch to avoid false positives
-    /// from initial prompt rendering on startup/restore.
     #[must_use]
     pub fn detect_attention(&self) -> Option<&'static str> {
+        self.detect_attention_signal().map(|signal| signal.summary)
+    }
+
+    pub(crate) fn detect_attention_signal(&self) -> Option<AgentAttentionSignal> {
         if !self.kind.is_agent() {
-            return None;
-        }
-        let age_ms = current_unix_millis().saturating_sub(self.launched_at_millis);
-        if age_ms < 10_000 {
             return None;
         }
         let terminal = self.content.terminal()?;
         let text = terminal.last_lines_text(3);
-        if text.is_empty() {
-            return None;
-        }
-        for line in text.lines().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("Allow")
-                || trimmed.starts_with("Do you want")
-                || trimmed.ends_with("[y/N]")
-                || trimmed.ends_with("[Y/n]")
-                || trimmed.ends_with("(y/n)")
-            {
-                return Some("Waiting for approval");
-            }
-            if trimmed.ends_with('?') && trimmed.len() > 2 {
-                return Some("Waiting for input");
-            }
-            if trimmed.starts_with('>') || trimmed.starts_with("❯") {
-                return Some("Ready for input");
-            }
-        }
-        None
+        detect_attention_signal_in_text(&text)
     }
 
     fn should_track_live_cwd(&self) -> bool {
@@ -602,6 +615,30 @@ impl Panel {
     }
 }
 
+fn detect_attention_signal_in_text(text: &str) -> Option<AgentAttentionSignal> {
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("Allow")
+            || trimmed.starts_with("Do you want")
+            || trimmed.ends_with("[y/N]")
+            || trimmed.ends_with("[Y/n]")
+            || trimmed.ends_with("(y/n)")
+        {
+            return Some(AgentAttentionSignal::prompt("Waiting for approval", trimmed));
+        }
+        if trimmed.ends_with('?') && trimmed.len() > 2 {
+            return Some(AgentAttentionSignal::prompt("Waiting for input", trimmed));
+        }
+        if trimmed.starts_with('>') || trimmed.starts_with("❯") {
+            return Some(AgentAttentionSignal::stable("Ready for input"));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -609,7 +646,8 @@ mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel,
         PanelContent, PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId,
-        kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        detect_attention_signal_in_text, kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command,
+        scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
 
@@ -629,6 +667,7 @@ mod tests {
             launched_at_millis: 0,
             has_custom_name,
             had_recent_output: false,
+            attention_initial_scan_pending: false,
             last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),
@@ -643,6 +682,24 @@ mod tests {
         let panel = test_panel("Terminal 1", "Build running", false);
 
         assert_eq!(panel.display_title(), "Build running");
+    }
+
+    #[test]
+    fn distinct_question_prompts_have_distinct_attention_fingerprints() {
+        let first = detect_attention_signal_in_text("First question?").expect("first signal");
+        let second = detect_attention_signal_in_text("Second question?").expect("second signal");
+
+        assert_eq!(first.summary, "Waiting for input");
+        assert_eq!(second.summary, "Waiting for input");
+        assert_ne!(first.fingerprint, second.fingerprint);
+    }
+
+    #[test]
+    fn ready_prompt_attention_fingerprint_is_stable() {
+        let empty = detect_attention_signal_in_text("> ").expect("empty prompt");
+        let typed = detect_attention_signal_in_text("> draft").expect("typed prompt");
+
+        assert_eq!(empty.fingerprint, typed.fingerprint);
     }
 
     #[test]

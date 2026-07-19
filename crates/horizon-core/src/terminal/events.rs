@@ -1,4 +1,4 @@
-use super::{AgentNotification, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, term};
+use super::{AgentNotification, ColorLookup, Event, HorizonOscTitle, Rgb, TermMode, Terminal, VecDeque, term};
 
 impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
@@ -18,8 +18,8 @@ impl Terminal {
         std::mem::take(&mut self.bell_pending)
     }
 
-    pub fn take_notification(&mut self) -> Option<AgentNotification> {
-        self.pending_notification.take()
+    pub fn take_notifications(&mut self) -> VecDeque<AgentNotification> {
+        std::mem::take(&mut self.pending_notifications)
     }
 
     pub(super) fn parse_horizon_title(title: &str) -> Option<HorizonOscTitle> {
@@ -80,7 +80,7 @@ impl Terminal {
         match event {
             Event::Title(title) => match Self::parse_horizon_title(&title) {
                 Some(HorizonOscTitle::Notification(notification)) => {
-                    self.pending_notification = Some(notification);
+                    self.pending_notifications.push_back(notification);
                 }
                 Some(HorizonOscTitle::SetTitle(next_title)) => {
                     self.title = next_title;

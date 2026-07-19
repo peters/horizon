@@ -11,6 +11,7 @@ use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 use crate::{branding, theme};
 
 use super::util::{chrome_button, primary_shortcut_label, viewport_local_rect};
+use super::view::aligned_pan_offset;
 use super::{DetachedWorkspaceViewportState, HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 use shortcut_actions::detached_shortcut_actions;
 
@@ -77,6 +78,34 @@ impl HorizonApp {
         }
 
         ctx.send_viewport_cmd_to(detached_viewport_id(&workspace.local_id), ViewportCommand::Focus);
+        true
+    }
+
+    pub(super) fn focus_panel_window(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        panel_id: horizon_core::PanelId,
+    ) -> bool {
+        let Some(workspace_local_id) = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| workspace.local_id.clone())
+        else {
+            return false;
+        };
+        let Some((panel_pos, panel_size)) = self.panel_focus_frame(panel_id) else {
+            return false;
+        };
+        let Some(detached_state) = self.detached_workspaces.get_mut(&workspace_local_id) else {
+            return false;
+        };
+
+        reveal_panel_in_detached_view(detached_state, panel_pos, panel_size);
+        let viewport_id = detached_viewport_id(&workspace_local_id);
+        ctx.request_repaint_of(viewport_id);
+        ctx.send_viewport_cmd_to(viewport_id, ViewportCommand::Focus);
+        self.mark_runtime_dirty();
         true
     }
 
@@ -376,7 +405,14 @@ impl HorizonApp {
         let canvas_rect = detached_canvas_rect(ctx);
         self.panels_to_close.clear();
         for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspace_collision_ids,
+                true,
+            ) {
                 self.panels_to_close.push(panel_id);
             }
         }
@@ -505,6 +541,27 @@ fn detached_canvas_rect(ctx: &Context) -> Rect {
     Rect::from_min_max(Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT), viewport.max)
 }
 
+fn reveal_panel_in_detached_view(
+    detached_state: &mut DetachedWorkspaceViewportState,
+    panel_pos: Pos2,
+    panel_size: Vec2,
+) {
+    let canvas_rect = Rect::from_min_max(
+        Pos2::new(0.0, TOOLBAR_HEIGHT),
+        Pos2::new(detached_state.window.width, detached_state.window.height),
+    );
+    let pan_offset = aligned_pan_offset(
+        canvas_rect,
+        panel_pos,
+        panel_size,
+        detached_state.canvas_view.zoom,
+        true,
+    );
+    detached_state.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+    detached_state.pan_target = None;
+    detached_state.initial_fit_pending = false;
+}
+
 fn detached_viewport_builder(
     window_config: &WindowConfig,
     workspace_name: &str,
@@ -537,8 +594,12 @@ fn detached_viewport_builder(
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{consume_detached_position_restore, detached_viewport_builder};
-    use horizon_core::WindowConfig;
+    use super::{
+        DetachedWorkspaceViewportState, TOOLBAR_HEIGHT, consume_detached_position_restore, detached_viewport_builder,
+        reveal_panel_in_detached_view,
+    };
+    use egui::{Pos2, Vec2};
+    use horizon_core::{CanvasViewState, WindowConfig};
 
     #[test]
     fn detached_viewport_builder_only_restores_window_state_when_requested() {
@@ -566,5 +627,27 @@ mod tests {
         assert!(consume_detached_position_restore(&mut pending, &workspace_local_id));
         assert!(!consume_detached_position_restore(&mut pending, &workspace_local_id));
         assert!(!consume_detached_position_restore(&mut pending, "ws-beta"));
+    }
+
+    #[test]
+    fn revealing_detached_panel_left_aligns_and_centers_its_frame() {
+        let mut state = DetachedWorkspaceViewportState::new(WindowConfig {
+            width: 800.0,
+            height: 600.0,
+            ..WindowConfig::default()
+        });
+        state.canvas_view = CanvasViewState::new([0.0, 0.0], 1.0);
+        state.pan_target = Some(Vec2::new(10.0, 20.0));
+        let panel_pos = Pos2::new(980.0, 180.0);
+        let panel_size = Vec2::new(340.0, 260.0);
+
+        reveal_panel_in_detached_view(&mut state, panel_pos, panel_size);
+
+        assert!((state.canvas_view.pan_offset[0] + panel_pos.x - 40.0).abs() <= f32::EPSILON);
+        let panel_center_y = panel_pos.y + panel_size.y * 0.5;
+        let canvas_center_y = (TOOLBAR_HEIGHT + state.window.height) * 0.5;
+        assert!((TOOLBAR_HEIGHT + state.canvas_view.pan_offset[1] + panel_center_y - canvas_center_y).abs() <= 0.01);
+        assert!(state.pan_target.is_none());
+        assert!(!state.initial_fit_pending);
     }
 }

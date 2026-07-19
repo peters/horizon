@@ -1,6 +1,6 @@
 use super::{
     Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PtyOptions, ReplayRestoreState,
-    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, WindowSize,
+    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, VecDeque, WindowSize,
     drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
 };
 
@@ -83,7 +83,7 @@ impl Terminal {
             child_exited: false,
             child_exit_status: None,
             bell_pending: false,
-            pending_notification: None,
+            pending_notifications: VecDeque::new(),
         };
         terminal.process_events();
         Ok(terminal)

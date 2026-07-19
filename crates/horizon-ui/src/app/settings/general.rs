@@ -1,6 +1,7 @@
 use egui::Ui;
 use horizon_core::{AppearanceTheme, Config};
 
+use crate::app::attention_feed::{FEED_MIN_HEIGHT, FEED_MIN_WIDTH};
 use crate::theme;
 
 /// Render the General settings tab: window dimensions, feature toggles,
@@ -126,7 +127,7 @@ fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.attention_feed_width)
-                            .range(120.0..=800.0)
+                            .range(FEED_MIN_WIDTH..=800.0)
                             .speed(1.0)
                             .suffix(" px"),
                     )
@@ -136,7 +137,7 @@ fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {
                 changed |= ui
                     .add(
                         egui::DragValue::new(&mut config.overlays.attention_feed_height)
-                            .range(100.0..=1200.0)
+                            .range(FEED_MIN_HEIGHT..=1200.0)
                             .speed(1.0)
                             .suffix(" px"),
                     )

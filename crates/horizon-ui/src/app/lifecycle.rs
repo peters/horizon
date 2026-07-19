@@ -348,17 +348,22 @@ impl HorizonApp {
         self.render_preset_picker(ctx);
         let minimap_height = self.render_minimap(ctx, &workspace_bounds);
         if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
-            let feed_result =
-                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
+            let feed_result = attention_feed::render_attention_feed(
+                ctx,
+                &self.board,
+                self.canvas_rect(ctx),
+                minimap_height,
+                &self.template_config.overlays,
+            );
             for attention_id in feed_result.dismissed_ids {
                 let _ = self.board.dismiss_attention(attention_id);
             }
-            if let Some(panel_id) = feed_result.focus_panel {
+            if let Some(panel_id) = feed_result.focus_panel
+                && let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
+            {
                 self.board.focus(panel_id);
-                if let Some(ws_id) = self.board.panel(panel_id).map(|p| p.workspace_id)
-                    && let Some((min, max)) = self.board.workspace_bounds(ws_id)
-                {
-                    self.focus_workspace_bounds(ctx, min, max, true);
+                if !self.focus_panel_window(ctx, workspace_id, panel_id) {
+                    self.focus_panel_visible(ctx, panel_id, true);
                 }
             }
         }
@@ -430,6 +435,7 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use std::time::Instant;
 
     use eframe::CreationContext;
     use egui::Context;
@@ -457,6 +463,19 @@ mod tests {
             },
             input::ObservedKeyboardInputs::default(),
         )
+    }
+
+    #[test]
+    fn fixed_overlays_hide_while_modal_or_preset_picker_is_open() {
+        let mut app = test_app();
+        assert!(app.fixed_overlays_visible());
+
+        app.open_command_palette();
+        assert!(!app.fixed_overlays_visible());
+
+        app.command_palette = None;
+        app.pending_preset_pick = Some((None, [0.0, 0.0], Instant::now()));
+        assert!(!app.fixed_overlays_visible());
     }
 
     #[test]

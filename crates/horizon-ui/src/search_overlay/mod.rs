@@ -51,6 +51,7 @@ pub(crate) struct SearchOverlay {
     pending_terminal_refresh: bool,
     /// When search results were last recomputed.
     last_refresh_at: Option<Instant>,
+    dropdown_visible: bool,
 }
 
 pub(crate) enum SearchAction {
@@ -77,6 +78,7 @@ impl SearchOverlay {
             query_changed_at: None,
             pending_terminal_refresh: false,
             last_refresh_at: None,
+            dropdown_visible: false,
         }
     }
 
@@ -95,6 +97,7 @@ impl SearchOverlay {
         self.query_changed_at = None;
         self.pending_terminal_refresh = false;
         self.last_refresh_at = None;
+        self.dropdown_visible = false;
     }
 
     /// Create a search overlay without auto-focusing the input. Used for
@@ -156,11 +159,16 @@ impl SearchOverlay {
         // result-row and toggle clicks are not dropped when the text field
         // loses focus on mouse down.
         let dropdown_rect = self.dropdown_rect(input_rect);
-        if self.should_show_dropdown(ui.ctx(), response.has_focus(), dropdown_rect) {
+        self.dropdown_visible = self.should_show_dropdown(ui.ctx(), response.has_focus(), dropdown_rect);
+        if self.dropdown_visible {
             self.show_results_dropdown(ui.ctx(), dropdown_rect)
         } else {
             SearchAction::None
         }
+    }
+
+    pub(crate) fn dropdown_visible(&self) -> bool {
+        self.dropdown_visible
     }
 
     fn show_results_dropdown(&mut self, ctx: &Context, dropdown_rect: Rect) -> SearchAction {

@@ -22,6 +22,10 @@ impl OverlayExclusion {
     pub(super) fn intersects(&self, rect: Rect) -> bool {
         self.zones.iter().any(|zone| zone.intersects(rect))
     }
+
+    pub(super) fn contains(&self, position: Pos2) -> bool {
+        self.zones.iter().any(|zone| zone.contains(position))
+    }
 }
 
 pub(super) fn viewport_local_rect(ctx: &Context) -> Rect {

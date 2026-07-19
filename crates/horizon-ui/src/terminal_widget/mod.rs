@@ -10,7 +10,10 @@ use horizon_core::Panel;
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
 pub(crate) use self::input::TerminalSelectionDragState;
-use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
+use self::input::{
+    PointerSupport, finish_blocked_terminal_selection_drag, handle_terminal_keyboard_input,
+    handle_terminal_pointer_input,
+};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
@@ -44,6 +47,7 @@ impl<'a> TerminalView<'a> {
         ui: &mut egui::Ui,
         is_active_panel: bool,
         interactive: bool,
+        pointer_input_allowed: bool,
         selection_drag: &mut TerminalSelectionDragState,
         keyboard: TerminalKeyboardContext<'_>,
     ) -> bool {
@@ -59,12 +63,14 @@ impl<'a> TerminalView<'a> {
             .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);
-        if interactive {
+        if interactive && is_active_panel && ui.input(|input| input.key_pressed(egui::Key::Tab)) {
+            interaction.body.request_focus();
+        }
+        if interactive && pointer_input_allowed {
             handle_terminal_pointer_input(
                 ui,
                 self.panel,
                 &interaction,
-                is_active_panel,
                 PointerSupport {
                     metrics: &metrics,
                     visible_rows: new_rows,
@@ -72,6 +78,14 @@ impl<'a> TerminalView<'a> {
                     primary_selection: keyboard.primary_selection,
                     selection_drag,
                 },
+            );
+        } else if interactive {
+            finish_blocked_terminal_selection_drag(
+                ui,
+                self.panel,
+                &interaction,
+                keyboard.primary_selection,
+                selection_drag,
             );
         }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));

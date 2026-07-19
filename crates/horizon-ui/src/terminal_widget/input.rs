@@ -49,7 +49,6 @@ pub(super) fn handle_terminal_pointer_input(
     ui: &mut egui::Ui,
     panel: &mut Panel,
     interaction: &TerminalInteraction,
-    is_active_panel: bool,
     support: PointerSupport<'_>,
 ) {
     let panel_id = panel.id;
@@ -63,10 +62,6 @@ pub(super) fn handle_terminal_pointer_input(
     if interaction.body.clicked() {
         interaction.body.request_focus();
     }
-    if is_active_panel && ui.input(|input| input.key_pressed(Key::Tab)) {
-        interaction.body.request_focus();
-    }
-
     let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
 
     if !should_handle_terminal_pointer(ui, interaction, from_global, selection_drag.active_for(panel_id)) {
@@ -157,6 +152,19 @@ pub(super) fn handle_terminal_pointer_input(
         && terminal.clickable_at_point(point.line, point.column).is_some()
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+}
+
+pub(super) fn finish_blocked_terminal_selection_drag(
+    ui: &egui::Ui,
+    panel: &Panel,
+    interaction: &TerminalInteraction,
+    primary_selection: &PrimarySelection,
+    selection_drag: &mut TerminalSelectionDragState,
+) {
+    if selection_drag.active_for(panel.id) && !ui.input(|input| input.pointer.primary_down()) {
+        let copy_completed_selection = selection_drag.finish(panel.id);
+        maybe_copy_selection_to_primary(panel, interaction, primary_selection, copy_completed_selection);
     }
 }
 

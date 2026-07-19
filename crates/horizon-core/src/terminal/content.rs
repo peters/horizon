@@ -1,8 +1,8 @@
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 use super::{
-    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, current_cwd_for_pid,
-    find_file_path_at_column, find_url_at_column, viewport_to_point,
+    Column, Dimensions, Line, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal,
+    current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
 };
 
 impl Terminal {
@@ -41,46 +41,38 @@ impl Terminal {
         self.set_scrollback(target);
     }
 
-    /// Extract the last few non-empty lines visible on screen as a single
-    /// string, for pattern matching (e.g. detecting agent prompts).
+    /// Extract the latest non-empty lines from the live screen as a single
+    /// string, independent of the user's scrollback position.
     #[must_use]
     pub fn last_lines_text(&self, max_lines: usize) -> String {
-        let term = self.term.lock();
-        let content = term.renderable_content();
-        let cols = usize::from(self.cols);
-        let rows = usize::from(self.rows);
-        let mut lines: Vec<String> = Vec::with_capacity(max_lines);
-        let mut current_line = String::with_capacity(cols);
-        let mut current_line_columns = 0;
-        let mut current_row: Option<usize> = None;
+        if max_lines == 0 {
+            return String::new();
+        }
 
-        for indexed in content.display_iter {
-            let Ok(row) = usize::try_from(indexed.point.line.0) else {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        let rows = grid.screen_lines();
+        let mut lines: Vec<String> = Vec::with_capacity(max_lines);
+
+        for row in (0..rows).rev() {
+            let Ok(row) = i32::try_from(row) else {
                 continue;
             };
-            if row >= rows {
-                continue;
+            let mut line = String::with_capacity(cols);
+            let mut occupied_columns = 0;
+            for col in 0..cols {
+                append_cell_text(&mut line, &mut occupied_columns, col, &grid[Line(row)][Column(col)]);
             }
-            if current_row != Some(row) {
-                if !current_line.is_empty() {
-                    lines.push(std::mem::take(&mut current_line));
+            if !line.is_empty() {
+                lines.push(line);
+                if lines.len() == max_lines {
+                    break;
                 }
-                current_row = Some(row);
-                current_line.clear();
-                current_line_columns = 0;
             }
-            append_cell_text(
-                &mut current_line,
-                &mut current_line_columns,
-                indexed.point.column.0,
-                indexed.cell,
-            );
         }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-        let start = lines.len().saturating_sub(max_lines);
-        lines[start..].join("\n")
+        lines.reverse();
+        lines.join("\n")
     }
 
     /// Extract all text from the terminal grid including scrollback history.

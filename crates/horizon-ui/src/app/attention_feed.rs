@@ -1,14 +1,27 @@
-use egui::{Button, Color32, CornerRadius, Id, Order, Pos2, Rect, RichText, ScrollArea, Sense, Vec2};
-use horizon_core::{AttentionId, AttentionItem, AttentionSeverity, Board, OverlaysConfig, PanelId};
+use egui::{Button, Color32, CornerRadius, Id, Order, Pos2, Rect, RichText, ScrollArea, Vec2};
+use horizon_core::{
+    AttentionId, AttentionItem, AttentionSeverity, Board, OverlaysConfig, PanelId, RESOLVED_ATTENTION_RETENTION,
+};
 use std::time::SystemTime;
 
 use crate::theme;
 
-const FEED_MIN_WIDTH: f32 = 240.0;
+pub(super) const FEED_MIN_WIDTH: f32 = 240.0;
+pub(super) const FEED_MIN_HEIGHT: f32 = FEED_HEADER_BLOCK_HEIGHT + FEED_ITEM_VIEWPORT_HEIGHT;
 const FEED_MARGIN: f32 = 16.0;
 const FEED_ITEM_SPACING: f32 = 4.0;
 const FEED_HEADER_BLOCK_HEIGHT: f32 = 30.0;
 const FEED_ITEM_VIEWPORT_HEIGHT: f32 = 74.0;
+const FEED_FRAME_HORIZONTAL_INSET: f32 = 18.0;
+const FEED_FRAME_VERTICAL_INSET: f32 = 14.0;
+const FEED_MINIMAP_GAP: f32 = 8.0;
+const MAX_RECENT_RESOLVED_ITEMS: usize = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AttentionFeedLayout {
+    content_size: Vec2,
+    outer_rect: Rect,
+}
 
 #[derive(Default)]
 pub struct AttentionFeedResult {
@@ -26,20 +39,22 @@ struct FeedItemAction {
 pub fn render_attention_feed(
     ctx: &egui::Context,
     board: &Board,
+    available_rect: Rect,
     minimap_height: f32,
     overlays: &OverlaysConfig,
 ) -> AttentionFeedResult {
     let now = SystemTime::now();
-    let items = visible_attention_items(&board.attention, now);
+    let visible = visible_attention_items(&board.attention, now);
+    let items = visible.items;
     if items.is_empty() {
         return AttentionFeedResult::default();
     }
 
-    let feed_width = overlays.attention_feed_width.max(FEED_MIN_WIDTH);
-    let offset_y = FEED_MARGIN + minimap_height + if minimap_height > 0.0 { 8.0 } else { 0.0 };
-    let feed_target_height = overlays
-        .attention_feed_height
-        .max(FEED_HEADER_BLOCK_HEIGHT + FEED_ITEM_VIEWPORT_HEIGHT);
+    let Some(layout) = attention_feed_layout(available_rect, minimap_height, overlays) else {
+        return AttentionFeedResult::default();
+    };
+    let feed_width = layout.content_size.x;
+    let feed_target_height = layout.content_size.y;
     let mut result = AttentionFeedResult::default();
     let list_max_height = snapped_feed_list_height(feed_target_height);
     let scroll_id = (
@@ -49,8 +64,10 @@ pub fn render_attention_feed(
     );
 
     egui::Area::new(Id::new("attention_feed"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-FEED_MARGIN, -offset_y))
-        .order(Order::Foreground)
+        .fixed_pos(layout.outer_rect.min)
+        .movable(false)
+        .constrain(false)
+        .order(Order::Tooltip)
         .interactable(true)
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
@@ -68,7 +85,7 @@ pub fn render_attention_feed(
                     ui.set_min_height(feed_target_height);
                     ui.set_max_height(feed_target_height);
                 }
-                render_feed_header(ui, &items);
+                render_feed_header(ui, visible.open_count);
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
@@ -87,7 +104,7 @@ pub fn render_attention_feed(
     result
 }
 
-fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
+fn render_feed_header(ui: &mut egui::Ui, open_count: usize) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("Attention Feed")
@@ -96,7 +113,6 @@ fn render_feed_header(ui: &mut egui::Ui, items: &[&AttentionItem]) {
                 .strong(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let open_count = items.iter().filter(|i| i.is_open()).count();
             if open_count > 0 {
                 ui.label(
                     RichText::new(format!("{open_count} open"))
@@ -121,7 +137,7 @@ fn render_feed_list(
         .max_height(list_max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
                 let action = render_feed_item(ui, item, feed_width);
                 if action.focus_panel.is_some() {
                     result.focus_panel = action.focus_panel;
@@ -129,7 +145,9 @@ fn render_feed_list(
                 if let Some(id) = action.dismiss_id {
                     result.dismissed_ids.push(id);
                 }
-                ui.add_space(FEED_ITEM_SPACING);
+                if index + 1 < items.len() {
+                    ui.add_space(FEED_ITEM_SPACING);
+                }
             }
         });
     result
@@ -202,17 +220,16 @@ fn render_feed_item(ui: &mut egui::Ui, item: &AttentionItem, feed_width: f32) ->
         };
     }
 
-    // Make the whole item clickable to navigate
-    if item.panel_id.is_some() {
-        let interact = ui.interact(resp.rect, Id::new(("attn_item", item.id.0)), Sense::click());
-        if interact.clicked() {
+    // The area itself claims background pointer input. Detect a card click from
+    // the frame's hover response so this card does not sit on top of its own
+    // dismiss and navigation buttons in egui's interaction order.
+    if item.panel_id.is_some() && resp.contains_pointer() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if ui.input(|input| input.pointer.primary_clicked()) {
             return FeedItemAction {
                 focus_panel: item.panel_id,
                 ..FeedItemAction::default()
             };
-        }
-        if interact.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
     }
 
@@ -294,50 +311,89 @@ fn format_elapsed(time: SystemTime) -> String {
 /// overlay exclusion to prevent canvas-space elements from rendering behind
 /// this widget.
 pub(super) fn estimated_outer_rect(
-    viewport: Rect,
+    available_rect: Rect,
     minimap_height: f32,
     overlays: &OverlaysConfig,
     board: &Board,
 ) -> Option<Rect> {
     let now = std::time::SystemTime::now();
-    if visible_attention_items(&board.attention, now).is_empty() {
+    if visible_attention_items(&board.attention, now).items.is_empty() {
         return None;
     }
 
-    let feed_w = overlays.attention_feed_width.max(FEED_MIN_WIDTH) + 18.0;
-    let feed_h = overlays
-        .attention_feed_height
-        .max(FEED_HEADER_BLOCK_HEIGHT + FEED_ITEM_VIEWPORT_HEIGHT)
-        + 14.0;
-    let offset_y = FEED_MARGIN + minimap_height + if minimap_height > 0.0 { 8.0 } else { 0.0 };
-
-    Some(Rect::from_min_max(
-        Pos2::new(
-            viewport.max.x - FEED_MARGIN - feed_w,
-            viewport.max.y - offset_y - feed_h,
-        ),
-        Pos2::new(viewport.max.x - FEED_MARGIN, viewport.max.y - offset_y),
-    ))
+    attention_feed_layout(available_rect, minimap_height, overlays).map(|layout| layout.outer_rect)
 }
 
 fn snapped_feed_list_height(feed_target_height: f32) -> f32 {
-    let available = (feed_target_height - FEED_HEADER_BLOCK_HEIGHT).max(FEED_ITEM_VIEWPORT_HEIGHT);
+    let available = (feed_target_height - FEED_HEADER_BLOCK_HEIGHT).max(0.0);
+    if available <= FEED_ITEM_VIEWPORT_HEIGHT {
+        return available;
+    }
     let row_span = FEED_ITEM_VIEWPORT_HEIGHT + FEED_ITEM_SPACING;
     let visible_rows = ((available + FEED_ITEM_SPACING) / row_span).floor().max(1.0);
     (visible_rows * FEED_ITEM_VIEWPORT_HEIGHT) + ((visible_rows - 1.0) * FEED_ITEM_SPACING)
 }
 
-fn visible_attention_items(attention: &[AttentionItem], now: SystemTime) -> Vec<&AttentionItem> {
-    let mut items: Vec<_> = attention
-        .iter()
-        .filter(|item| is_visible_attention_item(item, now))
-        .collect();
-    items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
-    items.truncate(10);
-    items
+fn attention_feed_layout(
+    available_rect: Rect,
+    minimap_height: f32,
+    overlays: &OverlaysConfig,
+) -> Option<AttentionFeedLayout> {
+    let minimap_gap = if minimap_height > 0.0 { FEED_MINIMAP_GAP } else { 0.0 };
+    let right = available_rect.max.x - FEED_MARGIN;
+    let bottom = available_rect.max.y - FEED_MARGIN - minimap_height - minimap_gap;
+    let left_limit = available_rect.min.x + FEED_MARGIN;
+    let top_limit = available_rect.min.y + FEED_MARGIN;
+    let max_outer_size = Vec2::new((right - left_limit).max(0.0), (bottom - top_limit).max(0.0));
+    if max_outer_size.x <= FEED_FRAME_HORIZONTAL_INSET
+        || max_outer_size.y <= FEED_FRAME_VERTICAL_INSET + FEED_HEADER_BLOCK_HEIGHT
+    {
+        return None;
+    }
+
+    let desired_outer_size = Vec2::new(
+        overlays.attention_feed_width.max(FEED_MIN_WIDTH) + FEED_FRAME_HORIZONTAL_INSET,
+        overlays.attention_feed_height.max(FEED_MIN_HEIGHT) + FEED_FRAME_VERTICAL_INSET,
+    );
+    let outer_size = desired_outer_size.min(max_outer_size);
+    let content_size = Vec2::new(
+        outer_size.x - FEED_FRAME_HORIZONTAL_INSET,
+        outer_size.y - FEED_FRAME_VERTICAL_INSET,
+    );
+    let outer_rect = Rect::from_min_size(Pos2::new(right - outer_size.x, bottom - outer_size.y), outer_size);
+
+    Some(AttentionFeedLayout {
+        content_size,
+        outer_rect,
+    })
 }
 
-fn is_visible_attention_item(item: &AttentionItem, now: SystemTime) -> bool {
+struct VisibleAttentionItems<'a> {
+    items: Vec<&'a AttentionItem>,
+    open_count: usize,
+}
+
+fn visible_attention_items(attention: &[AttentionItem], now: SystemTime) -> VisibleAttentionItems<'_> {
+    let mut open: Vec<_> = attention.iter().filter(|item| item.is_open()).collect();
+    let mut resolved: Vec<_> = attention
+        .iter()
+        .filter(|item| !item.is_open() && is_visible_attention_item(item, now))
+        .collect();
+    let open_count = open.len();
+    open.sort_by_key(|item| std::cmp::Reverse((item.created_at, item.id.0)));
+    resolved.sort_by_key(|item| {
+        std::cmp::Reverse((item.resolved_at.unwrap_or(item.created_at), item.created_at, item.id.0))
+    });
+    resolved.truncate(MAX_RECENT_RESOLVED_ITEMS);
+    open.extend(resolved);
+
+    VisibleAttentionItems {
+        items: open,
+        open_count,
+    }
+}
+
+pub(super) fn is_visible_attention_item(item: &AttentionItem, now: SystemTime) -> bool {
     if item.is_open() {
         return true;
     }
@@ -346,138 +402,8 @@ fn is_visible_attention_item(item: &AttentionItem, now: SystemTime) -> bool {
         && item
             .resolved_at
             .and_then(|resolved_at| now.duration_since(resolved_at).ok())
-            .is_some_and(|elapsed| elapsed.as_secs() < 30)
+            .is_some_and(|elapsed| elapsed < RESOLVED_ATTENTION_RETENTION)
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::{Duration, SystemTime};
-
-    use egui::{Pos2, Rect};
-    use horizon_core::{
-        AttentionId, AttentionItem, AttentionSeverity, AttentionState, Board, OverlaysConfig, PanelId, WorkspaceId,
-    };
-
-    use super::{estimated_outer_rect, snapped_feed_list_height, visible_attention_items};
-
-    fn test_attention_item(
-        id: u64,
-        created_at: SystemTime,
-        state: AttentionState,
-        resolved_at: Option<SystemTime>,
-    ) -> AttentionItem {
-        let mut item = AttentionItem::new(
-            AttentionId(id),
-            WorkspaceId(1),
-            Some(PanelId(id)),
-            "agent",
-            format!("item-{id}"),
-            AttentionSeverity::High,
-        );
-        item.created_at = created_at;
-        item.state = state;
-        item.resolved_at = resolved_at;
-        item
-    }
-
-    #[test]
-    fn visible_attention_items_include_open_and_recently_resolved_items() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
-        let open = test_attention_item(1, now - Duration::from_secs(5), AttentionState::Open, None);
-        let recent_resolved = test_attention_item(
-            2,
-            now - Duration::from_secs(10),
-            AttentionState::Resolved,
-            Some(now - Duration::from_secs(29)),
-        );
-        let stale_resolved = test_attention_item(
-            3,
-            now - Duration::from_secs(20),
-            AttentionState::Resolved,
-            Some(now - Duration::from_secs(31)),
-        );
-        let dismissed = test_attention_item(
-            4,
-            now - Duration::from_secs(30),
-            AttentionState::Dismissed,
-            Some(now - Duration::from_secs(5)),
-        );
-
-        let attention = [open, recent_resolved, stale_resolved, dismissed];
-        let items = visible_attention_items(&attention, now);
-
-        let ids: Vec<_> = items.iter().map(|item| item.id.0).collect();
-        assert_eq!(ids, vec![1, 2]);
-    }
-
-    #[test]
-    fn visible_attention_items_sort_newest_first_and_truncate_to_ten() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(2000);
-        let items: Vec<_> = (0_u64..12)
-            .map(|id| test_attention_item(id, now - Duration::from_secs(id), AttentionState::Open, None))
-            .collect();
-
-        let visible = visible_attention_items(&items, now);
-
-        let ids: Vec<_> = visible.iter().map(|item| item.id.0).collect();
-        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    }
-
-    #[test]
-    fn estimated_outer_rect_hides_when_only_stale_items_remain() {
-        let now = SystemTime::now();
-        let mut board = Board::new();
-        board.attention.push(test_attention_item(
-            1,
-            now - Duration::from_secs(60),
-            AttentionState::Resolved,
-            Some(now - Duration::from_secs(45)),
-        ));
-
-        let rect = estimated_outer_rect(
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0)),
-            0.0,
-            &OverlaysConfig::default(),
-            &board,
-        );
-
-        assert_eq!(rect, None);
-    }
-
-    #[test]
-    fn estimated_outer_rect_uses_feed_minimum_size() {
-        let mut board = Board::new();
-        board.attention.push(AttentionItem::new(
-            AttentionId(1),
-            WorkspaceId(1),
-            Some(PanelId(1)),
-            "agent",
-            "Ready for input",
-            AttentionSeverity::High,
-        ));
-
-        let rect = estimated_outer_rect(
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0)),
-            180.0,
-            &OverlaysConfig {
-                attention_feed_width: 120.0,
-                attention_feed_height: 100.0,
-                minimap_height: 180.0,
-                minimap_width: 320.0,
-            },
-            &board,
-        )
-        .expect("attention feed rect");
-
-        assert_eq!(rect.max, Pos2::new(1184.0, 596.0));
-        assert!((rect.width() - 258.0).abs() <= f32::EPSILON);
-        assert!((rect.height() - 118.0).abs() <= f32::EPSILON);
-    }
-
-    #[test]
-    fn snapped_feed_list_height_preserves_complete_rows() {
-        let height = snapped_feed_list_height(260.0);
-
-        assert!((height - 230.0).abs() <= f32::EPSILON);
-    }
-}
+mod tests;

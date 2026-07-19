@@ -131,6 +131,7 @@ impl Board {
         }
         self.attention.retain(|item| item.panel_id != Some(id));
         self.panel_attention_signals.remove(&id);
+        self.panel_attention_startup_baselined.remove(&id);
         if self.focused == Some(id) {
             self.focused = self.panels.last().map(|p| p.id);
             if let Some(focused) = self.focused {
@@ -233,6 +234,7 @@ impl Board {
         if let Some(panel) = self.panel_mut(panel_id) {
             panel.workspace_id = workspace_id;
         }
+        self.reassign_panel_attention(panel_id, workspace_id);
 
         if let Some(layout) = target_layout {
             self.apply_workspace_layout(workspace_id, layout);

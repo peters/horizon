@@ -35,6 +35,17 @@ struct HistoryMeter {
     focused: bool,
 }
 
+struct AttentionBadgeLayout {
+    rect: Rect,
+    text: String,
+}
+
+struct ChromeBadgeLayout {
+    attention: Option<AttentionBadgeLayout>,
+    ssh: Option<Rect>,
+    title_right: f32,
+}
+
 fn panel_accent(workspace_accent: Option<Color32>, focused: bool) -> Color32 {
     workspace_accent.unwrap_or(if focused {
         theme::ACCENT()
@@ -128,6 +139,14 @@ fn panel_kind_label_color(base: Color32, focused: bool) -> Color32 {
 pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let painter = ui.painter_at(chrome.panel_rect);
     let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
+    let badge_layout = chrome_badge_layout(
+        &painter,
+        chrome.titlebar_rect,
+        chrome.close_rect,
+        chrome.scrollback_limit,
+        chrome.attention_badge,
+        chrome.ssh_status,
+    );
 
     if let Some(stroke) = focus_ring_stroke(accent, chrome.focused) {
         painter.rect_stroke(
@@ -173,8 +192,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         } else {
             chrome.titlebar_rect.min.x + 12.0
         };
-        let title_right = title_right_boundary(&chrome);
-        let max_width = (title_right - title_x).max(0.0);
+        let max_width = (badge_layout.title_right - title_x).max(0.0);
         paint_truncated_title(
             &painter,
             title,
@@ -185,17 +203,11 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
-    if let Some((severity, summary)) = chrome.attention_badge {
-        paint_attention_badge(&painter, chrome.titlebar_rect, chrome.close_rect, *severity, summary);
+    if let (Some((severity, _)), Some(attention)) = (chrome.attention_badge, badge_layout.attention.as_ref()) {
+        paint_attention_badge(&painter, attention, *severity);
     }
-    if let Some(status) = chrome.ssh_status {
-        paint_ssh_status_badge(
-            &painter,
-            chrome.titlebar_rect,
-            chrome.close_rect,
-            chrome.scrollback_limit > 0,
-            status,
-        );
+    if let (Some(status), Some(rect)) = (chrome.ssh_status, badge_layout.ssh) {
+        paint_ssh_status_badge(&painter, rect, status);
     }
 
     if chrome.scrollback_limit > 0 {
@@ -245,22 +257,62 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
     );
 }
 
-/// Compute the right x boundary where the title text must stop, accounting
-/// for all badges (history meter, SSH status, attention) that sit to its right.
-fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
-    let mut right = chrome.close_rect.min.x - 12.0;
-    if chrome.scrollback_limit > 0 {
-        right = panel_history_badge_rect(chrome.titlebar_rect, chrome.close_rect).min.x - 8.0;
+fn chrome_badge_layout(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    scrollback_limit: usize,
+    attention_badge: Option<&(AttentionSeverity, String)>,
+    ssh_status: Option<SshConnectionStatus>,
+) -> ChromeBadgeLayout {
+    let history_rect = (scrollback_limit > 0).then(|| panel_history_badge_rect(titlebar_rect, close_rect));
+    let mut right = history_rect.map_or(close_rect.min.x - 8.0, |rect| rect.min.x - 6.0);
+
+    let ssh = ssh_status.and_then(|status| {
+        let font = egui::FontId::proportional(10.0);
+        let text_width = painter
+            .layout_no_wrap(status.label().to_string(), font, ssh_status_color(status))
+            .size()
+            .x;
+        let rect = reserve_badge_rect(titlebar_rect, right, text_width + 16.0, 18.0)?;
+        right = rect.min.x - 6.0;
+        Some(rect)
+    });
+
+    let attention = attention_badge.and_then(|(severity, summary)| {
+        let text = attention_badge_text(*severity, summary);
+        let font = egui::FontId::proportional(10.0);
+        let text_width = painter
+            .layout_no_wrap(text.clone(), font, attention_severity_color(*severity))
+            .size()
+            .x;
+        let rect = reserve_badge_rect(titlebar_rect, right, text_width + 12.0, 18.0)?;
+        right = rect.min.x - 6.0;
+        Some(AttentionBadgeLayout { rect, text })
+    });
+
+    let title_right = if attention.is_some() || ssh.is_some() || history_rect.is_some() {
+        right - 2.0
+    } else {
+        close_rect.min.x - 12.0
+    };
+    ChromeBadgeLayout {
+        attention,
+        ssh,
+        title_right,
     }
-    if chrome.ssh_status.is_some() {
-        // SSH badge sits left of the history meter; reserve ~90px.
-        right -= 90.0;
+}
+
+fn reserve_badge_rect(titlebar_rect: Rect, right: f32, desired_width: f32, height: f32) -> Option<Rect> {
+    let left_limit = titlebar_rect.min.x + 60.0;
+    if right <= left_limit {
+        return None;
     }
-    if chrome.attention_badge.is_some() {
-        // Attention badge sits left of the history meter; reserve ~110px.
-        right -= 110.0;
-    }
-    right
+    let left = (right - desired_width).max(left_limit);
+    Some(Rect::from_min_max(
+        Pos2::new(left, titlebar_rect.center().y - height * 0.5),
+        Pos2::new(right, titlebar_rect.center().y + height * 0.5),
+    ))
 }
 
 #[profiling::function]
@@ -361,82 +413,44 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
 }
 
 #[profiling::function]
-fn paint_attention_badge(
-    painter: &egui::Painter,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    severity: AttentionSeverity,
-    summary: &str,
-) {
+fn paint_attention_badge(painter: &egui::Painter, layout: &AttentionBadgeLayout, severity: AttentionSeverity) {
     let color = attention_severity_color(severity);
-    let icon = attention_severity_icon(severity);
-
-    // Truncate the summary for display.
-    let display_text = if summary.len() > 30 {
-        let mut truncated = summary[..29].to_string();
-        truncated.push('\u{2026}');
-        truncated
-    } else {
-        summary.to_string()
-    };
-    let badge_text = format!("{icon} {display_text}");
     let font = egui::FontId::proportional(10.0);
 
-    // Position the badge left of the history meter area.
-    let history_badge = panel_history_badge_rect(titlebar_rect, close_rect);
-    let badge_right = history_badge.min.x - 6.0;
-    let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
-    let text_width = text_galley.size().x;
-    let badge_width = text_width + 12.0;
-    let badge_height: f32 = 18.0;
-    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
-    let badge_rect = Rect::from_min_size(
-        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
-        Vec2::new(badge_right - badge_left, badge_height),
-    );
-
     painter.rect_filled(
-        badge_rect,
+        layout.rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
     );
-    painter.text(
-        Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
+    painter.with_clip_rect(layout.rect.shrink2(Vec2::new(4.0, 0.0))).text(
+        Pos2::new(layout.rect.min.x + 6.0, layout.rect.center().y),
         egui::Align2::LEFT_CENTER,
-        badge_text,
+        &layout.text,
         font,
         color,
     );
 }
 
+fn attention_badge_text(severity: AttentionSeverity, summary: &str) -> String {
+    const MAX_SUMMARY_CHARS: usize = 30;
+
+    let mut chars = summary.chars();
+    let prefix: String = chars.by_ref().take(MAX_SUMMARY_CHARS).collect();
+    let display_text = if chars.next().is_some() {
+        let mut truncated: String = prefix.chars().take(MAX_SUMMARY_CHARS - 1).collect();
+        truncated.push('\u{2026}');
+        truncated
+    } else {
+        prefix
+    };
+    format!("{} {display_text}", attention_severity_icon(severity))
+}
+
 #[profiling::function]
-fn paint_ssh_status_badge(
-    painter: &egui::Painter,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    has_history_meter: bool,
-    status: SshConnectionStatus,
-) {
+fn paint_ssh_status_badge(painter: &egui::Painter, badge_rect: Rect, status: SshConnectionStatus) {
     let color = ssh_status_color(status);
     let badge_text = status.label();
     let font = egui::FontId::proportional(10.0);
-    let badge_right = if has_history_meter {
-        panel_history_badge_rect(titlebar_rect, close_rect).min.x - 6.0
-    } else {
-        close_rect.min.x - 8.0
-    };
-    let text_width = painter
-        .layout_no_wrap(badge_text.to_string(), font.clone(), color)
-        .size()
-        .x;
-    let badge_width = text_width + 16.0;
-    let badge_height = 18.0;
-    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
-    let badge_rect = Rect::from_min_size(
-        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
-        Vec2::new(badge_right - badge_left, badge_height),
-    );
-
     painter.rect_filled(
         badge_rect,
         CornerRadius::same(4),
@@ -448,7 +462,7 @@ fn paint_ssh_status_badge(
         Stroke::new(1.0_f32, theme::alpha(color, 140)),
         StrokeKind::Inside,
     );
-    painter.text(
+    painter.with_clip_rect(badge_rect.shrink2(Vec2::new(2.0, 0.0))).text(
         badge_rect.center(),
         egui::Align2::CENTER_CENTER,
         badge_text,
@@ -489,14 +503,29 @@ fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
     )
 }
 
-pub(super) fn panel_title_content_rect(titlebar_rect: Rect, close_rect: Rect, has_workspace_accent: bool) -> Rect {
+pub(super) fn panel_title_content_rect(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    close_rect: Rect,
+    has_workspace_accent: bool,
+    scrollback_limit: usize,
+    attention_badge: Option<&(AttentionSeverity, String)>,
+    ssh_status: Option<SshConnectionStatus>,
+) -> Rect {
     let left = if has_workspace_accent {
         titlebar_rect.min.x + 26.0
     } else {
         titlebar_rect.min.x + 12.0
     };
-    let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
-    let right = (badge_rect.min.x - 12.0).max(left + 1.0);
+    let badge_layout = chrome_badge_layout(
+        painter,
+        titlebar_rect,
+        close_rect,
+        scrollback_limit,
+        attention_badge,
+        ssh_status,
+    );
+    let right = badge_layout.title_right.max(left + 1.0);
 
     Rect::from_min_max(
         Pos2::new(left, titlebar_rect.min.y + 2.0),
@@ -544,9 +573,10 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color, panel_titlebar_fill,
-        title_focus_indicator_rect,
+        attention_badge_text, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        panel_titlebar_fill, reserve_badge_rect, title_focus_indicator_rect,
     };
+    use horizon_core::AttentionSeverity;
 
     #[test]
     fn focused_panel_style_is_more_prominent() {
@@ -569,5 +599,24 @@ mod tests {
         assert!(titlebar_rect.contains(indicator.max - indicator.size() * 0.01));
         assert!(indicator.width() > 0.0);
         assert!(indicator.height() > 0.0);
+    }
+
+    #[test]
+    fn attention_badge_text_truncates_unicode_at_character_boundaries() {
+        let text = attention_badge_text(AttentionSeverity::High, &"\u{1F6A8}".repeat(31));
+
+        assert!(text.ends_with('\u{2026}'));
+        assert_eq!(text.chars().skip(2).count(), 30);
+    }
+
+    #[test]
+    fn adjacent_badge_reservations_do_not_overlap() {
+        let titlebar = Rect::from_min_max(Pos2::ZERO, Pos2::new(320.0, 34.0));
+        let ssh = reserve_badge_rect(titlebar, 182.0, 80.0, 18.0).expect("ssh badge");
+        let attention = reserve_badge_rect(titlebar, ssh.min.x - 6.0, 160.0, 18.0).expect("attention badge");
+
+        assert!(attention.max.x <= ssh.min.x - 6.0);
+        assert!(titlebar.contains(attention.min));
+        assert!(titlebar.contains(ssh.max));
     }
 }

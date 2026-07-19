@@ -7,7 +7,7 @@ mod selection;
 mod support;
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -17,7 +17,7 @@ use std::time::Duration;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, RenderableContent, Term, TermDamage, TermMode, viewport_to_point};
@@ -133,7 +133,7 @@ pub struct Terminal {
     child_exited: bool,
     child_exit_status: Option<std::process::ExitStatus>,
     bell_pending: bool,
-    pending_notification: Option<AgentNotification>,
+    pending_notifications: VecDeque<AgentNotification>,
 }
 
 #[cfg(test)]
@@ -295,12 +295,59 @@ mod tests {
 
         assert_eq!(terminal.title(), "Existing title");
         assert_eq!(
-            terminal.take_notification(),
-            Some(AgentNotification {
+            terminal.take_notifications().into_iter().collect::<Vec<_>>(),
+            vec![AgentNotification {
                 severity: "info".to_string(),
                 message: "Saved".to_string(),
-            })
+            }]
         );
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_notify_events_are_queued_in_order() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_NOTIFY:info:First".to_string()));
+        terminal.handle_event(Event::Title("HORIZON_NOTIFY:done:Second".to_string()));
+
+        assert_eq!(
+            terminal.take_notifications().into_iter().collect::<Vec<_>>(),
+            vec![
+                AgentNotification {
+                    severity: "info".to_string(),
+                    message: "First".to_string(),
+                },
+                AgentNotification {
+                    severity: "done".to_string(),
+                    message: "Second".to_string(),
+                },
+            ]
+        );
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn latest_lines_ignore_the_users_scrollback_position() {
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            args: vec!["-c".to_string(), "exit".to_string()],
+            cwd: None,
+            rows: 4,
+            cols: 40,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 42,
+            replay_bytes: b"old 1\r\nold 2\r\nold 3\r\nold 4\r\nold 5\r\n\xE2\x9D\xAF ".to_vec(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn");
+
+        assert_eq!(terminal.last_lines_text(1), "\u{276F}");
+        terminal.set_scrollback(3);
+        assert_eq!(terminal.last_lines_text(1), "\u{276F}");
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -311,7 +358,7 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -323,7 +370,7 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
 
         assert!(terminal.title().is_empty());
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -335,7 +382,7 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:rename:other".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -347,7 +394,7 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_NOTIFY:attention".to_string()));
 
         assert_eq!(terminal.title(), "Existing title");
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -359,7 +406,7 @@ mod tests {
         terminal.handle_event(Event::Title("cargo test".to_string()));
 
         assert_eq!(terminal.title(), "cargo test");
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -376,6 +423,23 @@ mod tests {
 
         assert_eq!(total_lines, usize::from(terminal.rows()));
         assert_eq!(lines, vec!["ascii æøå åäö", "mixed 你 e\u{0301} ✈\u{fe0f}"]);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn last_lines_text_uses_live_screen_while_scrolled_back() {
+        let mut terminal = spawn_test_terminal();
+        let transcript = (0..40)
+            .map(|line| format!("live-line-{line}"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        replay_terminal_bytes(&terminal.term, transcript.as_bytes());
+        let live_lines = terminal.last_lines_text(3);
+
+        terminal.scroll_scrollback_by(10);
+
+        assert!(terminal.scrollback() > 0);
+        assert_eq!(terminal.last_lines_text(3), live_lines);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 
@@ -401,7 +465,7 @@ mod tests {
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
 
         assert_eq!(terminal.title(), "Build running");
-        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.take_notifications().is_empty());
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 

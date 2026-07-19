@@ -24,6 +24,7 @@ use crate::workspace::{Workspace, WorkspaceId};
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const ATTENTION_STARTUP_GRACE: Duration = Duration::from_secs(10);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
@@ -82,6 +83,7 @@ pub struct Board {
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
     panel_attention_signals: HashMap<PanelId, String>,
+    panel_attention_startup_baselined: HashSet<PanelId>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
@@ -105,6 +107,7 @@ impl Board {
             workspaces: Vec::new(),
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
+            panel_attention_startup_baselined: HashSet::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
@@ -233,12 +236,16 @@ impl Board {
     ///
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart_panel(&mut self, id: PanelId) -> Result<()> {
-        let panel = self
-            .panels
-            .iter_mut()
-            .find(|p| p.id == id)
-            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
-        panel.restart()
+        {
+            let panel = self
+                .panels
+                .iter_mut()
+                .find(|p| p.id == id)
+                .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
+            panel.restart()?;
+        }
+        self.reset_panel_attention_tracking(id);
+        Ok(())
     }
 
     pub fn shutdown_terminal_panels(&mut self) {
@@ -294,12 +301,10 @@ impl Board {
             output.had_terminal_output |= panel_output.had_output;
             output.cwd_changed |= panel_output.cwd_changed;
         }
-        // Only run attention detection when terminals actually produced new
-        // output.  The expensive path — `detect_attention()` — locks the
-        // terminal mutex and iterates the full display, so skipping it on
-        // idle frames is a significant CPU win.
-        if self.attention_enabled && output.had_terminal_output {
+        if self.attention_enabled {
             self.update_attention();
+        } else {
+            self.discard_pending_attention_events();
         }
         output
     }
