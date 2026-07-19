@@ -203,7 +203,13 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     }
 
     if let Some((severity, summary)) = chrome.attention_badge {
-        paint_attention_badge(&painter, chrome.titlebar_rect, chrome.controls_anchor(), *severity, summary);
+        paint_attention_badge(
+            &painter,
+            chrome.titlebar_rect,
+            chrome.controls_anchor(),
+            *severity,
+            summary,
+        );
     }
     if let Some(status) = chrome.ssh_status {
         paint_ssh_status_badge(
@@ -262,7 +268,7 @@ fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
             painter.circle_stroke(
                 center,
                 9.0 + pulse * 2.0,
-                Stroke::new(1.2, theme::alpha(base, 90 + (pulse * 120.0) as u8)),
+                Stroke::new(1.2_f32, theme::alpha(base, 90 + (pulse * 120.0) as u8)),
             );
             base
         }
@@ -284,11 +290,11 @@ fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
             cradle_center + Vec2::new(cradle_radius * angle.cos(), cradle_radius * angle.sin())
         })
         .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(1.3, color)));
+    painter.add(egui::Shape::line(points, Stroke::new(1.3_f32, color)));
     // Stem.
     painter.line_segment(
         [center + Vec2::new(0.0, 5.0), center + Vec2::new(0.0, 7.0)],
-        Stroke::new(1.3, color),
+        Stroke::new(1.3_f32, color),
     );
 }
 

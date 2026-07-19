@@ -161,7 +161,9 @@ fn start_recording() -> Result<ActiveRecording, String> {
             )
         }
         other => {
-            return Err(format!("microphone `{device_name}`: unsupported sample format {other:?}"));
+            return Err(format!(
+                "microphone `{device_name}`: unsupported sample format {other:?}"
+            ));
         }
     }
     .map_err(|error| format!("microphone `{device_name}`: {error}"))?;

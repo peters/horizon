@@ -276,7 +276,11 @@ impl HorizonApp {
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
         // The push-to-talk chord is an app-level control; keep every press,
         // repeat, and release of its key out of the PTY input stream.
-        if let Some(binding) = self.speech.as_ref().and_then(super::super::speech::SpeechSystem::hotkey_binding) {
+        if let Some(binding) = self
+            .speech
+            .as_ref()
+            .and_then(super::super::speech::SpeechSystem::hotkey_binding)
+        {
             let filtered: Vec<Event> = events
                 .iter()
                 .filter(|event| !event_uses_shortcut_key(event, binding))

@@ -26,7 +26,10 @@ pub enum MicState {
 #[derive(Debug)]
 pub enum SpeechEvent {
     /// Transcribed text ready to inject into `target`'s PTY input.
-    Text { target: PanelId, text: String },
+    Text {
+        target: PanelId,
+        text: String,
+    },
     Error(String),
 }
 

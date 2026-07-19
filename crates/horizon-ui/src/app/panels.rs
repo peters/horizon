@@ -16,8 +16,8 @@ use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
-use super::speech::MicState;
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
+use super::speech::MicState;
 use super::util::clamp_panel_size;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
