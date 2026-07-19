@@ -5,7 +5,7 @@ mod render;
 mod scrollbar;
 
 use egui::{Context, FontId, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, Terminal};
 
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
@@ -19,6 +19,10 @@ use super::primary_selection::PrimarySelection;
 
 const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT_FACTOR: f32 = 1.3;
+
+const fn grid_cache_allowed(content_requires_refresh: bool, body_hovered: bool, drag_active: bool) -> bool {
+    !content_requires_refresh && !body_hovered && !drag_active
+}
 
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
@@ -99,10 +103,10 @@ impl<'a> TerminalView<'a> {
             clear_terminal_ime_state(ui, interaction.body.id);
         }
 
-        let allow_grid_cache = !self.panel.had_recent_output()
-            && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
-            && !interaction.body.dragged()
-            && !interaction.scrollbar.dragged();
+        let content_requires_refresh =
+            self.panel.had_recent_output() || self.panel.terminal().is_some_and(Terminal::has_selection);
+        let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
+        let allow_grid_cache = grid_cache_allowed(content_requires_refresh, interaction.body.hovered(), drag_active);
 
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
@@ -171,4 +175,15 @@ fn grid_metrics(ctx: &Context) -> GridMetrics {
 pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
     let metrics = grid_metrics(ctx);
     terminal_viewport_size(available, metrics.char_width, metrics.line_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grid_cache_allowed;
+
+    #[test]
+    fn hovered_terminal_bypasses_grid_cache() {
+        assert!(grid_cache_allowed(false, false, false));
+        assert!(!grid_cache_allowed(false, true, false));
+    }
 }
