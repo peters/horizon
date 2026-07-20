@@ -169,10 +169,36 @@ impl HorizonApp {
             .focused
             .filter(|id| self.board.panel(*id).is_some_and(|panel| panel.terminal().is_some()));
         let Some(speech) = self.speech.as_mut() else {
+            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
             return;
         };
 
-        if let Some(binding) = speech.hotkey_binding() {
+        // Privacy guard: on Wayland and macOS, winit synthesizes no key
+        // release when the window loses focus mid-hold, so the release that
+        // would stop the recording never arrives. Cancel outright — the
+        // microphone must not stay open while another window has focus.
+        let focus_lost = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+        });
+        if focus_lost && speech.recording_target().is_some() {
+            speech.cancel();
+            self.speech_hotkey_held = false;
+            self.speech_hotkey_engaged = false;
+            tracing::info!("window focus lost during dictation; recording cancelled");
+        }
+
+        // While the settings binder is capturing a new hotkey, the pressed
+        // chord must not also trigger the current binding.
+        let capturing_hotkey: bool = ctx
+            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+            .unwrap_or(false);
+
+        if let Some(binding) = speech.hotkey_binding()
+            && !capturing_hotkey
+        {
             let (pressed, released) =
                 ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
             // `speech_hotkey_held` is owned by the terminal event filter
@@ -225,10 +251,16 @@ impl HorizonApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         // Publish the selected backend for the settings UI (relevant when
-        // the config says `auto`).
-        if let Some(backend) = speech.active_backend() {
-            let backend = backend.to_string();
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_active_backend"), backend));
+        // the config says `auto`). Clear it while unknown so a stale value
+        // from before a live config rebuild is not displayed.
+        match speech.active_backend() {
+            Some(backend) => {
+                let backend = backend.to_string();
+                ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_active_backend"), backend));
+            }
+            None => {
+                ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            }
         }
 
         let events = speech.poll();

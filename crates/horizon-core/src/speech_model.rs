@@ -10,12 +10,18 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 /// Speech-relevant metadata extracted from a GGUF header.
+///
+/// Capability fields are `Option` so "the KV is absent" (family default
+/// applies) stays distinguishable from an explicit `false`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SpeechModelInfo {
     /// BCP-47-ish language codes the model declares (`general.languages`).
     pub languages: Vec<String>,
-    /// Whether the model supports the translate task.
-    pub supports_translate: bool,
+    /// Whether the model supports the translate task, when declared.
+    pub supports_translate: Option<bool>,
+    /// Whether the model supports source-language auto-detection, when
+    /// declared (`stt.capability.lang_detect`).
+    pub supports_lang_detect: Option<bool>,
     /// Declared translation target languages (usually `["en"]`).
     pub translate_targets: Vec<String>,
 }
@@ -25,6 +31,10 @@ const GGUF_MAGIC: [u8; 4] = *b"GGUF";
 const MAX_KV_COUNT: u64 = 100_000;
 const MAX_STRING_LEN: u64 = 16 * 1024 * 1024;
 const MAX_ARRAY_LEN: u64 = 1_000_000;
+/// Cumulative allocation budget for all strings this parser materializes.
+/// The parser runs synchronously from the settings UI, so a malformed file
+/// must not be able to demand per-item-cap × item-count memory.
+const MAX_TOTAL_STRING_BYTES: u64 = 8 * 1024 * 1024;
 
 const TYPE_UINT8: u32 = 0;
 const TYPE_INT8: u32 = 1;
@@ -64,26 +74,31 @@ pub fn read_speech_model_info(path: &Path) -> Option<SpeechModelInfo> {
     }
 
     let mut info = SpeechModelInfo::default();
+    let mut budget = MAX_TOTAL_STRING_BYTES;
     let mut found = 0_u8;
     for _ in 0..kv_count {
-        let key = read_string(&mut reader)?;
+        let key = read_string(&mut reader, &mut budget)?;
         let value_type = read_u32(&mut reader)?;
         match (key.as_str(), value_type) {
             ("general.languages", TYPE_ARRAY) => {
-                info.languages = read_string_array(&mut reader)?;
+                info.languages = read_string_array(&mut reader, &mut budget)?;
                 found += 1;
             }
             ("stt.translation.target_languages", TYPE_ARRAY) => {
-                info.translate_targets = read_string_array(&mut reader)?;
+                info.translate_targets = read_string_array(&mut reader, &mut budget)?;
                 found += 1;
             }
             ("stt.capability.translate", TYPE_BOOL) => {
-                info.supports_translate = read_u8(&mut reader)? != 0;
+                info.supports_translate = Some(read_u8(&mut reader)? != 0);
+                found += 1;
+            }
+            ("stt.capability.lang_detect", TYPE_BOOL) => {
+                info.supports_lang_detect = Some(read_u8(&mut reader)? != 0);
                 found += 1;
             }
             (_, value_type) => skip_value(&mut reader, value_type)?,
         }
-        if found == 3 {
+        if found == 4 {
             break;
         }
     }
@@ -108,17 +123,18 @@ fn read_u64(reader: &mut impl Read) -> Option<u64> {
     Some(u64::from_le_bytes(buffer))
 }
 
-fn read_string(reader: &mut impl Read) -> Option<String> {
+fn read_string(reader: &mut impl Read, budget: &mut u64) -> Option<String> {
     let length = read_u64(reader)?;
-    if length > MAX_STRING_LEN {
+    if length > MAX_STRING_LEN || length > *budget {
         return None;
     }
+    *budget -= length;
     let mut buffer = vec![0_u8; usize::try_from(length).ok()?];
     reader.read_exact(&mut buffer).ok()?;
     String::from_utf8(buffer).ok()
 }
 
-fn read_string_array(reader: &mut impl Read) -> Option<Vec<String>> {
+fn read_string_array(reader: &mut impl Read, budget: &mut u64) -> Option<Vec<String>> {
     let element_type = read_u32(reader)?;
     let count = read_u64(reader)?;
     if element_type != TYPE_STRING || count > MAX_ARRAY_LEN {
@@ -126,7 +142,7 @@ fn read_string_array(reader: &mut impl Read) -> Option<Vec<String>> {
     }
     let mut values = Vec::with_capacity(usize::try_from(count.min(1024)).ok()?);
     for _ in 0..count {
-        values.push(read_string(reader)?);
+        values.push(read_string(reader, budget)?);
     }
     Some(values)
 }
@@ -243,10 +259,47 @@ mod tests {
             info,
             SpeechModelInfo {
                 languages: vec!["no".into(), "nn".into(), "en".into()],
-                supports_translate: true,
+                supports_translate: Some(true),
+                supports_lang_detect: None,
                 translate_targets: vec!["en".into()],
             }
         );
+    }
+
+    #[test]
+    fn absent_capability_keys_stay_none() {
+        // A header carrying only file_type + languages: capability fields
+        // must stay None (family default), not become false.
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GGUF");
+        out.extend_from_slice(&3_u32.to_le_bytes());
+        out.extend_from_slice(&0_u64.to_le_bytes());
+        out.extend_from_slice(&2_u64.to_le_bytes());
+        push_string(&mut out, "general.file_type");
+        out.extend_from_slice(&4_u32.to_le_bytes()); // UINT32
+        out.extend_from_slice(&1_u32.to_le_bytes());
+        push_kv_string_array(&mut out, "general.languages", &["no", "nn", "en"]);
+
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(&out).expect("write gguf");
+        let info = read_speech_model_info(file.path()).expect("parse");
+        assert_eq!(info.supports_translate, None);
+        assert_eq!(info.supports_lang_detect, None);
+        assert_eq!(info.languages.len(), 3);
+    }
+
+    #[test]
+    fn rejects_headers_exceeding_the_string_budget() {
+        // One KV claiming a 9 MiB string exceeds the 8 MiB total budget.
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GGUF");
+        out.extend_from_slice(&3_u32.to_le_bytes());
+        out.extend_from_slice(&0_u64.to_le_bytes());
+        out.extend_from_slice(&1_u64.to_le_bytes());
+        out.extend_from_slice(&(9_u64 * 1024 * 1024).to_le_bytes()); // key length
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(&out).expect("write gguf");
+        assert!(read_speech_model_info(file.path()).is_none());
     }
 
     #[test]

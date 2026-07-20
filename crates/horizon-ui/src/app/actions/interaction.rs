@@ -128,6 +128,11 @@ fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
 
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
+        // A chord being captured by the settings hotkey binder must not
+        // trigger the shortcut it happens to match.
+        if super::super::shortcuts::hotkey_capture_active(ctx) {
+            return;
+        }
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
             (
                 shortcut_pressed(input, self.shortcuts.fullscreen_panel),

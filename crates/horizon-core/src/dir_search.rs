@@ -44,7 +44,10 @@ fn home_dir() -> PathBuf {
     std::env::var("HOME").map_or_else(|_| PathBuf::from("/"), PathBuf::from)
 }
 
-fn expand_tilde(input: &str) -> PathBuf {
+/// Expand a leading `~` to the user's home directory, like the other
+/// path-taking config fields (workspace `cwd`, ssh `identity_file`) do.
+#[must_use]
+pub fn expand_tilde(input: &str) -> PathBuf {
     if let Some(rest) = input.strip_prefix('~') {
         let home = home_dir();
         if rest.is_empty() {

@@ -76,7 +76,10 @@ impl Settings {
             _ => None,
         };
         Self {
-            model_path: config.model.clone(),
+            // `~/models/...` must work like every other path in the config.
+            model_path: horizon_core::dir_search::expand_tilde(config.model.trim())
+                .to_string_lossy()
+                .into_owned(),
             language,
             task,
             target_language,

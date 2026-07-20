@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use egui::Ui;
 use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
 use horizon_core::{AppearanceTheme, Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
@@ -201,7 +199,11 @@ fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
             &format!(
                 "{} languages · translate: {}",
                 info.languages.len(),
-                if info.supports_translate { "yes" } else { "no" }
+                match info.supports_translate {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "family default",
+                }
             ),
         ),
         None => super::dim_label(ui, "model metadata unavailable — free-form language entry"),
@@ -223,13 +225,17 @@ fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Spe
                 .selected_text(config.features.speech.language.clone())
                 .height(240.0)
                 .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(
-                            &mut config.features.speech.language,
-                            "auto".to_string(),
-                            "auto (detect)",
-                        )
-                        .changed();
+                    // Some models declare stt.capability.lang_detect = false
+                    // and require an explicit source language.
+                    if info.supports_lang_detect != Some(false) {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.features.speech.language,
+                                "auto".to_string(),
+                                "auto (detect)",
+                            )
+                            .changed();
+                    }
                     for code in &info.languages {
                         changed |= ui
                             .selectable_value(&mut config.features.speech.language, code.clone(), code)
@@ -251,8 +257,9 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
     let mut changed = false;
     ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
     let targets: Vec<String> = match model_info {
-        Some(info) if info.supports_translate && !info.translate_targets.is_empty() => info.translate_targets.clone(),
-        Some(info) if !info.supports_translate => Vec::new(),
+        Some(info) if info.supports_translate == Some(false) => Vec::new(),
+        Some(info) if !info.translate_targets.is_empty() => info.translate_targets.clone(),
+        // Absent metadata: the family default applies, so still offer English.
         _ => vec!["en".to_string()],
     };
     let selected = match config.features.speech.task {
@@ -282,7 +289,7 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
                 }
             }
         });
-    if matches!(model_info, Some(info) if !info.supports_translate)
+    if matches!(model_info, Some(info) if info.supports_translate == Some(false))
         && config.features.speech.task == SpeechTask::Translate
     {
         ui.end_row();
@@ -332,7 +339,7 @@ fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
     if let Some(cached) = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(key)) {
         return cached;
     }
-    let parsed = read_speech_model_info(Path::new(trimmed));
+    let parsed = read_speech_model_info(&horizon_core::dir_search::expand_tilde(trimmed));
     ui.data_mut(|data| data.insert_temp(key, parsed.clone()));
     parsed
 }
@@ -402,8 +409,13 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
 /// unsupported keys, malformed chords, and overlaps with global shortcuts.
 fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &Config) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
-    if modifiers.command || modifiers.ctrl {
+    // `Ctrl` is the platform-primary token (Command on macOS); a physical
+    // Control on macOS sets `ctrl` without `command` and serializes as the
+    // distinct `Control` token.
+    if modifiers.command {
         parts.push("Ctrl");
+    } else if modifiers.ctrl {
+        parts.push("Control");
     }
     if modifiers.alt {
         parts.push("Alt");

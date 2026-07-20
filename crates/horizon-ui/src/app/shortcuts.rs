@@ -9,6 +9,14 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
     events.iter().any(|event| shortcut_event_matches(event, binding))
 }
 
+/// Whether the settings hotkey binder is currently capturing a chord. While
+/// true, global shortcut handlers must not act on key presses — the user is
+/// aiming at the binder, not at the shortcut the chord happens to match.
+pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+        .unwrap_or(false)
+}
+
 /// Scan a frame's events for a press (initial, non-repeat) and a release of
 /// `binding`. The release matches on the key alone because modifiers are
 /// often released before the main key in push-to-talk usage.

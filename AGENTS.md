@@ -45,7 +45,7 @@ cargo run --release
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --features speech -- -D warnings
 ```
 
 If any step fails, read the error, fix the prerequisite, and retry. On Linux, missing system headers are the most common issue — look for `pkg-config` or linker errors and install the corresponding `-dev` package.
@@ -88,10 +88,12 @@ crates/
 ```bash
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
+# `--features speech` is the widest runner-buildable set (GPU features need
+# machine toolchains and add no Rust surface; needs libasound2-dev on Linux)
 RUSTFLAGS="-D warnings" cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --features speech -- -D warnings
 cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
+cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
 - Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
@@ -134,7 +136,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 | Tier | Command | Status |
 |------|---------|--------|
-| Blocking | `cargo clippy --all-targets --all-features -- -D warnings` | Must pass |
+| Blocking | `cargo clippy --all-targets --features speech -- -D warnings` | Must pass |
 | Strict | `cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
 | Pedantic | `cargo clippy ... -W clippy::pedantic` | Advisory (will promote) |
 
