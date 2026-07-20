@@ -478,6 +478,10 @@ pub struct SpeechConfig {
     /// Source language hint (ISO code such as `no`, `nn`, `en`) or `auto`.
     pub language: String,
     pub task: SpeechTask,
+    /// Destination language for the translate task (ISO code). The set the
+    /// model actually supports comes from its GGUF metadata; whisper models
+    /// translate to English only.
+    pub target_language: String,
     pub backend: SpeechBackend,
     /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
     pub hotkey: String,
@@ -491,6 +495,7 @@ impl Default for SpeechConfig {
             model: String::new(),
             language: "auto".to_string(),
             task: SpeechTask::Transcribe,
+            target_language: "en".to_string(),
             backend: SpeechBackend::Auto,
             hotkey: "F9".to_string(),
             hotkey_mode: SpeechHotkeyMode::Hold,

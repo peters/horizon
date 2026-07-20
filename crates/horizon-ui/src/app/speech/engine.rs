@@ -24,6 +24,8 @@ pub struct SpeechSystem {
     /// Monotonic recording generation; results tagged with an older value
     /// are stale (from a cancelled/failed recording) and are ignored.
     generation: u64,
+    /// Backend the loaded model actually runs on (known after first use).
+    active_backend: Option<String>,
 }
 
 impl SpeechSystem {
@@ -64,7 +66,15 @@ impl SpeechSystem {
             binding,
             hotkey_mode: config.hotkey_mode,
             generation: 0,
+            active_backend: None,
         })
+    }
+
+    /// The backend the model actually selected, once known (useful when the
+    /// configured backend is `auto`).
+    #[must_use]
+    pub fn active_backend(&self) -> Option<&str> {
+        self.active_backend.as_deref()
     }
 
     #[must_use]
@@ -166,14 +176,20 @@ impl SpeechSystem {
         }
 
         while let Some(event) = self.worker.try_recv_event() {
-            self.state = State::Idle;
             match event {
+                WorkerEvent::ModelLoaded { backend } => {
+                    self.active_backend = Some(backend);
+                }
                 WorkerEvent::Done { target, text } => {
+                    self.state = State::Idle;
                     if !text.is_empty() {
                         events.push(SpeechEvent::Text { target, text });
                     }
                 }
-                WorkerEvent::Failed { message } => events.push(SpeechEvent::Error(message)),
+                WorkerEvent::Failed { message } => {
+                    self.state = State::Idle;
+                    events.push(SpeechEvent::Error(message));
+                }
             }
         }
 

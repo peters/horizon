@@ -343,7 +343,24 @@ The push-to-talk hotkey listens in the main window (it targets the focused panel
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
 
-**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml`, restart Horizon, and verify the mic button appears in panel title bars.
+Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
+
+### Norwegian dictation (NB-Whisper)
+
+For Norwegian — including dialects — the strongest model is **NB-Whisper Large**, a Whisper fine-tune by the National Library of Norway ([NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large), trained on ~20 000 hours of Norwegian speech). It is not distributed as a GGUF, so convert it once with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (community whisper fine-tunes convert like the stock checkpoints; NbAiLab ships sharded safetensors that must be merged into a single `model.safetensors` first), quantize to `Q8_0`, then:
+
+```yaml
+features:
+  speech:
+    enabled: true
+    model: /path/to/nb-whisper-large-Q8_0.gguf
+    language: "no"        # bokmål output; "nn" for nynorsk
+    task: transcribe
+```
+
+Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
+
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears in panel title bars.
 
 ---
 

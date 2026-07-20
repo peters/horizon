@@ -168,6 +168,10 @@ pub struct HorizonApp {
     /// Push-to-talk chord is currently held (used to keep its key events,
     /// repeats, and release out of the terminal input stream).
     speech_hotkey_held: bool,
+    /// A chord press was observed by the hotkey handler; releases only stop
+    /// a recording when this is set (a bare-key release must not stop a
+    /// mic-button recording).
+    speech_hotkey_engaged: bool,
     /// Escape was consumed to cancel a recording this frame.
     speech_escape_cancelled: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
@@ -296,8 +300,9 @@ impl HorizonApp {
         app
     }
 
-    fn initial_state(config: &Config, bootstrap: AppBootstrap) -> Self {
-        let AppBootstrap {
+    fn initial_state(
+        config: &Config,
+        AppBootstrap {
             config_path,
             session_store,
             observed_keyboard_inputs,
@@ -308,8 +313,8 @@ impl HorizonApp {
             next_surge_update_check_at,
             shortcuts,
             action_commands_cache,
-        } = bootstrap;
-
+        }: AppBootstrap,
+    ) -> Self {
         Self {
             board,
             panels_to_close: Vec::new(),
@@ -345,6 +350,7 @@ impl HorizonApp {
             template_config: config.clone(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
             speech_hotkey_held: false,
+            speech_hotkey_engaged: false,
             speech_escape_cancelled: false,
             shortcuts,
             presets: config.resolved_presets(),

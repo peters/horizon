@@ -43,6 +43,11 @@ impl SpeechSystem {
         false
     }
 
+    #[must_use]
+    pub fn active_backend(&self) -> Option<&str> {
+        None
+    }
+
     pub fn toggle(&mut self, _target: PanelId) {}
 
     pub fn start(&mut self, _target: PanelId) {}

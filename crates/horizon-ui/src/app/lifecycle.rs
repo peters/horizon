@@ -177,6 +177,16 @@ impl HorizonApp {
                 ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
             // `speech_hotkey_held` is owned by the terminal event filter
             // (`swallow_speech_hotkey_event`), which runs later in the frame.
+            if pressed {
+                self.speech_hotkey_engaged = true;
+            }
+            // A release only counts if this app observed the chord press: a
+            // bare-key release (e.g. typing `k` with a Ctrl+K binding) must
+            // not stop a recording started from the mic button.
+            let released = released && self.speech_hotkey_engaged;
+            if released {
+                self.speech_hotkey_engaged = false;
+            }
             match speech.hotkey_mode() {
                 horizon_core::SpeechHotkeyMode::Hold => {
                     if pressed
@@ -213,6 +223,12 @@ impl HorizonApp {
             // promptly even when the terminal is otherwise idle, but bounded
             // so a long transcription doesn't spin the render loop.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Publish the selected backend for the settings UI (relevant when
+        // the config says `auto`).
+        if let Some(backend) = speech.active_backend() {
+            let backend = backend.to_string();
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_active_backend"), backend));
         }
 
         let events = speech.poll();

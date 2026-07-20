@@ -52,10 +52,15 @@ fn emit_cuda_runtime_link_workaround() {
     let cuda_root = env::var("CUDA_PATH")
         .or_else(|_| env::var("CUDA_HOME"))
         .unwrap_or_else(|_| "/usr/local/cuda".to_string());
-    println!("cargo:rustc-link-search=native={cuda_root}/lib64");
-    // libcuda.so (driver API) resolves from the stubs dir at link time and
-    // from the installed driver at runtime.
-    println!("cargo:rustc-link-search=native={cuda_root}/lib64/stubs");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Windows CUDA toolkits ship import libraries under lib/x64.
+        println!("cargo:rustc-link-search=native={cuda_root}/lib/x64");
+    } else {
+        println!("cargo:rustc-link-search=native={cuda_root}/lib64");
+        // libcuda.so (driver API) resolves from the stubs dir at link time
+        // and from the installed driver at runtime.
+        println!("cargo:rustc-link-search=native={cuda_root}/lib64/stubs");
+    }
     for lib in ["cudart", "cublas", "cublasLt", "cuda"] {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }

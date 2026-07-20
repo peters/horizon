@@ -285,16 +285,13 @@ impl HorizonApp {
         // (where the hotkey handler listens); keep its presses, repeats, and
         // release out of the PTY stream without swallowing unrelated keys.
         // Detached-viewport terminals receive their events unfiltered.
-        let speech_binding = (viewport_id == egui::ViewportId::ROOT)
-            .then(|| {
-                self.speech
-                    .as_ref()
-                    .and_then(super::super::speech::SpeechSystem::hotkey_binding)
-            })
-            .flatten();
-        let Some(binding) = speech_binding else {
+        if viewport_id != egui::ViewportId::ROOT || self.speech.is_none() {
             return terminal_input_events(events, frame_keyboard_events);
-        };
+        }
+        let binding = self
+            .speech
+            .as_ref()
+            .and_then(super::super::speech::SpeechSystem::hotkey_binding);
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
             if self.swallow_speech_hotkey_event(event, binding) {
@@ -312,12 +309,23 @@ impl HorizonApp {
     /// like `Ctrl+K` does not eat bare `K` keystrokes. Once the chord has been
     /// pressed, the key is swallowed regardless of modifier state until its
     /// release is seen — modifiers are often released before the main key.
-    fn swallow_speech_hotkey_event(&mut self, event: &Event, binding: horizon_core::ShortcutBinding) -> bool {
+    /// The Escape consumption applies even with no hotkey configured, because
+    /// mic-button dictation is cancelled with Escape too.
+    fn swallow_speech_hotkey_event(&mut self, event: &Event, binding: Option<horizon_core::ShortcutBinding>) -> bool {
+        if self.speech_escape_cancelled
+            && let Event::Key {
+                key: Key::Escape,
+                pressed,
+                ..
+            } = event
+        {
+            return *pressed;
+        }
+        let Some(binding) = binding else {
+            return false;
+        };
         match event {
             Event::Key { pressed, .. } => {
-                if self.speech_escape_cancelled && matches!(event, Event::Key { key: Key::Escape, .. }) {
-                    return *pressed;
-                }
                 if !event_uses_shortcut_key(event, binding) {
                     return false;
                 }
@@ -336,14 +344,27 @@ impl HorizonApp {
                 }
             }
             Event::Text(text) => {
-                // A bare-letter hotkey also produces text events while held.
+                // Modifier-free bindings also emit text events while held
+                // (letters, digits, and punctuation keys).
                 self.speech_hotkey_held
                     && binding.modifiers == horizon_core::ShortcutModifiers::NONE
-                    && matches!(binding.key, horizon_core::ShortcutKey::Letter(letter)
-                        if text.eq_ignore_ascii_case(&letter.to_string()))
+                    && binding_text_matches(binding.key, text)
             }
             _ => false,
         }
+    }
+}
+
+/// The text a modifier-free shortcut key emits alongside its key event.
+fn binding_text_matches(key: horizon_core::ShortcutKey, text: &str) -> bool {
+    match key {
+        horizon_core::ShortcutKey::Letter(letter) => text.eq_ignore_ascii_case(&letter.to_string()),
+        horizon_core::ShortcutKey::Digit(digit) => text == digit.to_string(),
+        horizon_core::ShortcutKey::Comma => text == ",",
+        horizon_core::ShortcutKey::Minus => text == "-",
+        // `Plus` binds both the + and = keycaps.
+        horizon_core::ShortcutKey::Plus => text == "+" || text == "=",
+        _ => false,
     }
 }
 

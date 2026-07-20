@@ -217,6 +217,16 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
+        // Speech applies live: rebuild the subsystem whenever its config
+        // changed (drops any in-flight recording, which is acceptable for a
+        // settings change). Covers both settings saves and file reloads.
+        if self.template_config.features.speech != config.features.speech {
+            self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
+            self.speech_hotkey_held = false;
+            self.speech_hotkey_engaged = false;
+            self.speech_escape_cancelled = false;
+            tracing::info!("speech configuration changed; speech system rebuilt");
+        }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =

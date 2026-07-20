@@ -1,4 +1,7 @@
+use std::path::Path;
+
 use egui::Ui;
+use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
 use horizon_core::{AppearanceTheme, Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
 use crate::app::speech::built_with_speech;
@@ -117,18 +120,17 @@ fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
 
 fn render_speech_settings(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
-    let speech = &mut config.features.speech;
 
     changed |= ui
         .checkbox(
-            &mut speech.enabled,
+            &mut config.features.speech.enabled,
             egui::RichText::new("Speech Input").color(theme::FG()).size(12.0),
         )
         .changed();
     if built_with_speech() {
         super::dim_label(
             ui,
-            "Dictate into the focused panel with the mic button or the push-to-talk hotkey. Applies on restart.",
+            "Dictate into the focused panel with the mic button or the push-to-talk hotkey. Changes apply live on save.",
         );
     } else {
         super::dim_label(
@@ -137,83 +139,289 @@ fn render_speech_settings(ui: &mut Ui, config: &mut Config) -> bool {
         );
     }
 
-    if !speech.enabled {
+    if !config.features.speech.enabled {
         return changed;
     }
+
+    let model_path = config.features.speech.model.clone();
+    let model_info = cached_speech_model_info(ui, &model_path);
 
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_grid")
         .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
-            changed |= ui
-                .add(egui::TextEdit::singleline(&mut speech.model).desired_width(260.0))
-                .changed();
-            ui.end_row();
-
-            ui.label(egui::RichText::new("Language").color(theme::FG_SOFT()).size(12.0));
-            changed |= ui
-                .add(egui::TextEdit::singleline(&mut speech.language).desired_width(70.0))
-                .changed();
-            ui.end_row();
-
-            ui.label(egui::RichText::new("Task").color(theme::FG_SOFT()).size(12.0));
-            egui::ComboBox::from_id_salt("settings_speech_task")
-                .selected_text(match speech.task {
-                    SpeechTask::Transcribe => "Transcribe",
-                    SpeechTask::Translate => "Translate to English",
-                })
-                .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(&mut speech.task, SpeechTask::Transcribe, "Transcribe")
-                        .changed();
-                    changed |= ui
-                        .selectable_value(&mut speech.task, SpeechTask::Translate, "Translate to English")
-                        .changed();
-                });
-            ui.end_row();
-
-            ui.label(egui::RichText::new("Backend").color(theme::FG_SOFT()).size(12.0));
-            egui::ComboBox::from_id_salt("settings_speech_backend")
-                .selected_text(format!("{:?}", speech.backend))
-                .show_ui(ui, |ui| {
-                    for (value, label) in [
-                        (SpeechBackend::Auto, "Auto"),
-                        (SpeechBackend::Cpu, "CPU"),
-                        (SpeechBackend::Cuda, "CUDA"),
-                        (SpeechBackend::Vulkan, "Vulkan"),
-                        (SpeechBackend::Metal, "Metal"),
-                    ] {
-                        changed |= ui.selectable_value(&mut speech.backend, value, label).changed();
-                    }
-                });
-            ui.end_row();
+            changed |= speech_model_rows(ui, config, model_info.as_ref());
+            changed |= speech_language_row(ui, config, model_info.as_ref());
+            changed |= speech_output_row(ui, config, model_info.as_ref());
+            changed |= speech_backend_row(ui, config);
 
             ui.label(egui::RichText::new("Push-to-talk").color(theme::FG_SOFT()).size(12.0));
-            changed |= ui
-                .add(egui::TextEdit::singleline(&mut speech.hotkey).desired_width(70.0))
-                .changed();
+            changed |= render_hotkey_binder(ui, config);
             ui.end_row();
 
+            // `config` is reborrowed by the hotkey binder above.
+            let speech_reborrow = &mut config.features.speech;
             ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
             egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
-                .selected_text(match speech.hotkey_mode {
+                .selected_text(match speech_reborrow.hotkey_mode {
                     SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
                     SpeechHotkeyMode::Toggle => "Toggle",
                 })
                 .show_ui(ui, |ui| {
                     changed |= ui
-                        .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Hold, "Hold (Ventrilo-style)")
+                        .selectable_value(
+                            &mut speech_reborrow.hotkey_mode,
+                            SpeechHotkeyMode::Hold,
+                            "Hold (Ventrilo-style)",
+                        )
                         .changed();
                     changed |= ui
-                        .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Toggle, "Toggle")
+                        .selectable_value(&mut speech_reborrow.hotkey_mode, SpeechHotkeyMode::Toggle, "Toggle")
                         .changed();
                 });
             ui.end_row();
         });
 
     changed
+}
+
+fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: Option<&SpeechModelInfo>) -> bool {
+    let mut changed = false;
+    ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
+    changed |= ui
+        .add(egui::TextEdit::singleline(&mut config.features.speech.model).desired_width(260.0))
+        .changed();
+    ui.end_row();
+
+    ui.label(String::new());
+    match model_info {
+        Some(info) => super::dim_label(
+            ui,
+            &format!(
+                "{} languages · translate: {}",
+                info.languages.len(),
+                if info.supports_translate { "yes" } else { "no" }
+            ),
+        ),
+        None => super::dim_label(ui, "model metadata unavailable — free-form language entry"),
+    }
+    ui.end_row();
+    changed
+}
+
+fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&SpeechModelInfo>) -> bool {
+    let mut changed = false;
+    ui.label(
+        egui::RichText::new("Spoken language")
+            .color(theme::FG_SOFT())
+            .size(12.0),
+    );
+    match model_info {
+        Some(info) if !info.languages.is_empty() => {
+            egui::ComboBox::from_id_salt("settings_speech_language")
+                .selected_text(config.features.speech.language.clone())
+                .height(240.0)
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(
+                            &mut config.features.speech.language,
+                            "auto".to_string(),
+                            "auto (detect)",
+                        )
+                        .changed();
+                    for code in &info.languages {
+                        changed |= ui
+                            .selectable_value(&mut config.features.speech.language, code.clone(), code)
+                            .changed();
+                    }
+                });
+        }
+        _ => {
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut config.features.speech.language).desired_width(70.0))
+                .changed();
+        }
+    }
+    ui.end_row();
+    changed
+}
+
+fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&SpeechModelInfo>) -> bool {
+    let mut changed = false;
+    ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
+    let targets: Vec<String> = match model_info {
+        Some(info) if info.supports_translate && !info.translate_targets.is_empty() => info.translate_targets.clone(),
+        Some(info) if !info.supports_translate => Vec::new(),
+        _ => vec!["en".to_string()],
+    };
+    let selected = match config.features.speech.task {
+        SpeechTask::Transcribe => "Transcribe (keep spoken language)".to_string(),
+        SpeechTask::Translate => format!("Translate to {}", config.features.speech.target_language),
+    };
+    egui::ComboBox::from_id_salt("settings_speech_output")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            changed |= ui
+                .selectable_value(
+                    &mut config.features.speech.task,
+                    SpeechTask::Transcribe,
+                    "Transcribe (keep spoken language)",
+                )
+                .changed();
+            for target in &targets {
+                let is_selected = config.features.speech.task == SpeechTask::Translate
+                    && config.features.speech.target_language == *target;
+                if ui
+                    .selectable_label(is_selected, format!("Translate to {target}"))
+                    .clicked()
+                {
+                    config.features.speech.task = SpeechTask::Translate;
+                    config.features.speech.target_language.clone_from(target);
+                    changed = true;
+                }
+            }
+        });
+    if matches!(model_info, Some(info) if !info.supports_translate)
+        && config.features.speech.task == SpeechTask::Translate
+    {
+        ui.end_row();
+        ui.label(String::new());
+        super::dim_label(ui, "⚠ this model does not support the translate task");
+    }
+    ui.end_row();
+    changed
+}
+
+fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    ui.label(egui::RichText::new("Backend").color(theme::FG_SOFT()).size(12.0));
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("settings_speech_backend")
+            .selected_text(format!("{:?}", config.features.speech.backend))
+            .show_ui(ui, |ui| {
+                for (value, label) in [
+                    (SpeechBackend::Auto, "Auto"),
+                    (SpeechBackend::Cpu, "CPU"),
+                    (SpeechBackend::Cuda, "CUDA"),
+                    (SpeechBackend::Vulkan, "Vulkan"),
+                    (SpeechBackend::Metal, "Metal"),
+                ] {
+                    changed |= ui
+                        .selectable_value(&mut config.features.speech.backend, value, label)
+                        .changed();
+                }
+            });
+        let active: Option<String> = ui.data(|data| data.get_temp(egui::Id::new("speech_active_backend")));
+        if let Some(active) = active {
+            super::dim_label(ui, &format!("active: {active}"));
+        }
+    });
+    ui.end_row();
+    changed
+}
+
+/// Cache GGUF header parses per model path in egui temp memory so the file
+/// is only re-read when the path changes.
+fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let key = egui::Id::new(("speech_model_info", trimmed));
+    if let Some(cached) = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(key)) {
+        return cached;
+    }
+    let parsed = read_speech_model_info(Path::new(trimmed));
+    ui.data_mut(|data| data.insert_temp(key, parsed.clone()));
+    parsed
+}
+
+/// Current binding label plus a press-to-bind capture flow. Returns whether
+/// the hotkey changed.
+fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
+    let capture_id = egui::Id::new("speech_hotkey_capturing");
+    let error_id = egui::Id::new("speech_hotkey_error");
+    let mut changed = false;
+    let capturing: bool = ui.data(|data| data.get_temp(capture_id)).unwrap_or(false);
+
+    ui.horizontal(|ui| {
+        let current = config.features.speech.hotkey.trim();
+        let label = if current.is_empty() { "(none)" } else { current };
+        ui.label(egui::RichText::new(label).color(theme::FG()).size(12.0).monospace());
+
+        if capturing {
+            super::dim_label(ui, "press a key combination… (Esc cancels)");
+            let captured = ui.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } => Some((*key, *modifiers)),
+                    _ => None,
+                })
+            });
+            if let Some((key, modifiers)) = captured {
+                ui.data_mut(|data| data.insert_temp(capture_id, false));
+                if key != egui::Key::Escape {
+                    match captured_binding_string(key, modifiers, config) {
+                        Ok(binding) => {
+                            config.features.speech.hotkey = binding;
+                            ui.data_mut(|data| data.remove_temp::<String>(error_id));
+                            changed = true;
+                        }
+                        Err(message) => {
+                            ui.data_mut(|data| data.insert_temp(error_id, message));
+                        }
+                    }
+                }
+            }
+        } else {
+            if ui.button("Rebind…").clicked() {
+                ui.data_mut(|data| data.insert_temp(capture_id, true));
+            }
+            if !current.is_empty() && ui.button("Clear").clicked() {
+                config.features.speech.hotkey = String::new();
+                changed = true;
+            }
+        }
+    });
+    let error: Option<String> = ui.data(|data| data.get_temp(error_id));
+    if let Some(error) = error {
+        ui.end_row();
+        ui.label(String::new());
+        super::dim_label(ui, &format!("⚠ {error}"));
+    }
+    changed
+}
+
+/// Build and validate a shortcut string from a captured key event. Rejects
+/// unsupported keys, malformed chords, and overlaps with global shortcuts.
+fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &Config) -> Result<String, String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if modifiers.command || modifiers.ctrl {
+        parts.push("Ctrl");
+    }
+    if modifiers.alt {
+        parts.push("Alt");
+    }
+    if modifiers.shift {
+        parts.push("Shift");
+    }
+    let key_name = key.name();
+    parts.push(key_name);
+    let candidate = parts.join("+");
+
+    let mut probe = config.clone();
+    probe.features.speech.enabled = true;
+    probe.features.speech.hotkey.clone_from(&candidate);
+    match probe.validate() {
+        Ok(()) => Ok(candidate),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {

@@ -14,8 +14,18 @@ pub struct Job {
 }
 
 pub enum WorkerEvent {
-    Done { target: PanelId, text: String },
-    Failed { message: String },
+    /// The model finished loading; reports the backend actually selected
+    /// (interesting when the config says `auto`).
+    ModelLoaded {
+        backend: String,
+    },
+    Done {
+        target: PanelId,
+        text: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 pub struct WorkerHandle {
@@ -47,6 +57,7 @@ struct Settings {
     model_path: String,
     language: Option<String>,
     task: Task,
+    target_language: Option<String>,
     backend: Backend,
 }
 
@@ -56,13 +67,19 @@ impl Settings {
             "" | "auto" => None,
             code => Some(code.to_string()),
         };
+        let task = match config.task {
+            SpeechTask::Transcribe => Task::Transcribe,
+            SpeechTask::Translate => Task::Translate,
+        };
+        let target_language = match (task, config.target_language.trim()) {
+            (Task::Translate, code) if !code.is_empty() => Some(code.to_string()),
+            _ => None,
+        };
         Self {
             model_path: config.model.clone(),
             language,
-            task: match config.task {
-                SpeechTask::Transcribe => Task::Transcribe,
-                SpeechTask::Translate => Task::Translate,
-            },
+            task,
+            target_language,
             backend: match config.backend {
                 SpeechBackend::Auto => Backend::Auto,
                 SpeechBackend::Cpu => Backend::Cpu,
@@ -78,13 +95,17 @@ fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<Wo
     let mut session: Option<Session> = None;
     while let Ok(job) = job_rx.recv() {
         let target = job.target;
-        let result = ensure_session(settings, &mut session).and_then(|()| {
+        let result = ensure_session(settings, &mut session).and_then(|loaded_backend| {
+            if let Some(backend) = loaded_backend {
+                let _ = event_tx.send(WorkerEvent::ModelLoaded { backend });
+            }
             let Some(session) = session.as_mut() else {
                 return Err("transcription session unavailable".to_string());
             };
             let options = RunOptions {
                 task: settings.task,
                 language: settings.language.clone(),
+                target_language: settings.target_language.clone(),
                 ..RunOptions::default()
             };
             session
@@ -114,10 +135,11 @@ fn sanitize_transcript(text: &str) -> String {
 }
 
 /// Lazily create the model-backed session on first use; leaves `session`
-/// populated on success so later jobs reuse it.
-fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<(), String> {
+/// populated on success so later jobs reuse it. Returns the selected
+/// backend name when this call performed the load.
+fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<Option<String>, String> {
     if session.is_some() {
-        return Ok(());
+        return Ok(None);
     }
     if settings.model_path.trim().is_empty() {
         return Err("no speech model configured (features.speech.model)".to_string());
@@ -128,16 +150,13 @@ fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<
     };
     let model = Model::load_with(&settings.model_path, &options)
         .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
-    tracing::info!(
-        model = %settings.model_path,
-        backend = %model.backend(),
-        "speech model loaded"
-    );
+    let backend = model.backend().clone();
+    tracing::info!(model = %settings.model_path, %backend, "speech model loaded");
     let new_session = model
         .session()
         .map_err(|error| format!("failed to create transcription session: {error}"))?;
     *session = Some(new_session);
-    Ok(())
+    Ok(Some(backend))
 }
 
 #[cfg(test)]

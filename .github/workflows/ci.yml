@@ -60,7 +60,7 @@ jobs:
       # Rust surface is identical to `speech` (they only toggle native
       # backends). cpal needs the ALSA headers on Linux.
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - run: cargo clippy --all-targets --features speech -- -D warnings
+      - run: cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 
   clippy-strict:
     name: Clippy (strict)
@@ -116,6 +116,14 @@ jobs:
         with:
           key: ${{ matrix.cache_key }}
       - run: cargo test --workspace
+      # Run the speech-feature tests (resampler, GGUF reader, shortcut
+      # matchers) where the native build is cheapest; the no-mic and
+      # real-model paths stay env-gated off. macOS speech coverage comes
+      # from the machine smoke lanes.
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo test --workspace --features speech
 
   windows-smoke:
     name: Windows test build

@@ -18,7 +18,7 @@ pub(super) use super::panel_chrome::{
 };
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
 use super::speech::MicState;
-use super::util::clamp_panel_size;
+use super::util::{clamp_panel_size, primary_shortcut_label};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
 #[derive(Clone, Copy)]
@@ -419,12 +419,26 @@ impl HorizonApp {
                         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
                     );
                 let mic_response = mic_eligible.then(|| {
+                    let tooltip = self.speech.as_ref().map_or_else(
+                        || "Dictate into this panel (click to start/stop)".to_string(),
+                        |speech| match (speech.hotkey_binding(), speech.hotkey_mode()) {
+                            (Some(binding), horizon_core::SpeechHotkeyMode::Hold) => format!(
+                                "Dictate into this panel (click to start/stop, or hold {})",
+                                binding.display_label(primary_shortcut_label())
+                            ),
+                            (Some(binding), horizon_core::SpeechHotkeyMode::Toggle) => format!(
+                                "Dictate into this panel (click or press {} to start/stop)",
+                                binding.display_label(primary_shortcut_label())
+                            ),
+                            (None, _) => "Dictate into this panel (click to start/stop)".to_string(),
+                        },
+                    );
                     ui.interact(
                         rects.mic.expand2(Vec2::splat(4.0)),
                         ui.make_persistent_id(("panel_mic", panel_id.0)),
                         if interactive { Sense::click() } else { Sense::hover() },
                     )
-                    .on_hover_text("Dictate into this panel (click to start/stop; hold the push-to-talk key)")
+                    .on_hover_text(tooltip)
                 });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
@@ -500,7 +514,13 @@ impl HorizonApp {
                 if snapshot.is_renaming {
                     outcome.rename_action = show_inline_rename_editor(
                         ui,
-                        panel_title_content_rect(rects.titlebar, rects.close, snapshot.workspace_accent.is_some()),
+                        panel_title_content_rect(
+                            rects.titlebar,
+                            // The rename editor must stop left of the mic
+                            // control when one is shown.
+                            if mic_eligible { rects.mic } else { rects.close },
+                            snapshot.workspace_accent.is_some(),
+                        ),
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
                     );
@@ -735,6 +755,10 @@ impl HorizonApp {
             && let Some(speech) = self.speech.as_mut()
         {
             speech.toggle(panel_id);
+            // The hotkey handler already made its repaint decision this
+            // frame; keep frames coming so the new recording's pulse and
+            // polling start immediately.
+            ctx.request_repaint();
         }
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);
