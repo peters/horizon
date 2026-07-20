@@ -173,22 +173,11 @@ impl HorizonApp {
             return;
         };
 
-        // Privacy guard: on Wayland and macOS, winit synthesizes no key
-        // release when the window loses focus mid-hold, so the release that
-        // would stop the recording never arrives. Cancel outright — the
-        // microphone must not stay open while another window has focus.
-        let focus_lost = ctx.input(|input| {
-            input
-                .events
-                .iter()
-                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
-        });
-        if focus_lost && speech.recording_target().is_some() {
-            speech.cancel();
-            self.speech_hotkey_held = false;
-            self.speech_hotkey_engaged = false;
-            tracing::info!("window focus lost during dictation; recording cancelled");
-        }
+        // Seed the per-frame focus aggregate with the root viewport; each
+        // detached viewport ORs itself in during rendering, and the privacy
+        // guard in `finalize_frame` cancels an unattended recording when no
+        // Horizon window has focus (see `cancel_unattended_recording`).
+        self.any_viewport_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding.
@@ -282,6 +271,25 @@ impl HorizonApp {
                     tracing::warn!(%message, "speech input error");
                 }
             }
+        }
+    }
+
+    /// Privacy guard: on Wayland and macOS, winit synthesizes no key release
+    /// when a window loses focus mid-hold, so the release that would stop a
+    /// recording never arrives — and a recording in a detached window gets no
+    /// root-viewport event at all. Evaluated after every viewport rendered:
+    /// if no Horizon window has focus, the microphone must not stay open.
+    fn cancel_unattended_recording(&mut self) {
+        if self.any_viewport_focused {
+            return;
+        }
+        if let Some(speech) = self.speech.as_mut()
+            && speech.recording_target().is_some()
+        {
+            speech.cancel();
+            self.speech_hotkey_held = false;
+            self.speech_hotkey_engaged = false;
+            tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }
     }
 
@@ -507,6 +515,7 @@ impl HorizonApp {
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
+        self.cancel_unattended_recording();
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);

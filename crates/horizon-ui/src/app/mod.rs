@@ -174,6 +174,9 @@ pub struct HorizonApp {
     speech_hotkey_engaged: bool,
     /// Escape was consumed to cancel a recording this frame.
     speech_escape_cancelled: bool,
+    /// Whether any Horizon viewport (root or detached) reported focus this
+    /// frame; evaluated at end of frame to cancel unattended recordings.
+    any_viewport_focused: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -352,6 +355,7 @@ impl HorizonApp {
             speech_hotkey_held: false,
             speech_hotkey_engaged: false,
             speech_escape_cancelled: false,
+            any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
             window_config: config.window.clone(),
