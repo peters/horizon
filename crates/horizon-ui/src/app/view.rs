@@ -173,6 +173,19 @@ impl HorizonApp {
         true
     }
 
+    pub(super) fn focus_workspace_in_rect(&mut self, workspace_id: WorkspaceId, canvas_rect: Rect) -> bool {
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return false;
+        };
+
+        let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, false);
+        self.board.focus_workspace(workspace_id);
+        self.pan_target = None;
+        self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        self.mark_runtime_dirty();
+        true
+    }
+
     pub(super) fn fit_workspace_visible(&mut self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
         if self.workspace_is_detached(workspace_id) {
             return false;

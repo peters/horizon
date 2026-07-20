@@ -55,6 +55,13 @@ pub(crate) struct TerminalGridCache {
     shapes: Vec<Shape>,
 }
 
+impl TerminalGridCache {
+    fn invalidate(&mut self) {
+        self.key = None;
+        self.shapes.clear();
+    }
+}
+
 #[profiling::function]
 pub(super) fn render_grid(
     ui: &egui::Ui,
@@ -66,6 +73,7 @@ pub(super) fn render_grid(
 ) {
     let painter = ui.painter_at(rect);
     let key = GridCacheKey::new(rect, content.display_offset, metrics);
+    let has_selection = content.selection.is_some();
 
     if let Some(grid_cache) = grid_cache {
         if allow_grid_cache && grid_cache.key == Some(key) {
@@ -74,9 +82,19 @@ pub(super) fn render_grid(
         }
 
         let shapes = build_grid_shapes(ui, rect, content, metrics);
-        painter.extend(shapes.iter().cloned());
-        grid_cache.key = Some(key);
-        grid_cache.shapes = shapes;
+        if has_selection {
+            // Copy/cut clear the model selection outside this render pass, and
+            // the cache key tracks only geometry and scroll offset. Retaining
+            // highlighted shapes would replay a stale selection highlight on
+            // the next cache-eligible frame. Nothing outlives this pass, so the
+            // shapes move straight into the painter instead of being cloned.
+            painter.extend(shapes);
+            grid_cache.invalidate();
+        } else {
+            painter.extend(shapes.iter().cloned());
+            grid_cache.key = Some(key);
+            grid_cache.shapes = shapes;
+        }
         return;
     }
 
@@ -437,15 +455,100 @@ fn append_cell_decoration(
 
 #[cfg(test)]
 mod tests {
-    use super::{cell_colors, merge_shape_layers};
+    use super::{GridMetrics, TerminalGridCache, cell_colors, merge_shape_layers, render_grid};
     use crate::theme;
-    use alacritty_terminal::grid::Indexed;
-    use alacritty_terminal::index::{Column, Line, Point};
-    use alacritty_terminal::selection::SelectionRange;
+    use alacritty_terminal::event::{Event as PtyEvent, EventListener};
+    use alacritty_terminal::grid::{Dimensions, Indexed};
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
     use alacritty_terminal::term::cell::Cell;
     use alacritty_terminal::term::color::Colors;
-    use alacritty_terminal::vte::ansi::{Color as TerminalColor, CursorShape, NamedColor};
-    use egui::{Color32, Pos2, Rect, Shape};
+    use alacritty_terminal::term::{Config as TermConfig, Term};
+    use alacritty_terminal::vte::ansi::{self, Color as TerminalColor, CursorShape, NamedColor};
+    use egui::{Color32, FontId, Pos2, Rect, Shape, Vec2};
+
+    struct NoopProxy;
+
+    impl EventListener for NoopProxy {
+        fn send_event(&self, _event: PtyEvent) {}
+    }
+
+    struct TestGridSize;
+
+    impl Dimensions for TestGridSize {
+        fn total_lines(&self) -> usize {
+            4
+        }
+
+        fn screen_lines(&self) -> usize {
+            4
+        }
+
+        fn columns(&self) -> usize {
+            12
+        }
+    }
+
+    fn test_term_with_text(text: &str) -> Term<NoopProxy> {
+        let mut term = Term::new(TermConfig::default(), &TestGridSize, NoopProxy);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(&mut term, text.as_bytes());
+        term
+    }
+
+    fn render_grid_pass(
+        ctx: &egui::Context,
+        term: &mut Term<NoopProxy>,
+        metrics: &GridMetrics,
+        cache: &mut TerminalGridCache,
+        allow_grid_cache: bool,
+    ) {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(96.0, 64.0));
+                render_grid(
+                    ui,
+                    rect,
+                    term.renderable_content(),
+                    metrics,
+                    Some(cache),
+                    allow_grid_cache,
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn selection_render_invalidates_grid_cache_instead_of_storing_highlight() {
+        let ctx = egui::Context::default();
+        let mut term = test_term_with_text("hello world");
+        let metrics = GridMetrics {
+            char_width: 8.0,
+            line_height: 16.0,
+            font_id: FontId::monospace(13.0),
+        };
+        let mut cache = TerminalGridCache::default();
+
+        render_grid_pass(&ctx, &mut term, &metrics, &mut cache, true);
+        let clean_key = cache.key;
+        let clean_shape_count = cache.shapes.len();
+        assert!(clean_key.is_some());
+        assert!(clean_shape_count > 0);
+
+        let mut selection = Selection::new(SelectionType::Simple, Point::new(Line(0), Column(0)), Side::Left);
+        selection.update(Point::new(Line(0), Column(4)), Side::Right);
+        term.selection = Some(selection);
+        render_grid_pass(&ctx, &mut term, &metrics, &mut cache, false);
+        // The selection is cleared outside the render pass by copy/cut, so a
+        // cache primed here would replay the highlight on the next quiet frame.
+        assert_eq!(cache.key, None);
+        assert!(cache.shapes.is_empty());
+
+        term.selection = None;
+        render_grid_pass(&ctx, &mut term, &metrics, &mut cache, true);
+        assert_eq!(cache.key, clean_key);
+        assert_eq!(cache.shapes.len(), clean_shape_count);
+    }
 
     #[test]
     fn merge_shape_layers_keeps_layer_order() {

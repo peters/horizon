@@ -406,6 +406,10 @@ impl HorizonApp {
     pub(super) fn render_active_view(&mut self, ctx: &Context) {
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
+            // Detached windows are immediate viewports: egui closes any child
+            // viewport that is not shown during a pass, so they must keep
+            // rendering while a panel is fullscreen in the root window.
+            self.render_detached_viewports(ctx);
             return;
         }
 

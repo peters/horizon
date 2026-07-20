@@ -101,7 +101,7 @@ mod tests {
     };
     use super::support::{
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
-        detached_workspace_ids,
+        detached_workspace_ids, fullscreen_panel_is_renderable,
     };
     use super::{
         DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, inherit_workspace_cwd,
@@ -277,6 +277,67 @@ mod tests {
 
         assert!(ids.contains(&detached));
         assert!(!ids.contains(&attached));
+    }
+
+    fn board_with_detached_workspace() -> (
+        Board,
+        PanelId,
+        PanelId,
+        BTreeMap<String, DetachedWorkspaceViewportState>,
+    ) {
+        let mut board = Board::new();
+        let attached = board.create_workspace("attached");
+        let detached = board.create_workspace("detached");
+        let attached_panel = board
+            .create_panel(PanelOptions::default(), attached)
+            .expect("attached panel");
+        let detached_panel = board
+            .create_panel(PanelOptions::default(), detached)
+            .expect("detached panel");
+        let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
+
+        let detached_workspaces = BTreeMap::from([(
+            detached_local_id,
+            DetachedWorkspaceViewportState::new(WindowConfig::default()),
+        )]);
+
+        (board, attached_panel, detached_panel, detached_workspaces)
+    }
+
+    #[test]
+    fn fullscreen_panel_is_renderable_for_panels_on_the_main_canvas() {
+        let (board, attached_panel, _, detached_workspaces) = board_with_detached_workspace();
+
+        assert!(fullscreen_panel_is_renderable(
+            &board,
+            &detached_workspaces,
+            attached_panel
+        ));
+    }
+
+    #[test]
+    fn fullscreen_panel_is_not_renderable_for_panels_in_a_detached_workspace() {
+        let (board, _, detached_panel, detached_workspaces) = board_with_detached_workspace();
+
+        // The detached window paints this panel in its own viewport; allowing it
+        // to also go fullscreen in the root window renders one PTY twice a frame.
+        assert!(!fullscreen_panel_is_renderable(
+            &board,
+            &detached_workspaces,
+            detached_panel
+        ));
+    }
+
+    #[test]
+    fn fullscreen_panel_is_not_renderable_once_the_panel_is_closed() {
+        let (mut board, attached_panel, _, detached_workspaces) = board_with_detached_workspace();
+        board.close_panel(attached_panel);
+
+        assert!(!fullscreen_panel_is_renderable(
+            &board,
+            &detached_workspaces,
+            attached_panel
+        ));
     }
 
     #[test]

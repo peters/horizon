@@ -6,6 +6,7 @@ use horizon_core::WorkspaceId;
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::shortcuts::{event_uses_shortcut_key, shortcut_event_matches, shortcut_pressed};
 use super::super::{CanvasPanSpaceKeyState, HorizonApp};
+use super::support::fullscreen_panel_is_renderable;
 
 impl CanvasPanSpaceKeyState {
     fn filter_terminal_events(
@@ -119,6 +120,12 @@ fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
     !modifiers.ctrl && !modifiers.command && !modifiers.alt
 }
 
+// egui feeds every wheel/trackpad event into both raw_scroll_delta and
+// smooth_scroll_delta; summing them would pan the canvas twice per event.
+fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
+    input.smooth_scroll_delta
+}
+
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
@@ -143,7 +150,7 @@ impl HorizonApp {
         }
 
         if let Some(panel_id) = self.fullscreen_panel
-            && self.board.panel(panel_id).is_none()
+            && !fullscreen_panel_is_renderable(&self.board, &self.detached_workspaces, panel_id)
         {
             self.fullscreen_panel = None;
         }
@@ -179,7 +186,7 @@ impl HorizonApp {
                 input.pointer.primary_down(),
                 input.key_down(egui::Key::Space),
                 input.modifiers,
-                input.smooth_scroll_delta + input.raw_scroll_delta,
+                wheel_pan_scroll_input(input),
                 input.pointer.delta(),
                 input.zoom_delta(),
             )
@@ -388,7 +395,54 @@ mod tests {
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
-    use super::{MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active};
+    use super::{
+        MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active,
+        wheel_pan_scroll_input,
+    };
+
+    #[test]
+    fn wheel_pan_scroll_input_counts_each_wheel_event_once() {
+        let delta = Vec2::new(3.0, -5.0);
+        let raw_input = egui::RawInput {
+            events: vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta,
+                modifiers: Modifiers::NONE,
+            }],
+            ..egui::RawInput::default()
+        };
+
+        let input = egui::InputState::default().begin_pass(raw_input, false, 1.0, egui::InputOptions::default());
+
+        // A point-unit delta below egui's smoothing threshold lands in full in
+        // both raw_scroll_delta and smooth_scroll_delta within the same pass,
+        // so reading both would double every trackpad gesture.
+        assert_eq!(input.raw_scroll_delta, delta);
+        assert_eq!(input.smooth_scroll_delta, delta);
+        assert_eq!(wheel_pan_scroll_input(&input), delta);
+    }
+
+    #[test]
+    fn wheel_pan_scroll_input_reads_only_the_smoothed_delta_for_notched_wheels() {
+        let raw_input = egui::RawInput {
+            events: vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -14.0),
+                modifiers: Modifiers::NONE,
+            }],
+            ..egui::RawInput::default()
+        };
+
+        let input = egui::InputState::default().begin_pass(raw_input, false, 1.0 / 60.0, egui::InputOptions::default());
+
+        // Line-unit notches bypass egui's smoothing threshold, so the raw and
+        // smoothed deltas diverge within one pass. That divergence is what makes
+        // this assertion discriminating: the point-unit case above passes for
+        // either field, so without this a regression to the raw delta — the
+        // exact doubling this fix removes — would go undetected.
+        assert_ne!(input.raw_scroll_delta, input.smooth_scroll_delta);
+        assert_eq!(wheel_pan_scroll_input(&input), input.smooth_scroll_delta);
+    }
 
     #[test]
     fn plain_space_is_delayed_until_release() {
