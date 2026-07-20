@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 use horizon_core::{PanelId, SpeechBackend, SpeechConfig, SpeechTask};
-use transcribe_cpp::{Backend, Model, ModelOptions, RunOptions, Session, Task};
+use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
 
 pub struct Job {
     pub pcm: Vec<f32>,
@@ -31,6 +31,17 @@ pub enum WorkerEvent {
 pub struct WorkerHandle {
     job_tx: Sender<Job>,
     event_rx: Receiver<WorkerEvent>,
+    cancel: CancelToken,
+}
+
+/// Dropping the handle (e.g. a live config rebuild replacing the speech
+/// system) must not leak an in-flight inference: cancel it so the worker
+/// thread unblocks, sees its closed job channel, and exits — releasing the
+/// model instead of running to completion beside a freshly loaded one.
+impl Drop for WorkerHandle {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 impl WorkerHandle {
@@ -38,10 +49,16 @@ impl WorkerHandle {
         let (job_tx, job_rx) = channel();
         let (event_tx, event_rx) = channel();
         let settings = Settings::from_config(config);
+        let cancel = CancelToken::new();
+        let worker_cancel = cancel.clone();
         thread::Builder::new()
             .name("speech-transcribe".into())
-            .spawn(move || worker_loop(&settings, &job_rx, &event_tx))?;
-        Ok(Self { job_tx, event_rx })
+            .spawn(move || worker_loop(&settings, &worker_cancel, &job_rx, &event_tx))?;
+        Ok(Self {
+            job_tx,
+            event_rx,
+            cancel,
+        })
     }
 
     pub fn submit(&self, job: Job) {
@@ -94,11 +111,14 @@ impl Settings {
     }
 }
 
-fn worker_loop(settings: &Settings, job_rx: &Receiver<Job>, event_tx: &Sender<WorkerEvent>) {
+fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>, event_tx: &Sender<WorkerEvent>) {
     let mut session: Option<Session> = None;
     while let Ok(job) = job_rx.recv() {
+        if cancel.is_cancelled() {
+            return;
+        }
         let target = job.target;
-        let result = ensure_session(settings, &mut session).and_then(|loaded_backend| {
+        let result = ensure_session(settings, cancel, &mut session).and_then(|loaded_backend| {
             if let Some(backend) = loaded_backend {
                 let _ = event_tx.send(WorkerEvent::ModelLoaded { backend });
             }
@@ -140,7 +160,11 @@ fn sanitize_transcript(text: &str) -> String {
 /// Lazily create the model-backed session on first use; leaves `session`
 /// populated on success so later jobs reuse it. Returns the selected
 /// backend name when this call performed the load.
-fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<Option<String>, String> {
+fn ensure_session(
+    settings: &Settings,
+    cancel: &CancelToken,
+    session: &mut Option<Session>,
+) -> Result<Option<String>, String> {
     if session.is_some() {
         return Ok(None);
     }
@@ -155,9 +179,10 @@ fn ensure_session(settings: &Settings, session: &mut Option<Session>) -> Result<
         .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
     let backend = model.backend().clone();
     tracing::info!(model = %settings.model_path, %backend, "speech model loaded");
-    let new_session = model
+    let mut new_session = model
         .session()
         .map_err(|error| format!("failed to create transcription session: {error}"))?;
+    new_session.set_cancel_token(cancel);
     *session = Some(new_session);
     Ok(Some(backend))
 }
