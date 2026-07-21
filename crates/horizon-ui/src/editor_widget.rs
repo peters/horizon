@@ -34,7 +34,10 @@ impl<'a> MarkdownEditorView<'a> {
 
         let body_rect = Rect::from_min_max(Pos2::new(ui.cursor().min.x, mode_rect.max.y + 2.0), ui.max_rect().max);
 
-        if ui.input(|input| shortcut_pressed(input, save_shortcut))
+        // Suppress the save chord while the speech hotkey binder is
+        // capturing, so rebinding e.g. Ctrl+Shift+S does not also save.
+        if !crate::app::shortcuts::hotkey_binder_capturing(ui.ctx())
+            && ui.input(|input| shortcut_pressed(input, save_shortcut))
             && let Some(ed) = self.panel.content.editor_mut()
         {
             ed.save_if_dirty();

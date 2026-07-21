@@ -228,7 +228,17 @@ impl SpeechSystem {
             }
             match pcm {
                 Ok(pcm) => {
-                    if let State::AwaitingPcm { target, profile } = self.state {
+                    // AwaitingPcm is the normal stop path; Recording happens
+                    // when the capture thread auto-finalized at the length
+                    // cap without a Stop command. Both deliver the captured
+                    // audio to a worker.
+                    let pending = match self.state {
+                        State::AwaitingPcm { target, profile } | State::Recording { target, profile } => {
+                            Some((target, profile))
+                        }
+                        _ => None,
+                    };
+                    if let Some((target, profile)) = pending {
                         if pcm.len() < MIN_PCM_SAMPLES {
                             tracing::debug!(samples = pcm.len(), "speech recording too short; dropped");
                             self.state = State::Idle;
