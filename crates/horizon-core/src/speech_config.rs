@@ -106,8 +106,8 @@ impl SpeechConfig {
 pub enum SpeechTask {
     #[default]
     Transcribe,
-    /// Translate speech into English (requires a model whose translate task
-    /// works, e.g. stock whisper-large-v3).
+    /// Translate speech into the configured `target_language` (requires a
+    /// model whose translate task works, e.g. stock whisper-large-v3).
     Translate,
 }
 

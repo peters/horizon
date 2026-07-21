@@ -149,6 +149,12 @@ fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Spe
     );
     match model_info {
         Some(info) if !info.languages.is_empty() => {
+            // A model that forbids auto-detect needs an explicit source; if
+            // the value is still `auto`, adopt the first declared language.
+            if info.supports_lang_detect == Some(false) && config.features.speech.language.trim() == "auto" {
+                config.features.speech.language.clone_from(&info.languages[0]);
+                changed = true;
+            }
             egui::ComboBox::from_id_salt("settings_speech_language")
                 .selected_text(config.features.speech.language.clone())
                 .height(240.0)
@@ -193,6 +199,19 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
         // Absent metadata: the family default applies, so still offer English.
         _ => vec!["en".to_string()],
     };
+    // If the spoken language changed so the configured target is no longer
+    // valid, snap to the first valid target, or fall back to transcription.
+    if config.features.speech.task == SpeechTask::Translate
+        && !targets.is_empty()
+        && !targets.contains(&config.features.speech.target_language)
+    {
+        config.features.speech.target_language.clone_from(&targets[0]);
+        changed = true;
+    }
+    if config.features.speech.task == SpeechTask::Translate && targets.is_empty() {
+        config.features.speech.task = SpeechTask::Transcribe;
+        changed = true;
+    }
     let selected = match config.features.speech.task {
         SpeechTask::Transcribe => "Transcribe (keep spoken language)".to_string(),
         SpeechTask::Translate => format!("Translate to {}", config.features.speech.target_language),

@@ -195,7 +195,8 @@ impl HorizonApp {
             && self.board.panel(target).is_none()
         {
             speech.cancel();
-            self.speech_held_bindings.clear();
+            // Held bindings persist until their release is consumed, so a
+            // key-up after the panel vanished cannot leak into the terminal.
             self.speech_engaged_profile = None;
             tracing::info!("recording target panel disappeared; recording cancelled");
         }
@@ -218,7 +219,6 @@ impl HorizonApp {
         {
             speech.stop();
             self.speech_engaged_profile = None;
-            self.speech_held_bindings.clear();
         }
 
         // While the settings binder is capturing a new hotkey, the pressed
@@ -346,7 +346,6 @@ impl HorizonApp {
             && speech.recording_target().is_some()
         {
             speech.cancel();
-            self.speech_held_bindings.clear();
             self.speech_engaged_profile = None;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }
