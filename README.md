@@ -345,6 +345,37 @@ Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.
 
 Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
 
+### Speech profiles: one key per language
+
+For switching languages without touching settings, define **profiles** — each with its own model, language, output, and push-to-talk key. The key *is* the language (Ventrilo-style channel binds): hold **F1** to dictate Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Each profile's model loads lazily on first use and then stays warm.
+
+```yaml
+features:
+  speech:
+    enabled: true
+    backend: auto
+    hotkey_mode: hold
+    profiles:
+      - name: Norsk
+        model: ~/models/nb-whisper-large-Q8_0.gguf
+        language: "no"
+        task: transcribe
+        hotkey: F1
+      - name: English
+        model: ~/models/whisper-large-v3-Q8_0.gguf
+        language: en
+        task: transcribe
+        hotkey: F2
+      - name: NO→EN
+        model: ~/models/whisper-large-v3-Q8_0.gguf
+        language: "no"
+        task: translate
+        target_language: en
+        hotkey: F3
+```
+
+Profile hotkeys are validated against each other and against every global shortcut. The mic button uses the last-used profile; with no `profiles:` list, the flat `model`/`language`/`hotkey` fields act as a single profile as before.
+
 ### Norwegian dictation (NB-Whisper)
 
 For Norwegian — including dialects — the strongest model is **NB-Whisper Large**, a Whisper fine-tune by the National Library of Norway ([NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large), trained on ~20 000 hours of Norwegian speech). It is not distributed as a GGUF, so convert it once with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (community whisper fine-tunes convert like the stock checkpoints; NbAiLab ships sharded safetensors that must be merged into a single `model.safetensors` first), quantize to `Q8_0`, then:

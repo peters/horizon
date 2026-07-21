@@ -141,6 +141,40 @@ fn render_speech_settings(ui: &mut Ui, config: &mut Config) -> bool {
         return changed;
     }
 
+    // With named profiles, the flat single-model editor below would
+    // mislead; show the profile summary and defer editing to the YAML tab
+    // (which live-previews and validates on save).
+    if !config.features.speech.profiles.is_empty() {
+        ui.add_space(6.0);
+        egui::Grid::new("settings_speech_profiles_grid")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                for profile in &config.features.speech.profiles {
+                    let key = if profile.hotkey.trim().is_empty() {
+                        "(mic button)".to_string()
+                    } else {
+                        profile.hotkey.clone()
+                    };
+                    ui.label(egui::RichText::new(key).color(theme::FG()).size(12.0).monospace());
+                    let model_name = std::path::Path::new(&profile.model)
+                        .file_name()
+                        .map_or_else(|| profile.model.clone(), |name| name.to_string_lossy().into_owned());
+                    let output = match profile.task {
+                        SpeechTask::Transcribe => profile.language.clone(),
+                        SpeechTask::Translate => format!("{} → {}", profile.language, profile.target_language),
+                    };
+                    super::dim_label(ui, &format!("{} — {output} · {model_name}", profile.name));
+                    ui.end_row();
+                }
+            });
+        super::dim_label(
+            ui,
+            "Speech profiles are edited in the YAML tab (features.speech.profiles).",
+        );
+        return changed;
+    }
+
     let model_path = config.features.speech.model.clone();
     let model_info = cached_speech_model_info(ui, &model_path);
 

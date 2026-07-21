@@ -222,8 +222,8 @@ impl HorizonApp {
         // settings change). Covers both settings saves and file reloads.
         if self.template_config.features.speech != config.features.speech {
             self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
-            self.speech_hotkey_held = false;
-            self.speech_hotkey_engaged = false;
+            self.speech_held_binding = None;
+            self.speech_engaged_profile = None;
             self.speech_escape_cancelled = false;
             tracing::info!("speech configuration changed; speech system rebuilt");
         }

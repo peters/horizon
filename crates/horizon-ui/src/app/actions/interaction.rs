@@ -297,10 +297,17 @@ impl HorizonApp {
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
         let captured_key: Option<Key> = ctx.data(|data| data.get_temp::<Option<Key>>(captured_key_id)).flatten();
-        let binding = self
+        let bindings: Vec<horizon_core::ShortcutBinding> = self
             .speech
             .as_ref()
-            .and_then(super::super::speech::SpeechSystem::hotkey_binding);
+            .map(|speech| {
+                speech
+                    .profile_bindings()
+                    .into_iter()
+                    .map(|(_, binding)| binding)
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
             if capturing && matches!(event, Event::Key { .. } | Event::Text(_)) {
@@ -319,7 +326,7 @@ impl HorizonApp {
                     _ => {}
                 }
             }
-            if self.swallow_speech_hotkey_event(event, binding) {
+            if self.swallow_speech_hotkey_event(event, &bindings) {
                 continue;
             }
             filtered.push(event.clone());
@@ -336,7 +343,7 @@ impl HorizonApp {
     /// release is seen — modifiers are often released before the main key.
     /// The Escape consumption applies even with no hotkey configured, because
     /// mic-button dictation is cancelled with Escape too.
-    fn swallow_speech_hotkey_event(&mut self, event: &Event, binding: Option<horizon_core::ShortcutBinding>) -> bool {
+    fn swallow_speech_hotkey_event(&mut self, event: &Event, bindings: &[horizon_core::ShortcutBinding]) -> bool {
         if self.speech_escape_cancelled
             && let Event::Key {
                 key: Key::Escape,
@@ -346,23 +353,21 @@ impl HorizonApp {
         {
             return *pressed;
         }
-        let Some(binding) = binding else {
-            return false;
-        };
         match event {
             Event::Key { pressed, .. } => {
-                if !event_uses_shortcut_key(event, binding) {
-                    return false;
-                }
                 if *pressed {
-                    if shortcut_event_matches(event, binding) {
-                        self.speech_hotkey_held = true;
+                    // A full chord press of any profile key engages holding.
+                    if let Some(matched) = bindings.iter().find(|binding| shortcut_event_matches(event, **binding)) {
+                        self.speech_held_binding = Some(*matched);
                         return true;
                     }
                     // Mid-hold repeats can carry drifted modifiers.
-                    self.speech_hotkey_held
-                } else if self.speech_hotkey_held {
-                    self.speech_hotkey_held = false;
+                    self.speech_held_binding
+                        .is_some_and(|held| event_uses_shortcut_key(event, held))
+                } else if let Some(held) = self.speech_held_binding
+                    && event_uses_shortcut_key(event, held)
+                {
+                    self.speech_held_binding = None;
                     true
                 } else {
                     false
@@ -371,9 +376,9 @@ impl HorizonApp {
             Event::Text(text) => {
                 // Modifier-free bindings also emit text events while held
                 // (letters, digits, and punctuation keys).
-                self.speech_hotkey_held
-                    && binding.modifiers == horizon_core::ShortcutModifiers::NONE
-                    && binding_text_matches(binding.key, text)
+                self.speech_held_binding.is_some_and(|held| {
+                    held.modifiers == horizon_core::ShortcutModifiers::NONE && binding_text_matches(held.key, text)
+                })
             }
             _ => false,
         }

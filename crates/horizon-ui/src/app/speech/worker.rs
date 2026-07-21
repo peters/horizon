@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 
-use horizon_core::{PanelId, SpeechBackend, SpeechConfig, SpeechTask};
+use horizon_core::{PanelId, SpeechBackend, SpeechProfile, SpeechTask};
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
 
 /// `Model::load_with` cannot be interrupted, so loads are serialized across
@@ -52,10 +52,10 @@ impl Drop for WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub fn spawn(config: &SpeechConfig) -> std::io::Result<Self> {
+    pub fn spawn(profile: &SpeechProfile, backend: SpeechBackend) -> std::io::Result<Self> {
         let (job_tx, job_rx) = channel();
         let (event_tx, event_rx) = channel();
-        let settings = Settings::from_config(config);
+        let settings = Settings::from_profile(profile, backend);
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
         thread::Builder::new()
@@ -86,28 +86,28 @@ struct Settings {
 }
 
 impl Settings {
-    fn from_config(config: &SpeechConfig) -> Self {
-        let language = match config.language.trim() {
+    fn from_profile(profile: &SpeechProfile, backend: SpeechBackend) -> Self {
+        let language = match profile.language.trim() {
             "" | "auto" => None,
             code => Some(code.to_string()),
         };
-        let task = match config.task {
+        let task = match profile.task {
             SpeechTask::Transcribe => Task::Transcribe,
             SpeechTask::Translate => Task::Translate,
         };
-        let target_language = match (task, config.target_language.trim()) {
+        let target_language = match (task, profile.target_language.trim()) {
             (Task::Translate, code) if !code.is_empty() => Some(code.to_string()),
             _ => None,
         };
         Self {
             // `~/models/...` must work like every other path in the config.
-            model_path: horizon_core::dir_search::expand_tilde(config.model.trim())
+            model_path: horizon_core::dir_search::expand_tilde(profile.model.trim())
                 .to_string_lossy()
                 .into_owned(),
             language,
             task,
             target_language,
-            backend: match config.backend {
+            backend: match backend {
                 SpeechBackend::Auto => Backend::Auto,
                 SpeechBackend::Cpu => Backend::Cpu,
                 SpeechBackend::Cuda => Backend::Cuda,

@@ -421,16 +421,15 @@ impl HorizonApp {
                 let mic_response = mic_eligible.then(|| {
                     let tooltip = self.speech.as_ref().map_or_else(
                         || "Dictate into this panel (click to start/stop)".to_string(),
-                        |speech| match (speech.hotkey_binding(), speech.hotkey_mode()) {
-                            (Some(binding), horizon_core::SpeechHotkeyMode::Hold) => format!(
-                                "Dictate into this panel (click to start/stop, or hold {})",
-                                binding.display_label(primary_shortcut_label())
-                            ),
-                            (Some(binding), horizon_core::SpeechHotkeyMode::Toggle) => format!(
-                                "Dictate into this panel (click or press {} to start/stop)",
-                                binding.display_label(primary_shortcut_label())
-                            ),
-                            (None, _) => "Dictate into this panel (click to start/stop)".to_string(),
+                        |speech| match speech.hotkey_summary(primary_shortcut_label()) {
+                            Some(summary) => {
+                                let verb = match speech.hotkey_mode() {
+                                    horizon_core::SpeechHotkeyMode::Hold => "hold",
+                                    horizon_core::SpeechHotkeyMode::Toggle => "press",
+                                };
+                                format!("Dictate into this panel (click, or {verb}: {summary})")
+                            }
+                            None => "Dictate into this panel (click to start/stop)".to_string(),
                         },
                     );
                     ui.interact(

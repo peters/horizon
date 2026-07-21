@@ -188,42 +188,44 @@ impl HorizonApp {
             .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
             .unwrap_or(false);
 
-        if let Some(binding) = speech.hotkey_binding()
-            && !capturing_hotkey
-        {
-            let (pressed, released) =
-                ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
-            // `speech_hotkey_held` is owned by the terminal event filter
-            // (`swallow_speech_hotkey_event`), which runs later in the frame.
-            if pressed {
-                self.speech_hotkey_engaged = true;
-            }
-            // A release only counts if this app observed the chord press: a
-            // bare-key release (e.g. typing `k` with a Ctrl+K binding) must
-            // not stop a recording started from the mic button.
-            let released = released && self.speech_hotkey_engaged;
-            if released {
-                self.speech_hotkey_engaged = false;
-            }
-            match speech.hotkey_mode() {
-                horizon_core::SpeechHotkeyMode::Hold => {
-                    if pressed
-                        && speech.recording_target().is_none()
-                        && let Some(focused) = focused_terminal
-                    {
-                        speech.start(focused);
-                    }
-                    if released {
-                        // No-op unless a recording is active.
-                        speech.stop();
-                    }
+        if !capturing_hotkey {
+            // Each profile owns its push-to-talk key: the key IS the
+            // language, so there is no active-profile mode to switch.
+            for (profile, binding) in speech.profile_bindings() {
+                let (pressed, released) =
+                    ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
+                // `speech_held_binding` is owned by the terminal event filter
+                // (`swallow_speech_hotkey_event`), which runs later in frame.
+                if pressed && self.speech_engaged_profile.is_none() {
+                    self.speech_engaged_profile = Some(profile);
                 }
-                horizon_core::SpeechHotkeyMode::Toggle => {
-                    if pressed {
-                        if speech.recording_target().is_some() {
+                // A release only counts if this app observed that profile's
+                // chord press: a bare-key release (e.g. typing `k` with a
+                // Ctrl+K binding) must not stop a mic-button recording.
+                let released = released && self.speech_engaged_profile == Some(profile);
+                if released {
+                    self.speech_engaged_profile = None;
+                }
+                match speech.hotkey_mode() {
+                    horizon_core::SpeechHotkeyMode::Hold => {
+                        if pressed
+                            && speech.recording_target().is_none()
+                            && let Some(focused) = focused_terminal
+                        {
+                            speech.start(focused, profile);
+                        }
+                        if released {
+                            // No-op unless a recording is active.
                             speech.stop();
-                        } else if let Some(focused) = focused_terminal {
-                            speech.start(focused);
+                        }
+                    }
+                    horizon_core::SpeechHotkeyMode::Toggle => {
+                        if pressed {
+                            if speech.recording_target().is_some() {
+                                speech.stop();
+                            } else if let Some(focused) = focused_terminal {
+                                speech.start(focused, profile);
+                            }
                         }
                     }
                 }
@@ -290,8 +292,8 @@ impl HorizonApp {
             && speech.recording_target().is_some()
         {
             speech.cancel();
-            self.speech_hotkey_held = false;
-            self.speech_hotkey_engaged = false;
+            self.speech_held_binding = None;
+            self.speech_engaged_profile = None;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }
     }

@@ -486,6 +486,10 @@ pub struct SpeechConfig {
     /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
     pub hotkey: String,
     pub hotkey_mode: SpeechHotkeyMode,
+    /// Named speech profiles, each with its own push-to-talk key (e.g.
+    /// F1 = Norwegian via NB-Whisper, F2 = English via whisper-large-v3).
+    /// When empty, the flat fields above act as a single unnamed profile.
+    pub profiles: Vec<SpeechProfile>,
 }
 
 impl Default for SpeechConfig {
@@ -499,6 +503,57 @@ impl Default for SpeechConfig {
             backend: SpeechBackend::Auto,
             hotkey: "F9".to_string(),
             hotkey_mode: SpeechHotkeyMode::Hold,
+            profiles: Vec::new(),
+        }
+    }
+}
+
+/// One dictation profile: a model plus its language/output settings and a
+/// dedicated push-to-talk key. The key IS the language — holding F1 vs F2
+/// needs no mode switching (Ventrilo-style channel binds).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct SpeechProfile {
+    pub name: String,
+    /// Path to a transcribe.cpp GGUF model.
+    pub model: String,
+    /// Source language hint (ISO code) or `auto`.
+    pub language: String,
+    pub task: SpeechTask,
+    pub target_language: String,
+    /// Push-to-talk shortcut; empty means mic-button only.
+    pub hotkey: String,
+}
+
+impl Default for SpeechProfile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            model: String::new(),
+            language: "auto".to_string(),
+            task: SpeechTask::Transcribe,
+            target_language: "en".to_string(),
+            hotkey: String::new(),
+        }
+    }
+}
+
+impl SpeechConfig {
+    /// The profiles to run: the explicit list, or a single profile
+    /// synthesized from the flat fields for configs that predate profiles.
+    #[must_use]
+    pub fn resolved_profiles(&self) -> Vec<SpeechProfile> {
+        if self.profiles.is_empty() {
+            vec![SpeechProfile {
+                name: "Default".to_string(),
+                model: self.model.clone(),
+                language: self.language.clone(),
+                task: self.task,
+                target_language: self.target_language.clone(),
+                hotkey: self.hotkey.clone(),
+            }]
+        } else {
+            self.profiles.clone()
         }
     }
 }
@@ -743,12 +798,39 @@ impl Config {
 }
 
 fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -> Result<()> {
-    if !speech.enabled || speech.hotkey.trim().is_empty() {
+    if !speech.enabled {
         return Ok(());
     }
-    let binding = ShortcutBinding::parse(&speech.hotkey)
-        .map_err(|error| Error::Config(format!("features.speech.hotkey: {error}")))?;
+    let mut bindings: Vec<(String, ShortcutBinding)> = Vec::new();
+    for (index, profile) in speech.resolved_profiles().iter().enumerate() {
+        if profile.hotkey.trim().is_empty() {
+            continue;
+        }
+        let label = if profile.name.trim().is_empty() {
+            format!("features.speech profile #{index}")
+        } else {
+            format!("features.speech profile `{}`", profile.name)
+        };
+        let binding = ShortcutBinding::parse(&profile.hotkey)
+            .map_err(|error| Error::Config(format!("{label} hotkey: {error}")))?;
+        if let Some((other, _)) = bindings.iter().find(|(_, existing)| binding.overlaps(*existing)) {
+            return Err(Error::Config(format!(
+                "{label} hotkey `{}` overlaps {other}'s hotkey",
+                profile.hotkey
+            )));
+        }
+        validate_speech_binding(&label, &profile.hotkey, binding, shortcuts)?;
+        bindings.push((label, binding));
+    }
+    Ok(())
+}
 
+fn validate_speech_binding(
+    label: &str,
+    hotkey: &str,
+    binding: ShortcutBinding,
+    shortcuts: &AppShortcuts,
+) -> Result<()> {
     // The push-to-talk chord is consumed before other handlers; a binding
     // that overlaps a global shortcut would trigger both actions.
     let global_bindings = [
@@ -774,8 +856,7 @@ fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -> Result<()
     ];
     if let Some((name, _)) = global_bindings.iter().find(|(_, global)| binding.overlaps(*global)) {
         return Err(Error::Config(format!(
-            "features.speech.hotkey `{}` overlaps the `{name}` shortcut; choose an unused key",
-            speech.hotkey
+            "{label} hotkey `{hotkey}` overlaps the `{name}` shortcut; choose an unused key"
         )));
     }
     Ok(())
@@ -942,7 +1023,7 @@ features:
         config.features.speech.enabled = true;
         config.features.speech.hotkey = "Ctrl++".to_string();
         let error = config.validate().expect_err("malformed hotkey must be rejected");
-        assert!(error.to_string().contains("features.speech.hotkey"));
+        assert!(error.to_string().contains("features.speech profile"));
 
         config.features.speech.enabled = false;
         config.validate().expect("disabled speech skips hotkey validation");
@@ -950,6 +1031,52 @@ features:
         config.features.speech.enabled = true;
         config.features.speech.hotkey = "F9".to_string();
         config.validate().expect("valid hotkey passes");
+    }
+
+    #[test]
+    fn validate_rejects_overlapping_profile_hotkeys() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        config.features.speech.profiles = vec![
+            super::SpeechProfile {
+                name: "Norsk".to_string(),
+                hotkey: "F1".to_string(),
+                ..super::SpeechProfile::default()
+            },
+            super::SpeechProfile {
+                name: "English".to_string(),
+                hotkey: "F1".to_string(),
+                ..super::SpeechProfile::default()
+            },
+        ];
+        let error = config
+            .validate()
+            .expect_err("duplicate profile hotkeys must be rejected");
+        assert!(error.to_string().contains("overlaps"));
+
+        config.features.speech.profiles[1].hotkey = "F2".to_string();
+        config.validate().expect("distinct profile hotkeys pass");
+    }
+
+    #[test]
+    fn resolved_profiles_synthesizes_from_flat_fields() {
+        let mut speech = super::SpeechConfig {
+            model: "/models/a.gguf".to_string(),
+            hotkey: "F9".to_string(),
+            ..super::SpeechConfig::default()
+        };
+        let profiles = speech.resolved_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].model, "/models/a.gguf");
+        assert_eq!(profiles[0].hotkey, "F9");
+
+        speech.profiles.push(super::SpeechProfile {
+            name: "English".to_string(),
+            hotkey: "F2".to_string(),
+            ..super::SpeechProfile::default()
+        });
+        assert_eq!(speech.resolved_profiles().len(), 1);
+        assert_eq!(speech.resolved_profiles()[0].name, "English");
     }
 
     #[test]

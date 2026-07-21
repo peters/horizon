@@ -19,7 +19,12 @@ impl SpeechSystem {
     }
 
     #[must_use]
-    pub fn hotkey_binding(&self) -> Option<ShortcutBinding> {
+    pub fn profile_bindings(&self) -> Vec<(usize, ShortcutBinding)> {
+        Vec::new()
+    }
+
+    #[must_use]
+    pub fn hotkey_summary(&self, _primary_label: &str) -> Option<String> {
         None
     }
 
@@ -50,7 +55,7 @@ impl SpeechSystem {
 
     pub fn toggle(&mut self, _target: PanelId) {}
 
-    pub fn start(&mut self, _target: PanelId) {}
+    pub fn start(&mut self, _target: PanelId, _profile: usize) {}
 
     pub fn stop(&mut self) {}
 
