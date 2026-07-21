@@ -286,8 +286,34 @@ impl HorizonApp {
         // The push-to-talk chord is an app-level control on the root viewport
         // (where the hotkey handler listens); keep its presses, repeats, and
         // release out of the PTY stream without swallowing unrelated keys.
-        // Detached-viewport terminals receive their events unfiltered.
+        // A detached viewport does not run that filter, but Escape must still
+        // cancel a recording started from its own mic button (dictation is
+        // cancellable everywhere), so handle just that here.
         if viewport_id != egui::ViewportId::ROOT {
+            if self.speech.as_ref().is_some_and(|s| s.recording_target().is_some()) {
+                let escape_pressed = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::Key {
+                            key: Key::Escape,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                });
+                if escape_pressed {
+                    if let Some(speech) = self.speech.as_mut() {
+                        speech.cancel();
+                    }
+                    self.speech_engaged_profile = None;
+                    let filtered: Vec<Event> = events
+                        .iter()
+                        .filter(|event| !matches!(event, Event::Key { key: Key::Escape, .. }))
+                        .cloned()
+                        .collect();
+                    return terminal_input_events(&filtered, frame_keyboard_events);
+                }
+            }
             return terminal_input_events(events, frame_keyboard_events);
         }
         // While the settings binder is actively capturing, every key

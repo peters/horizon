@@ -357,6 +357,11 @@ impl HorizonApp {
         {
             speech.cancel();
             self.speech_engaged_profile = None;
+            // Focus left every Horizon window: the pending releases will not
+            // reach our terminals, so clearing avoids a stuck-swallow after
+            // focus returns.
+            self.speech_held_bindings.clear();
+            self.speech_escape_release_pending = false;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }
     }
