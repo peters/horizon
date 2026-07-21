@@ -6,7 +6,8 @@ use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
-use crate::shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey};
+use crate::shortcuts::{AppShortcuts, ShortcutBinding};
+pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
 use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -465,131 +466,6 @@ impl Default for FeaturesConfig {
     }
 }
 
-/// Speech-to-text input (push-to-talk dictation into the focused panel).
-///
-/// The config always parses so a `speech:` block never breaks a build made
-/// without the `speech` cargo feature; the runtime simply ignores it there.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(default)]
-pub struct SpeechConfig {
-    pub enabled: bool,
-    /// Path to a transcribe.cpp GGUF model (e.g. nb-whisper-large-Q8_0.gguf).
-    pub model: String,
-    /// Source language hint (ISO code such as `no`, `nn`, `en`) or `auto`.
-    pub language: String,
-    pub task: SpeechTask,
-    /// Destination language for the translate task (ISO code). The set the
-    /// model actually supports comes from its GGUF metadata; whisper models
-    /// translate to English only.
-    pub target_language: String,
-    pub backend: SpeechBackend,
-    /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
-    pub hotkey: String,
-    pub hotkey_mode: SpeechHotkeyMode,
-    /// Named speech profiles, each with its own push-to-talk key (e.g.
-    /// F1 = Norwegian via NB-Whisper, F2 = English via whisper-large-v3).
-    /// When empty, the flat fields above act as a single unnamed profile.
-    pub profiles: Vec<SpeechProfile>,
-}
-
-impl Default for SpeechConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: String::new(),
-            language: "auto".to_string(),
-            task: SpeechTask::Transcribe,
-            target_language: "en".to_string(),
-            backend: SpeechBackend::Auto,
-            hotkey: "F9".to_string(),
-            hotkey_mode: SpeechHotkeyMode::Hold,
-            profiles: Vec::new(),
-        }
-    }
-}
-
-/// One dictation profile: a model plus its language/output settings and a
-/// dedicated push-to-talk key. The key IS the language — holding F1 vs F2
-/// needs no mode switching (Ventrilo-style channel binds).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(default)]
-pub struct SpeechProfile {
-    pub name: String,
-    /// Path to a transcribe.cpp GGUF model.
-    pub model: String,
-    /// Source language hint (ISO code) or `auto`.
-    pub language: String,
-    pub task: SpeechTask,
-    pub target_language: String,
-    /// Push-to-talk shortcut; empty means mic-button only.
-    pub hotkey: String,
-}
-
-impl Default for SpeechProfile {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            model: String::new(),
-            language: "auto".to_string(),
-            task: SpeechTask::Transcribe,
-            target_language: "en".to_string(),
-            hotkey: String::new(),
-        }
-    }
-}
-
-impl SpeechConfig {
-    /// The profiles to run: the explicit list, or a single profile
-    /// synthesized from the flat fields for configs that predate profiles.
-    #[must_use]
-    pub fn resolved_profiles(&self) -> Vec<SpeechProfile> {
-        if self.profiles.is_empty() {
-            vec![SpeechProfile {
-                name: "Default".to_string(),
-                model: self.model.clone(),
-                language: self.language.clone(),
-                task: self.task,
-                target_language: self.target_language.clone(),
-                hotkey: self.hotkey.clone(),
-            }]
-        } else {
-            self.profiles.clone()
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpeechTask {
-    #[default]
-    Transcribe,
-    /// Translate speech into English (requires a model whose translate task
-    /// works, e.g. stock whisper-large-v3).
-    Translate,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpeechBackend {
-    /// Probe GPUs (discrete before integrated) and fall back to CPU.
-    #[default]
-    Auto,
-    Cpu,
-    Cuda,
-    Vulkan,
-    Metal,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpeechHotkeyMode {
-    /// Ventrilo-style: record while the hotkey is held, transcribe on release.
-    #[default]
-    Hold,
-    /// Press once to start recording, press again to stop and transcribe.
-    Toggle,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkspaceConfig {
     pub name: String,
@@ -750,7 +626,7 @@ impl Config {
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
         let shortcuts = self.shortcuts.resolve()?;
-        validate_speech(&self.features.speech, &shortcuts)?;
+        crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }
@@ -795,82 +671,6 @@ impl Config {
 
         presets
     }
-}
-
-fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -> Result<()> {
-    if !speech.enabled {
-        return Ok(());
-    }
-    let mut bindings: Vec<(String, ShortcutBinding)> = Vec::new();
-    for (index, profile) in speech.resolved_profiles().iter().enumerate() {
-        if profile.hotkey.trim().is_empty() {
-            continue;
-        }
-        let label = if profile.name.trim().is_empty() {
-            format!("features.speech profile #{index}")
-        } else {
-            format!("features.speech profile `{}`", profile.name)
-        };
-        let binding = ShortcutBinding::parse(&profile.hotkey)
-            .map_err(|error| Error::Config(format!("{label} hotkey: {error}")))?;
-        if let Some((other, _)) = bindings.iter().find(|(_, existing)| binding.overlaps(*existing)) {
-            return Err(Error::Config(format!(
-                "{label} hotkey `{}` overlaps {other}'s hotkey",
-                profile.hotkey
-            )));
-        }
-        validate_speech_binding(&label, &profile.hotkey, binding, shortcuts)?;
-        bindings.push((label, binding));
-    }
-    Ok(())
-}
-
-fn validate_speech_binding(
-    label: &str,
-    hotkey: &str,
-    binding: ShortcutBinding,
-    shortcuts: &AppShortcuts,
-) -> Result<()> {
-    // egui-winit translates primary+C/X/V into synthetic Copy/Cut/Paste
-    // events instead of key presses, so such a chord would never fire.
-    if binding.modifiers.command()
-        && !binding.modifiers.shift()
-        && !binding.modifiers.alt()
-        && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V'))
-    {
-        return Err(Error::Config(format!(
-            "{label} hotkey `{hotkey}` is reserved for clipboard operations and never reaches shortcut handling"
-        )));
-    }
-    // The push-to-talk chord is consumed before other handlers; a binding
-    // that overlaps a global shortcut would trigger both actions.
-    let global_bindings = [
-        ("command_palette", shortcuts.command_palette),
-        ("new_terminal", shortcuts.new_terminal),
-        ("focus_active_workspace", shortcuts.focus_active_workspace),
-        ("fit_active_workspace", shortcuts.fit_active_workspace),
-        ("open_remote_hosts", shortcuts.open_remote_hosts),
-        ("toggle_sessions", shortcuts.toggle_sessions),
-        ("toggle_sidebar", shortcuts.toggle_sidebar),
-        ("toggle_hud", shortcuts.toggle_hud),
-        ("toggle_minimap", shortcuts.toggle_minimap),
-        ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
-        ("toggle_settings", shortcuts.toggle_settings),
-        ("zoom_reset", shortcuts.zoom_reset),
-        ("zoom_in", shortcuts.zoom_in),
-        ("zoom_out", shortcuts.zoom_out),
-        ("fullscreen_panel", shortcuts.fullscreen_panel),
-        ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
-        ("fullscreen_window", shortcuts.fullscreen_window),
-        ("save_editor", shortcuts.save_editor),
-        ("search", shortcuts.search),
-    ];
-    if let Some((name, _)) = global_bindings.iter().find(|(_, global)| binding.overlaps(*global)) {
-        return Err(Error::Config(format!(
-            "{label} hotkey `{hotkey}` overlaps the `{name}` shortcut; choose an unused key"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_ssh_connections(presets: &[PresetConfig], workspaces: &[WorkspaceConfig]) -> Result<()> {
@@ -983,135 +783,6 @@ mod tests {
                 .any(|path| path.ends_with(".config/horizon/config.yaml"))
         );
         assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
-    }
-
-    #[test]
-    fn speech_config_defaults_are_disabled_hold_f9() {
-        let speech = FeaturesConfig::default().speech;
-        assert!(!speech.enabled);
-        assert_eq!(speech.language, "auto");
-        assert_eq!(speech.task, super::SpeechTask::Transcribe);
-        assert_eq!(speech.backend, super::SpeechBackend::Auto);
-        assert_eq!(speech.hotkey, "F9");
-        assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Hold);
-    }
-
-    #[test]
-    fn speech_config_parses_from_yaml_and_roundtrips() {
-        let yaml = r"
-features:
-  speech:
-    enabled: true
-    model: /models/nb-whisper-large-Q8_0.gguf
-    language: no
-    task: translate
-    backend: cuda
-    hotkey: F9
-    hotkey_mode: toggle
-";
-        let config = Config::from_yaml(yaml).expect("speech config should parse");
-        let speech = &config.features.speech;
-        assert!(speech.enabled);
-        assert_eq!(speech.model, "/models/nb-whisper-large-Q8_0.gguf");
-        assert_eq!(speech.language, "no");
-        assert_eq!(speech.task, super::SpeechTask::Translate);
-        assert_eq!(speech.backend, super::SpeechBackend::Cuda);
-        assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Toggle);
-
-        let round_tripped = Config::from_yaml(&config.to_yaml().expect("serialize")).expect("re-parse");
-        assert_eq!(round_tripped.features.speech, *speech);
-    }
-
-    #[test]
-    fn config_without_speech_block_still_parses() {
-        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
-        assert!(!config.features.speech.enabled);
-    }
-
-    #[test]
-    fn validate_rejects_malformed_speech_hotkey_only_when_enabled() {
-        let mut config = Config::default();
-        config.features.speech.enabled = true;
-        config.features.speech.hotkey = "Ctrl++".to_string();
-        let error = config.validate().expect_err("malformed hotkey must be rejected");
-        assert!(error.to_string().contains("features.speech profile"));
-
-        config.features.speech.enabled = false;
-        config.validate().expect("disabled speech skips hotkey validation");
-
-        config.features.speech.enabled = true;
-        config.features.speech.hotkey = "F9".to_string();
-        config.validate().expect("valid hotkey passes");
-    }
-
-    #[test]
-    fn validate_rejects_clipboard_pseudo_event_hotkeys() {
-        let mut config = Config::default();
-        config.features.speech.enabled = true;
-        for chord in ["Ctrl+C", "Ctrl+X", "Ctrl+V"] {
-            config.features.speech.hotkey = chord.to_string();
-            let error = config.validate().expect_err("clipboard chord must be rejected");
-            assert!(error.to_string().contains("clipboard"), "{chord}: {error}");
-        }
-        // Shifted variants still produce real key events and stay allowed
-        // (subject to the usual global-shortcut overlap rules).
-        config.features.speech.hotkey = "Ctrl+Alt+C".to_string();
-        config.validate().expect("non-clipboard chord passes");
-    }
-
-    #[test]
-    fn validate_rejects_overlapping_profile_hotkeys() {
-        let mut config = Config::default();
-        config.features.speech.enabled = true;
-        config.features.speech.profiles = vec![
-            super::SpeechProfile {
-                name: "Norsk".to_string(),
-                hotkey: "F1".to_string(),
-                ..super::SpeechProfile::default()
-            },
-            super::SpeechProfile {
-                name: "English".to_string(),
-                hotkey: "F1".to_string(),
-                ..super::SpeechProfile::default()
-            },
-        ];
-        let error = config
-            .validate()
-            .expect_err("duplicate profile hotkeys must be rejected");
-        assert!(error.to_string().contains("overlaps"));
-
-        config.features.speech.profiles[1].hotkey = "F2".to_string();
-        config.validate().expect("distinct profile hotkeys pass");
-    }
-
-    #[test]
-    fn resolved_profiles_synthesizes_from_flat_fields() {
-        let mut speech = super::SpeechConfig {
-            model: "/models/a.gguf".to_string(),
-            hotkey: "F9".to_string(),
-            ..super::SpeechConfig::default()
-        };
-        let profiles = speech.resolved_profiles();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].model, "/models/a.gguf");
-        assert_eq!(profiles[0].hotkey, "F9");
-
-        speech.profiles.push(super::SpeechProfile {
-            name: "English".to_string(),
-            hotkey: "F2".to_string(),
-            ..super::SpeechProfile::default()
-        });
-        assert_eq!(speech.resolved_profiles().len(), 1);
-        assert_eq!(speech.resolved_profiles()[0].name, "English");
-    }
-
-    #[test]
-    fn validate_rejects_speech_hotkey_overlapping_global_shortcut() {
-        let mut config = Config::default();
-        config.features.speech.enabled = true;
-        config.features.speech.hotkey = "F11".to_string(); // fullscreen_panel default
-        let error = config.validate().expect_err("overlapping hotkey must be rejected");
-        assert!(error.to_string().contains("fullscreen_panel"));
     }
 
     #[test]

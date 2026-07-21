@@ -207,12 +207,19 @@ impl HorizonApp {
         self.any_viewport_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
 
         // While the settings binder is capturing a new hotkey, the pressed
-        // chord must not also trigger the current binding. And while any
-        // egui widget owns keyboard focus (settings fields, command
-        // palette), a printable hotkey belongs to that widget, not to
-        // push-to-talk — engaging would both type and record.
-        let ui_owns_keyboard = ctx.memory(|memory| memory.focused().is_some());
-        if !capturing_hotkey && !ui_owns_keyboard {
+        // chord must not also trigger the current binding. And while a
+        // text-entry surface is open (settings, command palette, search,
+        // rename), a printable hotkey belongs to that surface — engaging
+        // would both type and record. Terminal focus is NOT such a surface:
+        // dictating into the focused terminal is the normal case. Only new
+        // presses are gated; releases below always run so a hold started
+        // before opening a surface still stops.
+        let text_surface_active = self.settings.is_some()
+            || self.command_palette.is_some()
+            || self.search_overlay.is_some()
+            || self.renaming_panel.is_some()
+            || self.renaming_workspace.is_some();
+        if !capturing_hotkey {
             // Each profile owns its push-to-talk key: the key IS the
             // language, so there is no active-profile mode to switch.
             for index in 0..speech.profile_bindings().len() {
@@ -221,6 +228,7 @@ impl HorizonApp {
                     ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
                 // `speech_held_binding` is owned by the terminal event filter
                 // (`swallow_speech_hotkey_event`), which runs later in frame.
+                let pressed = pressed && !text_surface_active;
                 if pressed && self.speech_engaged_profile.is_none() {
                     self.speech_engaged_profile = Some(profile);
                 }
@@ -283,6 +291,12 @@ impl HorizonApp {
         }
 
         let events = speech.poll();
+        self.inject_speech_events(events);
+    }
+
+    /// Deliver transcripts into their target panels (mirrors
+    /// `poll_primary_selection_paste`); errors are logged.
+    fn inject_speech_events(&mut self, events: Vec<super::speech::SpeechEvent>) {
         for event in events {
             match event {
                 super::speech::SpeechEvent::Text { target, text } => {

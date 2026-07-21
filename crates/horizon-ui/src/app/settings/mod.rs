@@ -2,6 +2,7 @@ mod bar;
 mod general;
 mod presets;
 mod shortcuts;
+mod speech;
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
