@@ -60,7 +60,7 @@ Verify that a hovered terminal body bypasses stale grid-cache reuse on macOS, wh
 
            while True:
                chunk = os.read(input_fd, 128)
-               if chunk == b"q":
+               if b"q" in chunk:
                    break
                buffer.extend(chunk)
 
@@ -106,7 +106,11 @@ Verify that a hovered terminal body bypasses stale grid-cache reuse on macOS, wh
            args:
              - REPLACE_SMOKE_ROOT/horizon-hover-cache-helper.py
            position: [40.0, 40.0]
-           size: [920.0, 620.0]
+           size: [740.0, 620.0]
+         - name: Streaming Shell
+           kind: shell
+           position: [810.0, 40.0]
+           size: [400.0, 620.0]
    ```
 4. Replace `REPLACE_SMOKE_ROOT` in the config with the real `$SMOKE_ROOT` path.
 
@@ -163,7 +167,8 @@ target/debug/horizon --config "$SMOKE_ROOT/config.yaml"
 
 ### Streaming Output
 
-1. Temporarily stop the helper and run a short streaming command such as:
+1. Keep the helper running and focus the separate `Streaming Shell` panel.
+2. Run a short streaming command in that shell:
    ```bash
    python3 - <<'PY'
    import time
@@ -172,12 +177,12 @@ target/debug/horizon --config "$SMOKE_ROOT/config.yaml"
        time.sleep(0.1)
    PY
    ```
-2. Check once with the pointer outside the body and once with it inside.
-3. Expected: new output appears promptly in both cases.
+3. Check once with the pointer outside the shell body and once with it inside.
+4. Expected: new output appears promptly in both cases while the helper remains available for hover checks.
 
 ### Multi-Panel Check
 
-If practical, add a second panel and keep both visible.
+Keep the configured `Mouse Reporter` and `Streaming Shell` panels visible.
 
 - Hover one panel while the other emits output.
 - Sweep the pointer across empty canvas with both panels idle.
