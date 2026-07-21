@@ -30,6 +30,10 @@ struct ProfileRuntime {
 pub struct SpeechSystem {
     capture: CaptureHandle,
     profiles: Vec<ProfileRuntime>,
+    /// Cached `(profile index, binding)` pairs — bindings are immutable for
+    /// the lifetime of a `SpeechSystem`, and the frame path reads them every
+    /// frame (hot path: no per-frame allocation).
+    resolved_bindings: Vec<(usize, ShortcutBinding)>,
     state: State,
     hotkey_mode: SpeechHotkeyMode,
     /// Monotonic recording generation; results tagged with an older value
@@ -81,9 +85,15 @@ impl SpeechSystem {
             };
             profiles.push(ProfileRuntime { label, binding, worker });
         }
+        let resolved_bindings = profiles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, profile)| profile.binding.map(|binding| (index, binding)))
+            .collect();
         Some(Self {
             capture,
             profiles,
+            resolved_bindings,
             state: State::Idle,
             hotkey_mode: config.hotkey_mode,
             generation: 0,
@@ -101,12 +111,8 @@ impl SpeechSystem {
 
     /// Every profile's push-to-talk binding, by profile index.
     #[must_use]
-    pub fn profile_bindings(&self) -> Vec<(usize, ShortcutBinding)> {
-        self.profiles
-            .iter()
-            .enumerate()
-            .filter_map(|(index, profile)| profile.binding.map(|binding| (index, binding)))
-            .collect()
+    pub fn profile_bindings(&self) -> &[(usize, ShortcutBinding)] {
+        &self.resolved_bindings
     }
 
     /// Human-readable key summary for tooltips, e.g. `F1 Norsk · F2 English`.

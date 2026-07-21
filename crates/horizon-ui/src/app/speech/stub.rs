@@ -19,8 +19,8 @@ impl SpeechSystem {
     }
 
     #[must_use]
-    pub fn profile_bindings(&self) -> Vec<(usize, ShortcutBinding)> {
-        Vec::new()
+    pub fn profile_bindings(&self) -> &[(usize, ShortcutBinding)] {
+        &[]
     }
 
     #[must_use]

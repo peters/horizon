@@ -198,7 +198,8 @@ impl HorizonApp {
         if !capturing_hotkey {
             // Each profile owns its push-to-talk key: the key IS the
             // language, so there is no active-profile mode to switch.
-            for (profile, binding) in speech.profile_bindings() {
+            for index in 0..speech.profile_bindings().len() {
+                let (profile, binding) = speech.profile_bindings()[index];
                 let (pressed, released) =
                     ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
                 // `speech_held_binding` is owned by the terminal event filter

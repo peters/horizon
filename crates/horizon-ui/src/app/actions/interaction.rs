@@ -297,17 +297,6 @@ impl HorizonApp {
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
         let captured_key: Option<Key> = ctx.data(|data| data.get_temp::<Option<Key>>(captured_key_id)).flatten();
-        let bindings: Vec<horizon_core::ShortcutBinding> = self
-            .speech
-            .as_ref()
-            .map(|speech| {
-                speech
-                    .profile_bindings()
-                    .into_iter()
-                    .map(|(_, binding)| binding)
-                    .collect()
-            })
-            .unwrap_or_default();
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
             if capturing && matches!(event, Event::Key { .. } | Event::Text(_)) {
@@ -326,79 +315,96 @@ impl HorizonApp {
                     _ => {}
                 }
             }
-            if self.swallow_speech_hotkey_event(event, &bindings) {
+            let bindings = self
+                .speech
+                .as_ref()
+                .map_or(&[][..], super::super::speech::SpeechSystem::profile_bindings);
+            if swallow_speech_hotkey_event(
+                &mut self.speech_held_bindings,
+                self.speech_escape_cancelled,
+                event,
+                bindings,
+            ) {
                 continue;
             }
             filtered.push(event.clone());
         }
         terminal_input_events(&filtered, frame_keyboard_events)
     }
+}
 
-    /// Whether a root-viewport event belongs to the push-to-talk chord (or to
-    /// an Escape that cancelled dictation) and must not reach the terminal.
-    ///
-    /// Presses are swallowed only on a full chord match, so a modifier hotkey
-    /// like `Ctrl+K` does not eat bare `K` keystrokes. Once the chord has been
-    /// pressed, the key is swallowed regardless of modifier state until its
-    /// release is seen — modifiers are often released before the main key.
-    /// The Escape consumption applies even with no hotkey configured, because
-    /// mic-button dictation is cancelled with Escape too.
-    fn swallow_speech_hotkey_event(&mut self, event: &Event, bindings: &[horizon_core::ShortcutBinding]) -> bool {
-        if self.speech_escape_cancelled
-            && let Event::Key {
-                key: Key::Escape,
-                pressed,
-                ..
-            } = event
-        {
-            return *pressed;
-        }
-        match event {
-            Event::Key { pressed, .. } => {
-                if *pressed {
-                    // A full chord press of any profile key engages holding.
-                    if let Some(matched) = bindings.iter().find(|binding| shortcut_event_matches(event, **binding)) {
-                        if !self.speech_held_bindings.contains(matched) {
-                            self.speech_held_bindings.push(*matched);
-                        }
-                        return true;
-                    }
-                    // Mid-hold repeats can carry drifted modifiers.
-                    self.speech_held_bindings
-                        .iter()
-                        .any(|held| event_uses_shortcut_key(event, *held))
-                } else if let Some(position) = self
-                    .speech_held_bindings
+/// Whether a root-viewport event belongs to a push-to-talk chord (or to
+/// an Escape that cancelled dictation) and must not reach the terminal.
+///
+/// Presses are swallowed only on a full chord match, so a modifier hotkey
+/// like `Ctrl+K` does not eat bare `K` keystrokes. Every held chord is
+/// tracked independently until its release is seen — modifiers are often
+/// released before the main key, and multiple profile keys can be down
+/// at once. The Escape consumption applies even with no hotkey configured,
+/// because mic-button dictation is cancelled with Escape too.
+///
+/// Free function over disjoint borrows so the caller can keep the binding
+/// slice borrowed from the speech system (hot path: the binding list must
+/// not be cloned per frame).
+fn swallow_speech_hotkey_event(
+    held_bindings: &mut Vec<horizon_core::ShortcutBinding>,
+    escape_cancelled: bool,
+    event: &Event,
+    bindings: &[(usize, horizon_core::ShortcutBinding)],
+) -> bool {
+    if escape_cancelled
+        && let Event::Key {
+            key: Key::Escape,
+            pressed,
+            ..
+        } = event
+    {
+        return *pressed;
+    }
+    match event {
+        Event::Key { pressed, .. } => {
+            if *pressed {
+                // A full chord press of any profile key engages holding.
+                if let Some((_, matched)) = bindings
                     .iter()
-                    .position(|held| event_uses_shortcut_key(event, *held))
+                    .find(|(_, binding)| shortcut_event_matches(event, *binding))
                 {
-                    // Each held chord's release is consumed independently, so
-                    // releasing F2 while F1 stays down cannot leak F1's later
-                    // release into the PTY.
-                    self.speech_held_bindings.swap_remove(position);
-                    true
+                    if !held_bindings.contains(matched) {
+                        held_bindings.push(*matched);
+                    }
+                    return true;
+                }
+                // Mid-hold repeats can carry drifted modifiers.
+                held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held))
+            } else if let Some(position) = held_bindings
+                .iter()
+                .position(|held| event_uses_shortcut_key(event, *held))
+            {
+                // Each held chord's release is consumed independently, so
+                // releasing F2 while F1 stays down cannot leak F1's later
+                // release into the PTY.
+                held_bindings.swap_remove(position);
+                true
+            } else {
+                false
+            }
+        }
+        Event::Text(text) => {
+            // Bindings without ctrl/alt/cmd also emit text events while
+            // held. For plain keys the text is predictable; for Shift-only
+            // chords the shifted symbol is layout-dependent, so any
+            // single-character text is attributed to the held chord.
+            held_bindings.iter().any(|held| {
+                if held.modifiers == horizon_core::ShortcutModifiers::NONE {
+                    binding_text_matches(held.key, text)
+                } else if held.modifiers == horizon_core::ShortcutModifiers::SHIFT {
+                    text.chars().count() == 1
                 } else {
                     false
                 }
-            }
-            Event::Text(text) => {
-                // Bindings without ctrl/alt/cmd also emit text events while
-                // held. For plain keys the text is predictable; for
-                // Shift-only chords the shifted symbol is layout-dependent,
-                // so any single-character text is attributed to the held
-                // chord.
-                self.speech_held_bindings.iter().any(|held| {
-                    if held.modifiers == horizon_core::ShortcutModifiers::NONE {
-                        binding_text_matches(held.key, text)
-                    } else if held.modifiers == horizon_core::ShortcutModifiers::SHIFT {
-                        text.chars().count() == 1
-                    } else {
-                        false
-                    }
-                })
-            }
-            _ => false,
+            })
         }
+        _ => false,
     }
 }
 
