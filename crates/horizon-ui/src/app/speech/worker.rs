@@ -157,11 +157,17 @@ fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>
     }
 }
 
-/// Collapse all internal whitespace (including newlines) to single spaces.
-/// Dictated text must never carry `\n`/`\r`: on terminals without bracketed
-/// paste those bytes become Enter and would execute a partial command.
+/// Collapse all internal whitespace (including newlines) to single spaces
+/// and strip every remaining control character. Dictated text must never
+/// carry `\n`/`\r` (Enter on non-bracketed terminals) nor C0/C1 bytes like
+/// ESC or NUL, which `paste_bytes` only strips in bracketed-paste mode.
 fn sanitize_transcript(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect()
 }
 
 /// Lazily create the model-backed session on first use; leaves `session`
@@ -232,6 +238,15 @@ mod tests {
         let transcript = session.run(&pcm, &RunOptions::default()).expect("transcribe");
         eprintln!("backend: {} transcript: {}", model.backend(), transcript.text);
         assert!(!transcript.text.trim().is_empty(), "transcript must not be empty");
+    }
+
+    #[test]
+    fn sanitize_strips_controls_and_collapses_whitespace() {
+        assert_eq!(
+            super::sanitize_transcript("hei\x1b[31m der\r\nverden\u{0000}!"),
+            "hei[31m der verden!"
+        );
+        assert_eq!(super::sanitize_transcript("  a\tb  c  "), "a b c");
     }
 
     /// Minimal RIFF/WAVE reader for 16-bit PCM test fixtures.

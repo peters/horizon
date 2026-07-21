@@ -292,7 +292,10 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
     ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
     let targets: Vec<String> = match model_info {
         Some(info) if info.supports_translate == Some(false) => Vec::new(),
-        Some(info) if !info.translate_targets.is_empty() => info.translate_targets.clone(),
+        // Honor declared src→tgt pair restrictions for the chosen source.
+        Some(info) if !info.translate_targets.is_empty() || !info.translate_pairs.is_empty() => {
+            info.targets_for_source(&config.features.speech.language)
+        }
         // Absent metadata: the family default applies, so still offer English.
         _ => vec!["en".to_string()],
     };

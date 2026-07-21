@@ -183,10 +183,17 @@ impl HorizonApp {
         self.any_viewport_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
 
         // While the settings binder is capturing a new hotkey, the pressed
-        // chord must not also trigger the current binding.
-        let capturing_hotkey: bool = ctx
+        // chord must not also trigger the current binding. The flag lives in
+        // egui temp memory, so clear it if the settings view went away with
+        // a capture still armed — otherwise it would suppress global
+        // shortcuts forever.
+        let mut capturing_hotkey: bool = ctx
             .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
             .unwrap_or(false);
+        if capturing_hotkey && self.settings.is_none() {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
+            capturing_hotkey = false;
+        }
 
         if !capturing_hotkey {
             // Each profile owns its push-to-talk key: the key IS the

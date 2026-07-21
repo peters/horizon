@@ -374,10 +374,19 @@ impl HorizonApp {
                 }
             }
             Event::Text(text) => {
-                // Modifier-free bindings also emit text events while held
-                // (letters, digits, and punctuation keys).
+                // Bindings without ctrl/alt/cmd also emit text events while
+                // held. For plain keys the text is predictable; for
+                // Shift-only chords the shifted symbol is layout-dependent,
+                // so any single-character text is attributed to the held
+                // chord (the chord key is the only key being held).
                 self.speech_held_binding.is_some_and(|held| {
-                    held.modifiers == horizon_core::ShortcutModifiers::NONE && binding_text_matches(held.key, text)
+                    if held.modifiers == horizon_core::ShortcutModifiers::NONE {
+                        binding_text_matches(held.key, text)
+                    } else if held.modifiers == horizon_core::ShortcutModifiers::SHIFT {
+                        text.chars().count() == 1
+                    } else {
+                        false
+                    }
                 })
             }
             _ => false,

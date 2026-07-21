@@ -24,6 +24,30 @@ pub struct SpeechModelInfo {
     pub supports_lang_detect: Option<bool>,
     /// Declared translation target languages (usually `["en"]`).
     pub translate_targets: Vec<String>,
+    /// Declared source→target translation pairs (`stt.translation.pairs`,
+    /// entries shaped `src>tgt`). Empty means "not restricted".
+    pub translate_pairs: Vec<(String, String)>,
+}
+
+impl SpeechModelInfo {
+    /// Translation targets valid for a given source language, honoring the
+    /// model's declared pair restrictions when present. `auto` (or empty)
+    /// returns the union of all targets.
+    #[must_use]
+    pub fn targets_for_source(&self, source: &str) -> Vec<String> {
+        if self.translate_pairs.is_empty() {
+            return self.translate_targets.clone();
+        }
+        let source = source.trim();
+        let unrestricted = source.is_empty() || source == "auto";
+        let mut targets: Vec<String> = Vec::new();
+        for (from, to) in &self.translate_pairs {
+            if (unrestricted || from == source) && !targets.contains(to) {
+                targets.push(to.clone());
+            }
+        }
+        targets
+    }
 }
 
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
@@ -96,9 +120,19 @@ pub fn read_speech_model_info(path: &Path) -> Option<SpeechModelInfo> {
                 info.supports_lang_detect = Some(read_u8(&mut reader)? != 0);
                 found += 1;
             }
+            ("stt.translation.pairs", TYPE_ARRAY) => {
+                info.translate_pairs = read_string_array(&mut reader, &mut budget)?
+                    .into_iter()
+                    .filter_map(|pair| {
+                        pair.split_once('>')
+                            .map(|(from, to)| (from.trim().to_string(), to.trim().to_string()))
+                    })
+                    .collect();
+                found += 1;
+            }
             (_, value_type) => skip_value(&mut reader, value_type)?,
         }
-        if found == 4 {
+        if found == 5 {
             break;
         }
     }
@@ -262,6 +296,7 @@ mod tests {
                 supports_translate: Some(true),
                 supports_lang_detect: None,
                 translate_targets: vec!["en".into()],
+                translate_pairs: Vec::new(),
             }
         );
     }
@@ -300,6 +335,29 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
         file.write_all(&out).expect("write gguf");
         assert!(read_speech_model_info(file.path()).is_none());
+    }
+
+    #[test]
+    fn translation_pairs_filter_targets_by_source() {
+        let info = SpeechModelInfo {
+            translate_targets: vec!["en".into(), "de".into()],
+            translate_pairs: vec![
+                ("no".into(), "en".into()),
+                ("en".into(), "de".into()),
+                ("en".into(), "no".into()),
+            ],
+            ..SpeechModelInfo::default()
+        };
+        assert_eq!(info.targets_for_source("no"), vec!["en".to_string()]);
+        assert_eq!(info.targets_for_source("en"), vec!["de".to_string(), "no".to_string()]);
+        assert_eq!(info.targets_for_source("auto").len(), 3);
+        assert!(info.targets_for_source("de").is_empty());
+
+        let unrestricted = SpeechModelInfo {
+            translate_targets: vec!["en".into()],
+            ..SpeechModelInfo::default()
+        };
+        assert_eq!(unrestricted.targets_for_source("no"), vec!["en".to_string()]);
     }
 
     #[test]
