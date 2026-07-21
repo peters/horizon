@@ -1,10 +1,11 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use egui::{
-    Align2, Color32, Context, CornerRadius, FontId, Id, Order, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+    Align2, Color32, Context, CornerRadius, CursorIcon, FontId, Id, Order, Painter, PopupAnchor, Pos2, Rect, Sense,
+    Stroke, StrokeKind, Tooltip, Ui, Vec2,
     text::{LayoutJob, TextFormat, TextWrapping},
 };
-use horizon_core::WorkspaceId;
+use horizon_core::{PanelId, WorkspaceId};
 
 use crate::theme;
 
@@ -14,6 +15,23 @@ use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, WS_BG_PAD, WS_EMPTY_SIZE, W
 enum MinimapScope {
     Attached,
     Workspace(WorkspaceId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MinimapHitTarget {
+    Panel {
+        panel_id: PanelId,
+        workspace_id: WorkspaceId,
+    },
+    Workspace(WorkspaceId),
+}
+
+impl MinimapHitTarget {
+    fn workspace_id(self) -> WorkspaceId {
+        match self {
+            Self::Panel { workspace_id, .. } | Self::Workspace(workspace_id) => workspace_id,
+        }
+    }
 }
 
 struct MinimapModel {
@@ -90,28 +108,118 @@ fn render_scoped_minimap(
         .order(Order::Foreground)
         .show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(model.outer_size, Sense::click_and_drag());
-            paint_minimap_contents(app, &painter, response.rect, &model, workspace_bounds, scope);
-            response
+            let hovered = if response.dragged() {
+                None
+            } else {
+                response.hover_pos().and_then(|pointer| {
+                    minimap_hit_target(app, response.rect.min, &model, workspace_bounds, scope, pointer)
+                })
+            };
+            paint_minimap_contents(app, &painter, response.rect, &model, workspace_bounds, scope, hovered);
+            if hovered.is_some() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            show_minimap_hover_tooltip(app, ui, overlay_id, hovered);
+            (response, hovered)
         });
 
-    let inner = response.inner;
-    if (inner.clicked() || inner.dragged())
-        && let Some(pointer) = ctx.input(|input| input.pointer.interact_pos())
-    {
-        let local = pointer - inner.rect.min;
-        let canvas_x = model.content_min[0] + (local.x - MINIMAP_PAD) / model.scale_x;
-        let canvas_y = model.content_min[1] + (local.y - MINIMAP_PAD) / model.scale_y;
-
-        app.pan_target = None;
-        app.canvas_view.align_canvas_point_to_screen(
-            [canvas_rect.min.x, canvas_rect.min.y],
-            [canvas_x, canvas_y],
-            [canvas_rect.center().x, canvas_rect.center().y],
-        );
-        app.mark_runtime_dirty();
+    let (inner, hovered) = response.inner;
+    if inner.dragged() {
+        if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+            center_minimap_point(app, &model, canvas_rect, inner.rect.min, pointer);
+        }
+    } else if inner.double_clicked() {
+        if let Some(target) = hovered {
+            fit_minimap_workspace(app, ctx, canvas_rect, scope, target.workspace_id());
+        }
+    } else if inner.clicked() {
+        match hovered {
+            Some(MinimapHitTarget::Panel { panel_id, .. }) => match scope {
+                MinimapScope::Attached => app.focus_panel_visible(ctx, panel_id, false),
+                MinimapScope::Workspace(_) => app.focus_panel_in_rect(panel_id, canvas_rect),
+            },
+            Some(MinimapHitTarget::Workspace(workspace_id)) if scope == MinimapScope::Attached => {
+                let _ = app.focus_workspace_visible(ctx, workspace_id, false);
+            }
+            _ => {
+                if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                    center_minimap_point(app, &model, canvas_rect, inner.rect.min, pointer);
+                }
+            }
+        }
     }
 
     minimap_height
+}
+
+fn center_minimap_point(app: &mut HorizonApp, model: &MinimapModel, canvas_rect: Rect, origin: Pos2, pointer: Pos2) {
+    let local = pointer - origin;
+    let canvas_x = model.content_min[0] + (local.x - MINIMAP_PAD) / model.scale_x;
+    let canvas_y = model.content_min[1] + (local.y - MINIMAP_PAD) / model.scale_y;
+
+    app.pan_target = None;
+    app.canvas_view.align_canvas_point_to_screen(
+        [canvas_rect.min.x, canvas_rect.min.y],
+        [canvas_x, canvas_y],
+        [canvas_rect.center().x, canvas_rect.center().y],
+    );
+    app.mark_runtime_dirty();
+}
+
+fn fit_minimap_workspace(
+    app: &mut HorizonApp,
+    ctx: &Context,
+    canvas_rect: Rect,
+    scope: MinimapScope,
+    workspace_id: WorkspaceId,
+) {
+    match scope {
+        MinimapScope::Attached => {
+            let _ = app.fit_workspace_visible(ctx, workspace_id);
+        }
+        MinimapScope::Workspace(_) => {
+            let _ = app.fit_workspace_in_rect(workspace_id, canvas_rect);
+        }
+    }
+}
+
+fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered: Option<MinimapHitTarget>) {
+    let Some(target) = hovered else {
+        return;
+    };
+
+    let text = match target {
+        MinimapHitTarget::Panel { panel_id, .. } => app.board.panel(panel_id).map(|panel| {
+            if panel.title.trim().is_empty() {
+                "Panel".to_string()
+            } else {
+                panel.title.clone()
+            }
+        }),
+        MinimapHitTarget::Workspace(workspace_id) => app.board.workspace(workspace_id).map(|workspace| {
+            let panel_count = workspace.panels.len();
+            format!(
+                "{} — {} panel{}",
+                workspace.name,
+                panel_count,
+                if panel_count == 1 { "" } else { "s" }
+            )
+        }),
+    };
+    let Some(text) = text else {
+        return;
+    };
+
+    Tooltip::always_open(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        overlay_id.with("minimap_hover_tooltip"),
+        PopupAnchor::Pointer,
+    )
+    .gap(12.0)
+    .show(|ui| {
+        ui.label(text);
+    });
 }
 
 fn minimap_model(
@@ -151,6 +259,7 @@ fn paint_minimap_contents(
     model: &MinimapModel,
     workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     scope: MinimapScope,
+    hovered: Option<MinimapHitTarget>,
 ) {
     painter.rect_filled(rect, CornerRadius::same(8), theme::alpha(theme::BG_ELEVATED(), 220));
     painter.rect_stroke(
@@ -161,7 +270,8 @@ fn paint_minimap_contents(
     );
 
     let origin = rect.min;
-    paint_minimap_workspaces(app, painter, origin, model, workspace_bounds, scope);
+    let hovered_workspace = hovered.map(MinimapHitTarget::workspace_id);
+    paint_minimap_workspaces(app, painter, origin, model, workspace_bounds, scope, hovered_workspace);
     paint_minimap_panels(app, painter, origin, model, scope);
     paint_minimap_workspace_labels(app, painter, origin, model, workspace_bounds, scope);
     paint_minimap_viewport(painter, origin, model);
@@ -174,6 +284,7 @@ fn paint_minimap_workspaces(
     model: &MinimapModel,
     workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     scope: MinimapScope,
+    hovered_workspace: Option<WorkspaceId>,
 ) {
     for workspace in &app.board.workspaces {
         if !scope_includes_workspace(app, scope, workspace.id) {
@@ -183,27 +294,44 @@ fn paint_minimap_workspaces(
         let workspace_color = Color32::from_rgb(r, g, b);
         let is_active =
             app.board.active_workspace == Some(workspace.id) || scope == MinimapScope::Workspace(workspace.id);
-        let (workspace_min, workspace_max) =
-            workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
-                let pos = workspace.position;
-                (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
-            });
-        let workspace_rect = Rect::from_min_max(
-            origin + minimap_point(model, workspace_min[0], workspace_min[1]).to_vec2(),
-            origin + minimap_point(model, workspace_max[0], workspace_max[1]).to_vec2(),
-        );
+        let is_hovered = hovered_workspace == Some(workspace.id);
+        let workspace_rect =
+            workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
 
+        let fill_alpha = if is_active {
+            60
+        } else if is_hovered {
+            34
+        } else {
+            22
+        };
+        let stroke_alpha = if is_active {
+            210
+        } else if is_hovered {
+            180
+        } else {
+            80
+        };
         painter.rect_filled(
             workspace_rect,
             CornerRadius::same(2),
-            theme::alpha(workspace_color, if is_active { 40 } else { 22 }),
+            theme::alpha(workspace_color, fill_alpha),
         );
         painter.rect_stroke(
             workspace_rect,
             CornerRadius::same(2),
-            Stroke::new(0.8_f32, theme::alpha(workspace_color, if is_active { 140 } else { 80 })),
+            Stroke::new(0.8_f32, theme::alpha(workspace_color, stroke_alpha)),
             StrokeKind::Outside,
         );
+
+        if is_active && scope == MinimapScope::Attached {
+            painter.rect_stroke(
+                workspace_rect.expand(3.0),
+                CornerRadius::same(4),
+                Stroke::new(2.0_f32, theme::alpha(theme::ACCENT(), 160)),
+                StrokeKind::Outside,
+            );
+        }
     }
 }
 
@@ -240,15 +368,8 @@ fn collect_minimap_workspace_labels<'a>(
 
         let is_active =
             app.board.active_workspace == Some(workspace.id) || scope == MinimapScope::Workspace(workspace.id);
-        let (workspace_min, workspace_max) =
-            workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
-                let pos = workspace.position;
-                (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
-            });
-        let workspace_rect = Rect::from_min_max(
-            origin + minimap_point(model, workspace_min[0], workspace_min[1]).to_vec2(),
-            origin + minimap_point(model, workspace_max[0], workspace_max[1]).to_vec2(),
-        );
+        let workspace_rect =
+            workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
         let title_strip_rect = minimap_workspace_title_strip_rect(workspace_rect, model.scale_y);
 
         let (r, g, b) = workspace.accent();
@@ -518,12 +639,7 @@ fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model
         if !scope_includes_workspace(app, scope, panel.workspace_id) {
             continue;
         }
-        let pos = panel.layout.position;
-        let size = panel.layout.size;
-        let panel_rect = Rect::from_min_max(
-            origin + minimap_point(model, pos[0], pos[1]).to_vec2(),
-            origin + minimap_point(model, pos[0] + size[0], pos[1] + size[1]).to_vec2(),
-        );
+        let panel_rect = panel_minimap_screen_rect(origin, model, panel.layout.position, panel.layout.size);
         let workspace_color = app
             .board
             .workspace(panel.workspace_id)
@@ -531,15 +647,21 @@ fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model
                 let (r, g, b) = workspace.accent();
                 Color32::from_rgb(r, g, b)
             });
+        let is_focused = app.board.focused == Some(panel.id);
 
         painter.rect_filled(
             panel_rect,
             CornerRadius::same(1),
-            theme::alpha(
-                workspace_color,
-                if app.board.focused == Some(panel.id) { 120 } else { 70 },
-            ),
+            theme::alpha(workspace_color, if is_focused { 120 } else { 70 }),
         );
+        if is_focused {
+            painter.rect_stroke(
+                panel_rect,
+                CornerRadius::same(1),
+                Stroke::new(1.0_f32, theme::alpha(theme::FG(), 220)),
+                StrokeKind::Outside,
+            );
+        }
     }
 }
 
@@ -596,6 +718,91 @@ fn minimap_point(model: &MinimapModel, canvas_x: f32, canvas_y: f32) -> Pos2 {
     )
 }
 
+fn workspace_minimap_screen_rect(
+    origin: Pos2,
+    model: &MinimapModel,
+    workspace_id: WorkspaceId,
+    workspace_position: [f32; 2],
+    workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+) -> Rect {
+    let (workspace_min, workspace_max) =
+        workspace_minimap_bounds(workspace_id, workspace_bounds).unwrap_or_else(|| {
+            (
+                workspace_position,
+                [
+                    workspace_position[0] + WS_EMPTY_SIZE[0],
+                    workspace_position[1] + WS_EMPTY_SIZE[1],
+                ],
+            )
+        });
+    Rect::from_min_max(
+        origin + minimap_point(model, workspace_min[0], workspace_min[1]).to_vec2(),
+        origin + minimap_point(model, workspace_max[0], workspace_max[1]).to_vec2(),
+    )
+}
+
+fn panel_minimap_screen_rect(origin: Pos2, model: &MinimapModel, position: [f32; 2], size: [f32; 2]) -> Rect {
+    Rect::from_min_max(
+        origin + minimap_point(model, position[0], position[1]).to_vec2(),
+        origin + minimap_point(model, position[0] + size[0], position[1] + size[1]).to_vec2(),
+    )
+}
+
+/// Returns the target whose rect contains `pos`, preferring the one drawn last
+/// (topmost). Pure so the precedence rules stay unit-testable.
+fn last_hit<T>(pos: Pos2, items: impl Iterator<Item = (T, Rect)>) -> Option<T> {
+    let mut hit = None;
+    for (target, rect) in items {
+        if rect.contains(pos) {
+            hit = Some(target);
+        }
+    }
+    hit
+}
+
+fn minimap_hit_target(
+    app: &HorizonApp,
+    origin: Pos2,
+    model: &MinimapModel,
+    workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    scope: MinimapScope,
+    pos: Pos2,
+) -> Option<MinimapHitTarget> {
+    let panel_hit = last_hit(
+        pos,
+        app.board
+            .panels
+            .iter()
+            .filter(|panel| scope_includes_workspace(app, scope, panel.workspace_id))
+            .map(|panel| {
+                (
+                    MinimapHitTarget::Panel {
+                        panel_id: panel.id,
+                        workspace_id: panel.workspace_id,
+                    },
+                    panel_minimap_screen_rect(origin, model, panel.layout.position, panel.layout.size),
+                )
+            }),
+    );
+    if panel_hit.is_some() {
+        return panel_hit;
+    }
+
+    last_hit(
+        pos,
+        app.board
+            .workspaces
+            .iter()
+            .filter(|workspace| scope_includes_workspace(app, scope, workspace.id))
+            .map(|workspace| {
+                (
+                    MinimapHitTarget::Workspace(workspace.id),
+                    workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds),
+                )
+            }),
+    )
+}
+
 fn paint_minimap_viewport(painter: &Painter, origin: Pos2, model: &MinimapModel) {
     let map_rect = Rect::from_min_max(
         origin + Vec2::splat(MINIMAP_PAD),
@@ -638,9 +845,26 @@ fn scope_includes_workspace(app: &HorizonApp, scope: MinimapScope, workspace_id:
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, Rect, Vec2};
+    use std::collections::HashMap;
 
-    use super::vertical_label_badge_rect;
+    use egui::{Pos2, Rect, Vec2};
+    use horizon_core::WorkspaceId;
+
+    use super::{
+        MinimapModel, WS_EMPTY_SIZE, last_hit, panel_minimap_screen_rect, vertical_label_badge_rect,
+        workspace_minimap_screen_rect,
+    };
+
+    fn test_model() -> MinimapModel {
+        MinimapModel {
+            content_min: [100.0, 200.0],
+            scale_x: 0.5,
+            scale_y: 0.25,
+            outer_size: Vec2::ZERO,
+            view_min: Pos2::ZERO,
+            view_max: Pos2::ZERO,
+        }
+    }
 
     #[test]
     fn vertical_label_badge_rect_skips_sub_two_pixel_workspaces() {
@@ -649,5 +873,42 @@ mod tests {
         let badge_rect = vertical_label_badge_rect(workspace_rect, 6.0, 24.0);
 
         assert_eq!(badge_rect, None);
+    }
+
+    #[test]
+    fn last_hit_prefers_topmost_of_overlapping_rects() {
+        let bottom = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(40.0, 40.0));
+        let top = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(40.0, 40.0));
+        let items = [(1_u8, bottom), (2_u8, top)];
+
+        assert_eq!(last_hit(Pos2::new(20.0, 20.0), items.iter().copied()), Some(2));
+        assert_eq!(last_hit(Pos2::new(5.0, 5.0), items.iter().copied()), Some(1));
+        assert_eq!(last_hit(Pos2::new(90.0, 90.0), items.iter().copied()), None);
+    }
+
+    #[test]
+    fn panel_minimap_screen_rect_applies_model_scale_and_pad() {
+        let rect = panel_minimap_screen_rect(Pos2::new(10.0, 20.0), &test_model(), [140.0, 240.0], [20.0, 40.0]);
+
+        assert_eq!(rect, Rect::from_min_max(Pos2::new(36.0, 36.0), Pos2::new(46.0, 46.0)));
+    }
+
+    #[test]
+    fn workspace_minimap_screen_rect_falls_back_to_empty_size() {
+        let rect = workspace_minimap_screen_rect(
+            Pos2::new(10.0, 20.0),
+            &test_model(),
+            WorkspaceId(7),
+            [100.0, 200.0],
+            &HashMap::new(),
+        );
+
+        assert_eq!(
+            rect,
+            Rect::from_min_max(
+                Pos2::new(16.0, 26.0),
+                Pos2::new(16.0 + WS_EMPTY_SIZE[0] * 0.5, 26.0 + WS_EMPTY_SIZE[1] * 0.25)
+            )
+        );
     }
 }
