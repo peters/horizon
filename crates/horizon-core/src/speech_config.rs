@@ -64,7 +64,9 @@ pub struct SpeechProfile {
     pub language: String,
     pub task: SpeechTask,
     pub target_language: String,
-    /// Push-to-talk shortcut; empty means mic-button only.
+    /// Push-to-talk shortcut. The first profile is the mic-button default
+    /// and may leave this empty; every later profile needs a hotkey to be
+    /// reachable (the mic button reuses the last profile a hotkey started).
     pub hotkey: String,
 }
 
@@ -151,6 +153,14 @@ pub(crate) fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -
             return Err(Error::Config(format!("{label} has no model path")));
         }
         if profile.hotkey.trim().is_empty() {
+            // Only the first profile is reachable without a hotkey (it is the
+            // mic-button default). A later hotkey-less profile can never be
+            // selected, so reject it rather than silently ignoring it.
+            if index > 0 {
+                return Err(Error::Config(format!(
+                    "{label} needs a push-to-talk hotkey (only the first profile can be mic-button only)"
+                )));
+            }
             continue;
         }
         let binding = ShortcutBinding::parse(&profile.hotkey)

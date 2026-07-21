@@ -181,6 +181,14 @@ impl HorizonApp {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
             capturing_hotkey = false;
         }
+        // A just-captured chord suppresses global shortcuts until its key
+        // release is seen; if the window loses focus first, that release may
+        // never arrive (Wayland/macOS), so recover the pending key here or it
+        // would disable every shortcut indefinitely.
+        let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        if !root_focused_now {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_captured_key"), None::<egui::Key>));
+        }
 
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
