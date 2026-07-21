@@ -5,7 +5,7 @@ mod render;
 mod scrollbar;
 
 use egui::{Context, FontId, Vec2};
-use horizon_core::{Panel, Terminal};
+use horizon_core::Panel;
 
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
@@ -109,16 +109,10 @@ impl<'a> TerminalView<'a> {
             clear_terminal_ime_state(ui, interaction.body.id);
         }
 
-        let content_requires_refresh =
-            self.panel.had_recent_output() || self.panel.terminal().is_some_and(Terminal::has_selection);
+        let had_recent_output = self.panel.had_recent_output();
         let body_hovered = interaction.body.hovered();
-        let mouse_reporting_enabled = body_hovered
-            && self.panel.terminal().is_some_and(|terminal| {
-                pty_mouse_reporting_enabled(terminal.mode(), ui.input(|input| input.modifiers))
-            });
-        let hover_requires_refresh = hover_requires_grid_refresh(body_hovered, mouse_reporting_enabled);
+        let modifiers = body_hovered.then(|| ui.input(|input| input.modifiers));
         let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
-        let allow_grid_cache = grid_cache_allowed(content_requires_refresh, hover_requires_refresh, drag_active);
 
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
@@ -129,6 +123,12 @@ impl<'a> TerminalView<'a> {
             terminal.with_renderable_content(|content| {
                 let cursor = content.cursor;
                 let display_offset = content.display_offset;
+                let mouse_reporting_enabled =
+                    modifiers.is_some_and(|modifiers| pty_mouse_reporting_enabled(content.mode, modifiers));
+                let hover_requires_refresh = hover_requires_grid_refresh(body_hovered, mouse_reporting_enabled);
+                let content_requires_refresh = had_recent_output || content.selection.is_some();
+                let allow_grid_cache =
+                    grid_cache_allowed(content_requires_refresh, hover_requires_refresh, drag_active);
                 render_grid(
                     ui,
                     interaction.layout.body,
@@ -194,7 +194,7 @@ mod tests {
     use super::{grid_cache_allowed, hover_requires_grid_refresh};
 
     #[test]
-    fn hovered_terminal_bypasses_grid_cache() {
+    fn mouse_reporting_hover_bypasses_grid_cache() {
         assert!(hover_requires_grid_refresh(true, true));
         assert!(!grid_cache_allowed(false, true, false));
     }
