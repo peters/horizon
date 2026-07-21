@@ -31,6 +31,7 @@ No Rust toolchain or system headers are needed for this path.
   - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake`
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
 - **Windows:** MSVC build tools (installed automatically by `rustup` on the `msvc` target). DX12/Vulkan drivers ship with the GPU driver.
+- **Speech input (`--features speech`, opt-in):** additionally needs **CMake** and a **C++ compiler** (to build the vendored transcribe.cpp), plus on Linux the ALSA headers (`libasound2-dev`/`alsa-lib-devel`) for microphone capture. The default build does not require these.
 
 #### Build & Run
 
@@ -45,7 +46,8 @@ cargo run --release
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --features speech -- -D warnings
+cargo test --workspace --features speech   # speech tier (needs CMake + ALSA headers)
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 ```
 
 If any step fails, read the error, fix the prerequisite, and retry. On Linux, missing system headers are the most common issue — look for `pkg-config` or linker errors and install the corresponding `-dev` package.
@@ -91,8 +93,9 @@ cargo fmt --all -- --check
 # `--features speech` is the widest runner-buildable set (GPU features need
 # machine toolchains and add no Rust surface; needs libasound2-dev on Linux)
 RUSTFLAGS="-D warnings" cargo test --workspace
-cargo clippy --all-targets --features speech -- -D warnings
-cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+RUSTFLAGS="-D warnings" cargo test --workspace --features speech
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
@@ -136,8 +139,8 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 | Tier | Command | Status |
 |------|---------|--------|
-| Blocking | `cargo clippy --all-targets --features speech -- -D warnings` | Must pass |
-| Strict | `cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
+| Blocking | `cargo clippy --all-targets --features speech,trace-profiling -- -D warnings` | Must pass |
+| Strict | `cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
 | Pedantic | `cargo clippy ... -W clippy::pedantic` | Advisory (will promote) |
 
 ### Commit Guidelines

@@ -41,7 +41,14 @@ pub fn spawn_lookup(query: String) -> mpsc::Receiver<Vec<PathBuf>> {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var("HOME").map_or_else(|_| PathBuf::from("/"), PathBuf::from)
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home);
+    }
+    // Windows has no HOME; use the standard profile directory.
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return PathBuf::from(profile);
+    }
+    PathBuf::from("/")
 }
 
 /// Expand a leading `~` to the user's home directory, like the other

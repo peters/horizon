@@ -417,7 +417,7 @@ Manual smoke-test plans live under [**docs/testing**](docs/testing), including t
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --features speech -- -D warnings
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 ```
 
 ---

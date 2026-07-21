@@ -5,9 +5,10 @@
 //! cancelled recording can never affect a newer one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -19,6 +20,12 @@ pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// high native rates cannot balloon memory before conversion.
 const MAX_RECORD_SECONDS: usize = 600;
 const MAX_OUTPUT_SAMPLES: usize = MAX_RECORD_SECONDS * TARGET_SAMPLE_RATE as usize;
+/// The frame loop pings the capture thread every frame while recording. If
+/// no ping arrives for this long, frames have stopped (e.g. a Wayland
+/// surface minimized mid-dictation, which delivers no redraw callbacks) —
+/// the microphone must not stay open, so the capture thread self-cancels.
+const HEARTBEAT_STALE: Duration = Duration::from_millis(1500);
+const HEARTBEAT_POLL: Duration = Duration::from_millis(250);
 
 pub enum CaptureCmd {
     /// Begin recording under the given generation.
@@ -32,20 +39,33 @@ pub enum CaptureCmd {
 pub struct CaptureHandle {
     cmd_tx: Sender<CaptureCmd>,
     pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
+    heartbeat: Arc<Mutex<Instant>>,
 }
 
 impl CaptureHandle {
     pub fn spawn() -> std::io::Result<Self> {
         let (cmd_tx, cmd_rx) = channel();
         let (pcm_tx, pcm_rx) = channel();
+        let heartbeat = Arc::new(Mutex::new(Instant::now()));
+        let worker_heartbeat = Arc::clone(&heartbeat);
         thread::Builder::new()
             .name("speech-capture".into())
-            .spawn(move || capture_loop(&cmd_rx, &pcm_tx))?;
-        Ok(Self { cmd_tx, pcm_rx })
+            .spawn(move || capture_loop(&cmd_rx, &pcm_tx, &worker_heartbeat))?;
+        Ok(Self {
+            cmd_tx,
+            pcm_rx,
+            heartbeat,
+        })
     }
 
     pub fn send(&self, cmd: CaptureCmd) {
         let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Called every frame while the engine is active: proves the frame loop
+    /// is still running so the capture thread keeps recording.
+    pub fn heartbeat(&self) {
+        *self.heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
     }
 
     pub fn try_recv_pcm(&self) -> Option<(u64, Result<Vec<f32>, String>)> {
@@ -134,12 +154,51 @@ fn lock_samples(samples: &Mutex<Vec<f32>>) -> MutexGuard<'_, Vec<f32>> {
     samples.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<(u64, Result<Vec<f32>, String>)>) {
+fn capture_loop(
+    cmd_rx: &Receiver<CaptureCmd>,
+    pcm_tx: &Sender<(u64, Result<Vec<f32>, String>)>,
+    heartbeat: &Arc<Mutex<Instant>>,
+) {
     let mut active: Option<ActiveRecording> = None;
-    while let Ok(cmd) = cmd_rx.recv() {
+    loop {
+        // Poll while recording so a stalled frame loop (minimized Wayland
+        // surface) can be detected; block indefinitely when idle.
+        let cmd = if active.is_some() {
+            match cmd_rx.recv_timeout(HEARTBEAT_POLL) {
+                Ok(cmd) => Some(cmd),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match cmd_rx.recv() {
+                Ok(cmd) => Some(cmd),
+                Err(_) => return,
+            }
+        };
+
+        let Some(cmd) = cmd else {
+            // Timeout: self-cancel if the frame loop has gone silent, so the
+            // OS microphone is released even though no frame will run to do
+            // it (the pending error surfaces when frames resume).
+            if let Some(recording) = &active {
+                let stale = heartbeat.lock().unwrap_or_else(PoisonError::into_inner).elapsed() > HEARTBEAT_STALE;
+                if stale {
+                    let generation = recording.generation;
+                    active = None; // drops the stream, closing the mic
+                    tracing::warn!("speech capture heartbeat stale; microphone released");
+                    let _ = pcm_tx.send((
+                        generation,
+                        Err("recording stopped: window no longer visible".to_string()),
+                    ));
+                }
+            }
+            continue;
+        };
+
         match cmd {
             CaptureCmd::Start(generation) => {
                 if active.is_none() {
+                    *heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
                     match start_recording(generation, pcm_tx.clone()) {
                         Ok(recording) => active = Some(recording),
                         Err(error) => {
@@ -201,56 +260,33 @@ fn start_recording(
         tracing::warn!(%error, "speech capture stream error");
         let _ = pcm_tx.send((generation, Err(format!("microphone `{error_device}`: {error}"))));
     };
+    // One arm per interleaved sample type, each normalizing to f32 in
+    // [-1, 1] before the shared downmix/resample. Covers the formats real
+    // capture endpoints report: F32/I16/U16 plus 8-bit, 32-bit (incl. the
+    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64.
+    macro_rules! input_stream {
+        ($sample:ty, $to_f32:expr) => {{
+            let sink = Arc::clone(&samples);
+            let full = Arc::clone(&overflowed);
+            let mut resampler = MonoResampler::new(sample_rate, channels);
+            device.build_input_stream(
+                config,
+                move |data: &[$sample], _: &cpal::InputCallbackInfo| {
+                    convert_into(&mut resampler, &sink, &full, data.iter().map($to_f32));
+                },
+                error_cb,
+                None,
+            )
+        }};
+    }
     let stream = match sample_format {
-        SampleFormat::F32 => {
-            let sink = Arc::clone(&samples);
-            let full = Arc::clone(&overflowed);
-            let mut resampler = MonoResampler::new(sample_rate, channels);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    convert_into(&mut resampler, &sink, &full, data.iter().copied());
-                },
-                error_cb,
-                None,
-            )
-        }
-        SampleFormat::I16 => {
-            let sink = Arc::clone(&samples);
-            let full = Arc::clone(&overflowed);
-            let mut resampler = MonoResampler::new(sample_rate, channels);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    convert_into(
-                        &mut resampler,
-                        &sink,
-                        &full,
-                        data.iter().map(|&sample| f32::from(sample) / 32_768.0),
-                    );
-                },
-                error_cb,
-                None,
-            )
-        }
-        SampleFormat::U16 => {
-            let sink = Arc::clone(&samples);
-            let full = Arc::clone(&overflowed);
-            let mut resampler = MonoResampler::new(sample_rate, channels);
-            device.build_input_stream(
-                config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    convert_into(
-                        &mut resampler,
-                        &sink,
-                        &full,
-                        data.iter().map(|&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
-                    );
-                },
-                error_cb,
-                None,
-            )
-        }
+        SampleFormat::F32 => input_stream!(f32, |&sample| sample),
+        SampleFormat::F64 => input_stream!(f64, |&sample| f64_to_sample(sample)),
+        SampleFormat::I8 => input_stream!(i8, |&sample| f32::from(sample) / 128.0),
+        SampleFormat::I16 => input_stream!(i16, |&sample| f32::from(sample) / 32_768.0),
+        SampleFormat::I32 => input_stream!(i32, |&sample| i32_to_sample(sample)),
+        SampleFormat::U8 => input_stream!(u8, |&sample| (f32::from(sample) - 128.0) / 128.0),
+        SampleFormat::U16 => input_stream!(u16, |&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
         other => {
             return Err(format!(
                 "microphone `{device_name}`: unsupported sample format {other:?}"
@@ -297,6 +333,16 @@ fn convert_into(
 /// Integer downsample factors (48 kHz, 32 kHz) use a box filter; everything
 /// else (e.g. 44.1 kHz) falls back to linear interpolation. Whisper-family
 /// models are robust to this level of resampling fidelity.
+#[expect(clippy::cast_possible_truncation, reason = "audio downconvert to the f32 pipeline")]
+fn f64_to_sample(sample: f64) -> f32 {
+    sample as f32
+}
+
+#[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
+fn i32_to_sample(sample: i32) -> f32 {
+    sample as f32 / 2_147_483_648.0
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

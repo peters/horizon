@@ -299,7 +299,15 @@ impl HorizonApp {
         let captured_key: Option<Key> = ctx.data(|data| data.get_temp::<Option<Key>>(captured_key_id)).flatten();
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
-            if capturing && matches!(event, Event::Key { .. } | Event::Text(_)) {
+            if capturing
+                && matches!(
+                    event,
+                    Event::Key { .. } | Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::Ime(_)
+                )
+            {
+                // Every input belongs to the binder while it captures — incl.
+                // the synthetic Copy/Cut/Paste egui-winit emits for Ctrl+C/X/V
+                // and IME commits — so none reaches the focused terminal.
                 continue;
             }
             if let Some(pending) = captured_key {
@@ -401,24 +409,13 @@ fn swallow_speech_hotkey_event(
             }
         }
         Event::Text(text) => {
-            // Bindings without ctrl/alt/cmd also emit text events while
-            // held. Letters match their (case-insensitive) glyph even under
-            // Shift. A shifted digit/punctuation key emits a layout-
-            // dependent symbol that cannot be predicted, so only single
-            // NON-alphanumeric characters are attributed to such a chord —
-            // typing letters while holding push-to-talk stays intact.
-            held_bindings.iter().any(|held| match held.modifiers {
-                horizon_core::ShortcutModifiers::NONE => binding_text_matches(held.key, text),
-                horizon_core::ShortcutModifiers::SHIFT => {
-                    if let horizon_core::ShortcutKey::Letter(_) = held.key {
-                        binding_text_matches(held.key, text)
-                    } else {
-                        let mut chars = text.chars();
-                        matches!((chars.next(), chars.next()), (Some(only), None) if !only.is_alphanumeric())
-                    }
-                }
-                _ => false,
-            })
+            // A held chord's own key emits Text while held — directly (no
+            // modifier), under Shift, under Alt (bare letter on Linux), and
+            // during modifier-drift repeats (Ctrl+K with Ctrl released emits
+            // Text("k")). Swallow only Text matching a HELD key's glyph, so
+            // unrelated keys typed while holding push-to-talk still reach the
+            // terminal (e.g. "L" while holding Shift+K).
+            held_bindings.iter().any(|held| binding_text_matches(held.key, text))
         }
         _ => false,
     }

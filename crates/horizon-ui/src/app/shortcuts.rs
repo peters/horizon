@@ -13,8 +13,17 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
 /// true, global shortcut handlers must not act on key presses — the user is
 /// aiming at the binder, not at the shortcut the chord happens to match.
 pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
-        .unwrap_or(false)
+    // True while the binder is capturing, and while a just-captured chord's
+    // key is still held (its repeats/release must not fire the shortcut it
+    // was bound to).
+    let capturing: bool = ctx
+        .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+        .unwrap_or(false);
+    let release_pending = ctx
+        .data(|data| data.get_temp::<Option<egui::Key>>(egui::Id::new("speech_captured_key")))
+        .flatten()
+        .is_some();
+    capturing || release_pending
 }
 
 /// Scan a frame's events for a press (initial, non-repeat) and a release of

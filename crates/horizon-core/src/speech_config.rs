@@ -139,16 +139,22 @@ pub(crate) fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -
     }
     let mut bindings: Vec<(String, ShortcutBinding)> = Vec::new();
     for (index, profile) in speech.resolved_profiles().iter().enumerate() {
-        if profile.hotkey.trim().is_empty() {
-            continue;
-        }
         let label = if profile.name.trim().is_empty() {
-            format!("features.speech profile #{index}")
+            // 1-based to match how profiles are labelled at runtime.
+            format!("features.speech profile #{}", index + 1)
         } else {
             format!("features.speech profile `{}`", profile.name)
         };
+        // An enabled profile with no model would fail only as a runtime log
+        // line; reject it up front.
+        if profile.model.trim().is_empty() {
+            return Err(Error::Config(format!("{label} has no model path")));
+        }
+        if profile.hotkey.trim().is_empty() {
+            continue;
+        }
         let binding = ShortcutBinding::parse(&profile.hotkey)
-            .map_err(|error| Error::Config(format!("{label} hotkey: {error}")))?;
+            .map_err(|error| Error::Config(format!("{label} hotkey: {}", config_error_message(&error))))?;
         if let Some((other, _)) = bindings.iter().find(|(_, existing)| binding.overlaps(*existing)) {
             return Err(Error::Config(format!(
                 "{label} hotkey `{}` overlaps {other}'s hotkey",
@@ -161,12 +167,40 @@ pub(crate) fn validate_speech(speech: &SpeechConfig, shortcuts: &AppShortcuts) -
     Ok(())
 }
 
+/// `ShortcutBinding::parse` returns `Error::Config`, whose Display already
+/// carries a `Config error:` prefix; strip it so nesting does not double it.
+fn config_error_message(error: &Error) -> String {
+    error
+        .to_string()
+        .strip_prefix("Config error: ")
+        .map_or_else(|| error.to_string(), str::to_string)
+}
+
 fn validate_speech_binding(
     label: &str,
     hotkey: &str,
     binding: ShortcutBinding,
     shortcuts: &AppShortcuts,
 ) -> Result<()> {
+    // A bare printable key (letter/digit/Enter/Tab/punctuation) as a hold
+    // hotkey would hijack that key in every terminal. Require a modifier, or
+    // a non-typing key (function keys, arrows).
+    if binding.modifiers == crate::shortcuts::ShortcutModifiers::NONE
+        && matches!(
+            binding.key,
+            ShortcutKey::Letter(_)
+                | ShortcutKey::Digit(_)
+                | ShortcutKey::Enter
+                | ShortcutKey::Tab
+                | ShortcutKey::Comma
+                | ShortcutKey::Minus
+                | ShortcutKey::Plus
+        )
+    {
+        return Err(Error::Config(format!(
+            "{label} hotkey `{hotkey}` needs a modifier (e.g. Ctrl+{hotkey}); a bare key would hijack terminal typing"
+        )));
+    }
     // egui-winit translates primary+C/X/V into synthetic Copy/Cut/Paste
     // events instead of key presses, so such a chord would never fire.
     if binding.modifiers.command()
@@ -257,6 +291,7 @@ features:
     fn validate_rejects_malformed_speech_hotkey_only_when_enabled() {
         let mut config = Config::default();
         config.features.speech.enabled = true;
+        config.features.speech.model = "/m.gguf".to_string();
         config.features.speech.hotkey = "Ctrl++".to_string();
         let error = config.validate().expect_err("malformed hotkey must be rejected");
         assert!(error.to_string().contains("features.speech profile"));
@@ -272,6 +307,7 @@ features:
     fn validate_rejects_clipboard_pseudo_event_hotkeys() {
         let mut config = Config::default();
         config.features.speech.enabled = true;
+        config.features.speech.model = "/m.gguf".to_string();
         for chord in ["Ctrl+C", "Ctrl+X", "Ctrl+V"] {
             config.features.speech.hotkey = chord.to_string();
             let error = config.validate().expect_err("clipboard chord must be rejected");
@@ -289,11 +325,13 @@ features:
         config.features.speech.profiles = vec![
             super::SpeechProfile {
                 name: "Norsk".to_string(),
+                model: "/no.gguf".to_string(),
                 hotkey: "F1".to_string(),
                 ..super::SpeechProfile::default()
             },
             super::SpeechProfile {
                 name: "English".to_string(),
+                model: "/en.gguf".to_string(),
                 hotkey: "F1".to_string(),
                 ..super::SpeechProfile::default()
             },
@@ -327,9 +365,33 @@ features:
         assert_eq!(speech.resolved_profiles()[0].name, "English");
     }
     #[test]
+    fn validate_rejects_bare_printable_hotkeys() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        config.features.speech.model = "/m.gguf".to_string();
+        for bare in ["K", "5", "Enter", "Tab", "Comma"] {
+            config.features.speech.hotkey = bare.to_string();
+            let error = config.validate().expect_err("bare key must be rejected");
+            assert!(error.to_string().contains("needs a modifier"), "{bare}: {error}");
+        }
+        // Function keys are fine bare (they never type into a terminal).
+        config.features.speech.hotkey = "F9".to_string();
+        config.validate().expect("bare function key passes");
+    }
+
+    #[test]
+    fn validate_rejects_enabled_profile_without_model() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        let error = config.validate().expect_err("empty model must be rejected");
+        assert!(error.to_string().contains("no model path"), "{error}");
+    }
+
+    #[test]
     fn validate_rejects_speech_hotkey_overlapping_global_shortcut() {
         let mut config = Config::default();
         config.features.speech.enabled = true;
+        config.features.speech.model = "/m.gguf".to_string();
         config.features.speech.hotkey = "F11".to_string(); // fullscreen_panel default
         let error = config.validate().expect_err("overlapping hotkey must be rejected");
         assert!(error.to_string().contains("fullscreen_panel"));

@@ -72,7 +72,10 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
-      - run: cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      # `--features speech` so the unwrap/expect ban also covers the speech
+      # runtime code (needs the ALSA headers to build cpal on Linux).
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
   clippy-pedantic:
     name: Clippy (pedantic — advisory)

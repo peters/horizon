@@ -217,6 +217,14 @@ impl HorizonApp {
         }
     }
 
+    /// Whether the settings General tab — which hosts the speech hotkey
+    /// binder — is currently open. Used to auto-disarm a stale capture.
+    pub(super) fn settings_speech_tab_open(&self) -> bool {
+        self.settings
+            .as_ref()
+            .is_some_and(|editor| editor.active_tab == SettingsTab::General)
+    }
+
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
         // Speech applies live: rebuild the subsystem whenever its config
         // changed (drops any in-flight recording, which is acceptable for a

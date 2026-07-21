@@ -201,6 +201,12 @@ impl SpeechSystem {
     pub fn poll(&mut self) -> Vec<SpeechEvent> {
         let mut events = Vec::new();
 
+        // Prove the frame loop is alive so the capture thread keeps the mic
+        // open; if frames stop, its heartbeat goes stale and it self-cancels.
+        if matches!(self.state, State::Recording { .. }) {
+            self.capture.heartbeat();
+        }
+
         while let Some((generation, pcm)) = self.capture.try_recv_pcm() {
             if generation != self.generation {
                 tracing::debug!(generation, current = self.generation, "stale capture result ignored");
@@ -220,13 +226,17 @@ impl SpeechSystem {
                     }
                 }
                 Err(message) => {
-                    // A stream that died mid-recording leaves the capture
-                    // thread holding a broken stream; tear it down too.
+                    // Only a recording is disturbed by a stream error; a
+                    // Busy job (audio already handed to the worker) keeps
+                    // running. A stream that died mid-recording leaves the
+                    // capture thread holding a broken stream; tear it down.
                     if matches!(self.state, State::Recording { .. }) {
                         self.capture.send(CaptureCmd::Cancel);
+                        self.state = State::Idle;
+                        events.push(SpeechEvent::Error(message));
+                    } else {
+                        tracing::debug!(%message, "late capture error ignored (not recording)");
                     }
-                    self.state = State::Idle;
-                    events.push(SpeechEvent::Error(message));
                 }
             }
         }

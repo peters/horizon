@@ -7,6 +7,7 @@ use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
 use crate::app::speech::built_with_speech;
+use crate::app::util::primary_shortcut_label;
 use crate::theme;
 
 pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
@@ -277,31 +278,31 @@ fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-/// Cache GGUF header parses per model path in egui temp memory so the file
-/// is only re-read when the path changes.
+/// Parse a model's GGUF header, throttled to a few times a second and cached
+/// in egui temp memory. The settings panel is immediate-mode, so without the
+/// throttle an `fs::metadata` + header parse would run every frame while the
+/// panel is open. Keyed on the path, so the last result is reused between
+/// checks and a model replaced in place is picked up within the interval.
 fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let expanded = horizon_core::dir_search::expand_tilde(trimmed);
-    // Keying on file identity (length + mtime) as well as the path means a
-    // model downloaded, replaced, or converted at the same location is
-    // re-read instead of serving stale (or permanently-None) metadata.
-    let identity = std::fs::metadata(&expanded).map_or((0, 0), |meta| {
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| duration.as_secs());
-        (meta.len(), modified)
-    });
-    let key = egui::Id::new(("speech_model_info", trimmed, identity));
-    if let Some(cached) = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(key)) {
+    let now = ui.input(|input| input.time);
+    let throttle_id = egui::Id::new(("speech_model_info_at", trimmed));
+    let result_id = egui::Id::new(("speech_model_info_val", trimmed));
+    if let Some(last) = ui.data(|data| data.get_temp::<f64>(throttle_id))
+        && now - last < 0.5
+        && let Some(cached) = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(result_id))
+    {
         return cached;
     }
+    let expanded = horizon_core::dir_search::expand_tilde(trimmed);
     let parsed = read_speech_model_info(&expanded);
-    ui.data_mut(|data| data.insert_temp(key, parsed.clone()));
+    ui.data_mut(|data| {
+        data.insert_temp(throttle_id, now);
+        data.insert_temp(result_id, parsed.clone());
+    });
     parsed
 }
 
@@ -315,7 +316,15 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
 
     ui.horizontal(|ui| {
         let current = config.features.speech.hotkey.trim();
-        let label = if current.is_empty() { "(none)" } else { current };
+        let label = if current.is_empty() {
+            "(none)".to_string()
+        } else {
+            // Render with the platform-primary label so macOS shows `Cmd`.
+            horizon_core::ShortcutBinding::parse(current).map_or_else(
+                |_| current.to_string(),
+                |binding| binding.display_label(primary_shortcut_label()),
+            )
+        };
         ui.label(egui::RichText::new(label).color(theme::FG()).size(12.0).monospace());
 
         if capturing {
@@ -353,7 +362,11 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
             }
         } else {
             if ui.button("Rebind…").clicked() {
-                ui.data_mut(|data| data.insert_temp(capture_id, true));
+                ui.data_mut(|data| {
+                    data.insert_temp(capture_id, true);
+                    // Clear any stale error from a previous attempt.
+                    data.remove_temp::<String>(error_id);
+                });
             }
             if !current.is_empty() && ui.button("Clear").clicked() {
                 config.features.speech.hotkey = String::new();
@@ -374,12 +387,14 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
 /// unsupported keys, malformed chords, and overlaps with global shortcuts.
 fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &Config) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
-    // `Ctrl` is the platform-primary token (Command on macOS); a physical
-    // Control on macOS sets `ctrl` without `command` and serializes as the
-    // distinct `Control` token.
+    // `Ctrl` is the platform-primary token (Command on macOS). On macOS the
+    // physical Control key is distinct and serializes as `Control`, so a
+    // Cmd+Control chord must emit both. On Linux/Windows the Ctrl key sets
+    // both `command` and `ctrl`, so only the primary token is emitted.
     if modifiers.command {
         parts.push("Ctrl");
-    } else if modifiers.ctrl {
+    }
+    if modifiers.ctrl && (modifiers.mac_cmd || !modifiers.command) {
         parts.push("Control");
     }
     if modifiers.alt {

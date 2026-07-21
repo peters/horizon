@@ -177,7 +177,7 @@ impl HorizonApp {
         let mut capturing_hotkey: bool = ctx
             .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
             .unwrap_or(false);
-        if capturing_hotkey && self.settings.is_none() {
+        if capturing_hotkey && !self.settings_speech_tab_open() {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
             capturing_hotkey = false;
         }
@@ -204,7 +204,22 @@ impl HorizonApp {
         // detached viewport ORs itself in during rendering, and the privacy
         // guard in `finalize_frame` cancels an unattended recording when no
         // Horizon window has focus (see `cancel_unattended_recording`).
-        self.any_viewport_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        self.any_viewport_focused = root_focused;
+
+        // Hold-mode release detection is root-only, but the release can land
+        // in a detached Horizon window if focus moved there mid-hold (and on
+        // Wayland/macOS focus loss synthesizes no key release at all). If a
+        // hold is engaged and the root lost focus, treat it as the release —
+        // otherwise the mic would stay open with the key already up.
+        if !root_focused
+            && self.speech_engaged_profile.is_some()
+            && speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold
+        {
+            speech.stop();
+            self.speech_engaged_profile = None;
+            self.speech_held_bindings.clear();
+        }
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding. And while a
