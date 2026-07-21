@@ -325,7 +325,7 @@ cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
 cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
 ```
 
-GPU use at runtime is automatic either way: the `auto` backend probes discrete GPUs first and always falls back to CPU.
+When a GPU backend is compiled in (Metal ships automatically in plain `speech` on macOS), the `auto` backend probes discrete GPUs first and always falls back to CPU; a CPU-only build simply runs on CPU.
 
 ```yaml
 features:

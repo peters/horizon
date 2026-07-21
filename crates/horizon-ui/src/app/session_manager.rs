@@ -213,7 +213,7 @@ impl HorizonApp {
         // and no microphone may survive the teardown. Rebuilding drops the
         // workers (cancelling any in-flight inference via their tokens).
         self.speech = super::speech::SpeechSystem::from_config(&self.template_config.features.speech);
-        self.speech_held_binding = None;
+        self.speech_held_bindings.clear();
         self.speech_engaged_profile = None;
         let _ = self.board.begin_async_shutdown();
         self.git_watchers.clear();

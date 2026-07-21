@@ -41,7 +41,7 @@ impl HorizonApp {
             && speech.recording_target() == Some(panel_id)
         {
             speech.cancel();
-            self.speech_held_binding = None;
+            self.speech_held_bindings.clear();
             self.speech_engaged_profile = None;
         }
         let transcript = self

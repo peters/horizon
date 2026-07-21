@@ -165,9 +165,10 @@ pub struct HorizonApp {
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     speech: Option<speech::SpeechSystem>,
-    /// The push-to-talk chord currently held, if any (used to keep its key
-    /// events, repeats, and release out of the terminal input stream).
-    speech_held_binding: Option<horizon_core::ShortcutBinding>,
+    /// Every push-to-talk chord currently held (used to keep their key
+    /// events, repeats, and releases out of the terminal input stream —
+    /// multiple profile keys can be down simultaneously).
+    speech_held_bindings: Vec<horizon_core::ShortcutBinding>,
     /// The profile whose chord press was observed by the hotkey handler;
     /// releases only stop a recording when set (a bare-key release must not
     /// stop a mic-button recording).
@@ -352,7 +353,7 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
-            speech_held_binding: None,
+            speech_held_bindings: Vec::new(),
             speech_engaged_profile: None,
             speech_escape_cancelled: false,
             any_viewport_focused: true,

@@ -419,25 +419,31 @@ impl HorizonApp {
                         PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
                     );
                 let mic_response = mic_eligible.then(|| {
-                    let tooltip = self.speech.as_ref().map_or_else(
-                        || "Dictate into this panel (click to start/stop)".to_string(),
-                        |speech| match speech.hotkey_summary(primary_shortcut_label()) {
-                            Some(summary) => {
-                                let verb = match speech.hotkey_mode() {
-                                    horizon_core::SpeechHotkeyMode::Hold => "hold",
-                                    horizon_core::SpeechHotkeyMode::Toggle => "press",
-                                };
-                                format!("Dictate into this panel (click, or {verb}: {summary})")
-                            }
-                            None => "Dictate into this panel (click to start/stop)".to_string(),
-                        },
-                    );
+                    let speech = self.speech.as_ref();
                     ui.interact(
                         rects.mic.expand2(Vec2::splat(4.0)),
                         ui.make_persistent_id(("panel_mic", panel_id.0)),
                         if interactive { Sense::click() } else { Sense::hover() },
                     )
-                    .on_hover_text(tooltip)
+                    // Built lazily: the summary allocates per profile, so it
+                    // must only run for the hovered mic, not every visible
+                    // panel every frame.
+                    .on_hover_ui(|ui| {
+                        let tooltip = speech.map_or_else(
+                            || "Dictate into this panel (click to start/stop)".to_string(),
+                            |speech| match speech.hotkey_summary(primary_shortcut_label()) {
+                                Some(summary) => {
+                                    let verb = match speech.hotkey_mode() {
+                                        horizon_core::SpeechHotkeyMode::Hold => "hold",
+                                        horizon_core::SpeechHotkeyMode::Toggle => "press",
+                                    };
+                                    format!("Dictate into this panel (click, or {verb}: {summary})")
+                                }
+                                None => "Dictate into this panel (click to start/stop)".to_string(),
+                            },
+                        );
+                        ui.label(tooltip);
+                    })
                 });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),

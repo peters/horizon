@@ -299,7 +299,7 @@ impl HorizonApp {
             && speech.recording_target().is_some()
         {
             speech.cancel();
-            self.speech_held_binding = None;
+            self.speech_held_bindings.clear();
             self.speech_engaged_profile = None;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }

@@ -358,16 +358,24 @@ impl HorizonApp {
                 if *pressed {
                     // A full chord press of any profile key engages holding.
                     if let Some(matched) = bindings.iter().find(|binding| shortcut_event_matches(event, **binding)) {
-                        self.speech_held_binding = Some(*matched);
+                        if !self.speech_held_bindings.contains(matched) {
+                            self.speech_held_bindings.push(*matched);
+                        }
                         return true;
                     }
                     // Mid-hold repeats can carry drifted modifiers.
-                    self.speech_held_binding
-                        .is_some_and(|held| event_uses_shortcut_key(event, held))
-                } else if let Some(held) = self.speech_held_binding
-                    && event_uses_shortcut_key(event, held)
+                    self.speech_held_bindings
+                        .iter()
+                        .any(|held| event_uses_shortcut_key(event, *held))
+                } else if let Some(position) = self
+                    .speech_held_bindings
+                    .iter()
+                    .position(|held| event_uses_shortcut_key(event, *held))
                 {
-                    self.speech_held_binding = None;
+                    // Each held chord's release is consumed independently, so
+                    // releasing F2 while F1 stays down cannot leak F1's later
+                    // release into the PTY.
+                    self.speech_held_bindings.swap_remove(position);
                     true
                 } else {
                     false
@@ -378,8 +386,8 @@ impl HorizonApp {
                 // held. For plain keys the text is predictable; for
                 // Shift-only chords the shifted symbol is layout-dependent,
                 // so any single-character text is attributed to the held
-                // chord (the chord key is the only key being held).
-                self.speech_held_binding.is_some_and(|held| {
+                // chord.
+                self.speech_held_bindings.iter().any(|held| {
                     if held.modifiers == horizon_core::ShortcutModifiers::NONE {
                         binding_text_matches(held.key, text)
                     } else if held.modifiers == horizon_core::ShortcutModifiers::SHIFT {
