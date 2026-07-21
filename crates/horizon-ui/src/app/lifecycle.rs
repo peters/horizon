@@ -164,10 +164,13 @@ impl HorizonApp {
         self.speech_escape_cancelled = false;
         // The hotkey targets the focused panel, but only terminal-backed
         // panels can receive typed text.
-        let focused_terminal = self
-            .board
-            .focused
-            .filter(|id| self.board.panel(*id).is_some_and(|panel| panel.terminal().is_some()));
+        let focused_terminal = self.board.focused.filter(|id| {
+            self.board.panel(*id).is_some_and(|panel| {
+                // The root-viewport hotkey must not dictate into a panel
+                // living in a detached window (documented main-window scope).
+                panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
+            })
+        });
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
             return;

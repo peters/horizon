@@ -14,7 +14,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// Hard cap on a single recording so a stuck hotkey cannot grow unbounded.
+/// Applied to the 16 kHz mono output (≈37 MiB), not the raw device stream —
+/// audio is downmixed and resampled incrementally inside the callback, so
+/// high native rates cannot balloon memory before conversion.
 const MAX_RECORD_SECONDS: usize = 600;
+const MAX_OUTPUT_SAMPLES: usize = MAX_RECORD_SECONDS * TARGET_SAMPLE_RATE as usize;
 
 pub enum CaptureCmd {
     /// Begin recording under the given generation.
@@ -53,10 +57,75 @@ struct ActiveRecording {
     // Keeps the input stream alive; dropped to stop capture.
     _stream: cpal::Stream,
     generation: u64,
+    /// Already downmixed to mono and resampled to 16 kHz.
     samples: Arc<Mutex<Vec<f32>>>,
-    sample_rate: u32,
-    channels: usize,
     overflowed: Arc<AtomicBool>,
+}
+
+/// Stateful downmix-to-mono + linear resample to 16 kHz, fed chunk by chunk
+/// from the audio callback so only converted output is ever buffered.
+struct MonoResampler {
+    channels: usize,
+    /// Source frames advanced per output sample.
+    step: f64,
+    /// Fractional read position within `pending` (mono, source rate).
+    position: f64,
+    /// Last mono sample of the previous chunk plus this chunk's mono frames.
+    pending: Vec<f32>,
+    /// Partial interleaved frame carried across callback chunks: the audio
+    /// callback is under no obligation to deliver whole frames per chunk.
+    frame_acc: f32,
+    frame_fill: usize,
+}
+
+impl MonoResampler {
+    fn new(sample_rate: u32, channels: usize) -> Self {
+        Self {
+            channels: channels.max(1),
+            step: f64::from(sample_rate) / f64::from(TARGET_SAMPLE_RATE),
+            position: 0.0,
+            pending: Vec::new(),
+            frame_acc: 0.0,
+            frame_fill: 0,
+        }
+    }
+
+    /// Convert an interleaved chunk, appending 16 kHz mono samples to `out`.
+    ///
+    /// Holds back up to one interpolation window (< 1 ms) at the stream
+    /// tail, which is irrelevant for speech recognition.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions are far below every cast's precision limit"
+    )]
+    fn feed(&mut self, chunk: impl Iterator<Item = f32>, out: &mut Vec<f32>) {
+        for sample in chunk {
+            self.frame_acc += sample;
+            self.frame_fill += 1;
+            if self.frame_fill == self.channels {
+                self.pending.push(self.frame_acc / usize_to_f32(self.channels));
+                self.frame_acc = 0.0;
+                self.frame_fill = 0;
+            }
+        }
+
+        // Emit every output sample whose interpolation window is complete.
+        while (self.position.floor() as usize) + 1 < self.pending.len() {
+            let base = self.position.floor() as usize;
+            let frac = (self.position - self.position.floor()) as f32;
+            let current = self.pending[base];
+            let next = self.pending[base + 1];
+            out.push(current + (next - current) * frac);
+            self.position += self.step;
+        }
+
+        // Keep only the tail still needed for the next interpolation window.
+        let keep_from = (self.position.floor() as usize).min(self.pending.len());
+        self.pending.drain(..keep_from);
+        self.position -= keep_from as f64;
+    }
 }
 
 /// Recover a poisoned buffer lock instead of panicking: the protected data
@@ -83,17 +152,15 @@ fn capture_loop(cmd_rx: &Receiver<CaptureCmd>, pcm_tx: &Sender<(u64, Result<Vec<
                 if let Some(recording) = active.take() {
                     let generation = recording.generation;
                     let samples = Arc::clone(&recording.samples);
-                    let sample_rate = recording.sample_rate;
-                    let channels = recording.channels;
                     let overflowed = recording.overflowed.load(Ordering::Relaxed);
                     // Dropping the recording tears down the stream before the
                     // buffer is drained, so no samples race the drain.
                     drop(recording);
-                    let raw = std::mem::take(&mut *lock_samples(&samples));
+                    let pcm = std::mem::take(&mut *lock_samples(&samples));
                     if overflowed {
                         tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; truncated");
                     }
-                    let _ = pcm_tx.send((generation, Ok(to_mono_16k(&raw, sample_rate, channels))));
+                    let _ = pcm_tx.send((generation, Ok(pcm)));
                 }
             }
             CaptureCmd::Cancel => {
@@ -125,7 +192,6 @@ fn start_recording(
 
     let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
     let overflowed = Arc::new(AtomicBool::new(false));
-    let max_samples = MAX_RECORD_SECONDS * sample_rate as usize * channels;
 
     // Runtime stream failures (e.g. the microphone being unplugged) must
     // reach the engine over the channel, not just the log, or the UI would
@@ -139,10 +205,11 @@ fn start_recording(
         SampleFormat::F32 => {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
+            let mut resampler = MonoResampler::new(sample_rate, channels);
             device.build_input_stream(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    push_samples(&sink, &full, max_samples, data.iter().copied());
+                    convert_into(&mut resampler, &sink, &full, data.iter().copied());
                 },
                 error_cb,
                 None,
@@ -151,13 +218,14 @@ fn start_recording(
         SampleFormat::I16 => {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
+            let mut resampler = MonoResampler::new(sample_rate, channels);
             device.build_input_stream(
                 config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    push_samples(
+                    convert_into(
+                        &mut resampler,
                         &sink,
                         &full,
-                        max_samples,
                         data.iter().map(|&sample| f32::from(sample) / 32_768.0),
                     );
                 },
@@ -168,13 +236,14 @@ fn start_recording(
         SampleFormat::U16 => {
             let sink = Arc::clone(&samples);
             let full = Arc::clone(&overflowed);
+            let mut resampler = MonoResampler::new(sample_rate, channels);
             device.build_input_stream(
                 config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    push_samples(
+                    convert_into(
+                        &mut resampler,
                         &sink,
                         &full,
-                        max_samples,
                         data.iter().map(|&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
                     );
                 },
@@ -199,25 +268,27 @@ fn start_recording(
         _stream: stream,
         generation,
         samples,
-        sample_rate,
-        channels,
         overflowed,
     })
 }
 
-fn push_samples(
+/// Audio-callback path: downmix + resample the chunk and append to the
+/// shared 16 kHz mono buffer, enforcing the output-sample cap.
+fn convert_into(
+    resampler: &mut MonoResampler,
     sink: &Arc<Mutex<Vec<f32>>>,
     overflowed: &Arc<AtomicBool>,
-    max_samples: usize,
-    data: impl Iterator<Item = f32>,
+    chunk: impl Iterator<Item = f32>,
 ) {
-    let mut buffer = sink.lock().expect("capture buffer lock");
-    for sample in data {
-        if buffer.len() >= max_samples {
-            overflowed.store(true, Ordering::Relaxed);
-            return;
-        }
-        buffer.push(sample);
+    let mut buffer = lock_samples(sink);
+    if buffer.len() >= MAX_OUTPUT_SAMPLES {
+        overflowed.store(true, Ordering::Relaxed);
+        return;
+    }
+    resampler.feed(chunk, &mut buffer);
+    if buffer.len() > MAX_OUTPUT_SAMPLES {
+        buffer.truncate(MAX_OUTPUT_SAMPLES);
+        overflowed.store(true, Ordering::Relaxed);
     }
 }
 
@@ -232,6 +303,7 @@ fn push_samples(
     clippy::cast_precision_loss,
     reason = "sample positions/counts are far below every cast's precision limit"
 )]
+#[cfg(test)]
 pub fn to_mono_16k(samples: &[f32], sample_rate: u32, channels: usize) -> Vec<f32> {
     let channels = channels.max(1);
     let mono: Vec<f32> = if channels == 1 {
@@ -303,6 +375,40 @@ mod tests {
     fn native_rate_passes_through() {
         let samples = vec![0.1_f32; 1600];
         assert_eq!(to_mono_16k(&samples, 16_000, 1), samples);
+    }
+
+    /// The streaming path must produce the same signal as the batch helper
+    /// regardless of how the audio callback happens to chunk the input.
+    #[test]
+    #[expect(clippy::cast_precision_loss, reason = "test signal generation; indices are tiny")]
+    fn streaming_resampler_matches_batch_conversion() {
+        let rate = 44_100_u32;
+        let samples: Vec<f32> = (0..rate as usize)
+            .flat_map(|index| {
+                let t = index as f32 / rate as f32;
+                let value = (t * std::f32::consts::TAU * 220.0).sin();
+                [value, value]
+            })
+            .collect();
+        let batch = to_mono_16k(&samples, rate, 2);
+
+        let mut resampler = super::MonoResampler::new(rate, 2);
+        let mut streamed = Vec::new();
+        for chunk in samples.chunks(1337) {
+            resampler.feed(chunk.iter().copied(), &mut streamed);
+        }
+
+        // The streaming path holds back up to one interpolation window at
+        // the tail (< 1 ms) because nothing flushes at stream teardown.
+        assert!(
+            streamed.len().abs_diff(batch.len()) <= 16,
+            "length mismatch: streamed {} vs batch {}",
+            streamed.len(),
+            batch.len()
+        );
+        for (index, (a, b)) in streamed.iter().zip(batch.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-4, "sample {index} diverged: {a} vs {b}");
+        }
     }
 
     /// A8 smoke check: on a machine with no usable input device, starting

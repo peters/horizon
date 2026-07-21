@@ -3,10 +3,17 @@
 //! not slow down app startup, and a failed load is retried on the next job.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 
 use horizon_core::{PanelId, SpeechBackend, SpeechConfig, SpeechTask};
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
+
+/// `Model::load_with` cannot be interrupted, so loads are serialized across
+/// all workers: a replacement worker cannot begin loading until the
+/// cancelled one finished its load (and its prompt exit releases the
+/// model), keeping two multi-GB models from loading concurrently.
+static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct Job {
     pub pcm: Vec<f32>,
@@ -170,6 +177,10 @@ fn ensure_session(
     }
     if settings.model_path.trim().is_empty() {
         return Err("no speech model configured (features.speech.model)".to_string());
+    }
+    let _load_permit = MODEL_LOAD_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if cancel.is_cancelled() {
+        return Err("speech worker replaced before model load".to_string());
     }
     let options = ModelOptions {
         backend: settings.backend,

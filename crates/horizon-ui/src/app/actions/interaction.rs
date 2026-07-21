@@ -208,7 +208,7 @@ impl HorizonApp {
                     .filter_map(|(_, geometry)| geometry.terminal_body_screen_rect)
                     .any(|rect| rect.contains(position))
             });
-        let terminal_events = self.terminal_events_for_viewport(ctx.viewport_id(), &events);
+        let terminal_events = self.terminal_events_for_viewport(ctx, &events);
         // Delay plain Space forwarding until we know whether the key becomes
         // the canvas-pan modifier or an actual terminal keystroke.
         self.terminal_keyboard_events = self
@@ -280,11 +280,8 @@ impl HorizonApp {
         }
     }
 
-    fn terminal_events_for_viewport(
-        &mut self,
-        viewport_id: egui::ViewportId,
-        events: &[Event],
-    ) -> Vec<TerminalInputEvent> {
+    fn terminal_events_for_viewport(&mut self, ctx: &Context, events: &[Event]) -> Vec<TerminalInputEvent> {
+        let viewport_id = ctx.viewport_id();
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
         // The push-to-talk chord is an app-level control on the root viewport
         // (where the hotkey handler listens); keep its presses, repeats, and
@@ -293,12 +290,35 @@ impl HorizonApp {
         if viewport_id != egui::ViewportId::ROOT || self.speech.is_none() {
             return terminal_input_events(events, frame_keyboard_events);
         }
+        // While the settings binder is capturing, every key belongs to the
+        // binder — none of it may type into the focused terminal.
+        let capturing = super::super::shortcuts::hotkey_capture_active(ctx);
+        // A just-captured chord still has its release (and possibly repeats
+        // and a text event) in flight after the binder cleared its flag.
+        let captured_key_id = egui::Id::new("speech_captured_key");
+        let captured_key: Option<Key> = ctx.data(|data| data.get_temp::<Option<Key>>(captured_key_id)).flatten();
         let binding = self
             .speech
             .as_ref()
             .and_then(super::super::speech::SpeechSystem::hotkey_binding);
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
+            if capturing && matches!(event, Event::Key { .. } | Event::Text(_)) {
+                continue;
+            }
+            if let Some(pending) = captured_key {
+                match event {
+                    Event::Key {
+                        key, pressed: false, ..
+                    } if *key == pending => {
+                        ctx.data_mut(|data| data.insert_temp(captured_key_id, None::<Key>));
+                        continue;
+                    }
+                    Event::Key { key, .. } if *key == pending => continue,
+                    Event::Text(text) if text.eq_ignore_ascii_case(pending.name()) => continue,
+                    _ => {}
+                }
+            }
             if self.swallow_speech_hotkey_event(event, binding) {
                 continue;
             }
