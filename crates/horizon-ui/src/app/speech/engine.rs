@@ -170,6 +170,18 @@ impl SpeechSystem {
         }
     }
 
+    /// The target panel of any active state (recording, awaiting PCM, or
+    /// transcribing), for the "target must still exist" invariant.
+    #[must_use]
+    pub fn active_target(&self) -> Option<PanelId> {
+        match self.state {
+            State::Recording { target, .. }
+            | State::AwaitingPcm { target, .. }
+            | State::Transcribing { target, .. } => Some(target),
+            State::Idle => None,
+        }
+    }
+
     /// Recording or transcribing — the frame loop keeps repainting (and thus
     /// polling) while this is true.
     #[must_use]
@@ -204,11 +216,14 @@ impl SpeechSystem {
         }
     }
 
+    /// Return to Idle from any active state. A running transcription cannot
+    /// be interrupted, but the engine is freed so the mic/hotkey work again;
+    /// its eventual result is discarded because the state no longer matches.
     pub fn cancel(&mut self) {
         if matches!(self.state, State::Recording { .. }) {
             self.capture.send(CaptureCmd::Cancel);
-            self.state = State::Idle;
         }
+        self.state = State::Idle;
     }
 
     /// Drain worker/capture channels; called once per frame.

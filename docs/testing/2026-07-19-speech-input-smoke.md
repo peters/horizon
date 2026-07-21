@@ -67,6 +67,33 @@ cd -
   space and no newline. Hold F9 → speak → release; text lands in the
   *focused* panel. Escape while recording cancels. F9 press/release must
   not leak `~`/escape sequences into the terminal.
+- **A10 — Settings workflows (GUI)**: open Settings → General → Features →
+  Speech Input with a model configured. Verify: the **spoken-language**
+  dropdown lists the model's declared languages (not free-form) and the
+  metadata line shows the language count + translate capability; the
+  **Output** picker offers Transcribe and the model's declared translate
+  targets, and switching the spoken language resets an out-of-range
+  target; the **backend** picker only lists backends compiled into this
+  build and shows `active: <backend>` after a dictation; **Rebind…**
+  captures a pressed chord, rejects a chord that overlaps a global
+  shortcut (or another profile) with an inline error, and rejects bare
+  keys/clipboard chords; changing **task/mode/backend/hotkey** and saving
+  applies live with no restart.
+- **A11 — profiles**: configure `features.speech.profiles` with two
+  profiles (distinct models/languages and hotkeys F1/F2). Verify each
+  hotkey dictates with its own profile, the mic button reuses the
+  last-used profile, the mic tooltip lists both keys, and the Settings
+  summary shows per-profile rows. A profile with an invalid/duplicate
+  hotkey (or a non-first profile with no hotkey) is rejected on save.
+- **A12 — persistence after relaunch**: quit and relaunch; the saved
+  speech config (profiles, language, task, backend, hotkey) is restored
+  and dictation still works without re-editing.
+- **A13 — packaged bundle (macOS)**: build the `.app` via
+  `packaging/macos/make_app_bundle.sh` and launch that bundle (not the raw
+  binary). First dictation must trigger the microphone permission prompt
+  (the bundle's `Info.plist` carries `NSMicrophoneUsageDescription`);
+  granting it lets dictation proceed. The raw binary cannot exercise this
+  TCC path.
 
 ## Lane B — Linux + NVIDIA (CUDA)
 

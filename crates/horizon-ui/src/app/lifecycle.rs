@@ -198,11 +198,12 @@ impl HorizonApp {
             return;
         };
 
-        // Invariant: a recording's target panel must still exist. This
-        // covers every removal path at once — single close, workspace bulk
-        // close, session teardown — so the microphone can never stay open
-        // behind a vanished panel.
-        if let Some(target) = speech.recording_target()
+        // Invariant: the active target panel must still exist — across
+        // Recording, AwaitingPcm, and Transcribing. Covers every removal
+        // path (single close, workspace bulk close, session teardown), so
+        // the mic can't stay open and a busy engine can't wedge behind a
+        // vanished panel while inference finishes into nothing.
+        if let Some(target) = speech.active_target()
             && self.board.panel(target).is_none()
         {
             speech.cancel();

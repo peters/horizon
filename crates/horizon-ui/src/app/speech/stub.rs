@@ -44,6 +44,11 @@ impl SpeechSystem {
     }
 
     #[must_use]
+    pub fn active_target(&self) -> Option<PanelId> {
+        None
+    }
+
+    #[must_use]
     pub fn is_active(&self) -> bool {
         false
     }
