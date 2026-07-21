@@ -35,15 +35,6 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_panel(&mut self, panel_id: PanelId) {
-        // Closing the recording target removes the only visible stop
-        // control; the microphone must not stay open behind it.
-        if let Some(speech) = self.speech.as_mut()
-            && speech.recording_target() == Some(panel_id)
-        {
-            speech.cancel();
-            self.speech_held_bindings.clear();
-            self.speech_engaged_profile = None;
-        }
         let transcript = self
             .board
             .panel(panel_id)

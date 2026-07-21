@@ -495,7 +495,15 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
     if modifiers.shift {
         parts.push("Shift");
     }
-    let key_name = key.name();
+    // `Key::name()` yields glyphs like `+` for Plus, which the shared
+    // parser rejects (`Ctrl++` is an empty component); use canonical tokens.
+    let key_name = match key {
+        egui::Key::Plus => "Plus",
+        egui::Key::Equals => "Equals",
+        egui::Key::Minus => "Minus",
+        egui::Key::Comma => "Comma",
+        _ => key.name(),
+    };
     parts.push(key_name);
     let candidate = parts.join("+");
 

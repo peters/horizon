@@ -402,17 +402,22 @@ fn swallow_speech_hotkey_event(
         }
         Event::Text(text) => {
             // Bindings without ctrl/alt/cmd also emit text events while
-            // held. For plain keys the text is predictable; for Shift-only
-            // chords the shifted symbol is layout-dependent, so any
-            // single-character text is attributed to the held chord.
-            held_bindings.iter().any(|held| {
-                if held.modifiers == horizon_core::ShortcutModifiers::NONE {
-                    binding_text_matches(held.key, text)
-                } else if held.modifiers == horizon_core::ShortcutModifiers::SHIFT {
-                    text.chars().count() == 1
-                } else {
-                    false
+            // held. Letters match their (case-insensitive) glyph even under
+            // Shift. A shifted digit/punctuation key emits a layout-
+            // dependent symbol that cannot be predicted, so only single
+            // NON-alphanumeric characters are attributed to such a chord —
+            // typing letters while holding push-to-talk stays intact.
+            held_bindings.iter().any(|held| match held.modifiers {
+                horizon_core::ShortcutModifiers::NONE => binding_text_matches(held.key, text),
+                horizon_core::ShortcutModifiers::SHIFT => {
+                    if let horizon_core::ShortcutKey::Letter(_) = held.key {
+                        binding_text_matches(held.key, text)
+                    } else {
+                        let mut chars = text.chars();
+                        matches!((chars.next(), chars.next()), (Some(only), None) if !only.is_alphanumeric())
+                    }
                 }
+                _ => false,
             })
         }
         _ => false,

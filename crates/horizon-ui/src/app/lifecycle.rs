@@ -187,6 +187,19 @@ impl HorizonApp {
             return;
         };
 
+        // Invariant: a recording's target panel must still exist. This
+        // covers every removal path at once — single close, workspace bulk
+        // close, session teardown — so the microphone can never stay open
+        // behind a vanished panel.
+        if let Some(target) = speech.recording_target()
+            && self.board.panel(target).is_none()
+        {
+            speech.cancel();
+            self.speech_held_bindings.clear();
+            self.speech_engaged_profile = None;
+            tracing::info!("recording target panel disappeared; recording cancelled");
+        }
+
         // Seed the per-frame focus aggregate with the root viewport; each
         // detached viewport ORs itself in during rendering, and the privacy
         // guard in `finalize_frame` cancels an unattended recording when no
