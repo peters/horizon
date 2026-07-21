@@ -5,7 +5,7 @@ use egui::{
     Stroke, StrokeKind, Tooltip, Ui, Vec2,
     text::{LayoutJob, TextFormat, TextWrapping},
 };
-use horizon_core::{PanelId, WorkspaceId};
+use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use crate::theme;
 
@@ -634,11 +634,28 @@ fn place_minimap_label_rect(base_rect: Rect, workspace_rect: Rect, occupied: &[R
     is_active.then_some(base_rect)
 }
 
+/// Panels in minimap paint order: board order with the focused panel last,
+/// mirroring the canvas render order so the focus outline cannot be painted
+/// over and hit-testing prefers what is visually topmost.
+fn minimap_panels_in_paint_order(app: &HorizonApp, scope: MinimapScope) -> impl Iterator<Item = &Panel> {
+    let focused = app.board.focused;
+    let scoped = move |panel: &&Panel| scope_includes_workspace(app, scope, panel.workspace_id);
+    app.board
+        .panels
+        .iter()
+        .filter(scoped)
+        .filter(move |panel| Some(panel.id) != focused)
+        .chain(
+            app.board
+                .panels
+                .iter()
+                .filter(scoped)
+                .filter(move |panel| Some(panel.id) == focused),
+        )
+}
+
 fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model: &MinimapModel, scope: MinimapScope) {
-    for panel in &app.board.panels {
-        if !scope_includes_workspace(app, scope, panel.workspace_id) {
-            continue;
-        }
+    for panel in minimap_panels_in_paint_order(app, scope) {
         let panel_rect = panel_minimap_screen_rect(origin, model, panel.layout.position, panel.layout.size);
         let workspace_color = app
             .board
@@ -770,19 +787,15 @@ fn minimap_hit_target(
 ) -> Option<MinimapHitTarget> {
     let panel_hit = last_hit(
         pos,
-        app.board
-            .panels
-            .iter()
-            .filter(|panel| scope_includes_workspace(app, scope, panel.workspace_id))
-            .map(|panel| {
-                (
-                    MinimapHitTarget::Panel {
-                        panel_id: panel.id,
-                        workspace_id: panel.workspace_id,
-                    },
-                    panel_minimap_screen_rect(origin, model, panel.layout.position, panel.layout.size),
-                )
-            }),
+        minimap_panels_in_paint_order(app, scope).map(|panel| {
+            (
+                MinimapHitTarget::Panel {
+                    panel_id: panel.id,
+                    workspace_id: panel.workspace_id,
+                },
+                panel_minimap_screen_rect(origin, model, panel.layout.position, panel.layout.size),
+            )
+        }),
     );
     if panel_hit.is_some() {
         return panel_hit;
