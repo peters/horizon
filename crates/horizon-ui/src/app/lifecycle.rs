@@ -194,6 +194,7 @@ impl HorizonApp {
 
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            self.reset_speech_input_state(root_focused_now);
             return;
         };
 
@@ -215,7 +216,7 @@ impl HorizonApp {
         // detached viewport ORs itself in during rendering, and the privacy
         // guard in `finalize_frame` cancels an unattended recording when no
         // Horizon window has focus (see `cancel_unattended_recording`).
-        let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let root_focused = root_focused_now;
         self.any_viewport_focused = root_focused;
 
         // Hold-mode release detection is root-only, but the release can land
@@ -363,6 +364,18 @@ impl HorizonApp {
             self.speech_held_bindings.clear();
             self.speech_escape_release_pending = false;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
+        }
+    }
+
+    /// Seed the focus aggregate and drop stale held-chord state when speech
+    /// is unavailable: an undelivered key-up (focus lost while disabled)
+    /// must not keep swallowing that key forever.
+    fn reset_speech_input_state(&mut self, root_focused: bool) {
+        self.any_viewport_focused = root_focused;
+        if !root_focused {
+            self.speech_held_bindings.clear();
+            self.speech_engaged_profile = None;
+            self.speech_escape_release_pending = false;
         }
     }
 

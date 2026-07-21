@@ -346,11 +346,13 @@ fn convert_into(
 /// Integer downsample factors (48 kHz, 32 kHz) use a box filter; everything
 /// else (e.g. 44.1 kHz) falls back to linear interpolation. Whisper-family
 /// models are robust to this level of resampling fidelity.
+/// Narrow an f64 device sample to the f32 capture pipeline.
 #[expect(clippy::cast_possible_truncation, reason = "audio downconvert to the f32 pipeline")]
 fn f64_to_sample(sample: f64) -> f32 {
     sample as f32
 }
 
+/// Normalize a 32-bit integer device sample to f32 in [-1, 1).
 #[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
 fn i32_to_sample(sample: i32) -> f32 {
     sample as f32 / 2_147_483_648.0
