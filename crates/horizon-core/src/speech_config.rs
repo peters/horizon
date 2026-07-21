@@ -186,6 +186,19 @@ fn config_error_message(error: &Error) -> String {
         .map_or_else(|| error.to_string(), str::to_string)
 }
 
+/// Validate a single push-to-talk hotkey string against the shared shortcut
+/// rules (parse, reserved Escape, bare-key, clipboard chords, and overlap
+/// with global shortcuts) — WITHOUT the profile/model completeness checks,
+/// so the settings binder can accept a chord before other fields are filled.
+///
+/// # Errors
+/// Returns an error describing the first rule the hotkey violates.
+pub fn validate_speech_hotkey(hotkey: &str, shortcuts: &AppShortcuts) -> Result<()> {
+    let binding = ShortcutBinding::parse(hotkey)
+        .map_err(|error| Error::Config(format!("hotkey: {}", config_error_message(&error))))?;
+    validate_speech_binding("hotkey", hotkey, binding, shortcuts)
+}
+
 fn validate_speech_binding(
     label: &str,
     hotkey: &str,

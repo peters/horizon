@@ -22,6 +22,7 @@ pub mod search;
 mod session_store;
 mod shortcuts;
 pub mod speech_config;
+pub use speech_config::validate_speech_hotkey;
 pub mod speech_model;
 mod ssh;
 mod terminal;

@@ -462,11 +462,16 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
     parts.push(key_name);
     let candidate = parts.join("+");
 
-    let mut probe = config.clone();
-    probe.features.speech.enabled = true;
-    probe.features.speech.hotkey.clone_from(&candidate);
-    match probe.validate() {
-        Ok(()) => Ok(candidate),
-        Err(error) => Err(error.to_string()),
+    // Validate only the hotkey (parse/reserved/bare/clipboard/global overlap),
+    // not the whole config — the model and other fields may still be empty
+    // while the user is binding a key.
+    let shortcuts = config.shortcuts.resolve().map_err(|error| error.to_string())?;
+    horizon_core::validate_speech_hotkey(&candidate, &shortcuts).map_err(|error| error.to_string())?;
+    // Reject a chord that duplicates another configured profile's hotkey.
+    for profile in &config.features.speech.profiles {
+        if profile.hotkey.trim().eq_ignore_ascii_case(candidate.trim()) {
+            return Err(format!("`{candidate}` is already used by profile `{}`", profile.name));
+        }
     }
+    Ok(candidate)
 }
