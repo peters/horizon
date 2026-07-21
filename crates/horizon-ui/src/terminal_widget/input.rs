@@ -185,7 +185,7 @@ fn should_handle_terminal_pointer(
         })
 }
 
-fn pty_mouse_reporting_enabled(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
+pub(super) fn pty_mouse_reporting_enabled(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
     !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
 }
 

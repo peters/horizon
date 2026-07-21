@@ -10,7 +10,9 @@ use horizon_core::Panel;
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
 pub(crate) use self::input::TerminalSelectionDragState;
-use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
+use self::input::{
+    PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input, pty_mouse_reporting_enabled,
+};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
@@ -19,6 +21,14 @@ use super::primary_selection::PrimarySelection;
 
 const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT_FACTOR: f32 = 1.3;
+
+const fn hover_requires_grid_refresh(body_hovered: bool, mouse_reporting_enabled: bool) -> bool {
+    body_hovered && mouse_reporting_enabled
+}
+
+const fn grid_cache_allowed(content_requires_refresh: bool, hover_requires_refresh: bool, drag_active: bool) -> bool {
+    !(content_requires_refresh || hover_requires_refresh || drag_active)
+}
 
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
@@ -99,10 +109,10 @@ impl<'a> TerminalView<'a> {
             clear_terminal_ime_state(ui, interaction.body.id);
         }
 
-        let allow_grid_cache = !self.panel.had_recent_output()
-            && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
-            && !interaction.body.dragged()
-            && !interaction.scrollbar.dragged();
+        let had_recent_output = self.panel.had_recent_output();
+        let body_hovered = interaction.body.hovered();
+        let modifiers = body_hovered.then(|| ui.input(|input| input.modifiers));
+        let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
 
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
@@ -113,6 +123,12 @@ impl<'a> TerminalView<'a> {
             terminal.with_renderable_content(|content| {
                 let cursor = content.cursor;
                 let display_offset = content.display_offset;
+                let mouse_reporting_enabled =
+                    modifiers.is_some_and(|modifiers| pty_mouse_reporting_enabled(content.mode, modifiers));
+                let hover_requires_refresh = hover_requires_grid_refresh(body_hovered, mouse_reporting_enabled);
+                let content_requires_refresh = had_recent_output || content.selection.is_some();
+                let allow_grid_cache =
+                    grid_cache_allowed(content_requires_refresh, hover_requires_refresh, drag_active);
                 render_grid(
                     ui,
                     interaction.layout.body,
@@ -171,4 +187,28 @@ fn grid_metrics(ctx: &Context) -> GridMetrics {
 pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
     let metrics = grid_metrics(ctx);
     terminal_viewport_size(available, metrics.char_width, metrics.line_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{grid_cache_allowed, hover_requires_grid_refresh};
+
+    #[test]
+    fn mouse_reporting_hover_bypasses_grid_cache() {
+        assert!(hover_requires_grid_refresh(true, true));
+        assert!(!grid_cache_allowed(false, true, false));
+    }
+
+    #[test]
+    fn normal_terminal_hover_keeps_grid_cache() {
+        assert!(!hover_requires_grid_refresh(true, false));
+        assert!(!hover_requires_grid_refresh(false, true));
+        assert!(grid_cache_allowed(false, false, false));
+    }
+
+    #[test]
+    fn dynamic_content_and_drags_bypass_grid_cache() {
+        assert!(!grid_cache_allowed(true, false, false));
+        assert!(!grid_cache_allowed(false, false, true));
+    }
 }
