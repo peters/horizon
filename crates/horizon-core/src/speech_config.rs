@@ -192,6 +192,14 @@ fn validate_speech_binding(
     binding: ShortcutBinding,
     shortcuts: &AppShortcuts,
 ) -> Result<()> {
+    // Escape is reserved: the frame handler treats every Escape press as
+    // "cancel dictation", so an Escape binding would start and immediately
+    // cancel a recording.
+    if binding.key == ShortcutKey::Escape {
+        return Err(Error::Config(format!(
+            "{label} hotkey `{hotkey}` cannot use Escape (reserved for cancelling dictation)"
+        )));
+    }
     // A bare printable key (letter/digit/Enter/Tab/punctuation) as a hold
     // hotkey would hijack that key in every terminal. Require a modifier, or
     // a non-typing key (function keys, arrows).

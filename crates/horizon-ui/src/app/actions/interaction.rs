@@ -290,9 +290,12 @@ impl HorizonApp {
         if viewport_id != egui::ViewportId::ROOT {
             return terminal_input_events(events, frame_keyboard_events);
         }
-        // While the settings binder is capturing, every key belongs to the
-        // binder — none of it may type into the focused terminal.
-        let capturing = super::super::shortcuts::hotkey_capture_active(ctx);
+        // While the settings binder is actively capturing, every key
+        // belongs to the binder. Use the NARROW flag (not the combined
+        // capture-active that also covers the release-pending grace period),
+        // so the pending-key branch below still runs to consume and clear
+        // the captured chord's release instead of this branch eating it.
+        let capturing = super::super::shortcuts::hotkey_binder_capturing(ctx);
         // A just-captured chord still has its release (and possibly repeats
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
@@ -314,11 +317,11 @@ impl HorizonApp {
                 match event {
                     Event::Key {
                         key, pressed: false, ..
-                    } if *key == pending => {
+                    } if keys_equivalent(*key, pending) => {
                         ctx.data_mut(|data| data.insert_temp(captured_key_id, None::<Key>));
                         continue;
                     }
-                    Event::Key { key, .. } if *key == pending => continue,
+                    Event::Key { key, .. } if keys_equivalent(*key, pending) => continue,
                     Event::Text(text) if key_emits_text(pending, text) => continue,
                     _ => {}
                 }
@@ -419,6 +422,13 @@ fn swallow_speech_hotkey_event(
         }
         _ => false,
     }
+}
+
+/// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on
+/// release when Shift is dropped first; treat them as one key so a pending
+/// capture clears on release.
+fn keys_equivalent(a: Key, b: Key) -> bool {
+    a == b || matches!((a, b), (Key::Plus, Key::Equals) | (Key::Equals, Key::Plus))
 }
 
 /// The text a captured key emits alongside its key event (`Key::name()`

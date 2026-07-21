@@ -17,8 +17,22 @@ const MIN_PCM_SAMPLES: usize = 4_000; // 0.25 s at 16 kHz
 
 enum State {
     Idle,
-    Recording { target: PanelId, profile: usize },
-    Busy { target: PanelId, profile: usize },
+    Recording {
+        target: PanelId,
+        profile: usize,
+    },
+    /// Mic stopped; awaiting the captured PCM from the capture thread. A
+    /// capture error here still returns to Idle.
+    AwaitingPcm {
+        target: PanelId,
+        profile: usize,
+    },
+    /// The worker owns the job; only its Done/Failed returns to Idle, and a
+    /// late capture stream-error is ignored.
+    Transcribing {
+        target: PanelId,
+        profile: usize,
+    },
 }
 
 struct ProfileRuntime {
@@ -143,7 +157,7 @@ impl SpeechSystem {
     pub fn mic_state_for(&self, panel: PanelId) -> MicState {
         match self.state {
             State::Recording { target, .. } if target == panel => MicState::Recording,
-            State::Busy { target, .. } if target == panel => MicState::Busy,
+            State::AwaitingPcm { target, .. } | State::Transcribing { target, .. } if target == panel => MicState::Busy,
             _ => MicState::Idle,
         }
     }
@@ -170,7 +184,7 @@ impl SpeechSystem {
             State::Idle => self.start(target, self.last_used),
             State::Recording { target: current, .. } if current == target => self.stop(),
             // Recording another panel or transcription in flight: ignore.
-            State::Recording { .. } | State::Busy { .. } => {}
+            State::Recording { .. } | State::AwaitingPcm { .. } | State::Transcribing { .. } => {}
         }
     }
 
@@ -186,7 +200,7 @@ impl SpeechSystem {
     pub fn stop(&mut self) {
         if let State::Recording { target, profile } = self.state {
             self.capture.send(CaptureCmd::Stop);
-            self.state = State::Busy { target, profile };
+            self.state = State::AwaitingPcm { target, profile };
         }
     }
 
@@ -214,28 +228,35 @@ impl SpeechSystem {
             }
             match pcm {
                 Ok(pcm) => {
-                    if let State::Busy { target, profile } = self.state {
+                    if let State::AwaitingPcm { target, profile } = self.state {
                         if pcm.len() < MIN_PCM_SAMPLES {
                             tracing::debug!(samples = pcm.len(), "speech recording too short; dropped");
                             self.state = State::Idle;
                         } else if let Some(runtime) = self.profiles.get(profile) {
                             runtime.worker.submit(Job { pcm, target });
+                            self.state = State::Transcribing { target, profile };
                         } else {
                             self.state = State::Idle;
                         }
                     }
                 }
                 Err(message) => {
-                    // Only a recording is disturbed by a stream error; a
-                    // Busy job (audio already handed to the worker) keeps
-                    // running. A stream that died mid-recording leaves the
-                    // capture thread holding a broken stream; tear it down.
-                    if matches!(self.state, State::Recording { .. }) {
-                        self.capture.send(CaptureCmd::Cancel);
-                        self.state = State::Idle;
-                        events.push(SpeechEvent::Error(message));
-                    } else {
-                        tracing::debug!(%message, "late capture error ignored (not recording)");
+                    // A capture error before the PCM reached a worker
+                    // (Recording, or AwaitingPcm after a quick stop where
+                    // start actually failed) must return to Idle — no worker
+                    // event will. Once Transcribing, the worker owns the job
+                    // and a late stream-error is ignored.
+                    match self.state {
+                        State::Recording { .. } => {
+                            self.capture.send(CaptureCmd::Cancel);
+                            self.state = State::Idle;
+                            events.push(SpeechEvent::Error(message));
+                        }
+                        State::AwaitingPcm { .. } => {
+                            self.state = State::Idle;
+                            events.push(SpeechEvent::Error(message));
+                        }
+                        _ => tracing::debug!(%message, "late capture error ignored"),
                     }
                 }
             }
@@ -248,7 +269,7 @@ impl SpeechSystem {
                         self.active_backend = Some(backend);
                     }
                     WorkerEvent::Done { target, text } => {
-                        if matches!(self.state, State::Busy { profile, .. } if profile == index) {
+                        if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
                             self.state = State::Idle;
                         }
                         if !text.is_empty() {
@@ -256,7 +277,7 @@ impl SpeechSystem {
                         }
                     }
                     WorkerEvent::Failed { message } => {
-                        if matches!(self.state, State::Busy { profile, .. } if profile == index) {
+                        if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
                             self.state = State::Idle;
                         }
                         events.push(SpeechEvent::Error(message));

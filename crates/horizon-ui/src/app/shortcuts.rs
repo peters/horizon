@@ -12,6 +12,15 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
 /// Whether the settings hotkey binder is currently capturing a chord. While
 /// true, global shortcut handlers must not act on key presses — the user is
 /// aiming at the binder, not at the shortcut the chord happens to match.
+/// Whether the binder is *actively capturing* (raw flag only), excluding the
+/// captured-key-release-pending grace period. The terminal filter uses this
+/// narrow form so its broad key/text swallow does not consume the captured
+/// chord's release before the pending-key branch clears it.
+pub(crate) fn hotkey_binder_capturing(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+        .unwrap_or(false)
+}
+
 pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
     // True while the binder is capturing, and while a just-captured chord's
     // key is still held (its repeats/release must not fire the shortcut it

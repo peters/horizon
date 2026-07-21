@@ -309,17 +309,43 @@ fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
     }
     let now = ui.input(|input| input.time);
     let throttle_id = egui::Id::new(("speech_model_info_at", trimmed));
+    let identity_id = egui::Id::new(("speech_model_info_id", trimmed));
     let result_id = egui::Id::new(("speech_model_info_val", trimmed));
-    if let Some(last) = ui.data(|data| data.get_temp::<f64>(throttle_id))
+
+    // Reuse the cached result until the throttle window elapses without
+    // touching the filesystem at all.
+    let last = ui.data(|data| data.get_temp::<f64>(throttle_id));
+    let cached = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(result_id));
+    if let (Some(last), Some(cached)) = (last, cached.clone())
         && now - last < 0.5
-        && let Some(cached) = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(result_id))
     {
         return cached;
     }
+
+    // Throttle window elapsed: stat the file (cheap). Only re-parse the
+    // header (potentially megabytes of tokenizer arrays) when its identity
+    // (len + mtime) actually changed.
     let expanded = horizon_core::dir_search::expand_tilde(trimmed);
+    let identity = std::fs::metadata(&expanded).map_or((0_u64, 0_u64), |meta| {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_secs());
+        (meta.len(), modified)
+    });
+    let prev_identity = ui.data(|data| data.get_temp::<(u64, u64)>(identity_id));
+    if prev_identity == Some(identity)
+        && let Some(cached) = cached
+    {
+        // Unchanged file: refresh the throttle timestamp, keep the parse.
+        ui.data_mut(|data| data.insert_temp(throttle_id, now));
+        return cached;
+    }
     let parsed = read_speech_model_info(&expanded);
     ui.data_mut(|data| {
         data.insert_temp(throttle_id, now);
+        data.insert_temp(identity_id, identity);
         data.insert_temp(result_id, parsed.clone());
     });
     parsed
