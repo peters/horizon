@@ -391,7 +391,9 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
                 // The terminal event filter swallows this key's repeats,
                 // release, and text until the release is seen, so the
                 // captured chord never types into the focused terminal.
-                ui.data_mut(|data| data.insert_temp(egui::Id::new("speech_captured_key"), Some(key)));
+                ui.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("speech_captured_key"), Some((key, modifiers.shift)));
+                });
                 if key != egui::Key::Escape {
                     match captured_binding_string(key, modifiers, config) {
                         Ok(binding) => {

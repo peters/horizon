@@ -299,7 +299,9 @@ impl HorizonApp {
         // A just-captured chord still has its release (and possibly repeats
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
-        let captured_key: Option<Key> = ctx.data(|data| data.get_temp::<Option<Key>>(captured_key_id)).flatten();
+        let captured: Option<(Key, bool)> = ctx
+            .data(|data| data.get_temp::<Option<(Key, bool)>>(captured_key_id))
+            .flatten();
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
             if capturing
@@ -313,16 +315,20 @@ impl HorizonApp {
                 // and IME commits — so none reaches the focused terminal.
                 continue;
             }
-            if let Some(pending) = captured_key {
+            if let Some((pending, shifted)) = captured {
                 match event {
                     Event::Key {
                         key, pressed: false, ..
                     } if keys_equivalent(*key, pending) => {
-                        ctx.data_mut(|data| data.insert_temp(captured_key_id, None::<Key>));
+                        ctx.data_mut(|data| data.insert_temp(captured_key_id, None::<(Key, bool)>));
                         continue;
                     }
                     Event::Key { key, .. } if keys_equivalent(*key, pending) => continue,
+                    // A shifted digit/punctuation key emits a layout-dependent
+                    // symbol (Shift+1 -> "!"); while that chord is the only key
+                    // held, swallow its single-character text too.
                     Event::Text(text) if key_emits_text(pending, text) => continue,
+                    Event::Text(text) if shifted && text.chars().count() == 1 => continue,
                     _ => {}
                 }
             }

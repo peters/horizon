@@ -177,19 +177,32 @@ fn capture_loop(
         };
 
         let Some(cmd) = cmd else {
-            // Timeout: self-cancel if the frame loop has gone silent, so the
-            // OS microphone is released even though no frame will run to do
-            // it (the pending error surfaces when frames resume).
-            if let Some(recording) = &active {
+            // Timeout while recording: finalize if the frame loop went silent
+            // (heartbeat stale — minimized Wayland surface) or the recording
+            // hit the length cap. Either releases the OS microphone even
+            // though no frame will run to do it.
+            let finalize = active.as_ref().is_some_and(|recording| {
                 let stale = heartbeat.lock().unwrap_or_else(PoisonError::into_inner).elapsed() > HEARTBEAT_STALE;
-                if stale {
+                stale || recording.overflowed.load(Ordering::Relaxed)
+            });
+            if let Some(recording) = finalize.then(|| active.take()).flatten() {
+                let capped = recording.overflowed.load(Ordering::Relaxed);
+                {
                     let generation = recording.generation;
-                    active = None; // drops the stream, closing the mic
-                    tracing::warn!("speech capture heartbeat stale; microphone released");
-                    let _ = pcm_tx.send((
-                        generation,
-                        Err("recording stopped: window no longer visible".to_string()),
-                    ));
+                    let samples = Arc::clone(&recording.samples);
+                    drop(recording); // drops the stream, closing the mic
+                    if capped {
+                        // Deliver what was captured up to the cap.
+                        let pcm = std::mem::take(&mut *lock_samples(&samples));
+                        tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; stopping");
+                        let _ = pcm_tx.send((generation, Ok(pcm)));
+                    } else {
+                        tracing::warn!("speech capture heartbeat stale; microphone released");
+                        let _ = pcm_tx.send((
+                            generation,
+                            Err("recording stopped: window no longer visible".to_string()),
+                        ));
+                    }
                 }
             }
             continue;

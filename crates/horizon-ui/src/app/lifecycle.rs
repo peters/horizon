@@ -187,7 +187,9 @@ impl HorizonApp {
         // would disable every shortcut indefinitely.
         let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         if !root_focused_now {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_captured_key"), None::<egui::Key>));
+            ctx.data_mut(|data| {
+                data.insert_temp(egui::Id::new("speech_captured_key"), None::<(egui::Key, bool)>);
+            });
         }
 
         let Some(speech) = self.speech.as_mut() else {

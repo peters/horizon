@@ -29,7 +29,7 @@ pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
         .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
         .unwrap_or(false);
     let release_pending = ctx
-        .data(|data| data.get_temp::<Option<egui::Key>>(egui::Id::new("speech_captured_key")))
+        .data(|data| data.get_temp::<Option<(egui::Key, bool)>>(egui::Id::new("speech_captured_key")))
         .flatten()
         .is_some();
     capturing || release_pending
