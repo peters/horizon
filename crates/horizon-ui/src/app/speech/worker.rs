@@ -194,6 +194,12 @@ fn ensure_session(
     };
     let model = Model::load_with(&settings.model_path, &options)
         .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
+    if cancel.is_cancelled() {
+        // Replaced while loading: drop the model BEFORE releasing the load
+        // lock so the waiting replacement never overlaps residence with it.
+        drop(model);
+        return Err("speech worker replaced during model load".to_string());
+    }
     let backend = model.backend().clone();
     tracing::info!(model = %settings.model_path, %backend, "speech model loaded");
     let mut new_session = model

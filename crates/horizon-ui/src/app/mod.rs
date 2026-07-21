@@ -175,6 +175,9 @@ pub struct HorizonApp {
     speech_engaged_profile: Option<usize>,
     /// Escape was consumed to cancel a recording this frame.
     speech_escape_cancelled: bool,
+    /// The cancel-Escape's release has not yet been seen; it must also be
+    /// kept out of the terminal stream (kitty release reporting).
+    speech_escape_release_pending: bool,
     /// Whether any Horizon viewport (root or detached) reported focus this
     /// frame; evaluated at end of frame to cancel unattended recordings.
     any_viewport_focused: bool,
@@ -356,6 +359,7 @@ impl HorizonApp {
             speech_held_bindings: Vec::new(),
             speech_engaged_profile: None,
             speech_escape_cancelled: false,
+            speech_escape_release_pending: false,
             any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),

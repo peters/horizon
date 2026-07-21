@@ -287,7 +287,7 @@ impl HorizonApp {
         // (where the hotkey handler listens); keep its presses, repeats, and
         // release out of the PTY stream without swallowing unrelated keys.
         // Detached-viewport terminals receive their events unfiltered.
-        if viewport_id != egui::ViewportId::ROOT || self.speech.is_none() {
+        if viewport_id != egui::ViewportId::ROOT {
             return terminal_input_events(events, frame_keyboard_events);
         }
         // While the settings binder is capturing, every key belongs to the
@@ -311,7 +311,7 @@ impl HorizonApp {
                         continue;
                     }
                     Event::Key { key, .. } if *key == pending => continue,
-                    Event::Text(text) if text.eq_ignore_ascii_case(pending.name()) => continue,
+                    Event::Text(text) if key_emits_text(pending, text) => continue,
                     _ => {}
                 }
             }
@@ -322,6 +322,7 @@ impl HorizonApp {
             if swallow_speech_hotkey_event(
                 &mut self.speech_held_bindings,
                 self.speech_escape_cancelled,
+                &mut self.speech_escape_release_pending,
                 event,
                 bindings,
             ) {
@@ -349,17 +350,27 @@ impl HorizonApp {
 fn swallow_speech_hotkey_event(
     held_bindings: &mut Vec<horizon_core::ShortcutBinding>,
     escape_cancelled: bool,
+    escape_release_pending: &mut bool,
     event: &Event,
     bindings: &[(usize, horizon_core::ShortcutBinding)],
 ) -> bool {
-    if escape_cancelled
-        && let Event::Key {
-            key: Key::Escape,
-            pressed,
-            ..
-        } = event
+    if let Event::Key {
+        key: Key::Escape,
+        pressed,
+        ..
+    } = event
     {
-        return *pressed;
+        // A cancel-Escape is swallowed as a press AND as its later release:
+        // kitty REPORT_EVENT_TYPES terminals would otherwise receive a
+        // dangling Escape-release CSI-u sequence next frame.
+        if escape_cancelled && *pressed {
+            *escape_release_pending = true;
+            return true;
+        }
+        if *escape_release_pending && !pressed {
+            *escape_release_pending = false;
+            return true;
+        }
     }
     match event {
         Event::Key { pressed, .. } => {
@@ -405,6 +416,19 @@ fn swallow_speech_hotkey_event(
             })
         }
         _ => false,
+    }
+}
+
+/// The text a captured key emits alongside its key event (`Key::name()`
+/// returns display names like `Comma`, not the `,` glyph terminals see).
+fn key_emits_text(key: Key, text: &str) -> bool {
+    match key {
+        Key::Comma => text == ",",
+        Key::Minus => text == "-",
+        Key::Plus => text == "+",
+        Key::Equals => text == "=",
+        Key::Period => text == ".",
+        _ => text.eq_ignore_ascii_case(key.name()),
     }
 }
 

@@ -6,7 +6,7 @@ use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
-use crate::shortcuts::{AppShortcuts, ShortcutBinding};
+use crate::shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey};
 use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -831,6 +831,17 @@ fn validate_speech_binding(
     binding: ShortcutBinding,
     shortcuts: &AppShortcuts,
 ) -> Result<()> {
+    // egui-winit translates primary+C/X/V into synthetic Copy/Cut/Paste
+    // events instead of key presses, so such a chord would never fire.
+    if binding.modifiers.command()
+        && !binding.modifiers.shift()
+        && !binding.modifiers.alt()
+        && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V'))
+    {
+        return Err(Error::Config(format!(
+            "{label} hotkey `{hotkey}` is reserved for clipboard operations and never reaches shortcut handling"
+        )));
+    }
     // The push-to-talk chord is consumed before other handlers; a binding
     // that overlaps a global shortcut would trigger both actions.
     let global_bindings = [
@@ -1031,6 +1042,21 @@ features:
         config.features.speech.enabled = true;
         config.features.speech.hotkey = "F9".to_string();
         config.validate().expect("valid hotkey passes");
+    }
+
+    #[test]
+    fn validate_rejects_clipboard_pseudo_event_hotkeys() {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        for chord in ["Ctrl+C", "Ctrl+X", "Ctrl+V"] {
+            config.features.speech.hotkey = chord.to_string();
+            let error = config.validate().expect_err("clipboard chord must be rejected");
+            assert!(error.to_string().contains("clipboard"), "{chord}: {error}");
+        }
+        // Shifted variants still produce real key events and stay allowed
+        // (subject to the usual global-shortcut overlap rules).
+        config.features.speech.hotkey = "Ctrl+Alt+C".to_string();
+        config.validate().expect("non-clipboard chord passes");
     }
 
     #[test]

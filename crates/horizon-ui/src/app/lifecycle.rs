@@ -171,6 +171,17 @@ impl HorizonApp {
                 panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
             })
         });
+        // Capture-state hygiene must run even without a speech runtime
+        // (stub builds, or Speech Input disabled with Rebind still armed):
+        // a stale flag would suppress global shortcuts indefinitely.
+        let mut capturing_hotkey: bool = ctx
+            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+            .unwrap_or(false);
+        if capturing_hotkey && self.settings.is_none() {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
+            capturing_hotkey = false;
+        }
+
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
             return;
@@ -183,19 +194,12 @@ impl HorizonApp {
         self.any_viewport_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
 
         // While the settings binder is capturing a new hotkey, the pressed
-        // chord must not also trigger the current binding. The flag lives in
-        // egui temp memory, so clear it if the settings view went away with
-        // a capture still armed — otherwise it would suppress global
-        // shortcuts forever.
-        let mut capturing_hotkey: bool = ctx
-            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
-            .unwrap_or(false);
-        if capturing_hotkey && self.settings.is_none() {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
-            capturing_hotkey = false;
-        }
-
-        if !capturing_hotkey {
+        // chord must not also trigger the current binding. And while any
+        // egui widget owns keyboard focus (settings fields, command
+        // palette), a printable hotkey belongs to that widget, not to
+        // push-to-talk — engaging would both type and record.
+        let ui_owns_keyboard = ctx.memory(|memory| memory.focused().is_some());
+        if !capturing_hotkey && !ui_owns_keyboard {
             // Each profile owns its push-to-talk key: the key IS the
             // language, so there is no active-profile mode to switch.
             for index in 0..speech.profile_bindings().len() {
