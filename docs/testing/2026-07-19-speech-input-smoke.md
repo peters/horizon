@@ -7,7 +7,7 @@ machine and report per `AGENTS.md` → Cross-Machine Smoke-Test Handoff.
 
 Machine lanes:
 
-- **Lane A — macOS arm64 (Metal)**: steps A1–A9. Fully automatable except
+- **Lane A — macOS arm64 (Metal)**: steps A1–A13. Fully automatable except
   A9 (live mic; a Mac Studio has no built-in microphone — A8 covers the
   no-device error path instead, which is equally load-bearing).
 - **Lane B — Linux x86_64 + NVIDIA (CUDA)**: headless build/link/pipeline

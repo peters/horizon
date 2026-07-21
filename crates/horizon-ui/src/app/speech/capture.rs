@@ -112,8 +112,12 @@ impl MonoResampler {
 
     /// Convert an interleaved chunk, appending 16 kHz mono samples to `out`.
     ///
-    /// Holds back up to one interpolation window (< 1 ms) at the stream
-    /// tail, which is irrelevant for speech recognition.
+    /// Downsampling (mic rate > 16 kHz, the usual case) uses a box filter:
+    /// each output sample averages the source samples across its window, so
+    /// content above 8 kHz is attenuated instead of aliasing into the speech
+    /// band (point-sampling e.g. every third sample at 48 kHz would alias).
+    /// Upsampling falls back to linear interpolation. Holds back up to one
+    /// window (< 1 ms) at the stream tail, irrelevant for recognition.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -131,17 +135,29 @@ impl MonoResampler {
             }
         }
 
-        // Emit every output sample whose interpolation window is complete.
-        while (self.position.floor() as usize) + 1 < self.pending.len() {
-            let base = self.position.floor() as usize;
-            let frac = (self.position - self.position.floor()) as f32;
-            let current = self.pending[base];
-            let next = self.pending[base + 1];
-            out.push(current + (next - current) * frac);
-            self.position += self.step;
+        let available = self.pending.len() as f64;
+        // Emit each output sample whose full source window is buffered.
+        while self.position + self.step <= available {
+            let window_end = self.position + self.step;
+            if self.step > 1.0 {
+                // Box-average the samples covered by [position, window_end).
+                let start = self.position.floor() as usize;
+                let end = (window_end.ceil() as usize).min(self.pending.len());
+                let slice = &self.pending[start..end.max(start + 1)];
+                let sum: f32 = slice.iter().sum();
+                out.push(sum / usize_to_f32(slice.len()));
+            } else {
+                // Upsampling / near-unity: linear interpolation.
+                let base = self.position.floor() as usize;
+                let frac = (self.position - self.position.floor()) as f32;
+                let current = self.pending[base];
+                let next = self.pending.get(base + 1).copied().unwrap_or(current);
+                out.push(current + (next - current) * frac);
+            }
+            self.position = window_end;
         }
 
-        // Keep only the tail still needed for the next interpolation window.
+        // Keep only the tail still needed for the next window.
         let keep_from = (self.position.floor() as usize).min(self.pending.len());
         self.pending.drain(..keep_from);
         self.position -= keep_from as f64;
@@ -443,7 +459,10 @@ mod tests {
     #[test]
     #[expect(clippy::cast_precision_loss, reason = "test signal generation; indices are tiny")]
     fn streaming_resampler_matches_batch_conversion() {
-        let rate = 44_100_u32;
+        // 48 kHz -> 16 kHz is the common integer factor (3), where the
+        // streaming box filter and the batch box filter agree sample-for-
+        // sample; that is what the production path uses most.
+        let rate = 48_000_u32;
         let samples: Vec<f32> = (0..rate as usize)
             .flat_map(|index| {
                 let t = index as f32 / rate as f32;
