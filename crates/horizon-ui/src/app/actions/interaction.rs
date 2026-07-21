@@ -430,14 +430,12 @@ fn swallow_speech_hotkey_event(
                 }
                 // Mid-hold repeats can carry drifted modifiers.
                 held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held))
-            } else if let Some(position) = held_bindings
-                .iter()
-                .position(|held| event_uses_shortcut_key(event, *held))
-            {
-                // Each held chord's release is consumed independently, so
-                // releasing F2 while F1 stays down cannot leak F1's later
-                // release into the PTY.
-                held_bindings.swap_remove(position);
+            } else if held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held)) {
+                // A physical-key release clears EVERY held chord on that key
+                // (distinct chords like Ctrl+K and Alt+K can both be held via
+                // modifier drift), so no entry is left stuck to swallow that
+                // key forever. Chords on other keys stay held.
+                held_bindings.retain(|held| !event_uses_shortcut_key(event, *held));
                 true
             } else {
                 false

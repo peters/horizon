@@ -232,9 +232,11 @@ fn validate_speech_binding(
             "{label} hotkey `{hotkey}` needs a modifier (e.g. Ctrl+{hotkey}); a bare key would hijack terminal typing"
         )));
     }
-    // egui-winit translates primary+C/X/V into synthetic Copy/Cut/Paste
-    // events instead of key presses, so such a chord would never fire.
-    if binding.modifiers.command()
+    // egui-winit translates the primary modifier + C/X/V into synthetic
+    // Copy/Cut/Paste events instead of key presses, so such a chord never
+    // fires. This applies to both the platform-primary (`command`) and the
+    // physical-`Control` spelling — on Linux/Windows they are the same key.
+    if (binding.modifiers.command() || binding.modifiers.ctrl())
         && !binding.modifiers.shift()
         && !binding.modifiers.alt()
         && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V'))

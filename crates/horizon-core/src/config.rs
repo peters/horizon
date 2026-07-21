@@ -611,12 +611,9 @@ impl Config {
 
     #[must_use]
     pub fn expand_tilde(s: &str) -> PathBuf {
-        if let Some(rest) = s.strip_prefix("~/")
-            && let Ok(home) = std::env::var("HOME")
-        {
-            return PathBuf::from(home).join(rest);
-        }
-        PathBuf::from(s)
+        // Single implementation shared with speech model paths, so every
+        // path-taking config field expands `~` identically.
+        crate::dir_search::expand_tilde(s)
     }
 
     /// Validate semantic config rules that deserialization alone cannot catch.

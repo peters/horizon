@@ -31,6 +31,7 @@ pub enum WorkerEvent {
         text: String,
     },
     Failed {
+        target: PanelId,
         message: String,
     },
 }
@@ -150,7 +151,7 @@ fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>
             },
             Err(message) => {
                 tracing::warn!(%message, "speech transcription error");
-                WorkerEvent::Failed { message }
+                WorkerEvent::Failed { target, message }
             }
         };
         let _ = event_tx.send(event);

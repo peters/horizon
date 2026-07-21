@@ -326,15 +326,17 @@ fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
     // header (potentially megabytes of tokenizer arrays) when its identity
     // (len + mtime) actually changed.
     let expanded = horizon_core::dir_search::expand_tilde(trimmed);
-    let identity = std::fs::metadata(&expanded).map_or((0_u64, 0_u64), |meta| {
+    let identity = std::fs::metadata(&expanded).map_or((0_u64, 0_u128), |meta| {
+        // Full nanosecond mtime, so a same-size in-place replacement within a
+        // second still invalidates the cached metadata.
         let modified = meta
             .modified()
             .ok()
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| duration.as_secs());
+            .map_or(0, |duration| duration.as_nanos());
         (meta.len(), modified)
     });
-    let prev_identity = ui.data(|data| data.get_temp::<(u64, u64)>(identity_id));
+    let prev_identity = ui.data(|data| data.get_temp::<(u64, u128)>(identity_id));
     if prev_identity == Some(identity)
         && let Some(cached) = cached
     {

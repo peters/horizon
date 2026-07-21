@@ -294,15 +294,19 @@ impl SpeechSystem {
                         self.active_backend = Some(backend);
                     }
                     WorkerEvent::Done { target, text } => {
-                        if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
+                        // Match target as well as profile: a stale job from a
+                        // closed panel must not reset a newer job's state.
+                        if matches!(self.state, State::Transcribing { profile, target: t } if profile == index && t == target)
+                        {
                             self.state = State::Idle;
                         }
                         if !text.is_empty() {
                             events.push(SpeechEvent::Text { target, text });
                         }
                     }
-                    WorkerEvent::Failed { message } => {
-                        if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
+                    WorkerEvent::Failed { target, message } => {
+                        if matches!(self.state, State::Transcribing { profile, target: t } if profile == index && t == target)
+                        {
                             self.state = State::Idle;
                         }
                         events.push(SpeechEvent::Error(message));
