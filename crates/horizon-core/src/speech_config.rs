@@ -237,17 +237,19 @@ fn validate_speech_binding(
             "{label} hotkey `{hotkey}` needs a modifier (e.g. Ctrl+{hotkey}); a bare key would hijack terminal input"
         )));
     }
-    // egui-winit translates the primary modifier + C/X/V into synthetic
-    // Copy/Cut/Paste events instead of key presses, so such a chord never
-    // fires. This applies to both the platform-primary (`command`) and the
-    // physical-`Control` spelling — on Linux/Windows they are the same key.
-    // egui-winit's is_copy/cut/paste_command tests ONLY `modifiers.command`
-    // and the key — shift and alt do not exempt a chord — and it pushes the
-    // synthetic event instead of the key press. Mirror that predicate exactly
-    // (the physical-Control spelling is the same key on Linux/Windows).
-    if (binding.modifiers.command() || binding.modifiers.ctrl())
-        && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V'))
-    {
+    // egui-winit translates the PLATFORM-PRIMARY modifier + C/X/V into
+    // synthetic Copy/Cut/Paste events instead of key presses, so such a chord
+    // never fires. Its is_copy/cut/paste_command predicates test ONLY
+    // `modifiers.command` and the key — shift and alt do not exempt a chord —
+    // so mirror exactly that.
+    //
+    // The physical-`Control` spelling (`ctrl()`) is a separate question. On
+    // Linux/Windows the Control key sets `command` too, so `Control+C` is the
+    // same chord and is equally dead. On macOS physical Control is a distinct
+    // key that egui leaves alone, so `Control+C` is a perfectly usable
+    // push-to-talk binding there and must not be refused.
+    let clipboard_chord = binding.modifiers.command() || (!cfg!(target_os = "macos") && binding.modifiers.ctrl());
+    if clipboard_chord && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V')) {
         return Err(Error::Config(format!(
             "{label} hotkey `{hotkey}` is reserved for clipboard operations and never reaches shortcut handling"
         )));
@@ -363,6 +365,20 @@ features:
         // A different letter is unaffected.
         config.features.speech.hotkey = "Ctrl+Alt+D".to_string();
         config.validate().expect("non-clipboard chord passes");
+
+        // The physical-Control spelling is only a clipboard chord where that
+        // key IS the platform primary. On macOS `Control+C` reaches shortcut
+        // handling normally, so refusing it would cost a usable binding.
+        for chord in ["Control+C", "Control+X", "Control+V"] {
+            config.features.speech.hotkey = chord.to_string();
+            let result = config.validate();
+            if cfg!(target_os = "macos") {
+                result.expect("physical Control is distinct from Cmd on macOS");
+            } else {
+                let error = result.expect_err("Control is the primary modifier here");
+                assert!(error.to_string().contains("clipboard"), "{chord}: {error}");
+            }
+        }
     }
     #[test]
     fn validate_rejects_overlapping_profile_hotkeys() {
