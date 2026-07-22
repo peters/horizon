@@ -6,6 +6,7 @@ mod speech;
 #[cfg(test)]
 pub(in crate::app) use speech::ClipboardCapture;
 pub(in crate::app) use speech::PendingCapture;
+pub(in crate::app) use speech::SpeechModelInfoCache;
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
@@ -138,7 +139,7 @@ impl HorizonApp {
 
         let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ctx, &config_path, editor);
+            render_settings_panel(ctx, &config_path, editor, &mut self.speech_model_info_cache);
         }
     }
 
@@ -272,7 +273,12 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     }
 }
 
-fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut SettingsEditor) {
+fn render_settings_panel(
+    ctx: &Context,
+    config_path: &str,
+    editor: &mut SettingsEditor,
+    model_info_cache: &mut speech::SpeechModelInfoCache,
+) {
     let viewport_width = util::viewport_local_rect(ctx).width();
     let default_width = settings_panel_default_width(viewport_width);
 
@@ -298,12 +304,18 @@ fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut Settings
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, available),
+                tab => render_gui_tab(ui, tab, editor, model_info_cache, available),
             }
         });
 }
 
-fn render_gui_tab(ui: &mut egui::Ui, tab: SettingsTab, editor: &mut SettingsEditor, available: Vec2) {
+fn render_gui_tab(
+    ui: &mut egui::Ui,
+    tab: SettingsTab,
+    editor: &mut SettingsEditor,
+    model_info_cache: &mut speech::SpeechModelInfoCache,
+    available: Vec2,
+) {
     let Some(ref mut config) = editor.editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
@@ -318,7 +330,7 @@ fn render_gui_tab(ui: &mut egui::Ui, tab: SettingsTab, editor: &mut SettingsEdit
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let changed = match tab {
-                SettingsTab::General => general::render(ui, config),
+                SettingsTab::General => general::render(ui, config, model_info_cache),
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 // Yaml is handled before this function is called.

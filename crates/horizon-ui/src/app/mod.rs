@@ -36,7 +36,7 @@ use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
     PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -144,6 +144,21 @@ impl DetachedWorkspaceViewportState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeldSpeechBinding {
+    binding: ShortcutBinding,
+    release_deadline: Option<Instant>,
+}
+
+impl HeldSpeechBinding {
+    const fn new(binding: ShortcutBinding) -> Self {
+        Self {
+            binding,
+            release_deadline: None,
+        }
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -168,7 +183,7 @@ pub struct HorizonApp {
     /// Every push-to-talk chord currently held (used to keep their key
     /// events, repeats, and releases out of the terminal input stream —
     /// multiple profile keys can be down simultaneously).
-    speech_held_bindings: Vec<horizon_core::ShortcutBinding>,
+    speech_held_bindings: Vec<HeldSpeechBinding>,
     /// The profile whose chord press started the active hold-mode recording;
     /// releases only stop a recording when set (a no-op press must not stop a
     /// mic-button recording).
@@ -178,6 +193,7 @@ pub struct HorizonApp {
     /// The cancel-Escape's release has not yet been seen; it must also be
     /// kept out of the terminal stream (kitty release reporting).
     speech_escape_release_pending: bool,
+    speech_escape_release_deadline: Option<Instant>,
     /// Whether any Horizon viewport (root or detached) reported focus this
     /// frame; evaluated at end of frame to cancel unattended recordings.
     any_viewport_focused: bool,
@@ -225,6 +241,7 @@ pub struct HorizonApp {
     last_session_catalog_refresh: Option<Instant>,
     last_terminal_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
+    speech_model_info_cache: settings::SpeechModelInfoCache,
     session_manager: Option<RuntimeSessionManagerState>,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
@@ -360,6 +377,7 @@ impl HorizonApp {
             speech_engaged_profile: None,
             speech_escape_cancelled: false,
             speech_escape_release_pending: false,
+            speech_escape_release_deadline: None,
             any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
@@ -378,6 +396,7 @@ impl HorizonApp {
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
             settings: None,
+            speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             managed_install,
             surge_update_check_rx: None,

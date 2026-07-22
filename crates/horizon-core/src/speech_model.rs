@@ -56,8 +56,8 @@ const MAX_KV_COUNT: u64 = 100_000;
 const MAX_STRING_LEN: u64 = 16 * 1024 * 1024;
 const MAX_ARRAY_LEN: u64 = 1_000_000;
 /// Cumulative allocation budget for all strings this parser materializes.
-/// The parser runs synchronously from the settings UI, so a malformed file
-/// must not be able to demand per-item-cap × item-count memory.
+/// A malformed file must not be able to demand per-item-cap × item-count
+/// memory, even when parsed by a background metadata worker.
 const MAX_TOTAL_STRING_BYTES: u64 = 8 * 1024 * 1024;
 
 const TYPE_UINT8: u32 = 0;

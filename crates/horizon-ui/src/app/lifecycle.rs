@@ -10,6 +10,8 @@ use crate::{loading_spinner, theme};
 use super::canvas::CanvasGridCache;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
 
+const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
     start_target: Option<PanelId>,
@@ -261,6 +263,8 @@ impl HorizonApp {
     /// The hotkey listens on the root viewport only; panels in detached
     /// windows still dictate via their mic button.
     fn handle_speech_input(&mut self, ctx: &Context) {
+        let now = Instant::now();
+        self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
         // The hotkey targets the focused panel, but only terminal-backed
         // panels can receive typed text.
@@ -296,7 +300,7 @@ impl HorizonApp {
         }
 
         if !root_focused_now {
-            self.stop_hold_on_focus_loss();
+            self.stop_hold_on_focus_loss(ctx, now);
         }
 
         let Some(speech) = self.speech.as_mut() else {
@@ -417,37 +421,22 @@ impl HorizonApp {
         if self.any_viewport_focused {
             return;
         }
+        self.speech_engaged_profile = None;
         if let Some(speech) = self.speech.as_mut()
             && speech.recording_target().is_some()
         {
             speech.cancel();
-            self.speech_engaged_profile = None;
-            // Focus left every Horizon window: the pending releases will not
-            // reach our terminals, so clearing avoids a stuck-swallow after
-            // focus returns.
-            self.speech_held_bindings.clear();
-            self.speech_escape_release_pending = false;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
         }
     }
 
     /// Hold-mode release detection is root-only, but the release can land in
     /// a detached Horizon window when focus moved there mid-hold (and on
-    /// Wayland/macOS focus loss synthesizes no key release at all). Treat the
-    /// focus loss as the release, and drop the held chords: their key-up will
-    /// land in whatever took focus, so the root filter will never consume it.
-    fn stop_hold_on_focus_loss(&mut self) {
-        // Retiring the filter state is unconditional. The chord's key-up
-        // lands wherever focus went, so the root filter will never consume
-        // it — whether or not the press started a recording. A press that
-        // was a no-op still registers as held, because the filter does not
-        // know whether the engine acted on it: that happens when the focused
-        // panel is not a terminal, when the engine is still transcribing, or
-        // when a recording is already running. Gating this clear on an
-        // engaged profile strands such an entry, and it then swallows that
-        // key, its repeats, and its text from the next terminal typed into.
-        self.speech_held_bindings.clear();
-        self.speech_escape_release_pending = false;
+    /// Wayland/macOS focus loss synthesizes no key release at all). Treat root
+    /// focus loss as the recording release, but retain terminal-filter state:
+    /// a detached viewport must still consume the physical key-up.
+    fn stop_hold_on_focus_loss(&mut self, ctx: &Context, now: Instant) {
+        self.arm_speech_release_ownership(ctx, now);
         let Some(speech) = self.speech.as_mut() else {
             return;
         };
@@ -457,15 +446,43 @@ impl HorizonApp {
         }
     }
 
-    /// Seed the focus aggregate and drop stale held-chord state when speech
-    /// is unavailable: an undelivered key-up (focus lost while disabled)
-    /// must not keep swallowing that key forever.
+    pub(in crate::app) fn arm_speech_release_ownership(&mut self, ctx: &Context, now: Instant) {
+        let deadline = now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT;
+        let mut armed = false;
+        for held in &mut self.speech_held_bindings {
+            if held.release_deadline.is_none() {
+                held.release_deadline = Some(deadline);
+                armed = true;
+            }
+        }
+        if self.speech_escape_release_pending && self.speech_escape_release_deadline.is_none() {
+            self.speech_escape_release_deadline = Some(deadline);
+            armed = true;
+        }
+        if armed {
+            ctx.request_repaint_after(SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+        }
+    }
+
+    fn expire_speech_release_ownership(&mut self, now: Instant) {
+        self.speech_held_bindings
+            .retain(|held| held.release_deadline.is_none_or(|deadline| now < deadline));
+        if self
+            .speech_escape_release_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.speech_escape_release_pending = false;
+            self.speech_escape_release_deadline = None;
+        }
+    }
+
+    /// Seed the focus aggregate when speech is unavailable. Held-chord state
+    /// remains until a viewport consumes the release or its bounded ownership
+    /// window expires.
     fn reset_speech_input_state(&mut self, root_focused: bool) {
         self.any_viewport_focused = root_focused;
         if !root_focused {
-            self.speech_held_bindings.clear();
             self.speech_engaged_profile = None;
-            self.speech_escape_release_pending = false;
         }
     }
 
@@ -748,12 +765,16 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use std::time::{Duration, Instant};
 
     use eframe::CreationContext;
     use egui::Context;
     use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
 
-    use super::{HoldHotkeyTransition, HorizonApp, SpeechActivity, hold_hotkey_transition};
+    use super::{
+        HoldHotkeyTransition, HorizonApp, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
+    };
+    use crate::app::HeldSpeechBinding;
     use crate::input;
 
     fn test_app() -> HorizonApp {
@@ -793,12 +814,13 @@ mod tests {
         assert!(repaint_requests.load(Ordering::Relaxed) > 0);
     }
 
-    /// A push-to-talk press that started no recording still registers with
-    /// the terminal filter, so focus loss must retire it: its key-up goes to
-    /// whatever took focus, and a stranded entry swallows that key — and the
-    /// text it produces — from the next terminal the user types into.
+    /// Root focus may move directly into a detached Horizon viewport. Keep
+    /// ownership across a transient all-unfocused pass, but bound it in case
+    /// the destination viewport never receives the key-up.
     #[test]
-    fn focus_loss_retires_a_held_chord_that_never_started_a_recording() {
+    fn focus_loss_ownership_survives_handoff_and_expires_without_key_up() {
+        let ctx = Context::default();
+        let now = Instant::now();
         let mut app = test_app();
         let chord = horizon_core::ShortcutBinding::new(
             horizon_core::ShortcutModifiers::CTRL,
@@ -806,17 +828,64 @@ mod tests {
         );
         // Pressed with no terminal focused: the filter holds the chord, but
         // the engine never engaged a profile.
-        app.speech_held_bindings.push(chord);
+        app.speech_held_bindings.push(HeldSpeechBinding::new(chord));
         app.speech_engaged_profile = None;
         app.speech_escape_release_pending = true;
 
-        app.stop_hold_on_focus_loss();
+        app.stop_hold_on_focus_loss(&ctx, now);
 
-        assert!(
-            app.speech_held_bindings.is_empty(),
-            "a no-op press must not stay held once focus left the root window"
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert_eq!(app.speech_held_bindings[0].binding, chord);
+        assert!(app.speech_escape_release_pending);
+        assert_eq!(
+            app.speech_held_bindings[0].release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
         );
+        assert_eq!(
+            app.speech_escape_release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+
+        app.any_viewport_focused = false;
+        app.cancel_unattended_recording();
+
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert!(app.speech_escape_release_pending);
+
+        let later = now + Duration::from_secs(1);
+        let newer_chord = horizon_core::ShortcutBinding::new(
+            horizon_core::ShortcutModifiers::ALT,
+            horizon_core::ShortcutKey::Letter('L'),
+        );
+        app.speech_held_bindings.push(HeldSpeechBinding::new(newer_chord));
+        // A newly consumed Escape is a separate ownership generation.
+        app.speech_escape_release_deadline = None;
+        app.arm_speech_release_ownership(&ctx, later);
+
+        assert_eq!(
+            app.speech_held_bindings[0].release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+        assert_eq!(
+            app.speech_held_bindings[1].release_deadline,
+            Some(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+        assert_eq!(
+            app.speech_escape_release_deadline,
+            Some(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+
+        app.expire_speech_release_ownership(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert_eq!(app.speech_held_bindings[0].binding, newer_chord);
+        assert!(app.speech_escape_release_pending);
+
+        app.expire_speech_release_ownership(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+
+        assert!(app.speech_held_bindings.is_empty());
         assert!(!app.speech_escape_release_pending);
+        assert!(app.speech_escape_release_deadline.is_none());
     }
 
     #[test]

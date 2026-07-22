@@ -8,7 +8,7 @@ use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
 };
-use super::super::{CanvasPanSpaceKeyState, HorizonApp};
+use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
 
 impl CanvasPanSpaceKeyState {
@@ -289,11 +289,11 @@ impl HorizonApp {
         // The push-to-talk chord is an app-level control on the root viewport
         // (where the hotkey handler listens); keep its presses, repeats, and
         // release out of the PTY stream without swallowing unrelated keys.
-        // A detached viewport does not run that filter, but Escape must still
-        // cancel a recording started from its own mic button (dictation is
-        // cancellable everywhere), so handle just that here.
+        // Detached viewports never start root-scoped hotkeys, but they must
+        // consume a chord already held when focus moved there. Escape also
+        // cancels a recording started from a detached mic button.
         if viewport_id != egui::ViewportId::ROOT {
-            if let Some(filtered) = self.filter_detached_cancel_escape(events) {
+            if let Some(filtered) = self.filter_detached_speech_events(ctx, events) {
                 return terminal_input_events(&filtered, frame_keyboard_events);
             }
             return terminal_input_events(events, frame_keyboard_events);
@@ -313,6 +313,9 @@ impl HorizonApp {
         let captured_clipboard_event = take_captured_clipboard_event(ctx);
         let mut filtered = Vec::with_capacity(events.len());
         let mut swallow_next_shift_text = false;
+        if self.speech_escape_cancelled {
+            self.speech_escape_release_deadline = None;
+        }
         for event in events {
             if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
                 continue;
@@ -369,10 +372,14 @@ impl HorizonApp {
             }
             filtered.push(event.clone());
         }
+        if !ctx.input(|input| input.viewport().focused.unwrap_or(true)) {
+            self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        }
+        self.clear_speech_release_ownership_if_idle();
         terminal_input_events(&filtered, frame_keyboard_events)
     }
 
-    fn filter_detached_cancel_escape(&mut self, events: &[Event]) -> Option<Vec<Event>> {
+    fn filter_detached_speech_events(&mut self, ctx: &Context, events: &[Event]) -> Option<Vec<Event>> {
         let escape_cancelled = self.speech.as_ref().is_some_and(|speech| {
             speech.recording_target().is_some()
                 && events.iter().any(|event| {
@@ -391,19 +398,35 @@ impl HorizonApp {
                 speech.cancel();
             }
             self.speech_engaged_profile = None;
+            self.speech_escape_release_deadline = None;
         }
-        if !escape_cancelled && !self.speech_escape_release_pending {
+        if !escape_cancelled && !self.speech_escape_release_pending && self.speech_held_bindings.is_empty() {
             return None;
         }
 
+        let mut swallow_next_shift_text = false;
         let filtered = events
             .iter()
             .filter(|event| {
-                !swallow_cancel_escape_event(escape_cancelled, &mut self.speech_escape_release_pending, event)
+                if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
+                    return false;
+                }
+                if swallow_cancel_escape_event(escape_cancelled, &mut self.speech_escape_release_pending, event) {
+                    return false;
+                }
+                !swallow_held_speech_hotkey_event(&mut self.speech_held_bindings, &mut swallow_next_shift_text, event)
             })
             .cloned()
             .collect();
+        self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        self.clear_speech_release_ownership_if_idle();
         Some(filtered)
+    }
+
+    fn clear_speech_release_ownership_if_idle(&mut self) {
+        if !self.speech_escape_release_pending {
+            self.speech_escape_release_deadline = None;
+        }
     }
 }
 
@@ -421,7 +444,7 @@ impl HorizonApp {
 /// slice borrowed from the speech system (hot path: the binding list must
 /// not be cloned per frame).
 fn swallow_speech_hotkey_event(
-    held_bindings: &mut Vec<horizon_core::ShortcutBinding>,
+    held_bindings: &mut Vec<HeldSpeechBinding>,
     escape_cancelled: bool,
     escape_release_pending: &mut bool,
     swallow_next_shift_text: &mut bool,
@@ -431,35 +454,55 @@ fn swallow_speech_hotkey_event(
     if swallow_cancel_escape_event(escape_cancelled, escape_release_pending, event) {
         return true;
     }
-    match event {
-        Event::Key { pressed, .. } => {
-            if *pressed {
-                // A full chord press of any profile key engages holding.
-                if let Some((_, matched)) = bindings
-                    .iter()
-                    .find(|(_, binding)| shortcut_event_matches(event, *binding))
-                {
-                    if !held_bindings.contains(matched) {
-                        held_bindings.push(*matched);
-                    }
-                    arm_correlated_shift_text(*matched, swallow_next_shift_text);
-                    return true;
-                }
-                // Mid-hold repeats can carry drifted modifiers.
-                if let Some(held) = held_bindings.iter().find(|held| event_uses_shortcut_key(event, **held)) {
-                    arm_correlated_shift_text(*held, swallow_next_shift_text);
-                    true
-                } else {
-                    false
+    if matches!(event, Event::Key { pressed: true, .. }) {
+        // A full chord press of any profile key engages holding.
+        if let Some((_, matched)) = bindings
+            .iter()
+            .find(|(_, binding)| shortcut_event_matches(event, *binding))
+        {
+            if let Some(held) = held_bindings.iter_mut().find(|held| held.binding == *matched) {
+                if matches!(event, Event::Key { repeat: false, .. }) {
+                    held.release_deadline = None;
                 }
             } else {
-                clear_released_speech_hotkeys(held_bindings, event)
+                held_bindings.push(HeldSpeechBinding::new(*matched));
+            }
+            arm_correlated_shift_text(*matched, swallow_next_shift_text);
+            return true;
+        }
+    }
+    swallow_held_speech_hotkey_event(held_bindings, swallow_next_shift_text, event)
+}
+
+/// Consume repeats, text, and the eventual release for a chord whose press
+/// was already claimed by the root viewport. Detached viewports call this
+/// without the configured binding list, so they can retire ownership after a
+/// focus move but can never start a new global push-to-talk chord.
+fn swallow_held_speech_hotkey_event(
+    held_bindings: &mut Vec<HeldSpeechBinding>,
+    swallow_next_shift_text: &mut bool,
+    event: &Event,
+) -> bool {
+    match event {
+        Event::Key { pressed: true, .. } => {
+            // Mid-hold repeats can carry drifted modifiers.
+            if let Some(held) = held_bindings
+                .iter()
+                .find(|held| event_uses_shortcut_key(event, held.binding))
+            {
+                arm_correlated_shift_text(held.binding, swallow_next_shift_text);
+                true
+            } else {
+                false
             }
         }
+        Event::Key { pressed: false, .. } => clear_released_speech_hotkeys(held_bindings, event),
         // Direct glyphs and modifier-drift repeats can emit Text without an
         // adjacent shifted key event. Layout-dependent shifted glyphs are
         // handled by the event-correlation flag armed above.
-        Event::Text(text) => held_bindings.iter().any(|held| binding_text_matches(held.key, text)),
+        Event::Text(text) => held_bindings
+            .iter()
+            .any(|held| binding_text_matches(held.binding.key, text)),
         _ => false,
     }
 }
@@ -467,13 +510,15 @@ fn swallow_speech_hotkey_event(
 /// A physical-key release clears every held chord on that key. Distinct
 /// chords such as Ctrl+K and Alt+K can both be present after modifier drift;
 /// clearing all matches prevents a permanent terminal-input swallow.
-fn clear_released_speech_hotkeys(held_bindings: &mut Vec<horizon_core::ShortcutBinding>, event: &Event) -> bool {
+fn clear_released_speech_hotkeys(held_bindings: &mut Vec<HeldSpeechBinding>, event: &Event) -> bool {
     let Event::Key { pressed: false, .. } = event else {
         return false;
     };
-    let matched = held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held));
+    let matched = held_bindings
+        .iter()
+        .any(|held| event_uses_shortcut_key(event, held.binding));
     if matched {
-        held_bindings.retain(|held| !event_uses_shortcut_key(event, *held));
+        held_bindings.retain(|held| !event_uses_shortcut_key(event, held.binding));
     }
     matched
 }
@@ -661,10 +706,10 @@ mod tests {
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys, next_middle_pan_active,
-        pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
-        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_speech_hotkey_event,
-        wheel_pan_scroll_input,
+        HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys,
+        next_middle_pan_active, pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
+        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
+        swallow_speech_hotkey_event, wheel_pan_scroll_input,
     };
 
     #[test]
@@ -1000,15 +1045,71 @@ mod tests {
     fn rebind_capture_release_clears_held_speech_filter() {
         let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
         let other = ShortcutBinding::new(ShortcutModifiers::ALT, ShortcutKey::Letter('L'));
-        let mut held = vec![binding, other];
+        let mut held = vec![HeldSpeechBinding::new(binding), HeldSpeechBinding::new(other)];
         let release = key_event(Key::K, Some(Key::K), false, Modifiers::NONE);
 
         assert!(clear_released_speech_hotkeys(&mut held, &release));
-        assert_eq!(held, vec![other]);
+        assert_eq!(held, vec![HeldSpeechBinding::new(other)]);
+    }
+
+    #[test]
+    fn detached_viewport_only_swallows_owned_hotkey_events() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let mut held = vec![HeldSpeechBinding::new(binding)];
+        let mut shift_text_pending = false;
+
+        let unrelated_press = key_event(Key::L, Some(Key::L), true, Modifiers::NONE);
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &unrelated_press,
+        ));
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &Event::Text("l".to_string()),
+        ));
+
+        let release = key_event(Key::K, Some(Key::K), false, Modifiers::NONE);
+
+        assert!(swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &release
+        ));
+        assert!(held.is_empty());
+
+        let fresh_press = key_event(Key::K, Some(Key::K), true, Modifiers::CTRL);
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &fresh_press,
+        ));
+    }
+
+    #[test]
+    fn new_root_press_replaces_an_old_handoff_generation() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let mut stale = HeldSpeechBinding::new(binding);
+        stale.release_deadline = Some(std::time::Instant::now());
+        let mut held = vec![stale];
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+        let bindings = [(0, binding)];
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::K, Some(Key::K), true, Modifiers::CTRL),
+            &bindings,
+        ));
+        assert_eq!(held.len(), 1);
+        assert!(held[0].release_deadline.is_none());
     }
 
     fn speech_event_swallowed(
-        held: &mut Vec<ShortcutBinding>,
+        held: &mut Vec<HeldSpeechBinding>,
         escape_release_pending: &mut bool,
         shift_text_pending: &mut bool,
         event: &Event,

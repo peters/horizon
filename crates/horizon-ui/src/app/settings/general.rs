@@ -5,11 +5,15 @@ use crate::theme;
 
 /// Render the General settings tab: window dimensions, feature toggles,
 /// and overlay sizes.  Returns `true` when any value was modified.
-pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
+pub(super) fn render(
+    ui: &mut Ui,
+    config: &mut Config,
+    model_info_cache: &mut super::speech::SpeechModelInfoCache,
+) -> bool {
     let mut changed = false;
     changed |= render_window_section(ui, config);
     changed |= render_appearance_section(ui, config);
-    changed |= render_features_section(ui, config);
+    changed |= render_features_section(ui, config, model_info_cache);
     changed |= render_overlays_section(ui, config);
     changed
 }
@@ -96,7 +100,11 @@ fn render_appearance_section(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
+fn render_features_section(
+    ui: &mut Ui,
+    config: &mut Config,
+    model_info_cache: &mut super::speech::SpeechModelInfoCache,
+) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Features");
     super::section_card(ui, |ui| {
@@ -109,7 +117,7 @@ fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
         super::dim_label(ui, "Show a notification feed for agent activity.");
 
         ui.add_space(10.0);
-        changed |= super::speech::render(ui, config);
+        changed |= super::speech::render(ui, config, model_info_cache);
     });
     changed
 }

@@ -3,7 +3,7 @@
 //! capture flow. Split from `general.rs` per the module-size guardrail.
 
 use egui::Ui;
-use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
+use horizon_core::speech_model::SpeechModelInfo;
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
 use crate::app::shortcuts::{is_clipboard_pseudo_event, mark_captured_clipboard_event};
@@ -11,6 +11,10 @@ use crate::app::speech::built_with_speech;
 
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
+
+mod model_info;
+pub(in crate::app) use model_info::SpeechModelInfoCache;
+use model_info::SpeechModelInfoState;
 
 /// A chord the binder just captured, whose key may still be held. The
 /// terminal filter suppresses its repeats/release/text until the release is
@@ -63,7 +67,7 @@ enum HotkeyCaptureAttempt {
 use crate::app::util::primary_shortcut_label;
 use crate::theme;
 
-pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
+pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut SpeechModelInfoCache) -> bool {
     let mut changed = false;
 
     changed |= ui
@@ -123,16 +127,21 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
     }
 
     let model_path = config.features.speech.model.clone();
-    let model_info = cached_speech_model_info(ui, &model_path);
+    let model_info_state = model_info_cache.model_info(ui.ctx(), &model_path);
+    let (model_info, model_info_pending) = match &model_info_state {
+        SpeechModelInfoState::Available(info) => (Some(info), false),
+        SpeechModelInfoState::Pending => (None, true),
+        SpeechModelInfoState::Unavailable => (None, false),
+    };
 
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_grid")
         .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
-            changed |= speech_model_rows(ui, config, model_info.as_ref());
-            changed |= speech_language_row(ui, config, model_info.as_ref());
-            changed |= speech_output_row(ui, config, model_info.as_ref());
+            changed |= speech_model_rows(ui, config, &model_info_state);
+            changed |= speech_language_row(ui, config, model_info);
+            changed |= speech_output_row(ui, config, model_info, model_info_pending);
             changed |= speech_backend_row(ui, config);
 
             ui.label(egui::RichText::new("Push-to-talk").color(theme::FG_SOFT()).size(12.0));
@@ -165,7 +174,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: Option<&SpeechModelInfo>) -> bool {
+fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: &SpeechModelInfoState) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
     changed |= ui
@@ -175,7 +184,7 @@ fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
 
     ui.label(String::new());
     match model_info {
-        Some(info) => super::dim_label(
+        SpeechModelInfoState::Available(info) => super::dim_label(
             ui,
             &format!(
                 "{} languages · translate: {}",
@@ -187,7 +196,10 @@ fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
                 }
             ),
         ),
-        None => super::dim_label(ui, "model metadata unavailable — free-form language entry"),
+        SpeechModelInfoState::Pending => super::dim_label(ui, "loading model metadata…"),
+        SpeechModelInfoState::Unavailable => {
+            super::dim_label(ui, "model metadata unavailable — free-form language entry");
+        }
     }
     ui.end_row();
     changed
@@ -240,28 +252,41 @@ fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Spe
     changed
 }
 
-fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&SpeechModelInfo>) -> bool {
+fn speech_output_row(
+    ui: &mut Ui,
+    config: &mut Config,
+    model_info: Option<&SpeechModelInfo>,
+    model_info_pending: bool,
+) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
-    let targets: Vec<String> = match model_info {
-        Some(info) if info.supports_translate == Some(false) => Vec::new(),
-        // Honor declared src→tgt pair restrictions for the chosen source.
-        Some(info) if !info.translate_targets.is_empty() || !info.translate_pairs.is_empty() => {
-            info.targets_for_source(&config.features.speech.language)
+    let targets: Vec<String> = if model_info_pending {
+        match config.features.speech.task {
+            SpeechTask::Transcribe => Vec::new(),
+            SpeechTask::Translate => vec![config.features.speech.target_language.clone()],
         }
-        // Absent metadata: the family default applies, so still offer English.
-        _ => vec!["en".to_string()],
+    } else {
+        match model_info {
+            Some(info) if info.supports_translate == Some(false) => Vec::new(),
+            // Honor declared src→tgt pair restrictions for the chosen source.
+            Some(info) if !info.translate_targets.is_empty() || !info.translate_pairs.is_empty() => {
+                info.targets_for_source(&config.features.speech.language)
+            }
+            // Absent metadata: the family default applies, so still offer English.
+            _ => vec!["en".to_string()],
+        }
     };
     // If the spoken language changed so the configured target is no longer
     // valid, snap to the first valid target, or fall back to transcription.
-    if config.features.speech.task == SpeechTask::Translate
+    if !model_info_pending
+        && config.features.speech.task == SpeechTask::Translate
         && !targets.is_empty()
         && !targets.contains(&config.features.speech.target_language)
     {
         config.features.speech.target_language.clone_from(&targets[0]);
         changed = true;
     }
-    if config.features.speech.task == SpeechTask::Translate && targets.is_empty() {
+    if !model_info_pending && config.features.speech.task == SpeechTask::Translate && targets.is_empty() {
         config.features.speech.task = SpeechTask::Transcribe;
         changed = true;
     }
@@ -298,7 +323,7 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
     // select — so `task == Translate` could never hold here, making the
     // warning unreachable and the downgrade silent. Shown unconditionally it
     // explains why the translate options are missing.
-    if matches!(model_info, Some(info) if info.supports_translate == Some(false)) {
+    if !model_info_pending && matches!(model_info, Some(info) if info.supports_translate == Some(false)) {
         ui.end_row();
         ui.label(String::new());
         super::dim_label(ui, "⚠ this model does not support the translate task");
@@ -352,62 +377,6 @@ fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
     });
     ui.end_row();
     changed
-}
-
-/// Parse a model's GGUF header, throttled to a few times a second and cached
-/// in egui temp memory. The settings panel is immediate-mode, so without the
-/// throttle an `fs::metadata` + header parse would run every frame while the
-/// panel is open. Keyed on the path, so the last result is reused between
-/// checks and a model replaced in place is picked up within the interval.
-fn cached_speech_model_info(ui: &Ui, path: &str) -> Option<SpeechModelInfo> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let now = ui.input(|input| input.time);
-    let throttle_id = egui::Id::new(("speech_model_info_at", trimmed));
-    let identity_id = egui::Id::new(("speech_model_info_id", trimmed));
-    let result_id = egui::Id::new(("speech_model_info_val", trimmed));
-
-    // Reuse the cached result until the throttle window elapses without
-    // touching the filesystem at all.
-    let last = ui.data(|data| data.get_temp::<f64>(throttle_id));
-    let cached = ui.data(|data| data.get_temp::<Option<SpeechModelInfo>>(result_id));
-    if let (Some(last), Some(cached)) = (last, cached.clone())
-        && now - last < 0.5
-    {
-        return cached;
-    }
-
-    // Throttle window elapsed: stat the file (cheap). Only re-parse the
-    // header (potentially megabytes of tokenizer arrays) when its identity
-    // (len + mtime) actually changed.
-    let expanded = horizon_core::dir_search::expand_tilde(trimmed);
-    let identity = std::fs::metadata(&expanded).map_or((0_u64, 0_u128), |meta| {
-        // Full nanosecond mtime, so a same-size in-place replacement within a
-        // second still invalidates the cached metadata.
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| duration.as_nanos());
-        (meta.len(), modified)
-    });
-    let prev_identity = ui.data(|data| data.get_temp::<(u64, u128)>(identity_id));
-    if prev_identity == Some(identity)
-        && let Some(cached) = cached
-    {
-        // Unchanged file: refresh the throttle timestamp, keep the parse.
-        ui.data_mut(|data| data.insert_temp(throttle_id, now));
-        return cached;
-    }
-    let parsed = read_speech_model_info(&expanded);
-    ui.data_mut(|data| {
-        data.insert_temp(throttle_id, now);
-        data.insert_temp(identity_id, identity);
-        data.insert_temp(result_id, parsed.clone());
-    });
-    parsed
 }
 
 /// Current binding label plus a press-to-bind capture flow. Returns whether
@@ -597,14 +566,31 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
 #[cfg(test)]
 mod tests {
     use egui::{Event, Key, Modifiers};
-    use horizon_core::Config;
+    use horizon_core::{Config, SpeechTask};
 
     use crate::app::shortcuts::take_captured_clipboard_event;
 
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
-        hotkey_capture_attempt, render_hotkey_binder,
+        hotkey_capture_attempt, render_hotkey_binder, speech_output_row,
     };
+
+    #[test]
+    fn pending_model_metadata_does_not_rewrite_translation_target() {
+        let ctx = egui::Context::default();
+        let mut config = Config::default();
+        config.features.speech.task = SpeechTask::Translate;
+        config.features.speech.target_language = "de".to_string();
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!speech_output_row(ui, &mut config, None, true));
+            });
+        });
+
+        assert_eq!(config.features.speech.task, SpeechTask::Translate);
+        assert_eq!(config.features.speech.target_language, "de");
+    }
 
     #[test]
     fn clipboard_pseudo_events_disarm_capture_with_reserved_error() {
