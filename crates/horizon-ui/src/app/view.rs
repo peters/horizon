@@ -145,6 +145,18 @@ impl HorizonApp {
         }
     }
 
+    pub(super) fn focus_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
+        let Some((pos, size)) = self.panel_focus_frame(panel_id) else {
+            return;
+        };
+
+        let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, false);
+        self.board.focus(panel_id);
+        self.pan_target = None;
+        self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        self.mark_runtime_dirty();
+    }
+
     pub(super) fn focus_workspace_bounds(&mut self, ctx: &Context, min: [f32; 2], max: [f32; 2], left_align: bool) {
         let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
         let size = Vec2::new(
