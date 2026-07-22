@@ -4,16 +4,17 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use horizon_core::{PanelId, SpeechBackend, SpeechProfile, SpeechTask};
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
 
 /// `Model::load_with` cannot be interrupted, so loads are serialized across
-/// all workers: a replacement worker cannot begin loading until the
-/// cancelled one finished its load (and its prompt exit releases the
-/// model), keeping two multi-GB models from loading concurrently.
+/// all workers: two multi-GB models are never *loaded* concurrently. This
+/// alone does not bound residency — an already-loaded model stays resident
+/// while its worker runs — so loaders also wait on `RETIRING` below.
 static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
 
 /// Models loaded in this process, keyed by resolved path + backend, held
@@ -23,6 +24,63 @@ static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
 /// workers using it, so switching config to a different model frees the old
 /// one instead of pinning multi-GB allocations for the process lifetime.
 static LOADED_MODELS: Mutex<Option<HashMap<String, Weak<Model>>>> = Mutex::new(None);
+
+/// Cancelled workers that may not have exited yet. Cancellation is
+/// cooperative and transcribe.cpp does not observe the token mid-run for
+/// every model family, so a cancelled worker can still be inside a native
+/// `Session::run` — holding its multi-GB model resident — long after its
+/// handle was dropped. Serializing *loads* is therefore not enough: a
+/// replacement would load a second model beside the outgoing one and can
+/// exhaust GPU memory on a live config change. Loaders wait here first.
+static RETIRING: Mutex<Vec<Weak<WorkerLife>>> = Mutex::new(Vec::new());
+static RETIRED: Condvar = Condvar::new();
+
+/// How long a loader waits for outgoing workers. A wedged native call must
+/// degrade to the old (overlapping) behaviour rather than block dictation
+/// forever.
+const RETIRE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Owned by the worker thread and dropped only when that thread returns,
+/// i.e. once its model handle is released.
+struct WorkerLife;
+
+impl Drop for WorkerLife {
+    fn drop(&mut self) {
+        // Prune under the lock before signalling: the strong count is already
+        // zero here, so a waiter that re-checks its predicate cannot miss this
+        // exit and sleep until the timeout.
+        RETIRING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|life| life.strong_count() > 0);
+        RETIRED.notify_all();
+    }
+}
+
+/// Block until every cancelled worker has released its model, or the timeout
+/// expires. Called on a worker thread, never on the UI thread — an in-flight
+/// inference can take seconds and the frame loop must keep running.
+fn await_retiring_workers() {
+    let deadline = Instant::now() + RETIRE_TIMEOUT;
+    let mut retiring = RETIRING.lock().unwrap_or_else(PoisonError::into_inner);
+    loop {
+        retiring.retain(|life| life.strong_count() > 0);
+        if retiring.is_empty() {
+            return;
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            tracing::warn!(
+                pending = retiring.len(),
+                "cancelled speech worker still running after {RETIRE_TIMEOUT:?}; loading anyway"
+            );
+            return;
+        };
+        let (next, _) = RETIRED
+            .wait_timeout(retiring, remaining)
+            .unwrap_or_else(PoisonError::into_inner);
+        retiring = next;
+    }
+}
 
 pub struct Job {
     pub pcm: Vec<f32>,
@@ -49,6 +107,9 @@ pub struct WorkerHandle {
     job_tx: Sender<Job>,
     event_rx: Receiver<WorkerEvent>,
     cancel: CancelToken,
+    /// Alive until the worker thread returns; registered as retiring on drop
+    /// so the next loader waits for this worker's model to be released.
+    life: Weak<WorkerLife>,
 }
 
 /// Dropping the handle (e.g. a live config rebuild replacing the speech
@@ -58,6 +119,14 @@ pub struct WorkerHandle {
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
         self.cancel.cancel();
+        // Registering (rather than joining here) keeps the UI thread free:
+        // the wait happens on whichever worker thread next loads a model.
+        if self.life.strong_count() > 0 {
+            RETIRING
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(self.life.clone());
+        }
     }
 }
 
@@ -68,13 +137,18 @@ impl WorkerHandle {
         let settings = Settings::from_profile(profile, backend);
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
-        thread::Builder::new()
-            .name("speech-transcribe".into())
-            .spawn(move || worker_loop(&settings, &worker_cancel, &job_rx, &event_tx))?;
+        let life = Arc::new(WorkerLife);
+        let life_weak = Arc::downgrade(&life);
+        thread::Builder::new().name("speech-transcribe".into()).spawn(move || {
+            // Dropped last, after `worker_loop` released the model.
+            let _life = life;
+            worker_loop(&settings, &worker_cancel, &job_rx, &event_tx);
+        })?;
         Ok(Self {
             job_tx,
             event_rx,
             cancel,
+            life: life_weak,
         })
     }
 
@@ -198,6 +272,14 @@ fn ensure_session(
     if settings.model_path.trim().is_empty() {
         return Err("no speech model configured (features.speech.model)".to_string());
     }
+    if cancel.is_cancelled() {
+        return Err("speech worker replaced before model load".to_string());
+    }
+    // Before the load lock, not under it: an outgoing worker may itself be
+    // waiting to load, and holding the permit while waiting for it to exit
+    // would deadlock the pair. Checking `cancel` first also keeps a retiring
+    // worker from waiting on its own cohort.
+    await_retiring_workers();
     let _load_permit = MODEL_LOAD_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     if cancel.is_cancelled() {
         return Err("speech worker replaced before model load".to_string());
@@ -251,9 +333,55 @@ fn ensure_session(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
     use transcribe_cpp::{Model, RunOptions};
 
     use super::super::capture::to_mono_16k;
+    use super::{RETIRING, WorkerLife, await_retiring_workers};
+
+    /// A loader must not proceed while a cancelled worker is still running:
+    /// that worker still holds its multi-GB model, and loading beside it is
+    /// what exhausts GPU memory on a live config change.
+    #[test]
+    fn loader_waits_for_a_retiring_worker_to_release_its_model() {
+        let life = Arc::new(WorkerLife);
+        RETIRING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Arc::downgrade(&life));
+
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(120));
+            drop(life); // the worker thread returning
+        });
+
+        let started = Instant::now();
+        await_retiring_workers();
+        let waited = started.elapsed();
+        releaser.join().expect("releaser thread panicked");
+
+        assert!(
+            waited >= Duration::from_millis(100),
+            "returned after {waited:?} — did not wait for the worker to exit"
+        );
+        assert!(
+            RETIRING
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
+            "the exited worker must be pruned from the retiring list"
+        );
+    }
+
+    /// With nothing retiring, loading must not pay any wait at all.
+    #[test]
+    fn loader_does_not_wait_when_no_worker_is_retiring() {
+        let started = Instant::now();
+        await_retiring_workers();
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     /// End-to-end pipeline check against a real model, gated on env vars so
     /// `cargo test --features speech` stays green without downloads:

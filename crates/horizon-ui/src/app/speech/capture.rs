@@ -88,8 +88,12 @@ struct MonoResampler {
     channels: usize,
     /// Source frames advanced per output sample.
     step: f64,
-    /// Fractional read position within `pending` (mono, source rate).
-    position: f64,
+    /// Output samples emitted so far. The read position is derived from this
+    /// (`emitted * step`) rather than accumulated, so rounding cannot drift
+    /// with the callback chunk boundaries.
+    emitted: u64,
+    /// Source samples already dropped off the front of `pending`.
+    drained: u64,
     /// Last mono sample of the previous chunk plus this chunk's mono frames.
     pending: Vec<f32>,
     /// Partial interleaved frame carried across callback chunks: the audio
@@ -103,7 +107,8 @@ impl MonoResampler {
         Self {
             channels: channels.max(1),
             step: f64::from(sample_rate) / f64::from(TARGET_SAMPLE_RATE),
-            position: 0.0,
+            emitted: 0,
+            drained: 0,
             pending: Vec::new(),
             frame_acc: 0.0,
             frame_fill: 0,
@@ -118,6 +123,11 @@ impl MonoResampler {
     /// band (point-sampling e.g. every third sample at 48 kHz would alias).
     /// Upsampling falls back to linear interpolation. Holds back up to one
     /// window (< 1 ms) at the stream tail, irrelevant for recognition.
+    ///
+    /// Output is invariant to how the source is split into chunks: an output
+    /// sample is emitted only once every source sample it reads is buffered,
+    /// so feeding one 4000-sample chunk and feeding 4000 one-sample chunks
+    /// produce identical results.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -137,30 +147,53 @@ impl MonoResampler {
 
         let available = self.pending.len() as f64;
         // Emit each output sample whose full source window is buffered.
-        while self.position + self.step <= available {
-            let window_end = self.position + self.step;
+        loop {
+            // Both edges are derived from the output index and offset by the
+            // (integer, hence exactly subtracted) drain count. Accumulating
+            // `position += step`, or deriving the end as `position + step`,
+            // rounds differently depending on how large `position` happens to
+            // be — i.e. on when `pending` was last drained, i.e. on the
+            // callback chunking. At 44.1 kHz that shifted a window by a whole
+            // sample, so the same audio converted differently.
+            let position = self.emitted as f64 * self.step - self.drained as f64;
+            let window_end = (self.emitted + 1) as f64 * self.step - self.drained as f64;
+            if window_end > available {
+                break;
+            }
             if self.step > 1.0 {
                 // Box-average the samples covered by [position, window_end).
-                let start = self.position.floor() as usize;
+                let start = position.floor() as usize;
                 let end = (window_end.ceil() as usize).min(self.pending.len());
                 let slice = &self.pending[start..end.max(start + 1)];
                 let sum: f32 = slice.iter().sum();
                 out.push(sum / usize_to_f32(slice.len()));
             } else {
                 // Upsampling / near-unity: linear interpolation.
-                let base = self.position.floor() as usize;
-                let frac = (self.position - self.position.floor()) as f32;
+                let base = position.floor() as usize;
+                let frac = (position - position.floor()) as f32;
+                // The right-hand interpolation partner can still be sitting
+                // in the next callback chunk. Hold the sample back instead of
+                // substituting `current` for the missing neighbour: doing the
+                // latter repeats the last source sample at every chunk
+                // boundary, so the converted stream would depend on how the
+                // driver happened to split the audio into callbacks.
+                if frac > 0.0 && base + 1 >= self.pending.len() {
+                    break;
+                }
                 let current = self.pending[base];
                 let next = self.pending.get(base + 1).copied().unwrap_or(current);
                 out.push(current + (next - current) * frac);
             }
-            self.position = window_end;
+            self.emitted += 1;
         }
 
-        // Keep only the tail still needed for the next window.
-        let keep_from = (self.position.floor() as usize).min(self.pending.len());
+        // Keep only the tail still needed for the next window. Subtracting an
+        // integer from the absolute position is exact, so `drained` always
+        // ends up at `floor(emitted * step)` however the input was chunked.
+        let next_start = self.emitted as f64 * self.step - self.drained as f64;
+        let keep_from = (next_start.floor() as usize).min(self.pending.len());
         self.pending.drain(..keep_from);
-        self.position -= keep_from as f64;
+        self.drained += keep_from as u64;
     }
 }
 
@@ -509,6 +542,50 @@ mod tests {
         );
         for (index, (a, b)) in streamed.iter().zip(batch.iter()).enumerate() {
             assert!((a - b).abs() < 1e-4, "sample {index} diverged: {a} vs {b}");
+        }
+    }
+
+    /// An output sample must never depend on where a callback boundary fell.
+    /// The upsampling branch interpolates between two neighbouring source
+    /// samples, and the second one can still be in the next chunk; feeding
+    /// the same signal in different chunk sizes must produce byte-identical
+    /// output, including for the non-integer 44.1 kHz ratio.
+    #[test]
+    #[expect(clippy::cast_precision_loss, reason = "test signal generation; indices are tiny")]
+    fn resampler_output_is_invariant_to_chunking() {
+        // 8/12 kHz upsample, plus 44.1 kHz (non-integer downsample ratio).
+        for rate in [8_000_u32, 12_000, 44_100] {
+            let source: Vec<f32> = (0..4_000)
+                .map(|index| {
+                    let t = index as f32 / rate as f32;
+                    (t * std::f32::consts::TAU * 300.0).sin()
+                })
+                .collect();
+
+            let mut whole = Vec::new();
+            super::MonoResampler::new(rate, 1).feed(source.iter().copied(), &mut whole);
+
+            for chunk_len in [1_usize, 7, 64, 333] {
+                let mut resampler = super::MonoResampler::new(rate, 1);
+                let mut chunked = Vec::new();
+                for chunk in source.chunks(chunk_len) {
+                    resampler.feed(chunk.iter().copied(), &mut chunked);
+                }
+                // Bit patterns, not an epsilon: the claim is that chunking
+                // cannot perturb the result at all, so any difference is a
+                // regression however small.
+                let bits = |samples: &[f32]| samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+                let (got, want) = (bits(&chunked), bits(&whole));
+                let first_diff = got.iter().zip(want.iter()).position(|(a, b)| a != b);
+                assert!(
+                    got == want,
+                    "{rate} Hz chunk {chunk_len}: len {} vs {}, first diff at {first_diff:?} ({:?} vs {:?})",
+                    chunked.len(),
+                    whole.len(),
+                    first_diff.map(|i| chunked[i]),
+                    first_diff.map(|i| whole[i]),
+                );
+            }
         }
     }
 

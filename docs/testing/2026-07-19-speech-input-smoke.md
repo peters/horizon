@@ -98,6 +98,29 @@ cd -
   granting it lets dictation proceed. The raw binary cannot exercise this
   TCC path.
 
+### Minimap navigator (PR #254, merged into this branch)
+
+PR #254 targeted `feat/speech-input` rather than `main`, so its minimap
+changes ship in this PR's diff and need live coverage here too. These are
+UI-interaction steps, so they are Lane A (macOS) like the rest.
+
+- **A14 — spotlight follows the active workspace**: with three or more
+  workspaces, focus each in turn (click a panel, then the workspace
+  shortcut). The minimap highlights exactly the active workspace, and the
+  highlight moves with focus. Toggling the minimap off and on preserves it.
+- **A15 — click to focus, double-click to fit**: single-click a workspace
+  in the minimap — the canvas focuses it **without** changing zoom.
+  Double-click — the canvas fits that workspace. Verify the single click
+  does not *also* fit (the two gestures must not both fire), and that the
+  click does not pan/select on the canvas underneath.
+- **A16 — hover and tooltip**: hovering a minimap workspace shows its
+  tooltip with the workspace name and highlights the hovered entry
+  distinctly from the active one. Moving off clears both.
+- **A17 — edge cases**: an empty workspace (no panels) and a board with a
+  single workspace are still clickable and do not misplace the spotlight;
+  clicking minimap empty space does nothing. With a workspace detached to
+  its own window, minimap clicks act on the root window's canvas only.
+
 ## Lane B — Linux + NVIDIA (CUDA)
 
 Agent-run (headless only):

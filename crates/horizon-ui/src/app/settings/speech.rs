@@ -390,19 +390,22 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
 
         if capturing {
             super::dim_label(ui, "press a key combination… (Esc cancels)");
-            let captured = ui.input(|input| {
-                input.events.iter().find_map(|event| match event {
-                    egui::Event::Key {
-                        key,
-                        physical_key,
-                        pressed: true,
-                        repeat: false,
-                        modifiers,
-                    } => Some((*key, *physical_key, *modifiers)),
-                    _ => None,
-                })
-            });
-            if let Some((key, physical_key, modifiers)) = captured {
+            let captured = ui.input(|input| input.events.iter().find_map(capture_event));
+            if let Some(Captured::ClipboardReserved(name)) = captured {
+                // egui-winit turns the primary modifier + C/X/V into these
+                // synthetic events *instead of* a key press, so such a chord
+                // never arrives as `Event::Key`. Without this branch capture
+                // would stay armed with no feedback, even though the shared
+                // validator rejects the chord for exactly this reason.
+                ui.data_mut(|data| {
+                    data.insert_temp(capture_id, false);
+                    data.insert_temp(
+                        error_id,
+                        format!("`{name}` is reserved for clipboard operations and never reaches shortcut handling"),
+                    );
+                });
+            }
+            if let Some(Captured::Chord(key, physical_key, modifiers)) = captured {
                 ui.data_mut(|data| data.insert_temp(capture_id, false));
                 // The terminal event filter swallows this key's repeats,
                 // release, and text until the release is seen, so the
@@ -459,6 +462,31 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
+/// What the binder pulled out of a frame's events.
+#[derive(Clone, Copy)]
+enum Captured {
+    Chord(egui::Key, Option<egui::Key>, egui::Modifiers),
+    /// A clipboard chord, which egui-winit delivers as a synthetic
+    /// `Copy`/`Cut`/`Paste` event rather than a key press.
+    ClipboardReserved(&'static str),
+}
+
+fn capture_event(event: &egui::Event) -> Option<Captured> {
+    match event {
+        egui::Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        } => Some(Captured::Chord(*key, *physical_key, *modifiers)),
+        egui::Event::Copy => Some(Captured::ClipboardReserved("Copy")),
+        egui::Event::Cut => Some(Captured::ClipboardReserved("Cut")),
+        egui::Event::Paste(_) => Some(Captured::ClipboardReserved("Paste")),
+        _ => None,
+    }
+}
+
 /// Build and validate a shortcut string from a captured key event. Rejects
 /// unsupported keys, malformed chords, and overlaps with global shortcuts.
 fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &Config) -> Result<String, String> {
@@ -503,4 +531,65 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
         }
     }
     Ok(candidate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Captured, capture_event, captured_binding_string};
+    use horizon_core::Config;
+
+    fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn clipboard_chords_are_captured_from_their_synthetic_events() {
+        // egui-winit never emits a key press for the primary modifier + C/X/V,
+        // so the binder must recognise the synthetic events or stay armed.
+        for (event, expected) in [
+            (egui::Event::Copy, "Copy"),
+            (egui::Event::Cut, "Cut"),
+            (egui::Event::Paste("x".to_string()), "Paste"),
+        ] {
+            match capture_event(&event) {
+                Some(Captured::ClipboardReserved(name)) => assert_eq!(name, expected),
+                other => panic!("{expected}: expected a clipboard rejection, got {:?}", other.is_some()),
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_key_presses_still_capture_as_chords() {
+        let event = key_press(egui::Key::F9, egui::Modifiers::NONE);
+        assert!(matches!(
+            capture_event(&event),
+            Some(Captured::Chord(egui::Key::F9, _, _))
+        ));
+
+        // Repeats and releases are not captures.
+        let mut repeat = key_press(egui::Key::F9, egui::Modifiers::NONE);
+        if let egui::Event::Key { repeat: r, .. } = &mut repeat {
+            *r = true;
+        }
+        assert!(capture_event(&repeat).is_none());
+        assert!(capture_event(&egui::Event::Text("a".to_string())).is_none());
+    }
+
+    #[test]
+    fn bare_keys_and_global_overlaps_are_rejected_with_a_message() {
+        let config = Config::default();
+        let bare = captured_binding_string(egui::Key::K, egui::Modifiers::NONE, &config)
+            .expect_err("a bare letter must be rejected");
+        assert!(bare.contains("needs a modifier"), "{bare}");
+
+        let ok = captured_binding_string(egui::Key::F9, egui::Modifiers::NONE, &config)
+            .expect("a bare function key is a valid push-to-talk hotkey");
+        assert_eq!(ok, "F9");
+    }
 }
