@@ -58,6 +58,21 @@ impl CaptureHandle {
         })
     }
 
+    /// A handle whose commands go nowhere: no thread, no device. State
+    /// machine tests drive `start`/`stop`/`cancel` freely without opening the
+    /// default microphone — which would light the OS recording indicator and,
+    /// on macOS, raise a TCC prompt attributed to whatever ran `cargo test`.
+    #[cfg(test)]
+    pub fn inert() -> Self {
+        let (cmd_tx, _cmd_rx) = channel();
+        let (_pcm_tx, pcm_rx) = channel();
+        Self {
+            cmd_tx,
+            pcm_rx,
+            heartbeat: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
     pub fn send(&self, cmd: CaptureCmd) {
         let _ = self.cmd_tx.send(cmd);
     }

@@ -323,11 +323,16 @@ impl SpeechSystem {
 mod tests {
     use horizon_core::{PanelId, SpeechConfig, SpeechProfile};
 
+    use super::super::capture::CaptureHandle;
     use super::{MicState, SpeechSystem, State};
 
-    /// A system whose workers/capture threads exist but are never asked to
-    /// touch audio or models: `start`/`stop`/`cancel` only move the state
-    /// machine, so the transitions can be asserted without a device.
+    /// A system that cannot reach audio or models. The capture handle is
+    /// swapped for an inert one before any test drives it: `start` sends
+    /// `CaptureCmd::Start`, and a real capture thread answers that by opening
+    /// the default input device — lighting the OS recording indicator and, on
+    /// macOS, raising a TCC prompt against whatever ran `cargo test`. The
+    /// models are nonexistent paths and no job is ever submitted, so the
+    /// worker threads park on their channels and load nothing.
     fn test_system() -> SpeechSystem {
         let config = SpeechConfig {
             enabled: true,
@@ -347,7 +352,11 @@ mod tests {
             ],
             ..SpeechConfig::default()
         };
-        SpeechSystem::from_config(&config).expect("speech system should build")
+        let mut system = SpeechSystem::from_config(&config).expect("speech system should build");
+        // Replacing the handle drops the real thread's command channel, so it
+        // exits having never been sent a Start — no device is ever opened.
+        system.capture = CaptureHandle::inert();
+        system
     }
 
     #[test]

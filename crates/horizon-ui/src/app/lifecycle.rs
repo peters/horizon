@@ -437,13 +437,23 @@ impl HorizonApp {
     /// focus loss as the release, and drop the held chords: their key-up will
     /// land in whatever took focus, so the root filter will never consume it.
     fn stop_hold_on_focus_loss(&mut self) {
+        // Retiring the filter state is unconditional. The chord's key-up
+        // lands wherever focus went, so the root filter will never consume
+        // it — whether or not the press started a recording. A press that
+        // was a no-op still registers as held, because the filter does not
+        // know whether the engine acted on it: that happens when the focused
+        // panel is not a terminal, when the engine is still transcribing, or
+        // when a recording is already running. Gating this clear on an
+        // engaged profile strands such an entry, and it then swallows that
+        // key, its repeats, and its text from the next terminal typed into.
+        self.speech_held_bindings.clear();
+        self.speech_escape_release_pending = false;
         let Some(speech) = self.speech.as_mut() else {
             return;
         };
         if self.speech_engaged_profile.is_some() && speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold {
             speech.stop();
             self.speech_engaged_profile = None;
-            self.speech_held_bindings.clear();
         }
     }
 
@@ -781,6 +791,32 @@ mod tests {
         app.finalize_frame(&ctx, false, 0, 0);
 
         assert!(repaint_requests.load(Ordering::Relaxed) > 0);
+    }
+
+    /// A push-to-talk press that started no recording still registers with
+    /// the terminal filter, so focus loss must retire it: its key-up goes to
+    /// whatever took focus, and a stranded entry swallows that key — and the
+    /// text it produces — from the next terminal the user types into.
+    #[test]
+    fn focus_loss_retires_a_held_chord_that_never_started_a_recording() {
+        let mut app = test_app();
+        let chord = horizon_core::ShortcutBinding::new(
+            horizon_core::ShortcutModifiers::CTRL,
+            horizon_core::ShortcutKey::Letter('K'),
+        );
+        // Pressed with no terminal focused: the filter holds the chord, but
+        // the engine never engaged a profile.
+        app.speech_held_bindings.push(chord);
+        app.speech_engaged_profile = None;
+        app.speech_escape_release_pending = true;
+
+        app.stop_hold_on_focus_loss();
+
+        assert!(
+            app.speech_held_bindings.is_empty(),
+            "a no-op press must not stay held once focus left the root window"
+        );
+        assert!(!app.speech_escape_release_pending);
     }
 
     #[test]
