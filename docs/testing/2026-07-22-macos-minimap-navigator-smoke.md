@@ -28,12 +28,16 @@ cargo test --locked -p horizon-ui --bin horizon app::minimap
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 RUSTFLAGS="-D warnings" cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
-cargo clippy --workspace --lib --bins --examples -- \
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples --features speech -- \
   -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --all-features -- \
+cargo clippy --workspace --all-targets --features speech -- \
   -D warnings -W clippy::pedantic
 ```
+
+These feature sets match the stacked branch's portable CI surface. Do not
+combine `speech-cuda` and `speech-vulkan` through `--all-features`; their native
+toolchains are mutually unsuitable for this macOS lane.
 
 Record the exact commit:
 
@@ -123,7 +127,7 @@ another installed or development Horizon process by application name.
 1. Hover empty minimap ground. No hand cursor or tooltip should appear.
 2. Hover `Alpha Build` outside a panel rectangle. The workspace stroke should
    brighten, the cursor should become a pointing hand, and the tooltip should
-   read `Alpha Build - 2 panels` using the app's typographic dash.
+   read `Alpha Build — 2 panels`.
 3. Hover `Alpha Shell`. The tooltip must match the panel chrome title.
 4. In `Alpha Shell`, run:
 
@@ -204,12 +208,15 @@ another installed or development Horizon process by application name.
 1. Switch to the light theme. Repeat active halo, focused outline, hover, tooltip,
    and overlap checks; all indicators must retain sufficient contrast.
 2. Switch back to dark and verify no stale light-theme shapes remain.
-3. Close the isolated app cleanly, preserving the session state, then relaunch it
-   with the same `HOME` and config without `--ephemeral` if persistence requires a
-   named session.
-4. Confirm saved workspace/panel positions, focused target, canvas view, and
+3. Close the ephemeral process after the interaction lanes. Start a persistent
+   session with the same `HOME` and config by replacing `--ephemeral` with
+   `--new-session`, then recreate the moved panels, focused target, canvas view,
+   and detached state used above.
+4. Close that persistent session cleanly, then relaunch with the same `HOME` and
+   config and no session mode flag.
+5. Confirm saved workspace/panel positions, focused target, canvas view, and
    detached state restore without malformed minimap geometry.
-5. Confirm the existing version 8 config loads without migration or schema
+6. Confirm the existing version 8 config loads without migration or schema
    changes. This PR must not modify the config file merely by launching.
 
 ## Pointer Performance

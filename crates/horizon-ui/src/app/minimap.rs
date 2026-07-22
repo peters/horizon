@@ -165,20 +165,7 @@ fn paint_minimap_workspaces(
         let workspace_rect =
             workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
 
-        let fill_alpha = if is_active {
-            60
-        } else if is_hovered {
-            34
-        } else {
-            22
-        };
-        let stroke_alpha = if is_active {
-            210
-        } else if is_hovered {
-            180
-        } else {
-            80
-        };
+        let (fill_alpha, stroke_alpha) = workspace_style_alpha(is_active, is_hovered);
         painter.rect_filled(
             workspace_rect,
             CornerRadius::same(2),
@@ -199,6 +186,15 @@ fn paint_minimap_workspaces(
                 StrokeKind::Outside,
             );
         }
+    }
+}
+
+fn workspace_style_alpha(is_active: bool, is_hovered: bool) -> (u8, u8) {
+    match (is_active, is_hovered) {
+        (true, true) => (78, 240),
+        (true, false) => (60, 210),
+        (false, true) => (34, 180),
+        (false, false) => (22, 80),
     }
 }
 
@@ -643,7 +639,7 @@ mod tests {
 
     use super::{
         MinimapModel, WS_EMPTY_SIZE, panel_minimap_screen_rect, vertical_label_badge_rect,
-        workspace_minimap_screen_rect,
+        workspace_minimap_screen_rect, workspace_style_alpha,
     };
 
     fn test_model() -> MinimapModel {
@@ -664,6 +660,15 @@ mod tests {
         let badge_rect = vertical_label_badge_rect(workspace_rect, 6.0, 24.0);
 
         assert_eq!(badge_rect, None);
+    }
+
+    #[test]
+    fn active_workspace_brightens_while_hovered() {
+        let active = workspace_style_alpha(true, false);
+        let active_hovered = workspace_style_alpha(true, true);
+
+        assert!(active_hovered.0 > active.0);
+        assert!(active_hovered.1 > active.1);
     }
 
     #[test]
