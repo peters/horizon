@@ -38,6 +38,8 @@ pub(super) fn render_scoped_minimap(
                 })
             };
             paint_minimap_contents(app, &painter, response.rect, &model, workspace_bounds, scope, hovered);
+            let hovered_label = hovered.and_then(|target| minimap_target_label(app, target));
+            response.widget_info(|| minimap_widget_info(hovered_label.as_deref()));
             if hovered.is_some() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
@@ -108,12 +110,11 @@ fn restore_minimap_panel_focus(board: &mut Board, target: MinimapHitTarget, fitt
     }
 }
 
-fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered: Option<MinimapHitTarget>) {
-    let Some(target) = hovered else {
-        return;
-    };
-
-    let text = match target {
+/// Human-readable name for a hovered minimap target, shared by the tooltip
+/// and the accessibility label so assistive tech announces what a sighted
+/// user sees.
+fn minimap_target_label(app: &HorizonApp, target: MinimapHitTarget) -> Option<String> {
+    match target {
         MinimapHitTarget::Panel { panel_id, .. } => app
             .board
             .panel(panel_id)
@@ -127,8 +128,28 @@ fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered
                 if panel_count == 1 { "" } else { "s" }
             )
         }),
+    }
+}
+
+/// The minimap is one painter-backed surface rather than a widget per target,
+/// so without this it reaches assistive tech as an anonymous rectangle. Name
+/// it, and name whichever target the pointer is over.
+pub(super) fn minimap_widget_info(target_label: Option<&str>) -> egui::WidgetInfo {
+    egui::WidgetInfo::labeled(
+        egui::WidgetType::Other,
+        true,
+        target_label.map_or_else(
+            || "Workspace minimap".to_string(),
+            |label| format!("Workspace minimap — {label}"),
+        ),
+    )
+}
+
+fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered: Option<MinimapHitTarget>) {
+    let Some(target) = hovered else {
+        return;
     };
-    let Some(text) = text else {
+    let Some(text) = minimap_target_label(app, target) else {
         return;
     };
 
@@ -303,7 +324,22 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::{Board, PanelKind, PanelOptions};
 
-    use super::{MinimapHitTarget, MinimapScope, last_hit, minimap_panel_source, restore_minimap_panel_focus};
+    use super::{
+        MinimapHitTarget, MinimapScope, last_hit, minimap_panel_source, minimap_widget_info,
+        restore_minimap_panel_focus,
+    };
+
+    /// The minimap is painted as a single surface, so its accessibility label
+    /// is the only thing assistive tech has to go on: it must name the
+    /// control and, when the pointer is over a target, that target.
+    #[test]
+    fn minimap_widget_info_names_the_control_and_hovered_target() {
+        let bare = minimap_widget_info(None);
+        assert_eq!(bare.label.as_deref(), Some("Workspace minimap"));
+
+        let hovered = minimap_widget_info(Some("build — 3 panels"));
+        assert_eq!(hovered.label.as_deref(), Some("Workspace minimap — build — 3 panels"));
+    }
 
     fn editor_panel_options(name: &str) -> PanelOptions {
         PanelOptions {

@@ -292,9 +292,13 @@ fn speech_output_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Speec
                 }
             }
         });
-    if matches!(model_info, Some(info) if info.supports_translate == Some(false))
-        && config.features.speech.task == SpeechTask::Translate
-    {
+    // Deliberately not conditioned on the task. A model declaring no translate
+    // support yields an empty `targets`, which forces the task back to
+    // Transcribe above and leaves the picker with no translate entries to
+    // select — so `task == Translate` could never hold here, making the
+    // warning unreachable and the downgrade silent. Shown unconditionally it
+    // explains why the translate options are missing.
+    if matches!(model_info, Some(info) if info.supports_translate == Some(false)) {
         ui.end_row();
         ui.label(String::new());
         super::dim_label(ui, "⚠ this model does not support the translate task");
