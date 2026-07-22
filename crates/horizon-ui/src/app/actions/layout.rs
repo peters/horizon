@@ -147,6 +147,10 @@ impl HorizonApp {
             return;
         };
 
+        if self.overlay_exclusion_zones(ctx).contains(pointer_pos) {
+            return;
+        }
+
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(self.canvas_rect(ctx), None);
         let panel_order: Vec<_> = panel_geometry.iter().map(|(panel_id, _)| *panel_id).collect();
         let panel_rects: HashMap<_, _> = panel_geometry

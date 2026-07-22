@@ -18,6 +18,11 @@ impl OverlayExclusion {
         Self { zones }
     }
 
+    /// Returns `true` when a screen-space point belongs to a fixed overlay.
+    pub(super) fn contains(&self, point: Pos2) -> bool {
+        self.zones.iter().any(|zone| zone.contains(point))
+    }
+
     /// Returns `true` if `rect` overlaps any exclusion zone.
     pub(super) fn intersects(&self, rect: Rect) -> bool {
         self.zones.iter().any(|zone| zone.intersects(rect))
@@ -218,8 +223,8 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_panel_size, format_grid_position, primary_shortcut_label};
-    use egui::{Pos2, Vec2};
+    use super::{OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label};
+    use egui::{Pos2, Rect, Vec2};
 
     fn default_panel_canvas_pos(index: usize) -> Pos2 {
         const PANEL_COLUMN_SPACING: f32 = 540.0;
@@ -235,6 +240,18 @@ mod tests {
         assert_eq!(default_panel_canvas_pos(0), Pos2::new(120.0, 120.0));
         assert_eq!(default_panel_canvas_pos(1), Pos2::new(660.0, 120.0));
         assert_eq!(default_panel_canvas_pos(3), Pos2::new(120.0, 480.0));
+    }
+
+    #[test]
+    fn overlay_exclusion_contains_only_points_inside_fixed_zones() {
+        let exclusion = OverlayExclusion::new(vec![Rect::from_min_max(
+            Pos2::new(100.0, 200.0),
+            Pos2::new(300.0, 400.0),
+        )]);
+
+        assert!(exclusion.contains(Pos2::new(200.0, 300.0)));
+        assert!(!exclusion.contains(Pos2::new(99.0, 300.0)));
+        assert!(!exclusion.contains(Pos2::new(301.0, 300.0)));
     }
 
     #[test]
