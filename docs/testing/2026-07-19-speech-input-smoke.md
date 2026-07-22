@@ -1,15 +1,18 @@
-# Speech Input Smoke-Test Plan (2026-07-19)
+# Speech Input + Minimap Smoke-Test Plan (2026-07-19)
 
 Validates the opt-in speech feature: mic button on panel title bars, F9
 push-to-talk into the focused panel, config surface, and the transcribe.cpp
-integration. Executable without extra context; follow the lane for your
-machine and report per `AGENTS.md` → Cross-Machine Smoke-Test Handoff.
+integration. It also validates the integrated minimap navigator from #254.
+Executable without extra context; follow the lane for your machine and report
+per `AGENTS.md` → Cross-Machine Smoke-Test Handoff.
 
 Machine lanes:
 
-- **Lane A — macOS arm64 (Metal)**: steps A1–A13. Fully automatable except
+- **Lane A — macOS arm64 (Metal)**: steps A1–A15. Fully automatable except
   A9 (live mic; a Mac Studio has no built-in microphone — A8 covers the
   no-device error path instead, which is equally load-bearing).
+- **Lane C — macOS minimap navigator**: steps C1–C6 on the same arm64 host,
+  including native interaction and screenshots on the exact combined head.
 - **Lane B — Linux x86_64 + NVIDIA (CUDA)**: headless build/link/pipeline
   verification only (B1–B2), run by the originating agent after Lane A
   reports `SMOKE-TEST: DONE`. Agent-driven GUI smoke testing happens ONLY
@@ -89,37 +92,54 @@ cd -
 - **A12 — persistence after relaunch**: quit and relaunch; the saved
   speech config (profiles, language, task, backend, hotkey) is restored
   and dictation still works without re-editing.
-- **A13 — packaged bundle (macOS)**: build a speech binary
-  (`cargo build --release --features speech`), assemble the `.app` via
-  `packaging/macos/make_app_bundle.sh --speech` (the flag adds the
-  microphone usage description; a plain bundle omits it), and launch that
-  bundle (not the raw binary). First dictation must trigger the microphone permission prompt
-  (the bundle's `Info.plist` carries `NSMicrophoneUsageDescription`);
-  granting it lets dictation proceed. The raw binary cannot exercise this
-  TCC path.
+- **A13 — packaged bundle (macOS)**: build the default `.app` via
+  `packaging/macos/make_app_bundle.sh` and verify its `Info.plist` omits
+  `NSMicrophoneUsageDescription`. Rebuild with `--features speech`, package
+  via `packaging/macos/make_app_bundle.sh --speech`, and verify the key is
+  present with Horizon's push-to-talk description. Launch the speech bundle
+  (not the raw binary): first dictation must trigger the microphone permission
+  prompt, and granting it lets dictation proceed. The raw binary cannot
+  exercise this TCC path.
+- **A14 — keyboard mic control**: focus a terminal panel's mic button using
+  keyboard navigation. Enter and Space each activate it exactly once; the
+  accessible label identifies Start/Stop/Busy speech input as appropriate.
+  A busy mic and a mic belonging to another active panel are not activatable.
+- **A15 — binder cancellation edges**: arm **Rebind…**, then issue each native
+  Copy/Cut/Paste action. Capture must disarm and show the clipboard-reserved
+  error. Arm it again and capture a non-clipboard chord that overlaps a global
+  shortcut, but move focus away before its key-up reaches Horizon. After more
+  than three seconds, refocus Horizon and trigger that same global shortcut;
+  the expired pending-key suppression must not swallow it.
 
-### Minimap navigator (PR #254, merged into this branch)
+## Lane C — macOS minimap navigator
 
-PR #254 targeted `feat/speech-input` rather than `main`, so its minimap
-changes ship in this PR's diff and need live coverage here too. These are
-UI-interaction steps, so they are Lane A (macOS) like the rest.
+Run C1-C6 on the exact combined PR head using an isolated runtime state. Scope
+native automation and screenshots to the launched PID when other Horizon
+processes exist.
 
-- **A14 — spotlight follows the active workspace**: with three or more
-  workspaces, focus each in turn (click a panel, then the workspace
-  shortcut). The minimap highlights exactly the active workspace, and the
-  highlight moves with focus. Toggling the minimap off and on preserves it.
-- **A15 — click to focus, double-click to fit**: single-click a workspace
-  in the minimap — the canvas focuses it **without** changing zoom.
-  Double-click — the canvas fits that workspace. Verify the single click
-  does not *also* fit (the two gestures must not both fire), and that the
-  click does not pan/select on the canvas underneath.
-- **A16 — hover and tooltip**: hovering a minimap workspace shows its
-  tooltip with the workspace name and highlights the hovered entry
-  distinctly from the active one. Moving off clears both.
-- **A17 — edge cases**: an empty workspace (no panels) and a board with a
-  single workspace are still clickable and do not misplace the spotlight;
-  clicking minimap empty space does nothing. With a workspace detached to
-  its own window, minimap clicks act on the root window's canvas only.
+- **C1 — baseline and visual state**: launch with at least two workspaces and
+  overlapping panels. The active workspace is visually distinct, the focused
+  panel outline is painted above overlapping neighbors, and hover styling does
+  not replace the active styling. Capture launch and hover screenshots.
+- **C2 — single-click navigation**: single-click a non-focused panel in the
+  minimap. Its workspace becomes active, the panel receives focus, and the
+  canvas centers it without changing panel geometry. Repeat for an overlapped
+  panel to verify the focused outline remains visible.
+- **C3 — double-click fit**: double-click a panel in the minimap. It becomes
+  focused and the canvas fits that panel; a single click must not perform the
+  fit action.
+- **C4 — runtime titles and ordering**: change a terminal title at runtime and
+  verify the minimap tooltip reflects the new title. Panel hit targets must
+  follow the same front-to-back order as the painted minimap.
+- **C5 — input containment**: place a canvas panel underneath the minimap and
+  click/drag/double-click minimap content and empty minimap space. No click may
+  leak through to move, resize, focus, or activate the underlying canvas panel.
+- **C6 — resize and regression pass**: resize the root window, pan/zoom the
+  canvas, switch workspaces, and repeat C1-C5. Include empty and single-workspace
+  boards, toggle the minimap off and on, and detach a workspace; the detached
+  minimap acts only on its own canvas. The minimap remains in bounds,
+  labels/tooltips do not overlap, and no blank or stale rendering appears.
+  Capture a final resized screenshot.
 
 ## Lane B — Linux + NVIDIA (CUDA)
 

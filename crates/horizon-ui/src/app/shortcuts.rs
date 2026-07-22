@@ -1,6 +1,8 @@
 use egui::{Event, InputState, Key, Modifiers};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
+const CAPTURED_CLIPBOARD_EVENT_ID: &str = "speech_captured_clipboard_event";
+
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
     shortcut_pressed_in_events(&input.events, binding)
 }
@@ -9,9 +11,6 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
     events.iter().any(|event| shortcut_event_matches(event, binding))
 }
 
-/// Whether the settings hotkey binder is currently capturing a chord. While
-/// true, global shortcut handlers must not act on key presses — the user is
-/// aiming at the binder, not at the shortcut the chord happens to match.
 /// Whether the binder is *actively capturing* (raw flag only), excluding the
 /// captured-key-release-pending grace period. The terminal filter uses this
 /// narrow form so its broad key/text swallow does not consume the captured
@@ -21,18 +20,53 @@ pub(crate) fn hotkey_binder_capturing(ctx: &egui::Context) -> bool {
         .unwrap_or(false)
 }
 
+pub(in crate::app) fn mark_captured_clipboard_event(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(CAPTURED_CLIPBOARD_EVENT_ID), true));
+}
+
+/// Consume the one-frame marker set when the hotkey binder saw an egui
+/// clipboard pseudo-event. Settings renders before terminal input filtering,
+/// so the raw capture flag has already been cleared by the time this runs.
+pub(in crate::app) fn take_captured_clipboard_event(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(CAPTURED_CLIPBOARD_EVENT_ID);
+        let captured = data.get_temp(id).unwrap_or(false);
+        data.remove_temp::<bool>(id);
+        captured
+    })
+}
+
+pub(crate) fn is_clipboard_pseudo_event(event: &Event) -> bool {
+    matches!(event, Event::Copy | Event::Cut | Event::Paste(_))
+}
+
+/// How long a just-captured chord may suppress input while waiting for its
+/// key release. Generous for a real hold, short enough that a lost release
+/// cannot wedge shortcuts or typing.
+const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
+
+/// Return the pending captured chord after expiring stale state. Global
+/// shortcut dispatch and terminal filtering must share this cleanup path.
+pub(in crate::app) fn pending_hotkey_capture(ctx: &egui::Context) -> Option<super::settings::PendingCapture> {
+    let pending_id = egui::Id::new("speech_captured_key");
+    let pending = ctx
+        .data(|data| data.get_temp::<Option<super::settings::PendingCapture>>(pending_id))
+        .flatten();
+    let expired =
+        pending.is_some_and(|capture| ctx.input(|input| input.time) - capture.armed_at > PENDING_CAPTURE_TIMEOUT);
+    if expired {
+        ctx.data_mut(|data| data.insert_temp(pending_id, None::<super::settings::PendingCapture>));
+        None
+    } else {
+        pending
+    }
+}
+
 pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
     // True while the binder is capturing, and while a just-captured chord's
     // key is still held (its repeats/release must not fire the shortcut it
     // was bound to).
-    let capturing: bool = ctx
-        .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
-        .unwrap_or(false);
-    let release_pending = ctx
-        .data(|data| data.get_temp::<Option<super::settings::PendingCapture>>(egui::Id::new("speech_captured_key")))
-        .flatten()
-        .is_some();
-    capturing || release_pending
+    hotkey_binder_capturing(ctx) || pending_hotkey_capture(ctx).is_some()
 }
 
 /// Scan a frame's events for a press (initial, non-repeat) and a release of
@@ -210,7 +244,19 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
-    use super::{event_uses_shortcut_key, hotkey_capture_active, press_and_release_in_events, shortcut_pressed};
+    use super::{
+        event_uses_shortcut_key, hotkey_capture_active, mark_captured_clipboard_event, press_and_release_in_events,
+        shortcut_pressed, take_captured_clipboard_event,
+    };
+
+    #[test]
+    fn captured_clipboard_marker_is_consumed_once() {
+        let ctx = egui::Context::default();
+        mark_captured_clipboard_event(&ctx);
+
+        assert!(take_captured_clipboard_event(&ctx));
+        assert!(!take_captured_clipboard_event(&ctx));
+    }
 
     fn key_event(key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) -> Event {
         Event::Key {
@@ -275,12 +321,43 @@ mod tests {
                     key: Key::F11,
                     physical_key: Some(Key::F11),
                     shifted: false,
+                    clipboard: None,
                     armed_at: 1.0,
                 }),
             );
         });
 
         assert!(hotkey_capture_active(&ctx));
+    }
+
+    #[test]
+    fn expired_pending_capture_does_not_block_global_shortcuts() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(RawInput {
+            time: Some(5.0),
+            ..RawInput::default()
+        });
+        let pending_id = egui::Id::new("speech_captured_key");
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                pending_id,
+                Some(crate::app::settings::PendingCapture {
+                    key: Key::F11,
+                    physical_key: Some(Key::F11),
+                    shifted: false,
+                    clipboard: None,
+                    armed_at: 1.0,
+                }),
+            );
+        });
+
+        assert!(!hotkey_capture_active(&ctx));
+        let pending = ctx.data(|data| {
+            data.get_temp::<Option<crate::app::settings::PendingCapture>>(pending_id)
+                .flatten()
+        });
+        assert!(pending.is_none());
+        let _ = ctx.end_pass();
     }
 
     #[test]

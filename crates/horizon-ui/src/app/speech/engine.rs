@@ -6,15 +6,18 @@
 //! The microphone itself is shared: one recording at a time, attributed to
 //! the profile whose key (or the mic button's last-used profile) started it.
 
+use std::sync::mpsc::TryRecvError;
+
 use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
-use super::capture::{CaptureCmd, CaptureHandle};
+use super::capture::{CaptureCmd, CaptureHandle, CapturePoll};
 use super::worker::{Job, WorkerEvent, WorkerHandle};
 use super::{MicState, SpeechEvent};
 
 /// Recordings shorter than this are dropped as accidental taps.
 const MIN_PCM_SAMPLES: usize = 4_000; // 0.25 s at 16 kHz
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum State {
     Idle,
     Recording {
@@ -32,6 +35,7 @@ enum State {
     Transcribing {
         target: PanelId,
         profile: usize,
+        generation: u64,
     },
 }
 
@@ -204,24 +208,37 @@ impl SpeechSystem {
         if matches!(self.state, State::Idle) && profile < self.profiles.len() {
             self.generation += 1;
             self.last_used = profile;
-            self.capture.send(CaptureCmd::Start(self.generation));
+            if !self.capture.send(CaptureCmd::Start(self.generation)) {
+                tracing::error!("speech capture worker unavailable while starting recording");
+            }
             self.state = State::Recording { target, profile };
         }
     }
 
     pub fn stop(&mut self) {
         if let State::Recording { target, profile } = self.state {
-            self.capture.send(CaptureCmd::Stop);
+            if !self.capture.send(CaptureCmd::Stop) {
+                tracing::error!("speech capture worker unavailable while stopping recording");
+            }
             self.state = State::AwaitingPcm { target, profile };
         }
     }
 
-    /// Return to Idle from any active state. A running transcription cannot
-    /// be interrupted, but the engine is freed so the mic/hotkey work again;
-    /// its eventual result is discarded because the state no longer matches.
+    /// Return to Idle from any active state, cooperatively cancelling capture
+    /// or inference owned by the active generation.
     pub fn cancel(&mut self) {
-        if matches!(self.state, State::Recording { .. }) {
-            self.capture.send(CaptureCmd::Cancel);
+        match self.state {
+            State::Recording { .. } | State::AwaitingPcm { .. } => {
+                let _ = self.capture.send(CaptureCmd::Cancel);
+            }
+            State::Transcribing {
+                profile, generation, ..
+            } => {
+                if let Some(runtime) = self.profiles.get(profile) {
+                    runtime.worker.cancel(generation);
+                }
+            }
+            State::Idle => {}
         }
         self.state = State::Idle;
     }
@@ -236,222 +253,156 @@ impl SpeechSystem {
             self.capture.heartbeat();
         }
 
-        while let Some((generation, pcm)) = self.capture.try_recv_pcm() {
+        self.drain_capture_events(&mut events);
+        self.drain_worker_events(&mut events);
+        events
+    }
+
+    fn drain_capture_events(&mut self, events: &mut Vec<SpeechEvent>) {
+        loop {
+            let (generation, pcm) = match self.capture.try_recv_pcm() {
+                CapturePoll::Item(generation, pcm) => (generation, pcm),
+                CapturePoll::Empty => break,
+                CapturePoll::Disconnected => {
+                    if matches!(self.state, State::Recording { .. } | State::AwaitingPcm { .. }) {
+                        self.state = State::Idle;
+                        events.push(SpeechEvent::Error(
+                            "speech capture worker stopped unexpectedly".to_string(),
+                        ));
+                    }
+                    break;
+                }
+            };
             if generation != self.generation {
                 tracing::debug!(generation, current = self.generation, "stale capture result ignored");
                 continue;
             }
-            match pcm {
-                Ok(pcm) => {
-                    // AwaitingPcm is the normal stop path; Recording happens
-                    // when the capture thread auto-finalized at the length
-                    // cap without a Stop command. Both deliver the captured
-                    // audio to a worker.
-                    let pending = match self.state {
-                        State::AwaitingPcm { target, profile } | State::Recording { target, profile } => {
-                            Some((target, profile))
-                        }
-                        _ => None,
-                    };
-                    if let Some((target, profile)) = pending {
-                        if pcm.len() < MIN_PCM_SAMPLES {
-                            tracing::debug!(samples = pcm.len(), "speech recording too short; dropped");
-                            self.state = State::Idle;
-                        } else if let Some(runtime) = self.profiles.get(profile) {
-                            runtime.worker.submit(Job { pcm, target });
-                            self.state = State::Transcribing { target, profile };
-                        } else {
-                            self.state = State::Idle;
-                        }
-                    }
-                }
-                Err(message) => {
-                    // A capture error before the PCM reached a worker
-                    // (Recording, or AwaitingPcm after a quick stop where
-                    // start actually failed) must return to Idle — no worker
-                    // event will. Once Transcribing, the worker owns the job
-                    // and a late stream-error is ignored.
-                    match self.state {
-                        State::Recording { .. } => {
-                            self.capture.send(CaptureCmd::Cancel);
-                            self.state = State::Idle;
-                            events.push(SpeechEvent::Error(message));
-                        }
-                        State::AwaitingPcm { .. } => {
-                            self.state = State::Idle;
-                            events.push(SpeechEvent::Error(message));
-                        }
-                        _ => tracing::debug!(%message, "late capture error ignored"),
-                    }
-                }
-            }
+            self.handle_capture_result(generation, pcm, events);
         }
+    }
 
-        for index in 0..self.profiles.len() {
-            while let Some(event) = self.profiles[index].worker.try_recv_event() {
-                match event {
-                    WorkerEvent::ModelLoaded { backend } => {
-                        self.active_backend = Some(backend);
-                    }
-                    WorkerEvent::Done { target, text } => {
-                        // Match target as well as profile: a stale job from a
-                        // closed panel must not reset a newer job's state.
-                        if matches!(self.state, State::Transcribing { profile, target: t } if profile == index && t == target)
-                        {
-                            self.state = State::Idle;
-                        }
-                        if !text.is_empty() {
-                            events.push(SpeechEvent::Text { target, text });
-                        }
-                    }
-                    WorkerEvent::Failed { target, message } => {
-                        if matches!(self.state, State::Transcribing { profile, target: t } if profile == index && t == target)
-                        {
-                            self.state = State::Idle;
-                        }
+    fn handle_capture_result(&mut self, generation: u64, pcm: Result<Vec<f32>, String>, events: &mut Vec<SpeechEvent>) {
+        match pcm {
+            Ok(pcm) => self.submit_captured_audio(generation, pcm, events),
+            Err(message) => {
+                // Once Transcribing, the worker owns the job and a late
+                // capture stream error is unrelated to the active run.
+                match self.state {
+                    State::Recording { .. } => {
+                        let _ = self.capture.send(CaptureCmd::Cancel);
+                        self.state = State::Idle;
                         events.push(SpeechEvent::Error(message));
                     }
+                    State::AwaitingPcm { .. } => {
+                        self.state = State::Idle;
+                        events.push(SpeechEvent::Error(message));
+                    }
+                    _ => tracing::debug!(%message, "late capture error ignored"),
                 }
             }
         }
+    }
 
-        events
+    fn submit_captured_audio(&mut self, generation: u64, pcm: Vec<f32>, events: &mut Vec<SpeechEvent>) {
+        // AwaitingPcm is the normal stop path; Recording means capture
+        // auto-finalized at the length cap without receiving Stop.
+        let pending = match self.state {
+            State::AwaitingPcm { target, profile } | State::Recording { target, profile } => Some((target, profile)),
+            _ => None,
+        };
+        let Some((target, profile)) = pending else {
+            return;
+        };
+        if pcm.len() < MIN_PCM_SAMPLES {
+            tracing::debug!(samples = pcm.len(), "speech recording too short; dropped");
+            self.state = State::Idle;
+            return;
+        }
+        let Some(runtime) = self.profiles.get(profile) else {
+            self.state = State::Idle;
+            return;
+        };
+        match runtime.worker.submit(Job {
+            pcm,
+            target,
+            generation,
+        }) {
+            Ok(()) => {
+                self.state = State::Transcribing {
+                    target,
+                    profile,
+                    generation,
+                };
+            }
+            Err(error) => {
+                self.state = State::Idle;
+                events.push(SpeechEvent::Error(error.to_string()));
+            }
+        }
+    }
+
+    fn drain_worker_events(&mut self, events: &mut Vec<SpeechEvent>) {
+        for index in 0..self.profiles.len() {
+            loop {
+                let event = match self.profiles[index].worker.try_recv_event() {
+                    Ok(event) => event,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
+                            self.state = State::Idle;
+                            events.push(SpeechEvent::Error(
+                                "speech transcription worker stopped unexpectedly".to_string(),
+                            ));
+                        }
+                        break;
+                    }
+                };
+                self.handle_worker_event(index, event, events);
+            }
+        }
+    }
+
+    fn handle_worker_event(&mut self, profile: usize, event: WorkerEvent, events: &mut Vec<SpeechEvent>) {
+        match event {
+            WorkerEvent::ModelLoaded { generation, backend } => {
+                if matches!(self.state, State::Transcribing { profile: p, generation: g, .. } if p == profile && g == generation)
+                {
+                    self.active_backend = Some(backend);
+                } else {
+                    tracing::debug!(generation, profile, "stale model-loaded event ignored");
+                }
+            }
+            WorkerEvent::Done {
+                target,
+                generation,
+                text,
+            } => {
+                if matches!(self.state, State::Transcribing { profile: p, target: t, generation: g } if p == profile && t == target && g == generation)
+                {
+                    self.state = State::Idle;
+                    if !text.is_empty() {
+                        events.push(SpeechEvent::Text { target, text });
+                    }
+                } else {
+                    tracing::debug!(generation, profile, "stale transcription result ignored");
+                }
+            }
+            WorkerEvent::Failed {
+                target,
+                generation,
+                message,
+            } => {
+                if matches!(self.state, State::Transcribing { profile: p, target: t, generation: g } if p == profile && t == target && g == generation)
+                {
+                    self.state = State::Idle;
+                    events.push(SpeechEvent::Error(message));
+                } else {
+                    tracing::debug!(generation, profile, "stale transcription error ignored");
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use horizon_core::{PanelId, SpeechConfig, SpeechProfile};
-
-    use super::super::capture::CaptureHandle;
-    use super::{MicState, SpeechSystem, State};
-
-    /// A system that cannot reach audio or models. The capture handle is
-    /// swapped for an inert one before any test drives it: `start` sends
-    /// `CaptureCmd::Start`, and a real capture thread answers that by opening
-    /// the default input device — lighting the OS recording indicator and, on
-    /// macOS, raising a TCC prompt against whatever ran `cargo test`. The
-    /// models are nonexistent paths and no job is ever submitted, so the
-    /// worker threads park on their channels and load nothing.
-    fn test_system() -> SpeechSystem {
-        let config = SpeechConfig {
-            enabled: true,
-            profiles: vec![
-                SpeechProfile {
-                    name: "one".to_string(),
-                    model: "/nonexistent-a.gguf".to_string(),
-                    hotkey: "F9".to_string(),
-                    ..SpeechProfile::default()
-                },
-                SpeechProfile {
-                    name: "two".to_string(),
-                    model: "/nonexistent-b.gguf".to_string(),
-                    hotkey: "F10".to_string(),
-                    ..SpeechProfile::default()
-                },
-            ],
-            ..SpeechConfig::default()
-        };
-        let mut system = SpeechSystem::from_config(&config).expect("speech system should build");
-        // Replacing the handle drops the real thread's command channel, so it
-        // exits having never been sent a Start — no device is ever opened.
-        system.capture = CaptureHandle::inert();
-        system
-    }
-
-    #[test]
-    fn start_stop_cycle_moves_through_awaiting_pcm() {
-        let mut system = test_system();
-        let panel = PanelId(1);
-        assert!(matches!(system.state, State::Idle));
-        assert_eq!(system.active_target(), None);
-
-        system.start(panel, 0);
-        assert_eq!(system.recording_target(), Some(panel));
-        assert_eq!(system.mic_state_for(panel), MicState::Recording);
-        assert!(system.is_active());
-
-        system.stop();
-        // Awaiting the captured PCM: no longer "recording", still busy.
-        assert_eq!(system.recording_target(), None);
-        assert_eq!(system.active_target(), Some(panel));
-        assert_eq!(system.mic_state_for(panel), MicState::Busy);
-        assert!(system.is_active());
-    }
-
-    #[test]
-    fn cancel_returns_to_idle_from_every_active_state() {
-        let panel = PanelId(7);
-        let mut system = test_system();
-        system.start(panel, 0);
-        system.cancel();
-        assert!(!system.is_active(), "cancel from Recording must idle");
-        assert_eq!(system.active_target(), None);
-
-        system.start(panel, 0);
-        system.stop();
-        system.cancel();
-        assert!(!system.is_active(), "cancel from AwaitingPcm must idle");
-        assert_eq!(system.mic_state_for(panel), MicState::Idle);
-    }
-
-    #[test]
-    fn start_is_ignored_while_busy_and_for_unknown_profiles() {
-        let mut system = test_system();
-        let first = PanelId(1);
-        let second = PanelId(2);
-
-        system.start(first, 0);
-        // A second start must not retarget an in-flight recording.
-        system.start(second, 1);
-        assert_eq!(system.recording_target(), Some(first));
-
-        system.cancel();
-        // Out-of-range profile index is refused rather than panicking.
-        system.start(second, 99);
-        assert!(!system.is_active());
-        assert_eq!(system.active_target(), None);
-    }
-
-    #[test]
-    fn toggle_starts_then_stops_only_its_own_panel() {
-        let mut system = test_system();
-        let panel = PanelId(3);
-        let other = PanelId(4);
-
-        system.toggle(panel);
-        assert_eq!(system.recording_target(), Some(panel));
-
-        // Toggling a different panel while this one records is a no-op.
-        system.toggle(other);
-        assert_eq!(system.recording_target(), Some(panel));
-
-        system.toggle(panel);
-        assert_eq!(system.recording_target(), None);
-        assert_eq!(system.mic_state_for(panel), MicState::Busy);
-    }
-
-    #[test]
-    fn mic_button_reuses_the_last_hotkey_profile() {
-        let mut system = test_system();
-        let panel = PanelId(5);
-
-        system.start(panel, 1);
-        system.cancel();
-        // The mic button (toggle) adopts the last profile a hotkey used.
-        system.toggle(panel);
-        assert!(matches!(system.state, State::Recording { profile: 1, .. }));
-    }
-
-    #[test]
-    fn stale_generation_capture_results_are_ignored() {
-        let mut system = test_system();
-        let panel = PanelId(6);
-
-        system.start(panel, 0);
-        let stale = system.generation;
-        system.cancel();
-        system.start(panel, 0);
-        assert!(system.generation > stale, "each recording gets a new generation");
-    }
-}
+mod tests;

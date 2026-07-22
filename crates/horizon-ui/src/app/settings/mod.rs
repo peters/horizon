@@ -3,6 +3,8 @@ mod general;
 mod presets;
 mod shortcuts;
 mod speech;
+#[cfg(test)]
+pub(in crate::app) use speech::ClipboardCapture;
 pub(in crate::app) use speech::PendingCapture;
 mod yaml_editor;
 

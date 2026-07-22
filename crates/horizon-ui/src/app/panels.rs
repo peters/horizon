@@ -56,6 +56,12 @@ struct PanelUiOutcome {
     mic_clicked: bool,
 }
 
+struct PanelMicInteraction {
+    response: egui::Response,
+    state: MicState,
+    enabled: bool,
+}
+
 #[derive(Clone, Copy)]
 enum PanelCommand {
     Close,
@@ -111,6 +117,34 @@ impl PanelFrame {
             resize,
         }
     }
+}
+
+const fn mic_accessibility_label(state: MicState) -> &'static str {
+    match state {
+        MicState::Idle => "Start dictation",
+        MicState::Recording => "Stop dictation; recording",
+        MicState::Busy => "Dictation transcription in progress",
+    }
+}
+
+const fn mic_control_enabled(interactive: bool, speech_active: bool, state: MicState) -> bool {
+    interactive
+        && match state {
+            MicState::Idle => !speech_active,
+            MicState::Recording => true,
+            MicState::Busy => false,
+        }
+}
+
+fn mic_widget_info(state: MicState, enabled: bool) -> egui::WidgetInfo {
+    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, mic_accessibility_label(state))
+}
+
+fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state: MicState) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
+    let response = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| mic_widget_info(state, enabled));
+    response
 }
 
 struct PanelBodyContext<'a> {
@@ -420,30 +454,51 @@ impl HorizonApp {
                     );
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();
-                    ui.interact(
+                    let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));
+                    let enabled = ui.is_enabled()
+                        && mic_control_enabled(
+                            interactive,
+                            speech.is_some_and(super::speech::SpeechSystem::is_active),
+                            state,
+                        );
+                    let response = mic_control_response(
+                        ui,
                         rects.mic.expand2(Vec2::splat(4.0)),
                         ui.make_persistent_id(("panel_mic", panel_id.0)),
-                        if interactive { Sense::click() } else { Sense::hover() },
-                    )
+                        enabled,
+                        state,
+                    );
                     // Built lazily: the summary allocates per profile, so it
                     // must only run for the hovered mic, not every visible
                     // panel every frame.
-                    .on_hover_ui(|ui| {
-                        let tooltip = speech.map_or_else(
-                            || "Dictate into this panel (click to start/stop)".to_string(),
-                            |speech| match speech.hotkey_summary(primary_shortcut_label()) {
-                                Some(summary) => {
-                                    let verb = match speech.hotkey_mode() {
-                                        horizon_core::SpeechHotkeyMode::Hold => "hold",
-                                        horizon_core::SpeechHotkeyMode::Toggle => "press",
-                                    };
-                                    format!("Dictate into this panel (click, or {verb}: {summary})")
-                                }
-                                None => "Dictate into this panel (click to start/stop)".to_string(),
-                            },
-                        );
+                    let response = response.on_hover_ui(|ui| {
+                        let tooltip = match state {
+                            MicState::Recording => "Recording into this panel (click to stop)".to_string(),
+                            MicState::Busy => "Transcribing dictation for this panel".to_string(),
+                            MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
+                                "Dictation is active in another panel".to_string()
+                            }
+                            MicState::Idle => speech.map_or_else(
+                                || "Dictate into this panel (click to start/stop)".to_string(),
+                                |speech| match speech.hotkey_summary(primary_shortcut_label()) {
+                                    Some(summary) => {
+                                        let verb = match speech.hotkey_mode() {
+                                            horizon_core::SpeechHotkeyMode::Hold => "hold",
+                                            horizon_core::SpeechHotkeyMode::Toggle => "press",
+                                        };
+                                        format!("Dictate into this panel (click, or {verb}: {summary})")
+                                    }
+                                    None => "Dictate into this panel (click to start/stop)".to_string(),
+                                },
+                            ),
+                        };
                         ui.label(tooltip);
-                    })
+                    });
+                    PanelMicInteraction {
+                        response,
+                        state,
+                        enabled,
+                    }
                 });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
@@ -460,7 +515,7 @@ impl HorizonApp {
                         snapshot.is_renaming,
                         &drag_response,
                         &close_response,
-                        mic_response.as_ref(),
+                        mic_response.as_ref().map(|mic| &mic.response),
                         &resize_response,
                         &mut outcome,
                     );
@@ -502,13 +557,10 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
-                        mic: mic_response.as_ref().map(|response| MicControl {
+                        mic: mic_response.as_ref().map(|mic| MicControl {
                             rect: rects.mic,
-                            hovered: response.hovered(),
-                            state: self
-                                .speech
-                                .as_ref()
-                                .map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id)),
+                            hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
+                            state: mic.state,
                         }),
                     },
                 );
@@ -783,26 +835,4 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::clip_screen_rect_to_canvas;
-    use egui::{Pos2, Rect, Vec2};
-
-    #[test]
-    fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {
-        let canvas_rect = Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(420.0, 320.0));
-        let raw_rect = Rect::from_min_max(Pos2::new(60.0, 40.0), Pos2::new(180.0, 180.0));
-
-        assert_eq!(
-            clip_screen_rect_to_canvas(raw_rect, canvas_rect),
-            Some(Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(180.0, 180.0)))
-        );
-    }
-
-    #[test]
-    fn clip_screen_rect_to_canvas_rejects_non_positive_intersections() {
-        let canvas_rect = Rect::from_min_size(Pos2::new(100.0, 80.0), Vec2::new(320.0, 240.0));
-        let raw_rect = Rect::from_min_size(Pos2::new(430.0, 90.0), Vec2::new(80.0, 80.0));
-
-        assert_eq!(clip_screen_rect_to_canvas(raw_rect, canvas_rect), None);
-    }
-}
+mod tests;

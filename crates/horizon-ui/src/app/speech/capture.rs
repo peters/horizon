@@ -5,7 +5,7 @@
 //! cancelled recording can never affect a newer one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,6 +36,12 @@ pub enum CaptureCmd {
     Cancel,
 }
 
+pub enum CapturePoll {
+    Item(u64, Result<Vec<f32>, String>),
+    Empty,
+    Disconnected,
+}
+
 pub struct CaptureHandle {
     cmd_tx: Sender<CaptureCmd>,
     pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
@@ -58,23 +64,10 @@ impl CaptureHandle {
         })
     }
 
-    /// A handle whose commands go nowhere: no thread, no device. State
-    /// machine tests drive `start`/`stop`/`cancel` freely without opening the
-    /// default microphone — which would light the OS recording indicator and,
-    /// on macOS, raise a TCC prompt attributed to whatever ran `cargo test`.
-    #[cfg(test)]
-    pub fn inert() -> Self {
-        let (cmd_tx, _cmd_rx) = channel();
-        let (_pcm_tx, pcm_rx) = channel();
-        Self {
-            cmd_tx,
-            pcm_rx,
-            heartbeat: Arc::new(Mutex::new(Instant::now())),
-        }
-    }
-
-    pub fn send(&self, cmd: CaptureCmd) {
-        let _ = self.cmd_tx.send(cmd);
+    /// Returns false when the capture thread is no longer available.
+    #[must_use]
+    pub fn send(&self, cmd: CaptureCmd) -> bool {
+        self.cmd_tx.send(cmd).is_ok()
     }
 
     /// Called every frame while the engine is active: proves the frame loop
@@ -83,8 +76,26 @@ impl CaptureHandle {
         *self.heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
     }
 
-    pub fn try_recv_pcm(&self) -> Option<(u64, Result<Vec<f32>, String>)> {
-        self.pcm_rx.try_recv().ok()
+    pub fn try_recv_pcm(&self) -> CapturePoll {
+        match self.pcm_rx.try_recv() {
+            Ok((generation, pcm)) => CapturePoll::Item(generation, pcm),
+            Err(TryRecvError::Empty) => CapturePoll::Empty,
+            Err(TryRecvError::Disconnected) => CapturePoll::Disconnected,
+        }
+    }
+}
+
+#[cfg(test)]
+impl CaptureHandle {
+    pub(super) fn from_test_channels(
+        cmd_tx: Sender<CaptureCmd>,
+        pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
+    ) -> Self {
+        Self {
+            cmd_tx,
+            pcm_rx,
+            heartbeat: Arc::new(Mutex::new(Instant::now())),
+        }
     }
 }
 
@@ -94,6 +105,7 @@ struct ActiveRecording {
     generation: u64,
     /// Already downmixed to mono and resampled to 16 kHz.
     samples: Arc<Mutex<Vec<f32>>>,
+    resampler: Arc<Mutex<MonoResampler>>,
     overflowed: Arc<AtomicBool>,
 }
 
@@ -101,6 +113,7 @@ struct ActiveRecording {
 /// from the audio callback so only converted output is ever buffered.
 struct MonoResampler {
     channels: usize,
+    source_rate: u32,
     /// Source frames advanced per output sample.
     step: f64,
     /// Output samples emitted so far. The read position is derived from this
@@ -115,18 +128,21 @@ struct MonoResampler {
     /// callback is under no obligation to deliver whole frames per chunk.
     frame_acc: f32,
     frame_fill: usize,
+    source_frames: u64,
 }
 
 impl MonoResampler {
     fn new(sample_rate: u32, channels: usize) -> Self {
         Self {
             channels: channels.max(1),
+            source_rate: sample_rate,
             step: f64::from(sample_rate) / f64::from(TARGET_SAMPLE_RATE),
             emitted: 0,
             drained: 0,
             pending: Vec::new(),
             frame_acc: 0.0,
             frame_fill: 0,
+            source_frames: 0,
         }
     }
 
@@ -136,13 +152,10 @@ impl MonoResampler {
     /// each output sample averages the source samples across its window, so
     /// content above 8 kHz is attenuated instead of aliasing into the speech
     /// band (point-sampling e.g. every third sample at 48 kHz would alias).
-    /// Upsampling falls back to linear interpolation. Holds back up to one
-    /// window (< 1 ms) at the stream tail, irrelevant for recognition.
-    ///
-    /// Output is invariant to how the source is split into chunks: an output
-    /// sample is emitted only once every source sample it reads is buffered,
-    /// so feeding one 4000-sample chunk and feeding 4000 one-sample chunks
-    /// produce identical results.
+    /// Upsampling uses linear interpolation and retains the final source
+    /// frame until either its successor arrives or `flush` marks end-of-input.
+    /// Output positions are derived from an absolute output index, so the
+    /// result is invariant to how the source is split into callback chunks.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -157,6 +170,7 @@ impl MonoResampler {
                 self.pending.push(self.frame_acc / usize_to_f32(self.channels));
                 self.frame_acc = 0.0;
                 self.frame_fill = 0;
+                self.source_frames += 1;
             }
         }
 
@@ -202,6 +216,53 @@ impl MonoResampler {
             self.emitted += 1;
         }
 
+        self.discard_consumed();
+    }
+
+    /// Emit the duration-derived tail once no more source frames can arrive.
+    /// Linear upsampling repeats only the final source frame where the target
+    /// timeline extends beyond the last interpolation interval.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions/counts are far below every cast's precision limit"
+    )]
+    fn flush(&mut self, out: &mut Vec<f32>) {
+        let target_samples =
+            self.source_frames.saturating_mul(u64::from(TARGET_SAMPLE_RATE)) / u64::from(self.source_rate);
+        while self.emitted < target_samples {
+            let position = self.emitted as f64 * self.step - self.drained as f64;
+            let Some(current) = self.pending.get(position.floor() as usize).copied() else {
+                break;
+            };
+            if self.step > 1.0 {
+                let window_end = (self.emitted + 1) as f64 * self.step - self.drained as f64;
+                let start = position.floor() as usize;
+                let end = (window_end.ceil() as usize).min(self.pending.len());
+                let slice = &self.pending[start..end.max(start + 1)];
+                out.push(slice.iter().sum::<f32>() / usize_to_f32(slice.len()));
+            } else {
+                let base = position.floor() as usize;
+                let frac = (position - position.floor()) as f32;
+                let next = self.pending.get(base + 1).copied().unwrap_or(current);
+                out.push(current + (next - current) * frac);
+            }
+            self.emitted += 1;
+        }
+        self.pending.clear();
+        self.drained = self.source_frames;
+        self.frame_acc = 0.0;
+        self.frame_fill = 0;
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions are far below every cast's precision limit"
+    )]
+    fn discard_consumed(&mut self) {
         // Keep only the tail still needed for the next window. Subtracting an
         // integer from the absolute position is exact, so `drained` always
         // ends up at `floor(emitted * step)` however the input was chunked.
@@ -216,6 +277,31 @@ impl MonoResampler {
 /// is plain PCM samples, valid regardless of where another thread panicked.
 fn lock_samples(samples: &Mutex<Vec<f32>>) -> MutexGuard<'_, Vec<f32>> {
     samples.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Stop the callback before flushing its retained resampler tail, then take
+/// the completed PCM buffer out of the shared allocation.
+fn finish_recording(recording: ActiveRecording) -> (u64, Vec<f32>, bool) {
+    let ActiveRecording {
+        _stream: stream,
+        generation,
+        samples,
+        resampler,
+        overflowed,
+    } = recording;
+    drop(stream);
+
+    let mut capped = overflowed.load(Ordering::Relaxed);
+    let mut pcm = lock_samples(&samples);
+    if !capped {
+        resampler.lock().unwrap_or_else(PoisonError::into_inner).flush(&mut pcm);
+        if pcm.len() > MAX_OUTPUT_SAMPLES {
+            pcm.truncate(MAX_OUTPUT_SAMPLES);
+            capped = true;
+            overflowed.store(true, Ordering::Relaxed);
+        }
+    }
+    (generation, std::mem::take(&mut *pcm), capped)
 }
 
 fn capture_loop(
@@ -250,23 +336,17 @@ fn capture_loop(
                 stale || recording.overflowed.load(Ordering::Relaxed)
             });
             if let Some(recording) = finalize.then(|| active.take()).flatten() {
-                let capped = recording.overflowed.load(Ordering::Relaxed);
-                {
-                    let generation = recording.generation;
-                    let samples = Arc::clone(&recording.samples);
-                    drop(recording); // drops the stream, closing the mic
-                    if capped {
-                        // Deliver what was captured up to the cap.
-                        let pcm = std::mem::take(&mut *lock_samples(&samples));
-                        tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; stopping");
-                        let _ = pcm_tx.send((generation, Ok(pcm)));
-                    } else {
-                        tracing::warn!("speech capture heartbeat stale; microphone released");
-                        let _ = pcm_tx.send((
-                            generation,
-                            Err("recording stopped: window no longer visible".to_string()),
-                        ));
-                    }
+                let (generation, pcm, capped) = finish_recording(recording);
+                if capped {
+                    // Deliver what was captured up to the cap.
+                    tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; stopping");
+                    let _ = pcm_tx.send((generation, Ok(pcm)));
+                } else {
+                    tracing::warn!("speech capture heartbeat stale; microphone released");
+                    let _ = pcm_tx.send((
+                        generation,
+                        Err("recording stopped: window no longer visible".to_string()),
+                    ));
                 }
             }
             continue;
@@ -286,13 +366,7 @@ fn capture_loop(
             }
             CaptureCmd::Stop => {
                 if let Some(recording) = active.take() {
-                    let generation = recording.generation;
-                    let samples = Arc::clone(&recording.samples);
-                    let overflowed = recording.overflowed.load(Ordering::Relaxed);
-                    // Dropping the recording tears down the stream before the
-                    // buffer is drained, so no samples race the drain.
-                    drop(recording);
-                    let pcm = std::mem::take(&mut *lock_samples(&samples));
+                    let (generation, pcm, overflowed) = finish_recording(recording);
                     if overflowed {
                         tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; truncated");
                     }
@@ -329,6 +403,7 @@ fn start_recording(
     // Pre-size for ~30 s of 16 kHz mono so the audio callback does not
     // reallocate (and memcpy) tens of MiB mid-capture.
     let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(30 * TARGET_SAMPLE_RATE as usize)));
+    let resampler = Arc::new(Mutex::new(MonoResampler::new(sample_rate, channels)));
     let overflowed = Arc::new(AtomicBool::new(false));
 
     // Runtime stream failures (e.g. the microphone being unplugged) must
@@ -355,12 +430,12 @@ fn start_recording(
     macro_rules! input_stream {
         ($sample:ty, $to_f32:expr) => {{
             let sink = Arc::clone(&samples);
+            let converter = Arc::clone(&resampler);
             let full = Arc::clone(&overflowed);
-            let mut resampler = MonoResampler::new(sample_rate, channels);
             device.build_input_stream(
                 config,
                 move |data: &[$sample], _: &cpal::InputCallbackInfo| {
-                    convert_into(&mut resampler, &sink, &full, data.iter().map($to_f32));
+                    convert_into(&converter, &sink, &full, data.iter().map($to_f32));
                 },
                 error_cb,
                 None,
@@ -392,6 +467,7 @@ fn start_recording(
         _stream: stream,
         generation,
         samples,
+        resampler,
         overflowed,
     })
 }
@@ -399,7 +475,7 @@ fn start_recording(
 /// Audio-callback path: downmix + resample the chunk and append to the
 /// shared 16 kHz mono buffer, enforcing the output-sample cap.
 fn convert_into(
-    resampler: &mut MonoResampler,
+    resampler: &Mutex<MonoResampler>,
     sink: &Arc<Mutex<Vec<f32>>>,
     overflowed: &Arc<AtomicBool>,
     chunk: impl Iterator<Item = f32>,
@@ -409,18 +485,16 @@ fn convert_into(
         overflowed.store(true, Ordering::Relaxed);
         return;
     }
-    resampler.feed(chunk, &mut buffer);
+    resampler
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .feed(chunk, &mut buffer);
     if buffer.len() > MAX_OUTPUT_SAMPLES {
         buffer.truncate(MAX_OUTPUT_SAMPLES);
         overflowed.store(true, Ordering::Relaxed);
     }
 }
 
-/// Downmix interleaved samples to mono and resample to 16 kHz.
-///
-/// Integer downsample factors (48 kHz, 32 kHz) use a box filter; everything
-/// else (e.g. 44.1 kHz) falls back to linear interpolation. Whisper-family
-/// models are robust to this level of resampling fidelity.
 /// Whether a cpal stream notification leaves the stream usable. These are
 /// reported through the same error callback as fatal failures, but capture
 /// keeps running, so the recording must not be torn down.
@@ -493,7 +567,25 @@ fn usize_to_f32(value: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureCmd, CaptureHandle, TARGET_SAMPLE_RATE, to_mono_16k};
+    use std::sync::mpsc::channel;
+
+    use super::{CaptureCmd, CaptureHandle, CapturePoll, MonoResampler, TARGET_SAMPLE_RATE, to_mono_16k};
+
+    fn stream_in_chunks(samples: &[f32], sample_rate: u32, chunk_sizes: &[usize]) -> (usize, Vec<f32>) {
+        let mut resampler = MonoResampler::new(sample_rate, 1);
+        let mut streamed = Vec::new();
+        let mut offset = 0;
+        let mut chunk_index = 0;
+        while offset < samples.len() {
+            let end = (offset + chunk_sizes[chunk_index % chunk_sizes.len()]).min(samples.len());
+            resampler.feed(samples[offset..end].iter().copied(), &mut streamed);
+            offset = end;
+            chunk_index += 1;
+        }
+        let before_flush = streamed.len();
+        resampler.flush(&mut streamed);
+        (before_flush, streamed)
+    }
 
     #[test]
     fn stereo_48k_downmixes_and_decimates() {
@@ -546,15 +638,9 @@ mod tests {
         for chunk in samples.chunks(1337) {
             resampler.feed(chunk.iter().copied(), &mut streamed);
         }
+        resampler.flush(&mut streamed);
 
-        // The streaming path holds back up to one interpolation window at
-        // the tail (< 1 ms) because nothing flushes at stream teardown.
-        assert!(
-            streamed.len().abs_diff(batch.len()) <= 16,
-            "length mismatch: streamed {} vs batch {}",
-            streamed.len(),
-            batch.len()
-        );
+        assert_eq!(streamed.len(), batch.len());
         for (index, (a, b)) in streamed.iter().zip(batch.iter()).enumerate() {
             assert!((a - b).abs() < 1e-4, "sample {index} diverged: {a} vs {b}");
         }
@@ -604,6 +690,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn eight_khz_upsampling_is_chunk_invariant_and_flushes_tail() {
+        let samples = [0.0, 1.0, 2.0, 3.0];
+        let (single_before_flush, single) = stream_in_chunks(&samples, 8_000, &[samples.len()]);
+        let (chunked_before_flush, chunked) = stream_in_chunks(&samples, 8_000, &[1, 2, 1]);
+
+        assert_eq!(single_before_flush, 7);
+        assert_eq!(chunked_before_flush, 7);
+        assert_eq!(single, chunked);
+        assert_eq!(single, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn twelve_khz_upsampling_is_chunk_invariant_and_preserves_tail() {
+        let samples = [0.0, 1.0, 2.0, 3.0];
+        let (single_before_flush, single) = stream_in_chunks(&samples, 12_000, &[samples.len()]);
+        let (chunked_before_flush, chunked) = stream_in_chunks(&samples, 12_000, &[2, 1, 1]);
+
+        assert_eq!(single_before_flush, 5);
+        assert_eq!(chunked_before_flush, 5);
+        assert_eq!(single, chunked);
+        assert_eq!(single, [0.0, 0.75, 1.5, 2.25, 3.0]);
+    }
+
+    #[test]
+    fn capture_poll_distinguishes_empty_items_and_disconnects() {
+        let (cmd_tx, cmd_rx) = channel();
+        let (pcm_tx, pcm_rx) = channel();
+        let handle = CaptureHandle::from_test_channels(cmd_tx, pcm_rx);
+
+        assert!(matches!(handle.try_recv_pcm(), CapturePoll::Empty));
+        pcm_tx.send((4, Ok(vec![0.25]))).expect("test receiver is alive");
+        assert!(matches!(
+            handle.try_recv_pcm(),
+            CapturePoll::Item(4, Ok(samples)) if samples == [0.25]
+        ));
+        drop(pcm_tx);
+        assert!(matches!(handle.try_recv_pcm(), CapturePoll::Disconnected));
+        drop(cmd_rx);
+        assert!(!handle.send(CaptureCmd::Cancel));
+    }
+
     /// A8 smoke check: on a machine with no usable input device, starting
     /// capture must surface an error over the channel without panicking — the
     /// worker keeps running and the mic returns to idle. This covers both the
@@ -624,12 +752,16 @@ mod tests {
             return;
         }
         let handle = CaptureHandle::spawn().expect("spawn capture thread");
-        handle.send(CaptureCmd::Start(7));
+        assert!(handle.send(CaptureCmd::Start(7)));
         let mut received = None;
         for _ in 0..200 {
-            if let Some(pcm) = handle.try_recv_pcm() {
-                received = Some(pcm);
-                break;
+            match handle.try_recv_pcm() {
+                CapturePoll::Item(generation, pcm) => {
+                    received = Some((generation, pcm));
+                    break;
+                }
+                CapturePoll::Empty => {}
+                CapturePoll::Disconnected => panic!("capture worker disconnected before replying"),
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

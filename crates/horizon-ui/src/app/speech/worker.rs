@@ -3,7 +3,8 @@
 //! not slow down app startup, and a failed load is retried on the next job.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::fmt;
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -57,20 +58,30 @@ impl Drop for WorkerLife {
     }
 }
 
-/// Block until every cancelled worker has released its model, or the timeout
-/// expires. Called on a worker thread, never on the UI thread — an in-flight
-/// inference can take seconds and the frame loop must keep running.
-fn await_retiring_workers() {
+/// Block until every other cancelled worker has released its model, or the
+/// timeout expires. Called on a worker thread, never on the UI thread — an
+/// in-flight inference can take seconds and the frame loop must keep running.
+fn await_retiring_workers(current: Option<&Weak<WorkerLife>>, cancel: &CancelToken) {
     let deadline = Instant::now() + RETIRE_TIMEOUT;
     let mut retiring = RETIRING.lock().unwrap_or_else(PoisonError::into_inner);
     loop {
         retiring.retain(|life| life.strong_count() > 0);
-        if retiring.is_empty() {
+        // A config rebuild can retire this loader while it is waiting. Leaving
+        // immediately prevents multiple cancelled profile loaders from waiting
+        // on each other until the global timeout.
+        if cancel.is_cancelled() {
+            return;
+        }
+        let pending = retiring
+            .iter()
+            .filter(|life| current.is_none_or(|current| !Weak::ptr_eq(life, current)))
+            .count();
+        if pending == 0 {
             return;
         }
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             tracing::warn!(
-                pending = retiring.len(),
+                pending,
                 "cancelled speech worker still running after {RETIRE_TIMEOUT:?}; loading anyway"
             );
             return;
@@ -82,31 +93,61 @@ fn await_retiring_workers() {
     }
 }
 
+fn register_retiring_worker(life: &Weak<WorkerLife>) {
+    if life.strong_count() == 0 {
+        return;
+    }
+    RETIRING
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(life.clone());
+    // Wake loaders so a newly cancelled waiter can observe its shutdown token
+    // instead of sleeping until another worker happens to exit.
+    RETIRED.notify_all();
+}
+
 pub struct Job {
     pub pcm: Vec<f32>,
     pub target: PanelId,
+    pub generation: u64,
 }
 
 pub enum WorkerEvent {
     /// The model finished loading; reports the backend actually selected
     /// (interesting when the config says `auto`).
-    ModelLoaded {
-        backend: String,
-    },
+    ModelLoaded { generation: u64, backend: String },
     Done {
         target: PanelId,
+        generation: u64,
         text: String,
     },
     Failed {
         target: PanelId,
+        generation: u64,
         message: String,
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmitError {
+    Busy,
+    Disconnected,
+}
+
+impl fmt::Display for SubmitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Busy => formatter.write_str("speech transcriber is still stopping a previous recording"),
+            Self::Disconnected => formatter.write_str("speech transcription worker stopped unexpectedly"),
+        }
+    }
+}
+
 pub struct WorkerHandle {
-    job_tx: Sender<Job>,
+    job_tx: SyncSender<Job>,
     event_rx: Receiver<WorkerEvent>,
-    cancel: CancelToken,
+    shutdown: CancelToken,
+    run_cancels: Arc<Mutex<HashMap<u64, CancelToken>>>,
     /// Alive until the worker thread returns; registered as retiring on drop
     /// so the next loader waits for this worker's model to be released.
     life: Weak<WorkerLife>,
@@ -118,46 +159,106 @@ pub struct WorkerHandle {
 /// model instead of running to completion beside a freshly loaded one.
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
-        self.cancel.cancel();
+        self.shutdown.cancel();
+        for cancel in self.run_cancels.lock().unwrap_or_else(PoisonError::into_inner).values() {
+            cancel.cancel();
+        }
         // Registering (rather than joining here) keeps the UI thread free:
         // the wait happens on whichever worker thread next loads a model.
-        if self.life.strong_count() > 0 {
-            RETIRING
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(self.life.clone());
-        }
+        register_retiring_worker(&self.life);
     }
 }
 
 impl WorkerHandle {
     pub fn spawn(profile: &SpeechProfile, backend: SpeechBackend) -> std::io::Result<Self> {
-        let (job_tx, job_rx) = channel();
-        let (event_tx, event_rx) = channel();
+        // One queued recording in addition to the active run bounds retained
+        // PCM even when a backend is slow to honor cooperative cancellation.
+        let (job_tx, job_rx) = sync_channel(1);
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
         let settings = Settings::from_profile(profile, backend);
-        let cancel = CancelToken::new();
-        let worker_cancel = cancel.clone();
+        let shutdown = CancelToken::new();
+        let worker_shutdown = shutdown.clone();
+        let run_cancels = Arc::new(Mutex::new(HashMap::new()));
+        let worker_run_cancels = Arc::clone(&run_cancels);
         let life = Arc::new(WorkerLife);
         let life_weak = Arc::downgrade(&life);
+        let worker_life = life_weak.clone();
         thread::Builder::new().name("speech-transcribe".into()).spawn(move || {
             // Dropped last, after `worker_loop` released the model.
             let _life = life;
-            worker_loop(&settings, &worker_cancel, &job_rx, &event_tx);
+            worker_loop(
+                &settings,
+                &worker_shutdown,
+                &worker_run_cancels,
+                &worker_life,
+                &job_rx,
+                &event_tx,
+            );
         })?;
         Ok(Self {
             job_tx,
             event_rx,
-            cancel,
+            shutdown,
+            run_cancels,
             life: life_weak,
         })
     }
 
-    pub fn submit(&self, job: Job) {
-        let _ = self.job_tx.send(job);
+    pub fn submit(&self, job: Job) -> Result<(), SubmitError> {
+        let generation = job.generation;
+        self.run_cancels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(generation, CancelToken::new());
+        match self.job_tx.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.run_cancels
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&generation);
+                match error {
+                    TrySendError::Full(_) => Err(SubmitError::Busy),
+                    TrySendError::Disconnected(_) => Err(SubmitError::Disconnected),
+                }
+            }
+        }
     }
 
-    pub fn try_recv_event(&self) -> Option<WorkerEvent> {
-        self.event_rx.try_recv().ok()
+    pub fn cancel(&self, generation: u64) {
+        if let Some(cancel) = self
+            .run_cancels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&generation)
+        {
+            cancel.cancel();
+        }
+    }
+
+    pub fn try_recv_event(&self) -> Result<WorkerEvent, TryRecvError> {
+        self.event_rx.try_recv()
+    }
+}
+
+#[cfg(test)]
+impl WorkerHandle {
+    pub(super) fn from_test_channels(job_tx: SyncSender<Job>, event_rx: Receiver<WorkerEvent>) -> Self {
+        Self {
+            job_tx,
+            event_rx,
+            shutdown: CancelToken::new(),
+            run_cancels: Arc::new(Mutex::new(HashMap::new())),
+            life: Weak::new(),
+        }
+    }
+
+    pub(super) fn generation_is_cancelled(&self, generation: u64) -> bool {
+        self.run_cancels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&generation)
+            .is_some_and(CancelToken::is_cancelled)
     }
 }
 
@@ -202,23 +303,53 @@ impl Settings {
     }
 }
 
-fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>, event_tx: &Sender<WorkerEvent>) {
+fn worker_loop(
+    settings: &Settings,
+    shutdown: &CancelToken,
+    run_cancels: &Mutex<HashMap<u64, CancelToken>>,
+    life: &Weak<WorkerLife>,
+    job_rx: &Receiver<Job>,
+    event_tx: &Sender<WorkerEvent>,
+) {
     let mut session: Option<Session> = None;
     // Strong handle for this worker: keeps its model resident (and the shared
     // cache entry upgradable) for as long as the worker lives.
     let mut model: Option<Arc<Model>> = None;
+    let mut active_backend: Option<String> = None;
     while let Ok(job) = job_rx.recv() {
-        if cancel.is_cancelled() {
+        if shutdown.is_cancelled() {
             return;
         }
+        let run_cancel = run_cancels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&job.generation)
+            .cloned();
+        let Some(run_cancel) = run_cancel else {
+            continue;
+        };
+        if run_cancel.is_cancelled() {
+            finish_run(run_cancels, job.generation);
+            continue;
+        }
         let target = job.target;
-        let result = ensure_session(settings, cancel, &mut session, &mut model).and_then(|loaded_backend| {
+        let result = ensure_session(settings, shutdown, life, &mut session, &mut model).and_then(|loaded_backend| {
             if let Some(backend) = loaded_backend {
-                let _ = event_tx.send(WorkerEvent::ModelLoaded { backend });
+                active_backend = Some(backend);
+            }
+            if shutdown.is_cancelled() || run_cancel.is_cancelled() {
+                return Err("speech transcription cancelled".to_string());
+            }
+            if let Some(backend) = &active_backend {
+                let _ = event_tx.send(WorkerEvent::ModelLoaded {
+                    generation: job.generation,
+                    backend: backend.clone(),
+                });
             }
             let Some(session) = session.as_mut() else {
                 return Err("transcription session unavailable".to_string());
             };
+            session.set_cancel_token(&run_cancel);
             let options = RunOptions {
                 task: settings.task,
                 language: settings.language.clone(),
@@ -230,18 +361,38 @@ fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>
                 .map(|transcript| transcript.text)
                 .map_err(|error| format!("transcription failed: {error}"))
         });
+        finish_run(run_cancels, job.generation);
+        if shutdown.is_cancelled() {
+            return;
+        }
+        if run_cancel.is_cancelled() {
+            tracing::debug!(generation = job.generation, "cancelled transcription discarded");
+            continue;
+        }
         let event = match result {
             Ok(text) => WorkerEvent::Done {
                 target,
+                generation: job.generation,
                 text: sanitize_transcript(&text),
             },
             Err(message) => {
                 tracing::warn!(%message, "speech transcription error");
-                WorkerEvent::Failed { target, message }
+                WorkerEvent::Failed {
+                    target,
+                    generation: job.generation,
+                    message,
+                }
             }
         };
         let _ = event_tx.send(event);
     }
+}
+
+fn finish_run(run_cancels: &Mutex<HashMap<u64, CancelToken>>, generation: u64) {
+    run_cancels
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&generation);
 }
 
 /// Collapse all internal whitespace (including newlines) to single spaces
@@ -263,6 +414,7 @@ fn sanitize_transcript(text: &str) -> String {
 fn ensure_session(
     settings: &Settings,
     cancel: &CancelToken,
+    life: &Weak<WorkerLife>,
     session: &mut Option<Session>,
     model_slot: &mut Option<Arc<Model>>,
 ) -> Result<Option<String>, String> {
@@ -277,9 +429,9 @@ fn ensure_session(
     }
     // Before the load lock, not under it: an outgoing worker may itself be
     // waiting to load, and holding the permit while waiting for it to exit
-    // would deadlock the pair. Checking `cancel` first also keeps a retiring
-    // worker from waiting on its own cohort.
-    await_retiring_workers();
+    // would deadlock the pair. Excluding this worker's lifetime also lets a
+    // second config rebuild retire it while it is waiting without a self-wait.
+    await_retiring_workers(Some(life), cancel);
     let _load_permit = MODEL_LOAD_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     if cancel.is_cancelled() {
         return Err("speech worker replaced before model load".to_string());
@@ -320,10 +472,9 @@ fn ensure_session(
     }
     let backend = model.backend().clone();
     tracing::info!(model = %settings.model_path, %backend, "speech model ready");
-    let mut new_session = model
+    let new_session = model
         .session()
         .map_err(|error| format!("failed to create transcription session: {error}"))?;
-    new_session.set_cancel_token(cancel);
     *session = Some(new_session);
     // Retain the strong handle so this worker's model stays resident (and
     // shareable) until the worker itself goes away.
@@ -333,32 +484,41 @@ fn ensure_session(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
     use transcribe_cpp::{Model, RunOptions};
 
     use super::super::capture::to_mono_16k;
-    use super::{RETIRING, WorkerLife, await_retiring_workers};
+    use super::{RETIRING, WorkerLife, await_retiring_workers, register_retiring_worker};
+
+    // These tests exercise process-global retirement state and must not
+    // observe each other's temporary worker entries under the parallel test
+    // runner.
+    static RETIREMENT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// A loader must not proceed while a cancelled worker is still running:
     /// that worker still holds its multi-GB model, and loading beside it is
     /// what exhausts GPU memory on a live config change.
     #[test]
     fn loader_waits_for_a_retiring_worker_to_release_its_model() {
+        let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let life = Arc::new(WorkerLife);
         RETIRING
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Arc::downgrade(&life));
 
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let releaser = std::thread::spawn(move || {
+            release_rx.recv().expect("release signal");
             std::thread::sleep(Duration::from_millis(120));
             drop(life); // the worker thread returning
         });
 
         let started = Instant::now();
-        await_retiring_workers();
+        release_tx.send(()).expect("signal releaser");
+        await_retiring_workers(None, &transcribe_cpp::CancelToken::new());
         let waited = started.elapsed();
         releaser.join().expect("releaser thread panicked");
 
@@ -378,9 +538,66 @@ mod tests {
     /// With nothing retiring, loading must not pay any wait at all.
     #[test]
     fn loader_does_not_wait_when_no_worker_is_retiring() {
+        let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let started = Instant::now();
-        await_retiring_workers();
+        await_retiring_workers(None, &transcribe_cpp::CancelToken::new());
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retiring_loader_does_not_wait_for_its_own_worker_life() {
+        let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let life = Arc::new(WorkerLife);
+        let current = Arc::downgrade(&life);
+        RETIRING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(current.clone());
+
+        let started = Instant::now();
+        await_retiring_workers(Some(&current), &transcribe_cpp::CancelToken::new());
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        drop(life);
+        assert!(RETIRING.lock().unwrap_or_else(PoisonError::into_inner).is_empty());
+    }
+
+    #[test]
+    fn cancelled_loader_wakes_without_waiting_for_other_retirees() {
+        let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let other = Arc::new(WorkerLife);
+        RETIRING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&other));
+
+        let current = Arc::new(WorkerLife);
+        let current_weak = Arc::downgrade(&current);
+        let cancel = transcribe_cpp::CancelToken::new();
+        let waiter_cancel = cancel.clone();
+        let waiter_life = current_weak.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter_thread = std::thread::spawn(move || {
+            let _ = started_tx.send(());
+            let started = Instant::now();
+            await_retiring_workers(Some(&waiter_life), &waiter_cancel);
+            let _ = done_tx.send(started.elapsed());
+        });
+
+        started_rx.recv().expect("waiter started");
+        std::thread::sleep(Duration::from_millis(50));
+        cancel.cancel();
+        register_retiring_worker(&current_weak);
+        let elapsed = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cancelled loader should wake promptly");
+        assert!(elapsed < Duration::from_secs(1));
+
+        drop(current);
+        drop(other);
+        waiter_thread.join().expect("waiter thread panicked");
+        assert!(RETIRING.lock().unwrap_or_else(PoisonError::into_inner).is_empty());
     }
 
     /// End-to-end pipeline check against a real model, gated on env vars so

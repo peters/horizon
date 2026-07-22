@@ -4,7 +4,10 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
-use super::super::shortcuts::{event_uses_shortcut_key, shortcut_event_matches, shortcut_pressed};
+use super::super::shortcuts::{
+    event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
+    shortcut_pressed, take_captured_clipboard_event,
+};
 use super::super::{CanvasPanSpaceKeyState, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
 
@@ -304,26 +307,17 @@ impl HorizonApp {
         // A just-captured chord still has its release (and possibly repeats
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
-        let captured: Option<super::super::settings::PendingCapture> = ctx
-            .data(|data| data.get_temp::<Option<super::super::settings::PendingCapture>>(captured_key_id))
-            .flatten();
-        // Safety valve: if the release never arrives (a shifted keycap
-        // reports a different logical key, or a platform swallows the event),
-        // drop the pending capture instead of suppressing shortcuts and
-        // terminal typing forever.
-        let captured = captured.filter(|pending| {
-            let expired = ctx.input(|input| input.time) - pending.armed_at > PENDING_CAPTURE_TIMEOUT;
-            if expired {
-                ctx.data_mut(|data| {
-                    data.insert_temp(captured_key_id, None::<super::super::settings::PendingCapture>);
-                });
-            }
-            !expired
-        });
+        // This accessor applies the same timeout used by global shortcut
+        // dispatch, so neither path can be wedged by a lost release.
+        let captured = pending_hotkey_capture(ctx);
+        let captured_clipboard_event = take_captured_clipboard_event(ctx);
         let mut filtered = Vec::with_capacity(events.len());
         let mut swallow_next_shift_text = false;
         for event in events {
             if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
+                continue;
+            }
+            if swallow_captured_clipboard_event(captured_clipboard_event, event) {
                 continue;
             }
             if capturing {
@@ -344,38 +338,19 @@ impl HorizonApp {
                 continue;
             }
             if let Some(pending) = captured {
-                // Match the PHYSICAL key as well: a shifted keycap presses as
-                // one logical key (Shift+1 -> Exclamationmark) and releases as
-                // another (Num1) once Shift is lifted first.
-                let matches_pending = |key: Key, physical: Option<Key>| {
-                    keys_equivalent(key, pending.key)
-                        || (pending.physical_key.is_some() && physical == pending.physical_key)
-                };
-                match event {
-                    Event::Key {
-                        key,
-                        physical_key,
-                        pressed: false,
-                        ..
-                    } if matches_pending(*key, *physical_key) => {
+                match pending_capture_event(pending, event) {
+                    PendingCaptureEvent::Release => {
                         ctx.data_mut(|data| {
                             data.insert_temp(captured_key_id, None::<super::super::settings::PendingCapture>);
                         });
                         continue;
                     }
-                    Event::Key {
-                        key,
-                        physical_key,
-                        pressed,
-                        ..
-                    } if matches_pending(*key, *physical_key) => {
-                        if *pressed && pending.shifted && egui_key_may_emit_text(*key) {
-                            swallow_next_shift_text = true;
-                        }
+                    PendingCaptureEvent::SwallowAndArmShiftText => {
+                        swallow_next_shift_text = true;
                         continue;
                     }
-                    Event::Text(text) if key_emits_text(pending.key, text) => continue,
-                    _ => {}
+                    PendingCaptureEvent::Swallow => continue,
+                    PendingCaptureEvent::Forward => {}
                 }
             }
             let bindings = self
@@ -535,6 +510,50 @@ fn swallow_correlated_shift_text(pending: &mut bool, event: &Event) -> bool {
     std::mem::take(pending) && matches!(event, Event::Text(_))
 }
 
+fn swallow_captured_clipboard_event(captured: bool, event: &Event) -> bool {
+    captured && is_clipboard_pseudo_event(event)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingCaptureEvent {
+    Forward,
+    Swallow,
+    SwallowAndArmShiftText,
+    Release,
+}
+
+fn pending_capture_event(pending: super::super::settings::PendingCapture, event: &Event) -> PendingCaptureEvent {
+    // Match the PHYSICAL key as well: a shifted keycap presses as one logical
+    // key (Shift+1 -> Exclamationmark) and releases as another (Num1) once
+    // Shift is lifted first.
+    let matches_pending = |key: Key, physical: Option<Key>| {
+        keys_equivalent(key, pending.key)
+            || (pending.physical_key.is_some() && physical == pending.physical_key)
+            || pending
+                .clipboard
+                .is_some_and(|clipboard| clipboard.matches_release_key(key))
+    };
+    match event {
+        Event::Key {
+            key,
+            physical_key,
+            pressed: false,
+            ..
+        } if matches_pending(*key, *physical_key) => PendingCaptureEvent::Release,
+        Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            ..
+        } if matches_pending(*key, *physical_key) && pending.shifted && egui_key_may_emit_text(*key) => {
+            PendingCaptureEvent::SwallowAndArmShiftText
+        }
+        Event::Key { key, physical_key, .. } if matches_pending(*key, *physical_key) => PendingCaptureEvent::Swallow,
+        Event::Text(text) if key_emits_text(pending.key, text) => PendingCaptureEvent::Swallow,
+        _ => PendingCaptureEvent::Forward,
+    }
+}
+
 fn arm_correlated_shift_text(binding: horizon_core::ShortcutBinding, pending: &mut bool) {
     if binding.modifiers.shift() && shortcut_key_may_emit_text(binding.key) {
         *pending = true;
@@ -551,11 +570,6 @@ fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
             | horizon_core::ShortcutKey::Plus
     )
 }
-
-/// How long a just-captured chord may suppress input while waiting for its
-/// key release. Generous for a real hold, short enough that a lost release
-/// cannot wedge shortcuts or typing.
-const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
 
 /// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on
 /// release when Shift is dropped first; treat them as one key so a pending
@@ -647,10 +661,61 @@ mod tests {
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        MiddlePanMode, MiddlePanTarget, clear_released_speech_hotkeys, next_middle_pan_active,
-        primary_selection_routing_active, swallow_cancel_escape_event, swallow_correlated_shift_text,
-        swallow_speech_hotkey_event, wheel_pan_scroll_input,
+        MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys, next_middle_pan_active,
+        pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
+        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_speech_hotkey_event,
+        wheel_pan_scroll_input,
     };
+
+    #[test]
+    fn captured_clipboard_marker_swallows_pseudo_events_only() {
+        for event in [Event::Copy, Event::Cut, Event::Paste("text".to_string())] {
+            assert!(swallow_captured_clipboard_event(true, &event));
+            assert!(!swallow_captured_clipboard_event(false, &event));
+        }
+        assert!(!swallow_captured_clipboard_event(
+            true,
+            &Event::Key {
+                key: Key::C,
+                physical_key: Some(Key::C),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }
+        ));
+    }
+
+    #[test]
+    fn clipboard_key_releases_in_a_later_frame_are_claimed() {
+        use crate::app::settings::ClipboardCapture;
+
+        // Frame one contains only the pseudo-event. egui-winit can produce it
+        // from the primary C/X/V chord, Windows Insert/Delete conventions, or
+        // a dedicated clipboard key, then delivers the ordinary release later.
+        for (clipboard, fallback, release_keys) in [
+            (ClipboardCapture::Copy, Key::C, [Key::C, Key::Insert, Key::Copy]),
+            (ClipboardCapture::Cut, Key::X, [Key::X, Key::Delete, Key::Cut]),
+            (ClipboardCapture::Paste, Key::V, [Key::V, Key::Insert, Key::Paste]),
+        ] {
+            let pending = crate::app::settings::PendingCapture {
+                key: fallback,
+                physical_key: Some(fallback),
+                shifted: false,
+                clipboard: Some(clipboard),
+                armed_at: 1.0,
+            };
+            for key in release_keys {
+                let release = Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                };
+                assert_eq!(pending_capture_event(pending, &release), PendingCaptureEvent::Release);
+            }
+        }
+    }
 
     #[test]
     fn wheel_pan_scroll_input_counts_each_wheel_event_once() {

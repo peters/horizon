@@ -6,7 +6,11 @@ use egui::Ui;
 use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
+use crate::app::shortcuts::{is_clipboard_pseudo_event, mark_captured_clipboard_event};
 use crate::app::speech::built_with_speech;
+
+const CLIPBOARD_HOTKEY_ERROR: &str =
+    "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
 
 /// A chord the binder just captured, whose key may still be held. The
 /// terminal filter suppresses its repeats/release/text until the release is
@@ -17,9 +21,44 @@ pub(in crate::app) struct PendingCapture {
     pub key: egui::Key,
     pub physical_key: Option<egui::Key>,
     pub shifted: bool,
+    pub clipboard: Option<ClipboardCapture>,
     /// egui input time when armed; the filter drops it after a short window
     /// so a never-delivered release cannot wedge input permanently.
     pub armed_at: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::app) enum ClipboardCapture {
+    Copy,
+    Cut,
+    Paste,
+}
+
+impl ClipboardCapture {
+    const fn fallback_key(self) -> egui::Key {
+        match self {
+            Self::Copy => egui::Key::C,
+            Self::Cut => egui::Key::X,
+            Self::Paste => egui::Key::V,
+        }
+    }
+
+    pub(in crate::app) fn matches_release_key(self, key: egui::Key) -> bool {
+        match self {
+            Self::Copy => matches!(key, egui::Key::C | egui::Key::Insert | egui::Key::Copy),
+            Self::Cut => matches!(key, egui::Key::X | egui::Key::Delete | egui::Key::Cut),
+            Self::Paste => matches!(key, egui::Key::V | egui::Key::Insert | egui::Key::Paste),
+        }
+    }
+}
+
+enum HotkeyCaptureAttempt {
+    Key {
+        key: egui::Key,
+        physical_key: Option<egui::Key>,
+        modifiers: egui::Modifiers,
+    },
+    ClipboardReserved(ClipboardCapture),
 }
 use crate::app::util::primary_shortcut_label;
 use crate::theme;
@@ -390,52 +429,53 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
 
         if capturing {
             super::dim_label(ui, "press a key combination… (Esc cancels)");
-            let captured = ui.input(|input| input.events.iter().find_map(capture_event));
-            if let Some(Captured::ClipboardReserved(name)) = captured {
-                // egui-winit turns the primary modifier + C/X/V into these
-                // synthetic events *instead of* a key press, so such a chord
-                // never arrives as `Event::Key`. Without this branch capture
-                // would stay armed with no feedback, even though the shared
-                // validator rejects the chord for exactly this reason.
-                ui.data_mut(|data| {
-                    data.insert_temp(capture_id, false);
-                    data.insert_temp(
-                        error_id,
-                        format!("`{name}` is reserved for clipboard operations and never reaches shortcut handling"),
-                    );
-                });
-            }
-            if let Some(Captured::Chord(key, physical_key, modifiers)) = captured {
+            let (captured, captured_clipboard_event) = ui.input(|input| {
+                let captured = hotkey_capture_attempt(&input.events);
+                let captured_clipboard_event = captured.is_some() && input.events.iter().any(is_clipboard_pseudo_event);
+                (captured, captured_clipboard_event)
+            });
+            if let Some(captured) = captured {
+                if captured_clipboard_event {
+                    // The terminal filter runs after settings rendering, when
+                    // `capture_id` has already been cleared below. Preserve a
+                    // one-frame claim for synthetic Copy/Cut/Paste events.
+                    mark_captured_clipboard_event(ui.ctx());
+                }
                 ui.data_mut(|data| data.insert_temp(capture_id, false));
-                // The terminal event filter swallows this key's repeats,
-                // release, and text until the release is seen, so the
-                // captured chord never types into the focused terminal. The
-                // PHYSICAL key is recorded alongside the logical one: a
-                // shifted keycap presses as one logical key (Shift+1 ->
-                // Exclamationmark) and releases as another (Num1) when Shift
-                // is lifted first — only the physical key is stable.
-                let now = ui.input(|input| input.time);
-                ui.data_mut(|data| {
-                    data.insert_temp(
-                        egui::Id::new("speech_captured_key"),
-                        Some(PendingCapture {
-                            key,
-                            physical_key,
-                            shifted: modifiers.shift,
-                            armed_at: now,
-                        }),
-                    );
-                });
-                if key != egui::Key::Escape {
-                    match captured_binding_string(key, modifiers, config) {
-                        Ok(binding) => {
-                            config.features.speech.hotkey = binding;
-                            ui.data_mut(|data| data.remove_temp::<String>(error_id));
-                            changed = true;
+                match captured {
+                    HotkeyCaptureAttempt::Key {
+                        key,
+                        physical_key,
+                        modifiers,
+                    } => {
+                        // The terminal event filter swallows this key's repeats,
+                        // release, and text until the release is seen, so the
+                        // captured chord never types into the focused terminal. The
+                        // PHYSICAL key is recorded alongside the logical one: a
+                        // shifted keycap presses as one logical key (Shift+1 ->
+                        // Exclamationmark) and releases as another (Num1) when Shift
+                        // is lifted first — only the physical key is stable.
+                        arm_pending_capture(ui, key, physical_key, modifiers.shift, None);
+                        if key != egui::Key::Escape {
+                            match captured_binding_string(key, modifiers, config) {
+                                Ok(binding) => {
+                                    config.features.speech.hotkey = binding;
+                                    ui.data_mut(|data| data.remove_temp::<String>(error_id));
+                                    changed = true;
+                                }
+                                Err(message) => {
+                                    ui.data_mut(|data| data.insert_temp(error_id, message));
+                                }
+                            }
                         }
-                        Err(message) => {
-                            ui.data_mut(|data| data.insert_temp(error_id, message));
-                        }
+                    }
+                    HotkeyCaptureAttempt::ClipboardReserved(clipboard) => {
+                        // egui-winit substitutes the pseudo-event for the key
+                        // press but still emits a normal source-key release
+                        // later. Keep it out of kitty-protocol terminals.
+                        let key = clipboard.fallback_key();
+                        arm_pending_capture(ui, key, Some(key), false, Some(clipboard));
+                        ui.data_mut(|data| data.insert_temp(error_id, CLIPBOARD_HOTKEY_ERROR.to_string()));
                     }
                 }
             }
@@ -462,29 +502,46 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-/// What the binder pulled out of a frame's events.
-#[derive(Clone, Copy)]
-enum Captured {
-    Chord(egui::Key, Option<egui::Key>, egui::Modifiers),
-    /// A clipboard chord, which egui-winit delivers as a synthetic
-    /// `Copy`/`Cut`/`Paste` event rather than a key press.
-    ClipboardReserved(&'static str),
+fn arm_pending_capture(
+    ui: &Ui,
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    shifted: bool,
+    clipboard: Option<ClipboardCapture>,
+) {
+    let armed_at = ui.input(|input| input.time);
+    ui.data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("speech_captured_key"),
+            Some(PendingCapture {
+                key,
+                physical_key,
+                shifted,
+                clipboard,
+                armed_at,
+            }),
+        );
+    });
 }
 
-fn capture_event(event: &egui::Event) -> Option<Captured> {
-    match event {
+fn hotkey_capture_attempt(events: &[egui::Event]) -> Option<HotkeyCaptureAttempt> {
+    events.iter().find_map(|event| match event {
         egui::Event::Key {
             key,
             physical_key,
             pressed: true,
             repeat: false,
             modifiers,
-        } => Some(Captured::Chord(*key, *physical_key, *modifiers)),
-        egui::Event::Copy => Some(Captured::ClipboardReserved("Copy")),
-        egui::Event::Cut => Some(Captured::ClipboardReserved("Cut")),
-        egui::Event::Paste(_) => Some(Captured::ClipboardReserved("Paste")),
+        } => Some(HotkeyCaptureAttempt::Key {
+            key: *key,
+            physical_key: *physical_key,
+            modifiers: *modifiers,
+        }),
+        egui::Event::Copy => Some(HotkeyCaptureAttempt::ClipboardReserved(ClipboardCapture::Copy)),
+        egui::Event::Cut => Some(HotkeyCaptureAttempt::ClipboardReserved(ClipboardCapture::Cut)),
+        egui::Event::Paste(_) => Some(HotkeyCaptureAttempt::ClipboardReserved(ClipboardCapture::Paste)),
         _ => None,
-    }
+    })
 }
 
 /// Build and validate a shortcut string from a captured key event. Rejects
@@ -535,61 +592,128 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
 
 #[cfg(test)]
 mod tests {
-    use super::{Captured, capture_event, captured_binding_string};
+    use egui::{Event, Key, Modifiers};
     use horizon_core::Config;
 
-    fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
-        egui::Event::Key {
-            key,
-            physical_key: Some(key),
+    use crate::app::shortcuts::take_captured_clipboard_event;
+
+    use super::{
+        CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
+        hotkey_capture_attempt, render_hotkey_binder,
+    };
+
+    #[test]
+    fn clipboard_pseudo_events_disarm_capture_with_reserved_error() {
+        for (event, expected_key, expected_clipboard) in [
+            (Event::Copy, Key::C, ClipboardCapture::Copy),
+            (Event::Cut, Key::X, ClipboardCapture::Cut),
+            (Event::Paste("text".to_string()), Key::V, ClipboardCapture::Paste),
+        ] {
+            let ctx = egui::Context::default();
+            let capture_id = egui::Id::new("speech_hotkey_capturing");
+            let error_id = egui::Id::new("speech_hotkey_error");
+            ctx.data_mut(|data| data.insert_temp(capture_id, true));
+            let mut config = Config::default();
+
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![event],
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!render_hotkey_binder(ui, &mut config));
+                    });
+                },
+            );
+
+            let capturing: bool = ctx.data(|data| data.get_temp(capture_id)).unwrap_or(false);
+            let error: Option<String> = ctx.data(|data| data.get_temp(error_id));
+            let pending = ctx
+                .data(|data| data.get_temp::<Option<super::PendingCapture>>(egui::Id::new("speech_captured_key")))
+                .flatten();
+            assert!(!capturing);
+            assert_eq!(error.as_deref(), Some(CLIPBOARD_HOTKEY_ERROR));
+            assert!(pending.is_some_and(|pending| {
+                pending.key == expected_key
+                    && pending.physical_key == Some(expected_key)
+                    && pending.clipboard == Some(expected_clipboard)
+            }));
+            assert!(take_captured_clipboard_event(&ctx));
+            assert!(!take_captured_clipboard_event(&ctx));
+        }
+    }
+
+    #[test]
+    fn key_before_clipboard_pseudo_event_preserves_both_suppression_claims() {
+        let ctx = egui::Context::default();
+        let capture_id = egui::Id::new("speech_hotkey_capturing");
+        let pending_id = egui::Id::new("speech_captured_key");
+        ctx.data_mut(|data| data.insert_temp(capture_id, true));
+        let mut config = Config::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    Event::Key {
+                        key: Key::C,
+                        physical_key: Some(Key::C),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    },
+                    Event::Copy,
+                ],
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!render_hotkey_binder(ui, &mut config));
+                });
+            },
+        );
+
+        let pending = ctx
+            .data(|data| data.get_temp::<Option<super::PendingCapture>>(pending_id))
+            .flatten();
+        assert!(pending.is_some_and(|pending| pending.key == Key::C));
+        assert!(take_captured_clipboard_event(&ctx));
+    }
+
+    #[test]
+    fn ordinary_key_presses_are_captured_but_repeats_are_not() {
+        let key_press = Event::Key {
+            key: Key::F9,
+            physical_key: Some(Key::F9),
             pressed: true,
             repeat: false,
-            modifiers,
-        }
-    }
-
-    #[test]
-    fn clipboard_chords_are_captured_from_their_synthetic_events() {
-        // egui-winit never emits a key press for the primary modifier + C/X/V,
-        // so the binder must recognise the synthetic events or stay armed.
-        for (event, expected) in [
-            (egui::Event::Copy, "Copy"),
-            (egui::Event::Cut, "Cut"),
-            (egui::Event::Paste("x".to_string()), "Paste"),
-        ] {
-            match capture_event(&event) {
-                Some(Captured::ClipboardReserved(name)) => assert_eq!(name, expected),
-                other => panic!("{expected}: expected a clipboard rejection, got {:?}", other.is_some()),
-            }
-        }
-    }
-
-    #[test]
-    fn ordinary_key_presses_still_capture_as_chords() {
-        let event = key_press(egui::Key::F9, egui::Modifiers::NONE);
+            modifiers: Modifiers::NONE,
+        };
         assert!(matches!(
-            capture_event(&event),
-            Some(Captured::Chord(egui::Key::F9, _, _))
+            hotkey_capture_attempt(std::slice::from_ref(&key_press)),
+            Some(HotkeyCaptureAttempt::Key { key: Key::F9, .. })
         ));
 
-        // Repeats and releases are not captures.
-        let mut repeat = key_press(egui::Key::F9, egui::Modifiers::NONE);
-        if let egui::Event::Key { repeat: r, .. } = &mut repeat {
-            *r = true;
-        }
-        assert!(capture_event(&repeat).is_none());
-        assert!(capture_event(&egui::Event::Text("a".to_string())).is_none());
+        let repeat = Event::Key {
+            key: Key::F9,
+            physical_key: Some(Key::F9),
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(hotkey_capture_attempt(&[repeat]).is_none());
+        assert!(hotkey_capture_attempt(&[Event::Text("a".to_string())]).is_none());
     }
 
     #[test]
-    fn bare_keys_and_global_overlaps_are_rejected_with_a_message() {
+    fn bare_keys_are_rejected_but_function_keys_are_allowed() {
         let config = Config::default();
-        let bare = captured_binding_string(egui::Key::K, egui::Modifiers::NONE, &config)
-            .expect_err("a bare letter must be rejected");
+        let bare =
+            captured_binding_string(Key::K, Modifiers::NONE, &config).expect_err("a bare letter must be rejected");
         assert!(bare.contains("needs a modifier"), "{bare}");
 
-        let ok = captured_binding_string(egui::Key::F9, egui::Modifiers::NONE, &config)
+        let function_key = captured_binding_string(Key::F9, Modifiers::NONE, &config)
             .expect("a bare function key is a valid push-to-talk hotkey");
-        assert_eq!(ok, "F9");
+        assert_eq!(function_key, "F9");
     }
 }
