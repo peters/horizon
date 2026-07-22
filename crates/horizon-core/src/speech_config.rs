@@ -225,6 +225,8 @@ fn validate_speech_binding(
                 | ShortcutKey::Comma
                 | ShortcutKey::Minus
                 | ShortcutKey::Plus
+                // Arrows drive cursor movement and shell history in every
+                // terminal panel, so a bare arrow hotkey would hijack them.
                 | ShortcutKey::ArrowDown
                 | ShortcutKey::ArrowLeft
                 | ShortcutKey::ArrowRight
@@ -423,6 +425,9 @@ features:
             "ArrowLeft",
             "ArrowRight",
             "ArrowUp",
+            // The short aliases parse to the same keys and must be rejected too.
+            "Left",
+            "Right",
         ] {
             config.features.speech.hotkey = bare.to_string();
             let error = config.validate().expect_err("bare key must be rejected");

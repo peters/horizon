@@ -89,9 +89,11 @@ cd -
 - **A12 — persistence after relaunch**: quit and relaunch; the saved
   speech config (profiles, language, task, backend, hotkey) is restored
   and dictation still works without re-editing.
-- **A13 — packaged bundle (macOS)**: build the `.app` via
-  `packaging/macos/make_app_bundle.sh` and launch that bundle (not the raw
-  binary). First dictation must trigger the microphone permission prompt
+- **A13 — packaged bundle (macOS)**: build a speech binary
+  (`cargo build --release --features speech`), assemble the `.app` via
+  `packaging/macos/make_app_bundle.sh --speech` (the flag adds the
+  microphone usage description; a plain bundle omits it), and launch that
+  bundle (not the raw binary). First dictation must trigger the microphone permission prompt
   (the bundle's `Info.plist` carries `NSMicrophoneUsageDescription`);
   granting it lets dictation proceed. The raw binary cannot exercise this
   TCC path.

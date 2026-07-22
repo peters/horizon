@@ -318,3 +318,131 @@ impl SpeechSystem {
         events
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{PanelId, SpeechConfig, SpeechProfile};
+
+    use super::{MicState, SpeechSystem, State};
+
+    /// A system whose workers/capture threads exist but are never asked to
+    /// touch audio or models: `start`/`stop`/`cancel` only move the state
+    /// machine, so the transitions can be asserted without a device.
+    fn test_system() -> SpeechSystem {
+        let config = SpeechConfig {
+            enabled: true,
+            profiles: vec![
+                SpeechProfile {
+                    name: "one".to_string(),
+                    model: "/nonexistent-a.gguf".to_string(),
+                    hotkey: "F9".to_string(),
+                    ..SpeechProfile::default()
+                },
+                SpeechProfile {
+                    name: "two".to_string(),
+                    model: "/nonexistent-b.gguf".to_string(),
+                    hotkey: "F10".to_string(),
+                    ..SpeechProfile::default()
+                },
+            ],
+            ..SpeechConfig::default()
+        };
+        SpeechSystem::from_config(&config).expect("speech system should build")
+    }
+
+    #[test]
+    fn start_stop_cycle_moves_through_awaiting_pcm() {
+        let mut system = test_system();
+        let panel = PanelId(1);
+        assert!(matches!(system.state, State::Idle));
+        assert_eq!(system.active_target(), None);
+
+        system.start(panel, 0);
+        assert_eq!(system.recording_target(), Some(panel));
+        assert_eq!(system.mic_state_for(panel), MicState::Recording);
+        assert!(system.is_active());
+
+        system.stop();
+        // Awaiting the captured PCM: no longer "recording", still busy.
+        assert_eq!(system.recording_target(), None);
+        assert_eq!(system.active_target(), Some(panel));
+        assert_eq!(system.mic_state_for(panel), MicState::Busy);
+        assert!(system.is_active());
+    }
+
+    #[test]
+    fn cancel_returns_to_idle_from_every_active_state() {
+        let panel = PanelId(7);
+        let mut system = test_system();
+        system.start(panel, 0);
+        system.cancel();
+        assert!(!system.is_active(), "cancel from Recording must idle");
+        assert_eq!(system.active_target(), None);
+
+        system.start(panel, 0);
+        system.stop();
+        system.cancel();
+        assert!(!system.is_active(), "cancel from AwaitingPcm must idle");
+        assert_eq!(system.mic_state_for(panel), MicState::Idle);
+    }
+
+    #[test]
+    fn start_is_ignored_while_busy_and_for_unknown_profiles() {
+        let mut system = test_system();
+        let first = PanelId(1);
+        let second = PanelId(2);
+
+        system.start(first, 0);
+        // A second start must not retarget an in-flight recording.
+        system.start(second, 1);
+        assert_eq!(system.recording_target(), Some(first));
+
+        system.cancel();
+        // Out-of-range profile index is refused rather than panicking.
+        system.start(second, 99);
+        assert!(!system.is_active());
+        assert_eq!(system.active_target(), None);
+    }
+
+    #[test]
+    fn toggle_starts_then_stops_only_its_own_panel() {
+        let mut system = test_system();
+        let panel = PanelId(3);
+        let other = PanelId(4);
+
+        system.toggle(panel);
+        assert_eq!(system.recording_target(), Some(panel));
+
+        // Toggling a different panel while this one records is a no-op.
+        system.toggle(other);
+        assert_eq!(system.recording_target(), Some(panel));
+
+        system.toggle(panel);
+        assert_eq!(system.recording_target(), None);
+        assert_eq!(system.mic_state_for(panel), MicState::Busy);
+    }
+
+    #[test]
+    fn mic_button_reuses_the_last_hotkey_profile() {
+        let mut system = test_system();
+        let panel = PanelId(5);
+
+        system.start(panel, 1);
+        system.cancel();
+        // The mic button (toggle) adopts the last profile a hotkey used.
+        system.toggle(panel);
+        assert!(matches!(system.state, State::Recording { profile: 1, .. }));
+    }
+
+    #[test]
+    fn stale_generation_capture_results_are_ignored() {
+        let mut system = test_system();
+        let panel = PanelId(6);
+
+        system.start(panel, 0);
+        let stale = system.generation;
+        system.cancel();
+        system.start(panel, 0);
+        assert!(system.generation > stale, "each recording gets a new generation");
+    }
+}

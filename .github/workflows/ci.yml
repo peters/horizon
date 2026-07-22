@@ -119,14 +119,13 @@ jobs:
         with:
           key: ${{ matrix.cache_key }}
       - run: cargo test --workspace
-      # Run the speech-feature tests (resampler, GGUF reader, shortcut
-      # matchers) where the native build is cheapest; the no-mic and
-      # real-model paths stay env-gated off. macOS speech coverage comes
-      # from the machine smoke lanes.
+      # Speech tests (resampler, GGUF reader, shortcut matchers, engine
+      # state machine) run on every OS in the matrix so the native audio
+      # linkage (ALSA / CoreAudio) is exercised on each supported target;
+      # the no-mic and real-model paths stay env-gated off.
       - if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --features speech
+      - run: cargo test --workspace --features speech
 
   windows-smoke:
     name: Windows test build
@@ -140,6 +139,10 @@ jobs:
         with:
           key: windows-test-build
       - run: cargo test --workspace --no-run
+      # The speech feature is advertised on Windows too (WASAPI capture via
+      # cpal); build it so a Windows-only break cannot pass CI. Compiling the
+      # vendored C++ tree here is the point — tests are not run.
+      - run: cargo test --workspace --features speech --no-run
 
   snap-build-inputs:
     name: Snap Build Inputs
