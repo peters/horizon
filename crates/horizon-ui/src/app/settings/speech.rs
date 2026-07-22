@@ -645,6 +645,48 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_error_does_not_expand_the_settings_grid() {
+        fn render_panel(ctx: &egui::Context, config: &mut Config) -> f32 {
+            let mut panel_width = 0.0_f32;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_600.0, 900.0))),
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    let panel = egui::SidePanel::right("speech_hotkey_width_test")
+                        .default_width(480.0)
+                        .min_width(240.0)
+                        .max_width(800.0)
+                        .show(ctx, |ui| {
+                            egui::Grid::new("clipboard_error_width_test")
+                                .num_columns(2)
+                                .show(ui, |ui| {
+                                    ui.label("Push-to-talk");
+                                    assert!(!render_hotkey_binder(ui, config));
+                                    ui.end_row();
+                                });
+                        });
+                    panel_width = panel.response.rect.width();
+                },
+            );
+            panel_width
+        }
+
+        let ctx = egui::Context::default();
+        let error_id = egui::Id::new("speech_hotkey_error");
+        let mut config = Config::default();
+        let baseline = render_panel(&ctx, &mut config);
+        ctx.data_mut(|data| data.insert_temp(error_id, CLIPBOARD_HOTKEY_ERROR.to_string()));
+        let with_error = render_panel(&ctx, &mut config);
+
+        assert!(
+            with_error <= baseline + 1.0,
+            "settings panel expanded from {baseline}px to {with_error}px"
+        );
+    }
+
+    #[test]
     fn key_before_clipboard_pseudo_event_preserves_both_suppression_claims() {
         let ctx = egui::Context::default();
         let capture_id = egui::Id::new("speech_hotkey_capturing");

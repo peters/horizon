@@ -388,5 +388,5 @@ fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0));
+    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0)).wrap());
 }
