@@ -2,6 +2,7 @@
 //! the model is loaded lazily on the first job so enabling the feature does
 //! not slow down app startup, and a failed load is retried on the next job.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -14,6 +15,12 @@ use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Sess
 /// cancelled one finished its load (and its prompt exit releases the
 /// model), keeping two multi-GB models from loading concurrently.
 static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
+
+/// Models already loaded in this process, keyed by resolved path + backend.
+/// `Model` is a cheap `Arc` handle and `session()` takes `&self`, so profiles
+/// pointing at the same GGUF share one residency instead of loading the file
+/// (and its GPU allocation) once per profile. Guarded by `MODEL_LOAD_LOCK`.
+static LOADED_MODELS: Mutex<Option<HashMap<String, Model>>> = Mutex::new(None);
 
 pub struct Job {
     pub pcm: Vec<f32>,
@@ -193,12 +200,30 @@ fn ensure_session(
         backend: settings.backend,
         ..ModelOptions::default()
     };
-    let model = Model::load_with(&settings.model_path, &options)
-        .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
+    let cache_key = format!("{}|{:?}", settings.model_path, settings.backend);
+    let cached = {
+        let guard = LOADED_MODELS.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.as_ref().and_then(|map| map.get(&cache_key).cloned())
+    };
+    let model = if let Some(model) = cached {
+        model
+    } else {
+        let model = Model::load_with(&settings.model_path, &options)
+            .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
+        if cancel.is_cancelled() {
+            // Replaced while loading: drop the model BEFORE releasing the load
+            // lock so the waiting replacement never overlaps residence with it.
+            drop(model);
+            return Err("speech worker replaced during model load".to_string());
+        }
+        LOADED_MODELS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(cache_key, model.clone());
+        model
+    };
     if cancel.is_cancelled() {
-        // Replaced while loading: drop the model BEFORE releasing the load
-        // lock so the waiting replacement never overlaps residence with it.
-        drop(model);
         return Err("speech worker replaced during model load".to_string());
     }
     let backend = model.backend().clone();

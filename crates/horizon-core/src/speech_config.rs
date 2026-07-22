@@ -236,9 +236,11 @@ fn validate_speech_binding(
     // Copy/Cut/Paste events instead of key presses, so such a chord never
     // fires. This applies to both the platform-primary (`command`) and the
     // physical-`Control` spelling — on Linux/Windows they are the same key.
+    // egui-winit's is_copy/cut/paste_command tests ONLY `modifiers.command`
+    // and the key — shift and alt do not exempt a chord — and it pushes the
+    // synthetic event instead of the key press. Mirror that predicate exactly
+    // (the physical-Control spelling is the same key on Linux/Windows).
     if (binding.modifiers.command() || binding.modifiers.ctrl())
-        && !binding.modifiers.shift()
-        && !binding.modifiers.alt()
         && matches!(binding.key, ShortcutKey::Letter('C' | 'X' | 'V'))
     {
         return Err(Error::Config(format!(
@@ -346,9 +348,15 @@ features:
             let error = config.validate().expect_err("clipboard chord must be rejected");
             assert!(error.to_string().contains("clipboard"), "{chord}: {error}");
         }
-        // Shifted variants still produce real key events and stay allowed
-        // (subject to the usual global-shortcut overlap rules).
-        config.features.speech.hotkey = "Ctrl+Alt+C".to_string();
+        // egui checks only `command` + key, so shift/alt variants are ALSO
+        // turned into clipboard events and must be rejected too.
+        for chord in ["Ctrl+Shift+C", "Ctrl+Alt+C", "Ctrl+Shift+V"] {
+            config.features.speech.hotkey = chord.to_string();
+            let error = config.validate().expect_err("clipboard chord must be rejected");
+            assert!(error.to_string().contains("clipboard"), "{chord}: {error}");
+        }
+        // A different letter is unaffected.
+        config.features.speech.hotkey = "Ctrl+Alt+D".to_string();
         config.validate().expect("non-clipboard chord passes");
     }
     #[test]

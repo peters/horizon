@@ -7,6 +7,20 @@ use horizon_core::speech_model::{SpeechModelInfo, read_speech_model_info};
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
 use crate::app::speech::built_with_speech;
+
+/// A chord the binder just captured, whose key may still be held. The
+/// terminal filter suppresses its repeats/release/text until the release is
+/// observed — tracked by physical key because a shifted keycap's logical key
+/// differs between press and release.
+#[derive(Clone, Copy)]
+pub(in crate::app) struct PendingCapture {
+    pub key: egui::Key,
+    pub physical_key: Option<egui::Key>,
+    pub shifted: bool,
+    /// egui input time when armed; the filter drops it after a short window
+    /// so a never-delivered release cannot wedge input permanently.
+    pub armed_at: f64,
+}
 use crate::app::util::primary_shortcut_label;
 use crate::theme;
 
@@ -380,21 +394,34 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
                 input.events.iter().find_map(|event| match event {
                     egui::Event::Key {
                         key,
+                        physical_key,
                         pressed: true,
                         repeat: false,
                         modifiers,
-                        ..
-                    } => Some((*key, *modifiers)),
+                    } => Some((*key, *physical_key, *modifiers)),
                     _ => None,
                 })
             });
-            if let Some((key, modifiers)) = captured {
+            if let Some((key, physical_key, modifiers)) = captured {
                 ui.data_mut(|data| data.insert_temp(capture_id, false));
                 // The terminal event filter swallows this key's repeats,
                 // release, and text until the release is seen, so the
-                // captured chord never types into the focused terminal.
+                // captured chord never types into the focused terminal. The
+                // PHYSICAL key is recorded alongside the logical one: a
+                // shifted keycap presses as one logical key (Shift+1 ->
+                // Exclamationmark) and releases as another (Num1) when Shift
+                // is lifted first — only the physical key is stable.
+                let now = ui.input(|input| input.time);
                 ui.data_mut(|data| {
-                    data.insert_temp(egui::Id::new("speech_captured_key"), Some((key, modifiers.shift)));
+                    data.insert_temp(
+                        egui::Id::new("speech_captured_key"),
+                        Some(PendingCapture {
+                            key,
+                            physical_key,
+                            shifted: modifiers.shift,
+                            armed_at: now,
+                        }),
+                    );
                 });
                 if key != egui::Key::Escape {
                     match captured_binding_string(key, modifiers, config) {

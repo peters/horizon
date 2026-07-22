@@ -325,9 +325,22 @@ impl HorizonApp {
         // A just-captured chord still has its release (and possibly repeats
         // and a text event) in flight after the binder cleared its flag.
         let captured_key_id = egui::Id::new("speech_captured_key");
-        let captured: Option<(Key, bool)> = ctx
-            .data(|data| data.get_temp::<Option<(Key, bool)>>(captured_key_id))
+        let captured: Option<super::super::settings::PendingCapture> = ctx
+            .data(|data| data.get_temp::<Option<super::super::settings::PendingCapture>>(captured_key_id))
             .flatten();
+        // Safety valve: if the release never arrives (a shifted keycap
+        // reports a different logical key, or a platform swallows the event),
+        // drop the pending capture instead of suppressing shortcuts and
+        // terminal typing forever.
+        let captured = captured.filter(|pending| {
+            let expired = ctx.input(|input| input.time) - pending.armed_at > PENDING_CAPTURE_TIMEOUT;
+            if expired {
+                ctx.data_mut(|data| {
+                    data.insert_temp(captured_key_id, None::<super::super::settings::PendingCapture>);
+                });
+            }
+            !expired
+        });
         let mut filtered = Vec::with_capacity(events.len());
         for event in events {
             if capturing
@@ -341,20 +354,32 @@ impl HorizonApp {
                 // and IME commits — so none reaches the focused terminal.
                 continue;
             }
-            if let Some((pending, shifted)) = captured {
+            if let Some(pending) = captured {
+                // Match the PHYSICAL key as well: a shifted keycap presses as
+                // one logical key (Shift+1 -> Exclamationmark) and releases as
+                // another (Num1) once Shift is lifted first.
+                let matches_pending = |key: Key, physical: Option<Key>| {
+                    keys_equivalent(key, pending.key)
+                        || (pending.physical_key.is_some() && physical == pending.physical_key)
+                };
                 match event {
                     Event::Key {
-                        key, pressed: false, ..
-                    } if keys_equivalent(*key, pending) => {
-                        ctx.data_mut(|data| data.insert_temp(captured_key_id, None::<(Key, bool)>));
+                        key,
+                        physical_key,
+                        pressed: false,
+                        ..
+                    } if matches_pending(*key, *physical_key) => {
+                        ctx.data_mut(|data| {
+                            data.insert_temp(captured_key_id, None::<super::super::settings::PendingCapture>);
+                        });
                         continue;
                     }
-                    Event::Key { key, .. } if keys_equivalent(*key, pending) => continue,
+                    Event::Key { key, physical_key, .. } if matches_pending(*key, *physical_key) => continue,
                     // A shifted digit/punctuation key emits a layout-dependent
                     // symbol (Shift+1 -> "!"); while that chord is the only key
                     // held, swallow its single-character text too.
-                    Event::Text(text) if key_emits_text(pending, text) => continue,
-                    Event::Text(text) if shifted && text.chars().count() == 1 => continue,
+                    Event::Text(text) if key_emits_text(pending.key, text) => continue,
+                    Event::Text(text) if pending.shifted && text.chars().count() == 1 => continue,
                     _ => {}
                 }
             }
@@ -448,11 +473,23 @@ fn swallow_speech_hotkey_event(
             // Text("k")). Swallow only Text matching a HELD key's glyph, so
             // unrelated keys typed while holding push-to-talk still reach the
             // terminal (e.g. "L" while holding Shift+K).
-            held_bindings.iter().any(|held| binding_text_matches(held.key, text))
+            held_bindings.iter().any(|held| {
+                binding_text_matches(held.key, text)
+                    // A Shift-modified chord's keycap emits a layout-dependent
+                    // glyph (Shift+1 -> "!", Shift+Comma -> "<") the unshifted
+                    // table cannot predict; while such a chord is held, its
+                    // single-character text belongs to it.
+                    || (held.modifiers.shift() && text.chars().count() == 1)
+            })
         }
         _ => false,
     }
 }
+
+/// How long a just-captured chord may suppress input while waiting for its
+/// key release. Generous for a real hold, short enough that a lost release
+/// cannot wedge shortcuts or typing.
+const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
 
 /// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on
 /// release when Shift is dropped first; treat them as one key so a pending

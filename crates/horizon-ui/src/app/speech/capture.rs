@@ -278,7 +278,9 @@ fn start_recording(
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
 
-    let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+    // Pre-size for ~30 s of 16 kHz mono so the audio callback does not
+    // reallocate (and memcpy) tens of MiB mid-capture.
+    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(30 * TARGET_SAMPLE_RATE as usize)));
     let overflowed = Arc::new(AtomicBool::new(false));
 
     // Runtime stream failures (e.g. the microphone being unplugged) must
@@ -286,7 +288,16 @@ fn start_recording(
     // stay in Recording until manually cancelled.
     let error_device = device_name.clone();
     let error_cb = move |error: cpal::Error| {
-        tracing::warn!(%error, "speech capture stream error");
+        // cpal's error callback is a notification channel for recoverable
+        // conditions as well as fatal ones. An ALSA Xrun is recovered in
+        // place (prepare + start) and capture continues, and a route change
+        // keeps the stream active — aborting on those would discard a
+        // half-spoken sentence whenever the machine is briefly busy.
+        if is_recoverable_stream_error(error.kind()) {
+            tracing::warn!(%error, "recoverable speech capture stream notification; continuing");
+            return;
+        }
+        tracing::warn!(%error, "fatal speech capture stream error");
         let _ = pcm_tx.send((generation, Err(format!("microphone `{error_device}`: {error}"))));
     };
     // One arm per interleaved sample type, each normalizing to f32 in
@@ -362,6 +373,16 @@ fn convert_into(
 /// Integer downsample factors (48 kHz, 32 kHz) use a box filter; everything
 /// else (e.g. 44.1 kHz) falls back to linear interpolation. Whisper-family
 /// models are robust to this level of resampling fidelity.
+/// Whether a cpal stream notification leaves the stream usable. These are
+/// reported through the same error callback as fatal failures, but capture
+/// keeps running, so the recording must not be torn down.
+fn is_recoverable_stream_error(kind: cpal::ErrorKind) -> bool {
+    matches!(
+        kind,
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
+    )
+}
+
 /// Narrow an f64 device sample to the f32 capture pipeline.
 #[expect(clippy::cast_possible_truncation, reason = "audio downconvert to the f32 pipeline")]
 fn f64_to_sample(sample: f64) -> f32 {

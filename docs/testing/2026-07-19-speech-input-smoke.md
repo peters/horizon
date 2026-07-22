@@ -52,7 +52,8 @@ cd -
   pointing at the fixture, `hotkey: "F9"` in `~/.horizon/config.yaml`
   (back up the original first, restore after), launch
   `target/release/horizon`: a mic glyph appears left of the close button
-  on every panel title bar. Screenshot it. With `enabled: false` (or a
+  on every terminal-backed panel title bar (Editor/Git Changes/Usage
+  panels have no PTY and show none). Screenshot it. With `enabled: false` (or a
   build without the feature) the glyph is absent and the settings pane
   shows the rebuild hint under Features → Speech Input.
 - **A7 — layout regression**: with speech enabled, panel titles, the

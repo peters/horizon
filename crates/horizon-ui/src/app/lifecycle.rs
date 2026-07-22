@@ -192,6 +192,10 @@ impl HorizonApp {
             });
         }
 
+        if !root_focused_now {
+            self.stop_hold_on_focus_loss();
+        }
+
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
             self.reset_speech_input_state(root_focused_now);
@@ -219,19 +223,6 @@ impl HorizonApp {
         // Horizon window has focus (see `cancel_unattended_recording`).
         let root_focused = root_focused_now;
         self.any_viewport_focused = root_focused;
-
-        // Hold-mode release detection is root-only, but the release can land
-        // in a detached Horizon window if focus moved there mid-hold (and on
-        // Wayland/macOS focus loss synthesizes no key release at all). If a
-        // hold is engaged and the root lost focus, treat it as the release —
-        // otherwise the mic would stay open with the key already up.
-        if !root_focused
-            && self.speech_engaged_profile.is_some()
-            && speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold
-        {
-            speech.stop();
-            self.speech_engaged_profile = None;
-        }
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding. And while a
@@ -365,6 +356,22 @@ impl HorizonApp {
             self.speech_held_bindings.clear();
             self.speech_escape_release_pending = false;
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
+        }
+    }
+
+    /// Hold-mode release detection is root-only, but the release can land in
+    /// a detached Horizon window when focus moved there mid-hold (and on
+    /// Wayland/macOS focus loss synthesizes no key release at all). Treat the
+    /// focus loss as the release, and drop the held chords: their key-up will
+    /// land in whatever took focus, so the root filter will never consume it.
+    fn stop_hold_on_focus_loss(&mut self) {
+        let Some(speech) = self.speech.as_mut() else {
+            return;
+        };
+        if self.speech_engaged_profile.is_some() && speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold {
+            speech.stop();
+            self.speech_engaged_profile = None;
+            self.speech_held_bindings.clear();
         }
     }
 

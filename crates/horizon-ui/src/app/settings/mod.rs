@@ -3,6 +3,7 @@ mod general;
 mod presets;
 mod shortcuts;
 mod speech;
+pub(in crate::app) use speech::PendingCapture;
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
@@ -222,10 +223,12 @@ impl HorizonApp {
     pub(super) fn settings_speech_tab_open(&self) -> bool {
         self.settings.as_ref().is_some_and(|editor| {
             editor.active_tab == SettingsTab::General
-                && editor
-                    .editing_config
-                    .as_ref()
-                    .is_some_and(|config| config.features.speech.enabled)
+                && editor.editing_config.as_ref().is_some_and(|config| {
+                    // The binder only renders in the flat editor; with named
+                    // profiles the section shows a read-only summary, so an
+                    // armed capture must be auto-disarmed there too.
+                    config.features.speech.enabled && config.features.speech.profiles.is_empty()
+                })
         })
     }
 
