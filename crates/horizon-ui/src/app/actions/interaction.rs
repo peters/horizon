@@ -290,29 +290,8 @@ impl HorizonApp {
         // cancel a recording started from its own mic button (dictation is
         // cancellable everywhere), so handle just that here.
         if viewport_id != egui::ViewportId::ROOT {
-            if self.speech.as_ref().is_some_and(|s| s.recording_target().is_some()) {
-                let escape_pressed = events.iter().any(|event| {
-                    matches!(
-                        event,
-                        Event::Key {
-                            key: Key::Escape,
-                            pressed: true,
-                            ..
-                        }
-                    )
-                });
-                if escape_pressed {
-                    if let Some(speech) = self.speech.as_mut() {
-                        speech.cancel();
-                    }
-                    self.speech_engaged_profile = None;
-                    let filtered: Vec<Event> = events
-                        .iter()
-                        .filter(|event| !matches!(event, Event::Key { key: Key::Escape, .. }))
-                        .cloned()
-                        .collect();
-                    return terminal_input_events(&filtered, frame_keyboard_events);
-                }
+            if let Some(filtered) = self.filter_detached_cancel_escape(events) {
+                return terminal_input_events(&filtered, frame_keyboard_events);
             }
             return terminal_input_events(events, frame_keyboard_events);
         }
@@ -342,7 +321,11 @@ impl HorizonApp {
             !expired
         });
         let mut filtered = Vec::with_capacity(events.len());
+        let mut swallow_next_shift_text = false;
         for event in events {
+            if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
+                continue;
+            }
             if capturing
                 && matches!(
                     event,
@@ -374,12 +357,18 @@ impl HorizonApp {
                         });
                         continue;
                     }
-                    Event::Key { key, physical_key, .. } if matches_pending(*key, *physical_key) => continue,
-                    // A shifted digit/punctuation key emits a layout-dependent
-                    // symbol (Shift+1 -> "!"); while that chord is the only key
-                    // held, swallow its single-character text too.
+                    Event::Key {
+                        key,
+                        physical_key,
+                        pressed,
+                        ..
+                    } if matches_pending(*key, *physical_key) => {
+                        if *pressed && pending.shifted && egui_key_may_emit_text(*key) {
+                            swallow_next_shift_text = true;
+                        }
+                        continue;
+                    }
                     Event::Text(text) if key_emits_text(pending.key, text) => continue,
-                    Event::Text(text) if pending.shifted && text.chars().count() == 1 => continue,
                     _ => {}
                 }
             }
@@ -391,6 +380,7 @@ impl HorizonApp {
                 &mut self.speech_held_bindings,
                 self.speech_escape_cancelled,
                 &mut self.speech_escape_release_pending,
+                &mut swallow_next_shift_text,
                 event,
                 bindings,
             ) {
@@ -399,6 +389,40 @@ impl HorizonApp {
             filtered.push(event.clone());
         }
         terminal_input_events(&filtered, frame_keyboard_events)
+    }
+
+    fn filter_detached_cancel_escape(&mut self, events: &[Event]) -> Option<Vec<Event>> {
+        let escape_cancelled = self.speech.as_ref().is_some_and(|speech| {
+            speech.recording_target().is_some()
+                && events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::Key {
+                            key: Key::Escape,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                })
+        });
+        if escape_cancelled {
+            if let Some(speech) = self.speech.as_mut() {
+                speech.cancel();
+            }
+            self.speech_engaged_profile = None;
+        }
+        if !escape_cancelled && !self.speech_escape_release_pending {
+            return None;
+        }
+
+        let filtered = events
+            .iter()
+            .filter(|event| {
+                !swallow_cancel_escape_event(escape_cancelled, &mut self.speech_escape_release_pending, event)
+            })
+            .cloned()
+            .collect();
+        Some(filtered)
     }
 }
 
@@ -419,26 +443,12 @@ fn swallow_speech_hotkey_event(
     held_bindings: &mut Vec<horizon_core::ShortcutBinding>,
     escape_cancelled: bool,
     escape_release_pending: &mut bool,
+    swallow_next_shift_text: &mut bool,
     event: &Event,
     bindings: &[(usize, horizon_core::ShortcutBinding)],
 ) -> bool {
-    if let Event::Key {
-        key: Key::Escape,
-        pressed,
-        ..
-    } = event
-    {
-        // A cancel-Escape is swallowed as a press AND as its later release:
-        // kitty REPORT_EVENT_TYPES terminals would otherwise receive a
-        // dangling Escape-release CSI-u sequence next frame.
-        if escape_cancelled && *pressed {
-            *escape_release_pending = true;
-            return true;
-        }
-        if *escape_release_pending && !pressed {
-            *escape_release_pending = false;
-            return true;
-        }
+    if swallow_cancel_escape_event(escape_cancelled, escape_release_pending, event) {
+        return true;
     }
     match event {
         Event::Key { pressed, .. } => {
@@ -451,10 +461,16 @@ fn swallow_speech_hotkey_event(
                     if !held_bindings.contains(matched) {
                         held_bindings.push(*matched);
                     }
+                    arm_correlated_shift_text(*matched, swallow_next_shift_text);
                     return true;
                 }
                 // Mid-hold repeats can carry drifted modifiers.
-                held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held))
+                if let Some(held) = held_bindings.iter().find(|held| event_uses_shortcut_key(event, **held)) {
+                    arm_correlated_shift_text(*held, swallow_next_shift_text);
+                    true
+                } else {
+                    false
+                }
             } else if held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held)) {
                 // A physical-key release clears EVERY held chord on that key
                 // (distinct chords like Ctrl+K and Alt+K can both be held via
@@ -466,24 +482,61 @@ fn swallow_speech_hotkey_event(
                 false
             }
         }
-        Event::Text(text) => {
-            // A held chord's own key emits Text while held — directly (no
-            // modifier), under Shift, under Alt (bare letter on Linux), and
-            // during modifier-drift repeats (Ctrl+K with Ctrl released emits
-            // Text("k")). Swallow only Text matching a HELD key's glyph, so
-            // unrelated keys typed while holding push-to-talk still reach the
-            // terminal (e.g. "L" while holding Shift+K).
-            held_bindings.iter().any(|held| {
-                binding_text_matches(held.key, text)
-                    // A Shift-modified chord's keycap emits a layout-dependent
-                    // glyph (Shift+1 -> "!", Shift+Comma -> "<") the unshifted
-                    // table cannot predict; while such a chord is held, its
-                    // single-character text belongs to it.
-                    || (held.modifiers.shift() && text.chars().count() == 1)
-            })
-        }
+        // Direct glyphs and modifier-drift repeats can emit Text without an
+        // adjacent shifted key event. Layout-dependent shifted glyphs are
+        // handled by the event-correlation flag armed above.
+        Event::Text(text) => held_bindings.iter().any(|held| binding_text_matches(held.key, text)),
         _ => false,
     }
+}
+
+/// Consume a cancel-Escape's press, repeats, and later release. The pending
+/// state is shared across viewport frames so a detached terminal cannot
+/// receive a dangling kitty release event after dictation was cancelled.
+fn swallow_cancel_escape_event(escape_cancelled: bool, escape_release_pending: &mut bool, event: &Event) -> bool {
+    let Event::Key {
+        key: Key::Escape,
+        pressed,
+        ..
+    } = event
+    else {
+        return false;
+    };
+    if escape_cancelled && *pressed {
+        *escape_release_pending = true;
+        return true;
+    }
+    if *escape_release_pending {
+        if !pressed {
+            *escape_release_pending = false;
+        }
+        return true;
+    }
+    false
+}
+
+/// A consumed shifted printable key is followed immediately by its Text
+/// event in egui-winit's event batch. Consume only that adjacent Text; taking
+/// the flag here ensures any intervening event cancels the correlation.
+fn swallow_correlated_shift_text(pending: &mut bool, event: &Event) -> bool {
+    std::mem::take(pending) && matches!(event, Event::Text(_))
+}
+
+fn arm_correlated_shift_text(binding: horizon_core::ShortcutBinding, pending: &mut bool) {
+    if binding.modifiers.shift() && shortcut_key_may_emit_text(binding.key) {
+        *pending = true;
+    }
+}
+
+fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
+    matches!(
+        key,
+        horizon_core::ShortcutKey::Letter(_)
+            | horizon_core::ShortcutKey::Digit(_)
+            | horizon_core::ShortcutKey::Comma
+            | horizon_core::ShortcutKey::Minus
+            | horizon_core::ShortcutKey::Plus
+    )
 }
 
 /// How long a just-captured chord may suppress input while waiting for its
@@ -496,6 +549,13 @@ const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
 /// capture clears on release.
 fn keys_equivalent(a: Key, b: Key) -> bool {
     a == b || matches!((a, b), (Key::Plus, Key::Equals) | (Key::Equals, Key::Plus))
+}
+
+fn egui_key_may_emit_text(key: Key) -> bool {
+    key == Key::Space
+        || key == Key::Quote
+        || (key.symbol_or_name().chars().count() == 1
+            && !matches!(key, Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp))
 }
 
 /// The text a captured key emits alongside its key event (`Key::name()`
@@ -569,11 +629,13 @@ fn primary_selection_routing_active() -> bool {
 #[cfg(test)]
 mod tests {
     use egui::{Event, Key, Modifiers, Vec2};
+    use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
         MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active,
+        swallow_cancel_escape_event, swallow_correlated_shift_text, swallow_speech_hotkey_event,
         wheel_pan_scroll_input,
     };
 
@@ -764,11 +826,124 @@ mod tests {
         assert_eq!(primary_selection_routing_active(), cfg!(target_os = "linux"));
     }
 
+    #[test]
+    fn cancel_escape_swallows_release_in_a_later_batch() {
+        let mut release_pending = false;
+        assert!(swallow_cancel_escape_event(
+            true,
+            &mut release_pending,
+            &key_event(Key::Escape, Some(Key::Escape), true, Modifiers::NONE)
+        ));
+        assert!(release_pending);
+
+        assert!(swallow_cancel_escape_event(
+            false,
+            &mut release_pending,
+            &key_event(Key::Escape, Some(Key::Escape), false, Modifiers::NONE)
+        ));
+        assert!(!release_pending);
+    }
+
+    #[test]
+    fn cancel_escape_press_and_release_clear_pending_in_one_batch() {
+        let mut release_pending = false;
+        for event in [
+            key_event(Key::Escape, Some(Key::Escape), true, Modifiers::NONE),
+            key_event(Key::Escape, Some(Key::Escape), false, Modifiers::NONE),
+        ] {
+            assert!(swallow_cancel_escape_event(true, &mut release_pending, &event));
+        }
+        assert!(!release_pending);
+    }
+
+    #[test]
+    fn shifted_hotkey_text_is_correlated_without_swallowing_other_keys() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::SHIFT, ShortcutKey::Letter('K'));
+        let bindings = [(0, binding)];
+        let mut held = Vec::new();
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::K, Some(Key::K), true, Modifiers::SHIFT),
+            &bindings,
+        ));
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("K".to_string()),
+            &bindings,
+        ));
+        assert!(!speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::L, Some(Key::L), true, Modifiers::SHIFT),
+            &bindings,
+        ));
+        assert!(!speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("L".to_string()),
+            &bindings,
+        ));
+    }
+
+    #[test]
+    fn shifted_digit_hotkey_swallows_its_layout_glyph() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::SHIFT, ShortcutKey::Digit(1));
+        let bindings = [(0, binding)];
+        let mut held = Vec::new();
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::Exclamationmark, Some(Key::Num1), true, Modifiers::SHIFT,),
+            &bindings,
+        ));
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("!".to_string()),
+            &bindings,
+        ));
+    }
+
+    fn speech_event_swallowed(
+        held: &mut Vec<ShortcutBinding>,
+        escape_release_pending: &mut bool,
+        shift_text_pending: &mut bool,
+        event: &Event,
+        bindings: &[(usize, ShortcutBinding)],
+    ) -> bool {
+        swallow_correlated_shift_text(shift_text_pending, event)
+            || swallow_speech_hotkey_event(held, false, escape_release_pending, shift_text_pending, event, bindings)
+    }
+
     fn terminal_event(event: Event) -> TerminalInputEvent {
         TerminalInputEvent {
             event,
             key_without_modifiers_text: None,
             observed_key: None,
+        }
+    }
+
+    fn key_event(key: Key, physical_key: Option<Key>, pressed: bool, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key,
+            pressed,
+            repeat: false,
+            modifiers,
         }
     }
 
