@@ -2,13 +2,113 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
+use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
 use crate::{loading_spinner, theme};
 
 use super::canvas::CanvasGridCache;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HoldHotkeyTransition {
+    start_target: Option<PanelId>,
+    stop: bool,
+    engaged_profile: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpeechActivity {
+    Idle,
+    Recording,
+    Busy,
+}
+
+fn hold_hotkey_transition(
+    profile: usize,
+    pressed: bool,
+    released: bool,
+    engaged_profile: Option<usize>,
+    activity: SpeechActivity,
+    focused_terminal: Option<PanelId>,
+) -> HoldHotkeyTransition {
+    let mut engaged_profile = if activity == SpeechActivity::Recording {
+        engaged_profile
+    } else {
+        None
+    };
+    let start_target = if pressed && engaged_profile.is_none() && activity == SpeechActivity::Idle {
+        focused_terminal
+    } else {
+        None
+    };
+    if start_target.is_some() {
+        engaged_profile = Some(profile);
+    }
+    let stop = released && engaged_profile == Some(profile);
+    if stop {
+        engaged_profile = None;
+    }
+    HoldHotkeyTransition {
+        start_target,
+        stop,
+        engaged_profile,
+    }
+}
+
+fn speech_activity(speech: &super::speech::SpeechSystem) -> SpeechActivity {
+    if speech.recording_target().is_some() {
+        SpeechActivity::Recording
+    } else if speech.is_active() {
+        SpeechActivity::Busy
+    } else {
+        SpeechActivity::Idle
+    }
+}
+
+fn handle_profile_hotkeys(
+    ctx: &Context,
+    speech: &mut super::speech::SpeechSystem,
+    focused_terminal: Option<PanelId>,
+    presses_allowed: bool,
+    mut engaged_profile: Option<usize>,
+) -> Option<usize> {
+    for index in 0..speech.profile_bindings().len() {
+        let (profile, binding) = speech.profile_bindings()[index];
+        let (pressed, released) =
+            ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
+        let pressed = pressed && presses_allowed;
+        match speech.hotkey_mode() {
+            horizon_core::SpeechHotkeyMode::Hold => {
+                let transition = hold_hotkey_transition(
+                    profile,
+                    pressed,
+                    released,
+                    engaged_profile,
+                    speech_activity(speech),
+                    focused_terminal,
+                );
+                if let Some(focused) = transition.start_target {
+                    speech.start(focused, profile);
+                }
+                if transition.stop {
+                    speech.stop();
+                }
+                engaged_profile = transition.engaged_profile;
+            }
+            horizon_core::SpeechHotkeyMode::Toggle => {
+                if pressed {
+                    if speech.recording_target().is_some() {
+                        speech.stop();
+                    } else if let Some(focused) = focused_terminal {
+                        speech.start(focused, profile);
+                    }
+                }
+            }
+        }
+    }
+    engaged_profile
+}
 
 impl HorizonApp {
     #[profiling::function]
@@ -240,54 +340,17 @@ impl HorizonApp {
             || self.search_overlay.is_some()
             || self.renaming_panel.is_some()
             || self.renaming_workspace.is_some();
-        if !capturing_hotkey {
-            // Each profile owns its push-to-talk key: the key IS the
-            // language, so there is no active-profile mode to switch.
-            for index in 0..speech.profile_bindings().len() {
-                let (profile, binding) = speech.profile_bindings()[index];
-                let (pressed, released) =
-                    ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
-                // `speech_held_binding` is owned by the terminal event filter
-                // (`swallow_speech_hotkey_event`), which runs later in frame.
-                let pressed = pressed && !text_surface_active;
-                if pressed && self.speech_engaged_profile.is_none() {
-                    self.speech_engaged_profile = Some(profile);
-                }
-                // A release only counts if this app observed that profile's
-                // chord press: a bare-key release (e.g. typing `k` with a
-                // Ctrl+K binding) must not stop a mic-button recording.
-                let released = released && self.speech_engaged_profile == Some(profile);
-                if released {
-                    self.speech_engaged_profile = None;
-                }
-                match speech.hotkey_mode() {
-                    horizon_core::SpeechHotkeyMode::Hold => {
-                        if pressed
-                            && speech.recording_target().is_none()
-                            && let Some(focused) = focused_terminal
-                        {
-                            speech.start(focused, profile);
-                        }
-                        if released {
-                            // No-op unless a recording is active.
-                            speech.stop();
-                        }
-                    }
-                    horizon_core::SpeechHotkeyMode::Toggle => {
-                        if pressed {
-                            if speech.recording_target().is_some() {
-                                speech.stop();
-                            } else if let Some(focused) = focused_terminal {
-                                speech.start(focused, profile);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        self.speech_engaged_profile = handle_profile_hotkeys(
+            ctx,
+            speech,
+            focused_terminal,
+            !capturing_hotkey && !text_surface_active,
+            self.speech_engaged_profile,
+        );
 
         if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             speech.cancel();
+            self.speech_engaged_profile = None;
             // Consume the Escape: fullscreen exit and the terminal must not
             // also react to a keypress that meant "cancel dictation".
             self.speech_escape_cancelled = true;
@@ -312,6 +375,12 @@ impl HorizonApp {
         }
 
         let events = speech.poll();
+        // Capture/worker failures can end Recording during poll(), after the
+        // transition above ran. Drop ownership before rendering can start a
+        // new mic-button recording in this same frame.
+        if speech.recording_target().is_none() {
+            self.speech_engaged_profile = None;
+        }
         self.inject_speech_events(events);
     }
 
@@ -672,9 +741,9 @@ mod tests {
 
     use eframe::CreationContext;
     use egui::Context;
-    use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+    use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
 
-    use super::HorizonApp;
+    use super::{HoldHotkeyTransition, HorizonApp, SpeechActivity, hold_hotkey_transition};
     use crate::input;
 
     fn test_app() -> HorizonApp {
@@ -712,5 +781,59 @@ mod tests {
         app.finalize_frame(&ctx, false, 0, 0);
 
         assert!(repaint_requests.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
+        let focused = PanelId(7);
+        let starts = HoldHotkeyTransition {
+            start_target: Some(focused),
+            stop: false,
+            engaged_profile: Some(1),
+        };
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, Some(focused)),
+            starts
+        );
+
+        let ignored = HoldHotkeyTransition {
+            start_target: None,
+            stop: false,
+            engaged_profile: None,
+        };
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Recording, Some(focused)),
+            ignored
+        );
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, None),
+            ignored
+        );
+    }
+
+    #[test]
+    fn hold_hotkey_same_batch_tap_stops_only_its_own_recording() {
+        let focused = PanelId(7);
+        assert_eq!(
+            hold_hotkey_transition(1, true, true, None, SpeechActivity::Idle, Some(focused)),
+            HoldHotkeyTransition {
+                start_target: Some(focused),
+                stop: true,
+                engaged_profile: None,
+            }
+        );
+
+        let mic_button_press = hold_hotkey_transition(1, true, false, None, SpeechActivity::Recording, Some(focused));
+        assert_eq!(mic_button_press.engaged_profile, None);
+        assert!(!hold_hotkey_transition(1, false, true, None, SpeechActivity::Recording, Some(focused)).stop);
+        assert!(hold_hotkey_transition(1, false, true, Some(1), SpeechActivity::Recording, Some(focused)).stop);
+        assert!(!hold_hotkey_transition(2, false, true, Some(1), SpeechActivity::Recording, Some(focused)).stop);
+    }
+
+    #[test]
+    fn hold_hotkey_drops_stale_ownership_after_recording_ends() {
+        let transition = hold_hotkey_transition(1, false, true, Some(1), SpeechActivity::Busy, Some(PanelId(7)));
+        assert_eq!(transition.engaged_profile, None);
+        assert!(!transition.stop);
     }
 }

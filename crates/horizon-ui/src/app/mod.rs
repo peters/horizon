@@ -169,9 +169,9 @@ pub struct HorizonApp {
     /// events, repeats, and releases out of the terminal input stream —
     /// multiple profile keys can be down simultaneously).
     speech_held_bindings: Vec<horizon_core::ShortcutBinding>,
-    /// The profile whose chord press was observed by the hotkey handler;
-    /// releases only stop a recording when set (a bare-key release must not
-    /// stop a mic-button recording).
+    /// The profile whose chord press started the active hold-mode recording;
+    /// releases only stop a recording when set (a no-op press must not stop a
+    /// mic-button recording).
     speech_engaged_profile: Option<usize>,
     /// Escape was consumed to cancel a recording this frame.
     speech_escape_cancelled: bool,

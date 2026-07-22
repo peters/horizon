@@ -326,6 +326,12 @@ impl HorizonApp {
             if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
                 continue;
             }
+            if capturing {
+                // Rebind owns the input, but a release from a hold that began
+                // before capture still has to retire the terminal filter's
+                // held entry before the event is consumed below.
+                clear_released_speech_hotkeys(&mut self.speech_held_bindings, event);
+            }
             if capturing
                 && matches!(
                     event,
@@ -471,15 +477,8 @@ fn swallow_speech_hotkey_event(
                 } else {
                     false
                 }
-            } else if held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held)) {
-                // A physical-key release clears EVERY held chord on that key
-                // (distinct chords like Ctrl+K and Alt+K can both be held via
-                // modifier drift), so no entry is left stuck to swallow that
-                // key forever. Chords on other keys stay held.
-                held_bindings.retain(|held| !event_uses_shortcut_key(event, *held));
-                true
             } else {
-                false
+                clear_released_speech_hotkeys(held_bindings, event)
             }
         }
         // Direct glyphs and modifier-drift repeats can emit Text without an
@@ -488,6 +487,20 @@ fn swallow_speech_hotkey_event(
         Event::Text(text) => held_bindings.iter().any(|held| binding_text_matches(held.key, text)),
         _ => false,
     }
+}
+
+/// A physical-key release clears every held chord on that key. Distinct
+/// chords such as Ctrl+K and Alt+K can both be present after modifier drift;
+/// clearing all matches prevents a permanent terminal-input swallow.
+fn clear_released_speech_hotkeys(held_bindings: &mut Vec<horizon_core::ShortcutBinding>, event: &Event) -> bool {
+    let Event::Key { pressed: false, .. } = event else {
+        return false;
+    };
+    let matched = held_bindings.iter().any(|held| event_uses_shortcut_key(event, *held));
+    if matched {
+        held_bindings.retain(|held| !event_uses_shortcut_key(event, *held));
+    }
+    matched
 }
 
 /// Consume a cancel-Escape's press, repeats, and later release. The pending
@@ -634,9 +647,9 @@ mod tests {
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active,
-        swallow_cancel_escape_event, swallow_correlated_shift_text, swallow_speech_hotkey_event,
-        wheel_pan_scroll_input,
+        MiddlePanMode, MiddlePanTarget, clear_released_speech_hotkeys, next_middle_pan_active,
+        primary_selection_routing_active, swallow_cancel_escape_event, swallow_correlated_shift_text,
+        swallow_speech_hotkey_event, wheel_pan_scroll_input,
     };
 
     #[test]
@@ -916,6 +929,17 @@ mod tests {
             &Event::Text("!".to_string()),
             &bindings,
         ));
+    }
+
+    #[test]
+    fn rebind_capture_release_clears_held_speech_filter() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let other = ShortcutBinding::new(ShortcutModifiers::ALT, ShortcutKey::Letter('L'));
+        let mut held = vec![binding, other];
+        let release = key_event(Key::K, Some(Key::K), false, Modifiers::NONE);
+
+        assert!(clear_released_speech_hotkeys(&mut held, &release));
+        assert_eq!(held, vec![other]);
     }
 
     fn speech_event_swallowed(

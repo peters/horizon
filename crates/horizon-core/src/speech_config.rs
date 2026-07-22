@@ -213,9 +213,8 @@ fn validate_speech_binding(
             "{label} hotkey `{hotkey}` cannot use Escape (reserved for cancelling dictation)"
         )));
     }
-    // A bare printable key (letter/digit/Enter/Tab/punctuation) as a hold
-    // hotkey would hijack that key in every terminal. Require a modifier, or
-    // a non-typing key (function keys, arrows).
+    // A bare typing or navigation key as a hold hotkey would hijack that key
+    // in every terminal. Require a modifier, or a function key.
     if binding.modifiers == crate::shortcuts::ShortcutModifiers::NONE
         && matches!(
             binding.key,
@@ -226,10 +225,14 @@ fn validate_speech_binding(
                 | ShortcutKey::Comma
                 | ShortcutKey::Minus
                 | ShortcutKey::Plus
+                | ShortcutKey::ArrowDown
+                | ShortcutKey::ArrowLeft
+                | ShortcutKey::ArrowRight
+                | ShortcutKey::ArrowUp
         )
     {
         return Err(Error::Config(format!(
-            "{label} hotkey `{hotkey}` needs a modifier (e.g. Ctrl+{hotkey}); a bare key would hijack terminal typing"
+            "{label} hotkey `{hotkey}` needs a modifier (e.g. Ctrl+{hotkey}); a bare key would hijack terminal input"
         )));
     }
     // egui-winit translates the primary modifier + C/X/V into synthetic
@@ -406,16 +409,29 @@ features:
         assert_eq!(speech.resolved_profiles()[0].name, "English");
     }
     #[test]
-    fn validate_rejects_bare_printable_hotkeys() {
+    fn validate_rejects_bare_terminal_hotkeys() {
         let mut config = Config::default();
         config.features.speech.enabled = true;
         config.features.speech.model = "/m.gguf".to_string();
-        for bare in ["K", "5", "Enter", "Tab", "Comma"] {
+        for bare in [
+            "K",
+            "5",
+            "Enter",
+            "Tab",
+            "Comma",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "ArrowUp",
+        ] {
             config.features.speech.hotkey = bare.to_string();
             let error = config.validate().expect_err("bare key must be rejected");
             assert!(error.to_string().contains("needs a modifier"), "{bare}: {error}");
         }
-        // Function keys are fine bare (they never type into a terminal).
+        config.features.speech.hotkey = "Ctrl+Alt+ArrowUp".to_string();
+        config.validate().expect("modified arrow passes");
+
+        // Bare function keys remain available as intentional global controls.
         config.features.speech.hotkey = "F9".to_string();
         config.validate().expect("bare function key passes");
     }
