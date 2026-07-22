@@ -55,13 +55,10 @@ fn home_dir() -> PathBuf {
 /// path-taking config fields (workspace `cwd`, ssh `identity_file`) do.
 #[must_use]
 pub fn expand_tilde(input: &str) -> PathBuf {
-    if let Some(rest) = input.strip_prefix('~') {
-        let home = home_dir();
-        if rest.is_empty() {
-            home
-        } else {
-            home.join(rest.strip_prefix('/').unwrap_or(rest))
-        }
+    if input == "~" {
+        home_dir()
+    } else if let Some(rest) = input.strip_prefix("~/") {
+        home_dir().join(rest)
     } else {
         PathBuf::from(input)
     }
@@ -280,6 +277,8 @@ mod tests {
         assert_eq!(expand_tilde("~"), home);
         assert_eq!(expand_tilde("~/foo"), home.join("foo"));
         assert_eq!(expand_tilde("/etc"), PathBuf::from("/etc"));
+        assert_eq!(expand_tilde("~cache/model.gguf"), PathBuf::from("~cache/model.gguf"));
+        assert_eq!(expand_tilde("~alice/model.gguf"), PathBuf::from("~alice/model.gguf"));
     }
 
     #[test]

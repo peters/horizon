@@ -29,7 +29,7 @@ pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
         .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
         .unwrap_or(false);
     let release_pending = ctx
-        .data(|data| data.get_temp::<Option<(egui::Key, bool)>>(egui::Id::new("speech_captured_key")))
+        .data(|data| data.get_temp::<Option<super::settings::PendingCapture>>(egui::Id::new("speech_captured_key")))
         .flatten()
         .is_some();
     capturing || release_pending
@@ -210,7 +210,7 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
-    use super::{event_uses_shortcut_key, press_and_release_in_events, shortcut_pressed};
+    use super::{event_uses_shortcut_key, hotkey_capture_active, press_and_release_in_events, shortcut_pressed};
 
     fn key_event(key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) -> Event {
         Event::Key {
@@ -261,6 +261,26 @@ mod tests {
             &key_event(Key::J, true, false, Modifiers::CTRL),
             binding
         ));
+    }
+
+    #[test]
+    fn pending_captured_key_keeps_hotkey_capture_active() {
+        let ctx = egui::Context::default();
+        assert!(!hotkey_capture_active(&ctx));
+
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("speech_captured_key"),
+                Some(crate::app::settings::PendingCapture {
+                    key: Key::F11,
+                    physical_key: Some(Key::F11),
+                    shifted: false,
+                    armed_at: 1.0,
+                }),
+            );
+        });
+
+        assert!(hotkey_capture_active(&ctx));
     }
 
     #[test]
