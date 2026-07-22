@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread;
 
 use horizon_core::{PanelId, SpeechBackend, SpeechProfile, SpeechTask};
@@ -16,11 +16,13 @@ use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Sess
 /// model), keeping two multi-GB models from loading concurrently.
 static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
 
-/// Models already loaded in this process, keyed by resolved path + backend.
-/// `Model` is a cheap `Arc` handle and `session()` takes `&self`, so profiles
-/// pointing at the same GGUF share one residency instead of loading the file
-/// (and its GPU allocation) once per profile. Guarded by `MODEL_LOAD_LOCK`.
-static LOADED_MODELS: Mutex<Option<HashMap<String, Model>>> = Mutex::new(None);
+/// Models loaded in this process, keyed by resolved path + backend, held
+/// WEAKLY. Profiles pointing at the same GGUF share one residency instead of
+/// loading the file (and its GPU allocation) once per profile, but the cache
+/// never keeps a model alive on its own: the strong handles live in the
+/// workers using it, so switching config to a different model frees the old
+/// one instead of pinning multi-GB allocations for the process lifetime.
+static LOADED_MODELS: Mutex<Option<HashMap<String, Weak<Model>>>> = Mutex::new(None);
 
 pub struct Job {
     pub pcm: Vec<f32>,
@@ -128,12 +130,15 @@ impl Settings {
 
 fn worker_loop(settings: &Settings, cancel: &CancelToken, job_rx: &Receiver<Job>, event_tx: &Sender<WorkerEvent>) {
     let mut session: Option<Session> = None;
+    // Strong handle for this worker: keeps its model resident (and the shared
+    // cache entry upgradable) for as long as the worker lives.
+    let mut model: Option<Arc<Model>> = None;
     while let Ok(job) = job_rx.recv() {
         if cancel.is_cancelled() {
             return;
         }
         let target = job.target;
-        let result = ensure_session(settings, cancel, &mut session).and_then(|loaded_backend| {
+        let result = ensure_session(settings, cancel, &mut session, &mut model).and_then(|loaded_backend| {
             if let Some(backend) = loaded_backend {
                 let _ = event_tx.send(WorkerEvent::ModelLoaded { backend });
             }
@@ -185,6 +190,7 @@ fn ensure_session(
     settings: &Settings,
     cancel: &CancelToken,
     session: &mut Option<Session>,
+    model_slot: &mut Option<Arc<Model>>,
 ) -> Result<Option<String>, String> {
     if session.is_some() {
         return Ok(None);
@@ -202,37 +208,44 @@ fn ensure_session(
     };
     let cache_key = format!("{}|{:?}", settings.model_path, settings.backend);
     let cached = {
-        let guard = LOADED_MODELS.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.as_ref().and_then(|map| map.get(&cache_key).cloned())
+        let mut guard = LOADED_MODELS.lock().unwrap_or_else(PoisonError::into_inner);
+        let map = guard.get_or_insert_with(HashMap::new);
+        // Drop entries whose last strong handle went away with its workers.
+        map.retain(|_, weak| weak.strong_count() > 0);
+        map.get(&cache_key).and_then(Weak::upgrade)
     };
     let model = if let Some(model) = cached {
         model
     } else {
-        let model = Model::load_with(&settings.model_path, &options)
+        let loaded = Model::load_with(&settings.model_path, &options)
             .map_err(|error| format!("failed to load speech model `{}`: {error}", settings.model_path))?;
         if cancel.is_cancelled() {
             // Replaced while loading: drop the model BEFORE releasing the load
             // lock so the waiting replacement never overlaps residence with it.
-            drop(model);
+            drop(loaded);
             return Err("speech worker replaced during model load".to_string());
         }
+        let model = Arc::new(loaded);
         LOADED_MODELS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert_with(HashMap::new)
-            .insert(cache_key, model.clone());
+            .insert(cache_key, Arc::downgrade(&model));
         model
     };
     if cancel.is_cancelled() {
         return Err("speech worker replaced during model load".to_string());
     }
     let backend = model.backend().clone();
-    tracing::info!(model = %settings.model_path, %backend, "speech model loaded");
+    tracing::info!(model = %settings.model_path, %backend, "speech model ready");
     let mut new_session = model
         .session()
         .map_err(|error| format!("failed to create transcription session: {error}"))?;
     new_session.set_cancel_token(cancel);
     *session = Some(new_session);
+    // Retain the strong handle so this worker's model stays resident (and
+    // shareable) until the worker itself goes away.
+    *model_slot = Some(model);
     Ok(Some(backend))
 }
 
