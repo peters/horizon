@@ -92,12 +92,21 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         return changed;
     }
 
+    // The microphone applies to every profile, so it renders in both the
+    // profiles and the flat single-model layout.
+    ui.add_space(6.0);
+    egui::Grid::new("settings_speech_mic_grid")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            changed |= speech_microphone_row(ui, config);
+        });
+
     // With named profiles, the flat single-model editor below would
     // mislead; show one row per profile with a press-to-bind hotkey flow,
     // and defer model/language editing to the YAML tab (which live-previews
     // and validates on save).
     if !config.features.speech.profiles.is_empty() {
-        ui.add_space(6.0);
         egui::Grid::new("settings_speech_profiles_grid")
             .num_columns(2)
             .spacing([12.0, 6.0])
@@ -119,6 +128,10 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         super::dim_label(
             ui,
             "Hotkeys rebind here and apply on save; profile models and languages are edited in the YAML tab (features.speech.profiles).",
+        );
+        super::dim_label(
+            ui,
+            "Push-to-talk presses are paused while this window is open — Rebind… also shows what any key press delivers.",
         );
         return changed;
     }
@@ -168,6 +181,101 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             ui.end_row();
         });
 
+    changed
+}
+
+/// Cached result of the background input-device enumeration.
+#[derive(Clone, Default)]
+enum DeviceListState {
+    #[default]
+    Pending,
+    Loaded(std::sync::Arc<Vec<String>>),
+}
+
+const DEVICE_LIST_ID: &str = "speech_input_devices";
+
+/// The input devices the host reports, enumerated once on a background
+/// thread (cpal enumeration can block) and cached in egui memory. `None`
+/// while the scan is still running.
+fn input_device_list(ui: &Ui) -> Option<std::sync::Arc<Vec<String>>> {
+    let id = egui::Id::new(DEVICE_LIST_ID);
+    let state: Option<DeviceListState> = ui.data(|data| data.get_temp(id));
+    match state {
+        Some(DeviceListState::Loaded(devices)) => Some(devices),
+        Some(DeviceListState::Pending) => None,
+        None => {
+            ui.data_mut(|data| data.insert_temp(id, DeviceListState::Pending));
+            let ctx = ui.ctx().clone();
+            let spawned = std::thread::Builder::new()
+                .name("speech-device-list".to_string())
+                .spawn(move || {
+                    let devices = std::sync::Arc::new(crate::app::speech::list_input_devices());
+                    ctx.data_mut(|data| data.insert_temp(id, DeviceListState::Loaded(devices)));
+                    ctx.request_repaint();
+                });
+            if let Err(error) = spawned {
+                tracing::warn!(%error, "failed to spawn audio device enumeration thread");
+                let empty = DeviceListState::Loaded(std::sync::Arc::new(Vec::new()));
+                ui.data_mut(|data| data.insert_temp(id, empty));
+            }
+            None
+        }
+    }
+}
+
+/// Global microphone picker. Dictating into one microphone while capture
+/// reads another (e.g. a webcam mic as system default) yields empty
+/// transcripts that present as broken hotkeys, so the device is explicit.
+fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    ui.label(egui::RichText::new("Microphone").color(theme::FG_SOFT()).size(12.0));
+    ui.horizontal(|ui| {
+        let devices = input_device_list(ui);
+        let current = config.features.speech.input_device.trim().to_string();
+        let selected = if current.is_empty() {
+            "System default".to_string()
+        } else {
+            current.clone()
+        };
+        egui::ComboBox::from_id_salt("settings_speech_input_device")
+            .width(240.0)
+            .selected_text(egui::RichText::new(selected).size(12.0))
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_empty(), "System default").clicked() && !current.is_empty() {
+                    config.features.speech.input_device.clear();
+                    changed = true;
+                }
+                match devices.as_deref().map(Vec::as_slice) {
+                    None => super::dim_label(ui, "scanning audio devices…"),
+                    Some([]) => super::dim_label(ui, "no input devices reported"),
+                    Some(device_names) => {
+                        let mut current_listed = current.is_empty();
+                        for device in device_names {
+                            let is_current = *device == current;
+                            current_listed |= is_current;
+                            if ui.selectable_label(is_current, device).clicked() && !is_current {
+                                config.features.speech.input_device.clone_from(device);
+                                changed = true;
+                            }
+                        }
+                        if !current_listed {
+                            super::dim_label(
+                                ui,
+                                &format!("`{current}` not found — capture falls back to system default"),
+                            );
+                        }
+                    }
+                }
+            });
+        let refresh = ui
+            .button(egui::RichText::new("↻").size(12.0))
+            .on_hover_text("Re-scan audio input devices");
+        if refresh.clicked() {
+            ui.data_mut(|data| data.remove_temp::<DeviceListState>(egui::Id::new(DEVICE_LIST_ID)));
+            ui.ctx().request_repaint();
+        }
+    });
+    ui.end_row();
     changed
 }
 
@@ -468,7 +576,7 @@ fn render_hotkey_binder_slot(ui: &mut Ui, config: &mut Config, slot: Option<usiz
                         // is lifted first — only the physical key is stable.
                         arm_pending_capture(ui, key, physical_key, modifiers.shift, None);
                         if key != egui::Key::Escape {
-                            match captured_binding_string(key, modifiers, config, slot) {
+                            match captured_binding_string(key, physical_key, modifiers, config, slot) {
                                 Ok(binding) => {
                                     set_slot_hotkey(config, slot, binding);
                                     ui.data_mut(|data| {
@@ -573,16 +681,32 @@ fn hotkey_capture_attempt(events: &[egui::Event]) -> Option<HotkeyCaptureAttempt
     })
 }
 
+/// Whether an egui key is a function key (`F1`–`F35`).
+fn is_function_key(key: egui::Key) -> bool {
+    let name = key.name();
+    name.len() >= 2 && name.starts_with('F') && name[1..].chars().all(|c| c.is_ascii_digit())
+}
+
 /// Build and validate a shortcut string from a captured key event. Rejects
 /// unsupported keys, malformed chords, overlaps with global shortcuts, and
 /// overlaps with other profiles' hotkeys (`slot` names the profile being
 /// rebound so its own current key is not a conflict; `None` = flat editor).
 fn captured_binding_string(
     key: egui::Key,
+    physical_key: Option<egui::Key>,
     modifiers: egui::Modifiers,
     config: &Config,
     slot: Option<usize>,
 ) -> Result<String, String> {
+    // A physically pressed F-key whose logical key was mangled (input-method
+    // bridge, remapped layout) must still bind as that F-key — the mirror of
+    // `key_matches`, which matches function bindings by physical key too.
+    // Without this, the exact keys most likely to need the binder-as-probe
+    // flow would be the ones it cannot bind.
+    let key = match physical_key {
+        Some(physical) if is_function_key(physical) && !is_function_key(key) => physical,
+        _ => key,
+    };
     let mut parts: Vec<&str> = Vec::new();
     // `Ctrl` is the platform-primary token (Command on macOS). On macOS the
     // physical Control key is distinct and serializes as `Control`, so a
@@ -816,13 +940,33 @@ mod tests {
     #[test]
     fn bare_keys_are_rejected_but_function_keys_are_allowed() {
         let config = Config::default();
-        let bare = captured_binding_string(Key::K, Modifiers::NONE, &config, None)
+        let bare = captured_binding_string(Key::K, None, Modifiers::NONE, &config, None)
             .expect_err("a bare letter must be rejected");
         assert!(bare.contains("needs a modifier"), "{bare}");
 
-        let function_key = captured_binding_string(Key::F9, Modifiers::NONE, &config, None)
+        let function_key = captured_binding_string(Key::F9, None, Modifiers::NONE, &config, None)
             .expect("a bare function key is a valid push-to-talk hotkey");
         assert_eq!(function_key, "F9");
+    }
+
+    #[test]
+    fn capture_binds_the_physical_function_key_when_the_logical_key_is_mangled() {
+        let config = Config::default();
+        // An input-method bridge can deliver an F-key press whose logical
+        // key is something else entirely; the keycap must still bind (the
+        // mirror of `key_matches`, which matches F-keys physically too).
+        let mangled = captured_binding_string(Key::K, Some(Key::F1), Modifiers::NONE, &config, None)
+            .expect("physical F1 must bind despite a mangled logical key");
+        assert_eq!(mangled, "F1");
+        // A logical F-key wins over its own physical position…
+        let logical =
+            captured_binding_string(Key::F2, Some(Key::F2), Modifiers::NONE, &config, None).expect("plain F2 binds");
+        assert_eq!(logical, "F2");
+        // …and a remapped layout that produces a logical F-key from a
+        // non-F physical key still binds the logical key.
+        let remapped = captured_binding_string(Key::F5, Some(Key::K), Modifiers::NONE, &config, None)
+            .expect("logical F5 binds regardless of physical position");
+        assert_eq!(remapped, "F5");
     }
 
     fn profiles_config() -> Config {
@@ -849,14 +993,16 @@ mod tests {
     fn captured_binding_rejects_other_profiles_hotkey_but_not_its_own() {
         let config = profiles_config();
         // Rebinding profile 1 to profile 0's key must be refused…
-        let error = captured_binding_string(Key::F1, Modifiers::NONE, &config, Some(1))
+        let error = captured_binding_string(Key::F1, None, Modifiers::NONE, &config, Some(1))
             .expect_err("another profile's key must be rejected");
         assert!(error.contains("Norsk"), "{error}");
         // …while re-capturing its own current key is not a conflict.
-        let own = captured_binding_string(Key::F2, Modifiers::NONE, &config, Some(1)).expect("own key is no conflict");
+        let own =
+            captured_binding_string(Key::F2, None, Modifiers::NONE, &config, Some(1)).expect("own key is no conflict");
         assert_eq!(own, "F2");
         // A fresh key is accepted.
-        let fresh = captured_binding_string(Key::F3, Modifiers::NONE, &config, Some(1)).expect("unused key passes");
+        let fresh =
+            captured_binding_string(Key::F3, None, Modifiers::NONE, &config, Some(1)).expect("unused key passes");
         assert_eq!(fresh, "F3");
     }
 

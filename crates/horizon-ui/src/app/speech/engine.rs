@@ -10,12 +10,21 @@ use std::sync::mpsc::TryRecvError;
 
 use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
-use super::capture::{CaptureCmd, CaptureHandle, CapturePoll};
+use super::capture::{CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio};
 use super::worker::{Job, WorkerEvent, WorkerHandle};
 use super::{MicState, SpeechEvent};
 
 /// Recordings shorter than this are dropped as accidental taps.
 const MIN_PCM_SAMPLES: usize = 4_000; // 0.25 s at 16 kHz
+
+/// Duration of a 16 kHz mono sample count, for user-facing messages.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "sample counts are far below f32 precision loss"
+)]
+fn seconds_of(samples: usize) -> f32 {
+    samples as f32 / super::capture::TARGET_SAMPLE_RATE as f32
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum State {
@@ -61,6 +70,9 @@ pub struct SpeechSystem {
     active_backend: Option<String>,
     /// Profile used by the mic button (the hotkeys address theirs directly).
     last_used: usize,
+    /// Device name and duration of the most recently submitted recording,
+    /// so an empty transcription can name the microphone it came from.
+    last_capture: Option<(String, f32)>,
 }
 
 impl SpeechSystem {
@@ -70,7 +82,11 @@ impl SpeechSystem {
         if !config.enabled {
             return None;
         }
-        let capture = match CaptureHandle::spawn() {
+        let input_device = match config.input_device.trim() {
+            "" => None,
+            device => Some(device.to_string()),
+        };
+        let capture = match CaptureHandle::spawn(input_device) {
             Ok(capture) => capture,
             Err(error) => {
                 tracing::error!(%error, "failed to start speech capture thread; speech input disabled");
@@ -117,6 +133,7 @@ impl SpeechSystem {
             generation: 0,
             active_backend: None,
             last_used: 0,
+            last_capture: None,
         })
     }
 
@@ -281,9 +298,14 @@ impl SpeechSystem {
         }
     }
 
-    fn handle_capture_result(&mut self, generation: u64, pcm: Result<Vec<f32>, String>, events: &mut Vec<SpeechEvent>) {
+    fn handle_capture_result(
+        &mut self,
+        generation: u64,
+        pcm: Result<CapturedAudio, String>,
+        events: &mut Vec<SpeechEvent>,
+    ) {
         match pcm {
-            Ok(pcm) => self.submit_captured_audio(generation, pcm, events),
+            Ok(audio) => self.submit_captured_audio(generation, audio, events),
             Err(message) => {
                 // Once Transcribing, the worker owns the job and a late
                 // capture stream error is unrelated to the active run.
@@ -303,7 +325,8 @@ impl SpeechSystem {
         }
     }
 
-    fn submit_captured_audio(&mut self, generation: u64, pcm: Vec<f32>, events: &mut Vec<SpeechEvent>) {
+    fn submit_captured_audio(&mut self, generation: u64, audio: CapturedAudio, events: &mut Vec<SpeechEvent>) {
+        let CapturedAudio { samples: pcm, device } = audio;
         // AwaitingPcm is the normal stop path; Recording means capture
         // auto-finalized at the length cap without receiving Stop.
         let pending = match self.state {
@@ -313,15 +336,24 @@ impl SpeechSystem {
         let Some((target, profile)) = pending else {
             return;
         };
+        let seconds = seconds_of(pcm.len());
         if pcm.len() < MIN_PCM_SAMPLES {
-            tracing::debug!(samples = pcm.len(), "speech recording too short; dropped");
+            // An accidental tap must not vanish without a trace: in hold
+            // mode "press and let go" is the natural first thing to try,
+            // and silence here reads as dead hotkeys.
+            tracing::info!(samples = pcm.len(), device = %device, "speech recording too short; dropped");
             self.state = State::Idle;
+            events.push(SpeechEvent::Notice(format!(
+                "Recording too short ({seconds:.1} s) — keep the key held down while speaking, then release."
+            )));
             return;
         }
         let Some(runtime) = self.profiles.get(profile) else {
             self.state = State::Idle;
             return;
         };
+        tracing::info!(seconds, device = %device, profile = %runtime.label, "speech recording submitted");
+        self.last_capture = Some((device, seconds));
         match runtime.worker.submit(Job {
             pcm,
             target,
@@ -380,7 +412,18 @@ impl SpeechSystem {
                 if matches!(self.state, State::Transcribing { profile: p, target: t, generation: g } if p == profile && t == target && g == generation)
                 {
                     self.state = State::Idle;
-                    if !text.is_empty() {
+                    if text.is_empty() {
+                        // Nothing will be injected; say so, and name the
+                        // microphone — "no speech" from a mic the user was
+                        // not speaking into is a configuration bug, not a
+                        // transcription result.
+                        let source = self.last_capture.take().map_or_else(String::new, |(device, seconds)| {
+                            format!(" in {seconds:.1} s from `{device}`")
+                        });
+                        events.push(SpeechEvent::Notice(format!(
+                            "No speech detected{source}. If that is the wrong microphone, pick one under Settings → Speech Input."
+                        )));
+                    } else {
                         events.push(SpeechEvent::Text { target, text });
                     }
                 } else {
@@ -409,7 +452,7 @@ impl SpeechSystem {
 #[cfg(test)]
 pub(in crate::app) struct TestSpeechChannels {
     capture_cmds: std::sync::mpsc::Receiver<CaptureCmd>,
-    _pcm: std::sync::mpsc::Sender<(u64, Result<Vec<f32>, String>)>,
+    _pcm: std::sync::mpsc::Sender<(u64, Result<CapturedAudio, String>)>,
     _jobs: Vec<std::sync::mpsc::Receiver<Job>>,
     _events: Vec<std::sync::mpsc::Sender<WorkerEvent>>,
 }
@@ -459,6 +502,7 @@ impl SpeechSystem {
                 generation: 0,
                 active_backend: None,
                 last_used: 0,
+                last_capture: None,
             },
             TestSpeechChannels {
                 capture_cmds: capture_cmd_rx,

@@ -2,17 +2,24 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel, sync_channel};
 
 use horizon_core::{PanelId, SpeechHotkeyMode};
 
-use super::super::capture::{CaptureCmd, CaptureHandle};
+use super::super::capture::{CaptureCmd, CaptureHandle, CapturedAudio};
 use super::super::worker::{Job, WorkerEvent, WorkerHandle};
 use super::{MIN_PCM_SAMPLES, ProfileRuntime, SpeechEvent, SpeechSystem, State};
 
 struct Harness {
     capture_cmd_rx: Receiver<CaptureCmd>,
-    pcm_tx: Sender<(u64, Result<Vec<f32>, String>)>,
+    pcm_tx: Sender<(u64, Result<CapturedAudio, String>)>,
     job_rx: Receiver<Job>,
     worker_event_tx: Sender<WorkerEvent>,
     _other_job_rx: Receiver<Job>,
     _other_worker_event_tx: Sender<WorkerEvent>,
+}
+
+fn captured(samples: Vec<f32>) -> CapturedAudio {
+    CapturedAudio {
+        samples,
+        device: "test-mic".to_string(),
+    }
 }
 
 fn test_system() -> (SpeechSystem, Harness) {
@@ -45,6 +52,7 @@ fn test_system() -> (SpeechSystem, Harness) {
         generation: 0,
         active_backend: None,
         last_used: 0,
+        last_capture: None,
     };
     (
         speech,
@@ -81,7 +89,7 @@ fn submit_recording(speech: &mut SpeechSystem, harness: &Harness, target: PanelI
     let generation = start_and_stop(speech, harness, target);
     harness
         .pcm_tx
-        .send((generation, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue PCM");
     assert!(speech.poll().is_empty());
     let job = harness.job_rx.try_recv().expect("worker job");
@@ -105,10 +113,16 @@ fn short_tap_stops_and_returns_to_idle_without_worker_job() {
     let generation = start_and_stop(&mut speech, &harness, PanelId(7));
     harness
         .pcm_tx
-        .send((generation, Ok(vec![0.0; MIN_PCM_SAMPLES - 1])))
+        .send((generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES - 1]))))
         .expect("queue short PCM");
 
-    assert!(speech.poll().is_empty());
+    // The tap is dropped, but not silently: in hold mode "press and let go"
+    // must explain itself or it reads as a dead hotkey.
+    let events = speech.poll();
+    assert!(matches!(
+        events.as_slice(),
+        [SpeechEvent::Notice(message)] if message.contains("too short")
+    ));
     assert_eq!(speech.state, State::Idle);
     assert!(matches!(harness.job_rx.try_recv(), Err(TryRecvError::Empty)));
 }
@@ -276,7 +290,7 @@ fn auto_finalized_pcm_while_recording_is_submitted() {
     ));
     harness
         .pcm_tx
-        .send((generation, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue auto-finalized PCM");
 
     assert!(speech.poll().is_empty());
@@ -419,7 +433,7 @@ fn disconnected_worker_rejects_submission_without_leaving_busy_state() {
     drop(harness.job_rx);
     harness
         .pcm_tx
-        .send((generation, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue PCM");
 
     let events = speech.poll();
@@ -439,7 +453,7 @@ fn full_worker_queue_is_bounded_and_returns_to_idle() {
     let first_generation = start_and_stop(&mut speech, &harness, target);
     harness
         .pcm_tx
-        .send((first_generation, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((first_generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue first PCM");
     assert!(speech.poll().is_empty());
     assert!(matches!(speech.state, State::Transcribing { .. }));
@@ -448,7 +462,7 @@ fn full_worker_queue_is_bounded_and_returns_to_idle() {
     let second_generation = start_and_stop(&mut speech, &harness, target);
     harness
         .pcm_tx
-        .send((second_generation, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((second_generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue second PCM");
 
     let events = speech.poll();
@@ -483,7 +497,7 @@ fn cancelled_capture_generation_is_ignored_after_restart() {
     ));
     harness
         .pcm_tx
-        .send((1, Ok(vec![0.0; MIN_PCM_SAMPLES])))
+        .send((1, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue stale PCM");
     assert!(speech.poll().is_empty());
     assert_eq!(speech.state, State::Recording { target, profile: 0 });

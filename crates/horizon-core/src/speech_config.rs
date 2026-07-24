@@ -26,6 +26,12 @@ pub struct SpeechConfig {
     /// translate to English only.
     pub target_language: String,
     pub backend: SpeechBackend,
+    /// Microphone to record from, matched case-insensitively against the
+    /// names the audio host reports (exact match first, then substring, so
+    /// `NT-USB` finds `RØDE NT-USB+ Mono`). Empty uses the system default
+    /// input device; a configured name that matches nothing falls back to
+    /// the system default with a warning.
+    pub input_device: String,
     /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
     pub hotkey: String,
     pub hotkey_mode: SpeechHotkeyMode,
@@ -44,6 +50,7 @@ impl Default for SpeechConfig {
             task: SpeechTask::Transcribe,
             target_language: "en".to_string(),
             backend: SpeechBackend::Auto,
+            input_device: String::new(),
             hotkey: "F9".to_string(),
             hotkey_mode: SpeechHotkeyMode::Hold,
             profiles: Vec::new(),

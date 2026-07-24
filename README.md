@@ -335,6 +335,7 @@ features:
     language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
     task: transcribe     # translate = speak any language, insert English text
     backend: auto        # auto | cpu | cuda | vulkan | metal
+    input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
 ```
@@ -343,7 +344,9 @@ The push-to-talk hotkey listens in the main window (it targets the focused panel
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
 
-Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
+Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
+
+Dictation outcomes that would otherwise be invisible are surfaced as a transient message: a tap too short to transcribe, a recording in which no speech was detected (named with the microphone it came from), a push-to-talk press while the previous dictation is still processing, and speech errors.
 
 ### Speech profiles: one key per language
 

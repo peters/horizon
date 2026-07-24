@@ -30,6 +30,10 @@ pub enum SpeechEvent {
         target: PanelId,
         text: String,
     },
+    /// A dictation attempt ended without text (too short, nothing heard,
+    /// press ignored). Shown transiently so a silent outcome is never
+    /// mistaken for dead hotkeys.
+    Notice(String),
     Error(String),
 }
 
@@ -51,4 +55,19 @@ pub use stub::SpeechSystem;
 #[must_use]
 pub const fn built_with_speech() -> bool {
     cfg!(feature = "speech")
+}
+
+/// Input devices the audio host reports, for the settings microphone
+/// picker. Enumeration can block — keep it off the UI thread. Empty in
+/// builds without the `speech` feature.
+#[must_use]
+pub fn list_input_devices() -> Vec<String> {
+    #[cfg(feature = "speech")]
+    {
+        capture::list_input_devices()
+    }
+    #[cfg(not(feature = "speech"))]
+    {
+        Vec::new()
+    }
 }

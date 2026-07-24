@@ -36,27 +36,34 @@ pub enum CaptureCmd {
     Cancel,
 }
 
+/// A finished recording: 16 kHz mono samples plus the device that produced
+/// them, so downstream feedback can name the microphone actually used.
+pub struct CapturedAudio {
+    pub samples: Vec<f32>,
+    pub device: String,
+}
+
 pub enum CapturePoll {
-    Item(u64, Result<Vec<f32>, String>),
+    Item(u64, Result<CapturedAudio, String>),
     Empty,
     Disconnected,
 }
 
 pub struct CaptureHandle {
     cmd_tx: Sender<CaptureCmd>,
-    pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
+    pcm_rx: Receiver<(u64, Result<CapturedAudio, String>)>,
     heartbeat: Arc<Mutex<Instant>>,
 }
 
 impl CaptureHandle {
-    pub fn spawn() -> std::io::Result<Self> {
+    pub fn spawn(preferred_device: Option<String>) -> std::io::Result<Self> {
         let (cmd_tx, cmd_rx) = channel();
         let (pcm_tx, pcm_rx) = channel();
         let heartbeat = Arc::new(Mutex::new(Instant::now()));
         let worker_heartbeat = Arc::clone(&heartbeat);
         thread::Builder::new()
             .name("speech-capture".into())
-            .spawn(move || capture_loop(&cmd_rx, &pcm_tx, &worker_heartbeat))?;
+            .spawn(move || capture_loop(&cmd_rx, &pcm_tx, &worker_heartbeat, preferred_device.as_deref()))?;
         Ok(Self {
             cmd_tx,
             pcm_rx,
@@ -89,7 +96,7 @@ impl CaptureHandle {
 impl CaptureHandle {
     pub(super) fn from_test_channels(
         cmd_tx: Sender<CaptureCmd>,
-        pcm_rx: Receiver<(u64, Result<Vec<f32>, String>)>,
+        pcm_rx: Receiver<(u64, Result<CapturedAudio, String>)>,
     ) -> Self {
         Self {
             cmd_tx,
@@ -103,6 +110,7 @@ struct ActiveRecording {
     // Keeps the input stream alive; dropped to stop capture.
     _stream: cpal::Stream,
     generation: u64,
+    device_name: String,
     /// Already downmixed to mono and resampled to 16 kHz.
     samples: Arc<Mutex<Vec<f32>>>,
     resampler: Arc<Mutex<MonoResampler>>,
@@ -281,10 +289,11 @@ fn lock_samples(samples: &Mutex<Vec<f32>>) -> MutexGuard<'_, Vec<f32>> {
 
 /// Stop the callback before flushing its retained resampler tail, then take
 /// the completed PCM buffer out of the shared allocation.
-fn finish_recording(recording: ActiveRecording) -> (u64, Vec<f32>, bool) {
+fn finish_recording(recording: ActiveRecording) -> (u64, CapturedAudio, bool) {
     let ActiveRecording {
         _stream: stream,
         generation,
+        device_name,
         samples,
         resampler,
         overflowed,
@@ -301,13 +310,18 @@ fn finish_recording(recording: ActiveRecording) -> (u64, Vec<f32>, bool) {
             overflowed.store(true, Ordering::Relaxed);
         }
     }
-    (generation, std::mem::take(&mut *pcm), capped)
+    let audio = CapturedAudio {
+        samples: std::mem::take(&mut *pcm),
+        device: device_name,
+    };
+    (generation, audio, capped)
 }
 
 fn capture_loop(
     cmd_rx: &Receiver<CaptureCmd>,
-    pcm_tx: &Sender<(u64, Result<Vec<f32>, String>)>,
+    pcm_tx: &Sender<(u64, Result<CapturedAudio, String>)>,
     heartbeat: &Arc<Mutex<Instant>>,
+    preferred_device: Option<&str>,
 ) {
     let mut active: Option<ActiveRecording> = None;
     loop {
@@ -356,7 +370,7 @@ fn capture_loop(
             CaptureCmd::Start(generation) => {
                 if active.is_none() {
                     *heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
-                    match start_recording(generation, pcm_tx.clone()) {
+                    match start_recording(generation, pcm_tx.clone(), preferred_device) {
                         Ok(recording) => active = Some(recording),
                         Err(error) => {
                             let _ = pcm_tx.send((generation, Err(error)));
@@ -380,14 +394,77 @@ fn capture_loop(
     }
 }
 
+/// Every input device the audio host reports, in host order. Used by the
+/// settings microphone picker; enumeration can block, so callers must keep
+/// it off the UI thread.
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices().map_or_else(
+        |error| {
+            tracing::warn!(%error, "could not enumerate audio input devices");
+            Vec::new()
+        },
+        |devices| {
+            devices
+                .filter_map(|device| Some(device.description().ok()?.name().to_string()))
+                .collect()
+        },
+    )
+}
+
+/// Resolve the configured device name against the host: exact
+/// case-insensitive match first, then substring, then the system default
+/// (with a warning, so a renamed or unplugged microphone is diagnosable).
+fn resolve_input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cpal::Device, String> {
+    let preferred = preferred.map(str::trim).filter(|wanted| !wanted.is_empty());
+    if let Some(wanted) = preferred {
+        let devices: Vec<(String, cpal::Device)> = host.input_devices().map_or_else(
+            |error| {
+                tracing::warn!(%error, "could not enumerate audio input devices");
+                Vec::new()
+            },
+            |devices| {
+                devices
+                    .filter_map(|device| {
+                        let name = device.description().ok()?.name().to_string();
+                        Some((name, device))
+                    })
+                    .collect()
+            },
+        );
+        let wanted_lower = wanted.to_lowercase();
+        let mut exact = None;
+        let mut substring = None;
+        for (name, device) in devices {
+            let name_lower = name.to_lowercase();
+            if name_lower == wanted_lower {
+                exact = Some((name, device));
+                break;
+            }
+            if substring.is_none() && name_lower.contains(&wanted_lower) {
+                substring = Some((name, device));
+            }
+        }
+        if let Some((name, device)) = exact.or(substring) {
+            tracing::info!(configured = wanted, device = %name, "using configured speech input device");
+            return Ok(device);
+        }
+        tracing::warn!(
+            configured = wanted,
+            "configured speech input device not found; using system default"
+        );
+    }
+    host.default_input_device()
+        .ok_or_else(|| "no microphone found (no default input device)".to_string())
+}
+
 fn start_recording(
     generation: u64,
-    pcm_tx: Sender<(u64, Result<Vec<f32>, String>)>,
+    pcm_tx: Sender<(u64, Result<CapturedAudio, String>)>,
+    preferred_device: Option<&str>,
 ) -> Result<ActiveRecording, String> {
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no microphone found (no default input device)".to_string())?;
+    let device = resolve_input_device(&host, preferred_device)?;
     let device_name = device
         .description()
         .map_or_else(|_| "unknown".to_string(), |description| description.name().to_string());
@@ -466,6 +543,7 @@ fn start_recording(
     Ok(ActiveRecording {
         _stream: stream,
         generation,
+        device_name,
         samples,
         resampler,
         overflowed,
@@ -569,7 +647,9 @@ fn usize_to_f32(value: usize) -> f32 {
 mod tests {
     use std::sync::mpsc::channel;
 
-    use super::{CaptureCmd, CaptureHandle, CapturePoll, MonoResampler, TARGET_SAMPLE_RATE, to_mono_16k};
+    use super::{
+        CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE, to_mono_16k,
+    };
 
     fn stream_in_chunks(samples: &[f32], sample_rate: u32, chunk_sizes: &[usize]) -> (usize, Vec<f32>) {
         let mut resampler = MonoResampler::new(sample_rate, 1);
@@ -721,10 +801,14 @@ mod tests {
         let handle = CaptureHandle::from_test_channels(cmd_tx, pcm_rx);
 
         assert!(matches!(handle.try_recv_pcm(), CapturePoll::Empty));
-        pcm_tx.send((4, Ok(vec![0.25]))).expect("test receiver is alive");
+        let audio = CapturedAudio {
+            samples: vec![0.25],
+            device: "test-mic".to_string(),
+        };
+        pcm_tx.send((4, Ok(audio))).expect("test receiver is alive");
         assert!(matches!(
             handle.try_recv_pcm(),
-            CapturePoll::Item(4, Ok(samples)) if samples == [0.25]
+            CapturePoll::Item(4, Ok(audio)) if audio.samples == [0.25] && audio.device == "test-mic"
         ));
         drop(pcm_tx);
         assert!(matches!(handle.try_recv_pcm(), CapturePoll::Disconnected));
@@ -751,7 +835,7 @@ mod tests {
             eprintln!("skipped: HORIZON_SPEECH_TEST_NO_MIC not set");
             return;
         }
-        let handle = CaptureHandle::spawn().expect("spawn capture thread");
+        let handle = CaptureHandle::spawn(None).expect("spawn capture thread");
         assert!(handle.send(CaptureCmd::Start(7)));
         let mut received = None;
         for _ in 0..200 {

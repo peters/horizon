@@ -8,6 +8,7 @@ use super::super::input;
 use crate::{loading_spinner, theme};
 
 use super::canvas::CanvasGridCache;
+use super::speech::SpeechEvent;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -68,18 +69,42 @@ fn speech_activity(speech: &super::speech::SpeechSystem) -> SpeechActivity {
     }
 }
 
+/// Why a matched push-to-talk press could not start a recording. Every
+/// no-op press produces a notice: a press that visibly does nothing is
+/// indistinguishable from a dead hotkey, which is exactly how the silent
+/// variants were reported.
+fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
+    let message = match activity {
+        SpeechActivity::Recording => "Another dictation is already recording — release its key first.",
+        SpeechActivity::Busy => {
+            "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
+        }
+        SpeechActivity::Idle => "Focus a terminal panel, then hold the key to dictate into it.",
+    };
+    SpeechEvent::Notice(message.to_string())
+}
+
 fn handle_profile_hotkeys(
     ctx: &Context,
     speech: &mut super::speech::SpeechSystem,
     focused_terminal: Option<PanelId>,
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
+    events: &mut Vec<SpeechEvent>,
 ) -> Option<usize> {
     for index in 0..speech.profile_bindings().len() {
         let (profile, binding) = speech.profile_bindings()[index];
         let (pressed, released) =
             ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
         let pressed = pressed && presses_allowed;
+        if pressed {
+            tracing::info!(
+                profile,
+                activity = ?speech_activity(speech),
+                terminal_focused = focused_terminal.is_some(),
+                "speech hotkey pressed"
+            );
+        }
         match speech.hotkey_mode() {
             horizon_core::SpeechHotkeyMode::Hold => {
                 let transition = hold_hotkey_transition(
@@ -92,6 +117,8 @@ fn handle_profile_hotkeys(
                 );
                 if let Some(focused) = transition.start_target {
                     speech.start(focused, profile);
+                } else if pressed {
+                    events.push(no_start_notice(speech_activity(speech)));
                 }
                 if transition.stop {
                     speech.stop();
@@ -102,8 +129,13 @@ fn handle_profile_hotkeys(
                 if pressed {
                     if speech.recording_target().is_some() {
                         speech.stop();
+                    } else if speech_activity(speech) != SpeechActivity::Idle {
+                        // `start` below no-ops outside Idle; explain instead.
+                        events.push(no_start_notice(speech_activity(speech)));
                     } else if let Some(focused) = focused_terminal {
                         speech.start(focused, profile);
+                    } else {
+                        events.push(no_start_notice(SpeechActivity::Idle));
                     }
                 }
             }
@@ -344,12 +376,30 @@ impl HorizonApp {
             || self.search_overlay.is_some()
             || self.renaming_panel.is_some()
             || self.renaming_workspace.is_some();
+        let mut events = Vec::new();
+        // A push-to-talk chord pressed while its presses are gated must not
+        // read as a dead hotkey — say why nothing started. The binder's own
+        // capture is exempt: there the press is being recorded, not ignored.
+        if text_surface_active && !capturing_hotkey {
+            let gated_press = ctx.input(|input| {
+                speech
+                    .profile_bindings()
+                    .iter()
+                    .any(|(_, binding)| super::shortcuts::press_and_release_in_events(&input.events, *binding).0)
+            });
+            if gated_press {
+                events.push(super::speech::SpeechEvent::Notice(
+                    "Push-to-talk is paused while settings, search, or a rename field is open.".to_string(),
+                ));
+            }
+        }
         self.speech_engaged_profile = handle_profile_hotkeys(
             ctx,
             speech,
             focused_terminal,
             !capturing_hotkey && !text_surface_active,
             self.speech_engaged_profile,
+            &mut events,
         );
 
         if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -378,7 +428,7 @@ impl HorizonApp {
             }
         }
 
-        let events = speech.poll();
+        events.extend(speech.poll());
         // Capture/worker failures can end Recording during poll(), after the
         // transition above ran. Drop ownership before rendering can start a
         // new mic-button recording in this same frame.
@@ -405,11 +455,56 @@ impl HorizonApp {
                     let bytes = input::paste_bytes(&format!("{text} "), mode, true);
                     panel.write_input(&bytes);
                 }
+                super::speech::SpeechEvent::Notice(message) => {
+                    tracing::info!(%message, "speech notice");
+                    self.show_speech_notice(message, false);
+                }
                 super::speech::SpeechEvent::Error(message) => {
                     tracing::warn!(%message, "speech input error");
+                    self.show_speech_notice(format!("Speech input error: {message}"), true);
                 }
             }
         }
+    }
+
+    pub(super) fn show_speech_notice(&mut self, message: impl Into<String>, error: bool) {
+        self.speech_notice = Some(super::SpeechNotice {
+            message: message.into(),
+            error,
+            shown_at: Instant::now(),
+        });
+    }
+
+    /// Bottom-center transient feedback for dictation outcomes that would
+    /// otherwise be invisible (ignored presses, empty transcripts, errors).
+    pub(super) fn render_speech_notice(&mut self, ctx: &Context) {
+        const NOTICE_TTL: Duration = Duration::from_secs(5);
+        let Some(notice) = &self.speech_notice else {
+            return;
+        };
+        let elapsed = notice.shown_at.elapsed();
+        let Some(remaining) = NOTICE_TTL.checked_sub(elapsed).filter(|left| !left.is_zero()) else {
+            self.speech_notice = None;
+            return;
+        };
+        ctx.request_repaint_after(remaining);
+        let (icon, tint) = if notice.error {
+            ("⚠", theme::PALETTE_YELLOW())
+        } else {
+            ("🎤", theme::FG())
+        };
+        egui::Area::new(egui::Id::new("speech_notice_overlay"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon).color(tint).size(12.0));
+                        ui.label(egui::RichText::new(&notice.message).color(theme::FG()).size(12.0));
+                    });
+                });
+            });
     }
 
     /// Privacy guard: on Wayland and macOS, winit synthesizes no key release
@@ -920,17 +1015,18 @@ mod tests {
         let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1", "F2", "F3"]);
         let target = PanelId(7);
         let mut engaged = None;
+        let mut events = Vec::new();
 
         // A key with no profile binding must not engage anything.
         let _ = ctx.run(frame(vec![press(Key::K)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
         });
         assert_eq!(engaged, None);
         assert_eq!(speech.recording_target(), None);
 
         // F2 engages the second profile and starts capture into the target.
         let _ = ctx.run(frame(vec![press(Key::F2)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
         });
         assert_eq!(engaged, Some(1));
         assert_eq!(speech.recording_target(), Some(target));
@@ -939,11 +1035,14 @@ mod tests {
         // Releasing the engaged key stops the hold (recording ends, the
         // engine moves on to awaiting the captured PCM).
         let _ = ctx.run(frame(vec![release(Key::F2)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
         });
         assert_eq!(engaged, None);
         assert_eq!(speech.recording_target(), None);
         assert!(speech.is_active());
+        // Unbound keys, a clean start, and a clean stop must not produce
+        // ignored-press notices.
+        assert!(events.is_empty());
     }
 
     #[test]

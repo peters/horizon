@@ -159,6 +159,14 @@ impl HeldSpeechBinding {
     }
 }
 
+/// Transient dictation feedback shown bottom-center: outcomes that would
+/// otherwise be invisible (ignored presses, empty transcripts, errors).
+struct SpeechNotice {
+    message: String,
+    error: bool,
+    shown_at: Instant,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -194,6 +202,7 @@ pub struct HorizonApp {
     /// kept out of the terminal stream (kitty release reporting).
     speech_escape_release_pending: bool,
     speech_escape_release_deadline: Option<Instant>,
+    speech_notice: Option<SpeechNotice>,
     /// Whether any Horizon viewport (root or detached) reported focus this
     /// frame; evaluated at end of frame to cancel unattended recordings.
     any_viewport_focused: bool,
@@ -378,6 +387,7 @@ impl HorizonApp {
             speech_escape_cancelled: false,
             speech_escape_release_pending: false,
             speech_escape_release_deadline: None,
+            speech_notice: None,
             any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
@@ -532,6 +542,7 @@ impl eframe::App for HorizonApp {
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
         self.render_active_view(ctx);
+        self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
     }
 
