@@ -146,7 +146,13 @@ fn key_matches(logical_key: Key, physical_key: Option<Key>, shortcut_key: Shortc
             digit_key(digit).is_some_and(|key| logical_key == key || physical_key == Some(key))
         }
         ShortcutKey::Letter(letter) => letter_key(letter).is_some_and(|key| logical_key == key),
-        ShortcutKey::Function(function) => function_key(function).is_some_and(|key| logical_key == key),
+        // Match the physical key as well (as digits above do): X11 input-
+        // method bridges and remapped layouts can deliver an F-key press
+        // whose logical key differs, and a function-key binding should
+        // follow the keycap actually pressed.
+        ShortcutKey::Function(function) => {
+            function_key(function).is_some_and(|key| logical_key == key || physical_key == Some(key))
+        }
     }
 }
 
@@ -294,6 +300,31 @@ mod tests {
         let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
         let bare = [key_event(Key::K, true, false, Modifiers::NONE)];
         assert_eq!(press_and_release_in_events(&bare, binding), (false, false));
+    }
+
+    #[test]
+    fn function_key_matches_by_physical_key_when_logical_differs() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(1));
+        // An input-method bridge or remapped layout can deliver the F1 keycap
+        // with a different logical key; the physical key must still bind.
+        let mangled = [Event::Key {
+            key: Key::OpenBracket,
+            physical_key: Some(Key::F1),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }];
+        assert_eq!(press_and_release_in_events(&mangled, binding), (true, false));
+
+        // A different F-keycap must not match this binding.
+        let other = [Event::Key {
+            key: Key::F2,
+            physical_key: Some(Key::F2),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }];
+        assert_eq!(press_and_release_in_events(&other, binding), (false, false));
     }
 
     #[test]

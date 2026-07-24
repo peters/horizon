@@ -888,6 +888,64 @@ mod tests {
         assert!(app.speech_escape_release_deadline.is_none());
     }
 
+    /// End-to-end press path for profile push-to-talk: a synthetic F-key
+    /// egui event must engage the matching profile, start capture, and stop
+    /// on release. Guards the full parse → match → engine chain that no
+    /// smoke lane could exercise live (the mac runner has no input device).
+    #[cfg(feature = "speech")]
+    #[test]
+    fn f_key_events_drive_profile_hold_dictation_end_to_end() {
+        use egui::{Event, Key, Modifiers, RawInput};
+
+        let press = |key| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let release = |key| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let frame = |events| RawInput {
+            events,
+            ..RawInput::default()
+        };
+
+        let ctx = Context::default();
+        let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1", "F2", "F3"]);
+        let target = PanelId(7);
+        let mut engaged = None;
+
+        // A key with no profile binding must not engage anything.
+        let _ = ctx.run(frame(vec![press(Key::K)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+        });
+        assert_eq!(engaged, None);
+        assert_eq!(speech.recording_target(), None);
+
+        // F2 engages the second profile and starts capture into the target.
+        let _ = ctx.run(frame(vec![press(Key::F2)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+        });
+        assert_eq!(engaged, Some(1));
+        assert_eq!(speech.recording_target(), Some(target));
+        assert!(channels.capture_start_requested());
+
+        // Releasing the engaged key stops the hold (recording ends, the
+        // engine moves on to awaiting the captured PCM).
+        let _ = ctx.run(frame(vec![release(Key::F2)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged);
+        });
+        assert_eq!(engaged, None);
+        assert_eq!(speech.recording_target(), None);
+        assert!(speech.is_active());
+    }
+
     #[test]
     fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
         let focused = PanelId(7);

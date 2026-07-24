@@ -404,5 +404,71 @@ impl SpeechSystem {
     }
 }
 
+/// Keeps a test system's channel peers alive; dropping it disconnects the
+/// capture/worker channels mid-test, which `poll` treats as worker death.
+#[cfg(test)]
+pub(in crate::app) struct TestSpeechChannels {
+    capture_cmds: std::sync::mpsc::Receiver<CaptureCmd>,
+    _pcm: std::sync::mpsc::Sender<(u64, Result<Vec<f32>, String>)>,
+    _jobs: Vec<std::sync::mpsc::Receiver<Job>>,
+    _events: Vec<std::sync::mpsc::Sender<WorkerEvent>>,
+}
+
+#[cfg(test)]
+impl TestSpeechChannels {
+    /// Whether the capture thread was told to start recording.
+    pub(in crate::app) fn capture_start_requested(&self) -> bool {
+        matches!(self.capture_cmds.try_recv(), Ok(CaptureCmd::Start(_)))
+    }
+}
+
+#[cfg(test)]
+impl SpeechSystem {
+    /// A hold-mode system with one profile per hotkey and inert channel-backed
+    /// capture/workers, for app-level input tests outside this module.
+    pub(in crate::app) fn with_test_bindings(hotkeys: &[&str]) -> (Self, TestSpeechChannels) {
+        let (capture_cmd_tx, capture_cmd_rx) = std::sync::mpsc::channel();
+        let (pcm_tx, pcm_rx) = std::sync::mpsc::channel();
+        let capture = CaptureHandle::from_test_channels(capture_cmd_tx, pcm_rx);
+        let mut profiles = Vec::new();
+        let mut jobs = Vec::new();
+        let mut events = Vec::new();
+        for (index, hotkey) in hotkeys.iter().enumerate() {
+            let (job_tx, job_rx) = std::sync::mpsc::sync_channel(1);
+            let (event_tx, event_rx) = std::sync::mpsc::channel();
+            profiles.push(ProfileRuntime {
+                label: format!("profile {}", index + 1),
+                binding: Some(ShortcutBinding::parse(hotkey).expect("test hotkey must parse")),
+                worker: WorkerHandle::from_test_channels(job_tx, event_rx),
+            });
+            jobs.push(job_rx);
+            events.push(event_tx);
+        }
+        let resolved_bindings = profiles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, profile)| profile.binding.map(|binding| (index, binding)))
+            .collect();
+        (
+            Self {
+                capture,
+                profiles,
+                resolved_bindings,
+                state: State::Idle,
+                hotkey_mode: SpeechHotkeyMode::Hold,
+                generation: 0,
+                active_backend: None,
+                last_used: 0,
+            },
+            TestSpeechChannels {
+                capture_cmds: capture_cmd_rx,
+                _pcm: pcm_tx,
+                _jobs: jobs,
+                _events: events,
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests;

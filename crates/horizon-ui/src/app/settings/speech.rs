@@ -93,21 +93,18 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     }
 
     // With named profiles, the flat single-model editor below would
-    // mislead; show the profile summary and defer editing to the YAML tab
-    // (which live-previews and validates on save).
+    // mislead; show one row per profile with a press-to-bind hotkey flow,
+    // and defer model/language editing to the YAML tab (which live-previews
+    // and validates on save).
     if !config.features.speech.profiles.is_empty() {
         ui.add_space(6.0);
         egui::Grid::new("settings_speech_profiles_grid")
             .num_columns(2)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
-                for profile in &config.features.speech.profiles {
-                    let key = if profile.hotkey.trim().is_empty() {
-                        "(mic button)".to_string()
-                    } else {
-                        profile.hotkey.clone()
-                    };
-                    ui.label(egui::RichText::new(key).color(theme::FG()).size(12.0).monospace());
+                for index in 0..config.features.speech.profiles.len() {
+                    changed |= render_hotkey_binder_slot(ui, config, Some(index));
+                    let profile = &config.features.speech.profiles[index];
                     let model_name = std::path::Path::new(&profile.model)
                         .file_name()
                         .map_or_else(|| profile.model.clone(), |name| name.to_string_lossy().into_owned());
@@ -121,7 +118,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             });
         super::dim_label(
             ui,
-            "Speech profiles are edited in the YAML tab (features.speech.profiles).",
+            "Hotkeys rebind here and apply on save; profile models and languages are edited in the YAML tab (features.speech.profiles).",
         );
         return changed;
     }
@@ -379,22 +376,63 @@ fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-/// Current binding label plus a press-to-bind capture flow. Returns whether
-/// the hotkey changed.
+/// Current binding label plus a press-to-bind capture flow for the flat
+/// (single-profile) editor. Returns whether the hotkey changed.
 fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
+    render_hotkey_binder_slot(ui, config, None)
+}
+
+/// The hotkey a binder slot edits: the flat field (`None`) or one profile's.
+fn slot_hotkey(config: &Config, slot: Option<usize>) -> &str {
+    match slot {
+        None => &config.features.speech.hotkey,
+        Some(index) => config
+            .features
+            .speech
+            .profiles
+            .get(index)
+            .map_or("", |profile| profile.hotkey.as_str()),
+    }
+}
+
+fn set_slot_hotkey(config: &mut Config, slot: Option<usize>, hotkey: String) {
+    match slot {
+        None => config.features.speech.hotkey = hotkey,
+        Some(index) => {
+            if let Some(profile) = config.features.speech.profiles.get_mut(index) {
+                profile.hotkey = hotkey;
+            }
+        }
+    }
+}
+
+/// One binding label plus press-to-bind capture flow. `slot` selects the flat
+/// hotkey (`None`) or a profile row; all rows share one capture/error state,
+/// scoped by the armed slot so only the row that was clicked captures.
+fn render_hotkey_binder_slot(ui: &mut Ui, config: &mut Config, slot: Option<usize>) -> bool {
     let capture_id = egui::Id::new("speech_hotkey_capturing");
+    let capture_slot_id = egui::Id::new("speech_hotkey_capture_slot");
     let error_id = egui::Id::new("speech_hotkey_error");
+    let error_slot_id = egui::Id::new("speech_hotkey_error_slot");
     let mut changed = false;
-    let capturing: bool = ui.data(|data| data.get_temp(capture_id)).unwrap_or(false);
+    let capturing_any: bool = ui.data(|data| data.get_temp(capture_id)).unwrap_or(false);
+    let armed_slot: Option<usize> = ui.data(|data| data.get_temp(capture_slot_id)).unwrap_or(None);
+    let capturing = capturing_any && armed_slot == slot;
 
     ui.horizontal(|ui| {
-        let current = config.features.speech.hotkey.trim();
+        let current = slot_hotkey(config, slot).trim().to_string();
         let label = if current.is_empty() {
-            "(none)".to_string()
+            // The first profile without a hotkey is reachable via the mic
+            // button; the flat editor just shows the binding as absent.
+            if slot == Some(0) {
+                "(mic button)".to_string()
+            } else {
+                "(none)".to_string()
+            }
         } else {
             // Render with the platform-primary label so macOS shows `Cmd`.
-            horizon_core::ShortcutBinding::parse(current).map_or_else(
-                |_| current.to_string(),
+            horizon_core::ShortcutBinding::parse(&current).map_or_else(
+                |_| current.clone(),
                 |binding| binding.display_label(primary_shortcut_label()),
             )
         };
@@ -430,14 +468,20 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
                         // is lifted first — only the physical key is stable.
                         arm_pending_capture(ui, key, physical_key, modifiers.shift, None);
                         if key != egui::Key::Escape {
-                            match captured_binding_string(key, modifiers, config) {
+                            match captured_binding_string(key, modifiers, config, slot) {
                                 Ok(binding) => {
-                                    config.features.speech.hotkey = binding;
-                                    ui.data_mut(|data| data.remove_temp::<String>(error_id));
+                                    set_slot_hotkey(config, slot, binding);
+                                    ui.data_mut(|data| {
+                                        data.remove_temp::<String>(error_id);
+                                        data.remove_temp::<Option<usize>>(error_slot_id);
+                                    });
                                     changed = true;
                                 }
                                 Err(message) => {
-                                    ui.data_mut(|data| data.insert_temp(error_id, message));
+                                    ui.data_mut(|data| {
+                                        data.insert_temp(error_id, message);
+                                        data.insert_temp(error_slot_id, slot);
+                                    });
                                 }
                             }
                         }
@@ -448,7 +492,10 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
                         // later. Keep it out of kitty-protocol terminals.
                         let key = clipboard.fallback_key();
                         arm_pending_capture(ui, key, Some(key), false, Some(clipboard));
-                        ui.data_mut(|data| data.insert_temp(error_id, CLIPBOARD_HOTKEY_ERROR.to_string()));
+                        ui.data_mut(|data| {
+                            data.insert_temp(error_id, CLIPBOARD_HOTKEY_ERROR.to_string());
+                            data.insert_temp(error_slot_id, slot);
+                        });
                     }
                 }
             }
@@ -456,18 +503,27 @@ fn render_hotkey_binder(ui: &mut Ui, config: &mut Config) -> bool {
             if ui.button("Rebind…").clicked() {
                 ui.data_mut(|data| {
                     data.insert_temp(capture_id, true);
+                    data.insert_temp(capture_slot_id, slot);
                     // Clear any stale error from a previous attempt.
                     data.remove_temp::<String>(error_id);
+                    data.remove_temp::<Option<usize>>(error_slot_id);
                 });
             }
-            if !current.is_empty() && ui.button("Clear").clicked() {
-                config.features.speech.hotkey = String::new();
+            // Only the first profile may go hotkey-less (mic-button default);
+            // clearing a later profile would make it unreachable, which
+            // validation rejects — so don't offer it.
+            let clearable = slot.is_none_or(|index| index == 0);
+            if clearable && !current.is_empty() && ui.button("Clear").clicked() {
+                set_slot_hotkey(config, slot, String::new());
                 changed = true;
             }
         }
     });
     let error: Option<String> = ui.data(|data| data.get_temp(error_id));
-    if let Some(error) = error {
+    let error_slot: Option<usize> = ui.data(|data| data.get_temp(error_slot_id)).unwrap_or(None);
+    if let Some(error) = error
+        && error_slot == slot
+    {
         ui.end_row();
         ui.label(String::new());
         super::dim_label(ui, &format!("⚠ {error}"));
@@ -518,8 +574,15 @@ fn hotkey_capture_attempt(events: &[egui::Event]) -> Option<HotkeyCaptureAttempt
 }
 
 /// Build and validate a shortcut string from a captured key event. Rejects
-/// unsupported keys, malformed chords, and overlaps with global shortcuts.
-fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &Config) -> Result<String, String> {
+/// unsupported keys, malformed chords, overlaps with global shortcuts, and
+/// overlaps with other profiles' hotkeys (`slot` names the profile being
+/// rebound so its own current key is not a conflict; `None` = flat editor).
+fn captured_binding_string(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    config: &Config,
+    slot: Option<usize>,
+) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
     // `Ctrl` is the platform-primary token (Command on macOS). On macOS the
     // physical Control key is distinct and serializes as `Control`, so a
@@ -554,10 +617,23 @@ fn captured_binding_string(key: egui::Key, modifiers: egui::Modifiers, config: &
     // while the user is binding a key.
     let shortcuts = config.shortcuts.resolve().map_err(|error| error.to_string())?;
     horizon_core::validate_speech_hotkey(&candidate, &shortcuts).map_err(|error| error.to_string())?;
-    // Reject a chord that duplicates another configured profile's hotkey.
-    for profile in &config.features.speech.profiles {
-        if profile.hotkey.trim().eq_ignore_ascii_case(candidate.trim()) {
-            return Err(format!("`{candidate}` is already used by profile `{}`", profile.name));
+    // Reject a chord that overlaps another profile's hotkey (same rule the
+    // config validator applies on save, surfaced at capture time instead).
+    let binding = horizon_core::ShortcutBinding::parse(&candidate).map_err(|error| error.to_string())?;
+    for (index, profile) in config.features.speech.profiles.iter().enumerate() {
+        if slot == Some(index) {
+            continue;
+        }
+        let Ok(existing) = horizon_core::ShortcutBinding::parse(profile.hotkey.trim()) else {
+            continue;
+        };
+        if binding.overlaps(existing) {
+            let name = if profile.name.trim().is_empty() {
+                format!("profile #{}", index + 1)
+            } else {
+                format!("profile `{}`", profile.name.trim())
+            };
+            return Err(format!("`{candidate}` overlaps {name}'s hotkey `{}`", profile.hotkey));
         }
     }
     Ok(candidate)
@@ -740,12 +816,88 @@ mod tests {
     #[test]
     fn bare_keys_are_rejected_but_function_keys_are_allowed() {
         let config = Config::default();
-        let bare =
-            captured_binding_string(Key::K, Modifiers::NONE, &config).expect_err("a bare letter must be rejected");
+        let bare = captured_binding_string(Key::K, Modifiers::NONE, &config, None)
+            .expect_err("a bare letter must be rejected");
         assert!(bare.contains("needs a modifier"), "{bare}");
 
-        let function_key = captured_binding_string(Key::F9, Modifiers::NONE, &config)
+        let function_key = captured_binding_string(Key::F9, Modifiers::NONE, &config, None)
             .expect("a bare function key is a valid push-to-talk hotkey");
         assert_eq!(function_key, "F9");
+    }
+
+    fn profiles_config() -> Config {
+        let mut config = Config::default();
+        config.features.speech.enabled = true;
+        config.features.speech.profiles = vec![
+            horizon_core::SpeechProfile {
+                name: "Norsk".to_string(),
+                model: "/no.gguf".to_string(),
+                hotkey: "F1".to_string(),
+                ..horizon_core::SpeechProfile::default()
+            },
+            horizon_core::SpeechProfile {
+                name: "English".to_string(),
+                model: "/en.gguf".to_string(),
+                hotkey: "F2".to_string(),
+                ..horizon_core::SpeechProfile::default()
+            },
+        ];
+        config
+    }
+
+    #[test]
+    fn captured_binding_rejects_other_profiles_hotkey_but_not_its_own() {
+        let config = profiles_config();
+        // Rebinding profile 1 to profile 0's key must be refused…
+        let error = captured_binding_string(Key::F1, Modifiers::NONE, &config, Some(1))
+            .expect_err("another profile's key must be rejected");
+        assert!(error.contains("Norsk"), "{error}");
+        // …while re-capturing its own current key is not a conflict.
+        let own = captured_binding_string(Key::F2, Modifiers::NONE, &config, Some(1)).expect("own key is no conflict");
+        assert_eq!(own, "F2");
+        // A fresh key is accepted.
+        let fresh = captured_binding_string(Key::F3, Modifiers::NONE, &config, Some(1)).expect("unused key passes");
+        assert_eq!(fresh, "F3");
+    }
+
+    #[test]
+    fn profile_rebind_captures_into_the_armed_profile_only() {
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("speech_hotkey_capturing"), true);
+            data.insert_temp(egui::Id::new("speech_hotkey_capture_slot"), Some(1_usize));
+        });
+        let mut config = profiles_config();
+
+        let mut changed_slot0 = false;
+        let mut changed_slot1 = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![Event::Key {
+                    key: Key::F5,
+                    physical_key: Some(Key::F5),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    // The unarmed row must ignore the press entirely.
+                    changed_slot0 = super::render_hotkey_binder_slot(ui, &mut config, Some(0));
+                    changed_slot1 = super::render_hotkey_binder_slot(ui, &mut config, Some(1));
+                });
+            },
+        );
+
+        assert!(!changed_slot0);
+        assert!(changed_slot1);
+        assert_eq!(config.features.speech.profiles[0].hotkey, "F1");
+        assert_eq!(config.features.speech.profiles[1].hotkey, "F5");
+        let capturing: bool = ctx
+            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+            .unwrap_or(false);
+        assert!(!capturing, "capture must disarm after a successful bind");
     }
 }
