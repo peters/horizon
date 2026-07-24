@@ -4,8 +4,11 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
-use super::super::shortcuts::shortcut_pressed;
-use super::super::{CanvasPanSpaceKeyState, HorizonApp};
+use super::super::shortcuts::{
+    event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
+    shortcut_pressed, take_captured_clipboard_event,
+};
+use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
 
 impl CanvasPanSpaceKeyState {
@@ -128,6 +131,11 @@ fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
 
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
+        // A chord being captured by the settings hotkey binder must not
+        // trigger the shortcut it happens to match.
+        if super::super::shortcuts::hotkey_capture_active(ctx) {
+            return;
+        }
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
             (
                 shortcut_pressed(input, self.shortcuts.fullscreen_panel),
@@ -145,7 +153,7 @@ impl HorizonApp {
             } else {
                 self.board.focused
             };
-        } else if exit_fullscreen && self.fullscreen_panel.is_some() {
+        } else if exit_fullscreen && self.fullscreen_panel.is_some() && !self.speech_escape_cancelled {
             self.fullscreen_panel = None;
         }
 
@@ -203,7 +211,7 @@ impl HorizonApp {
                     .filter_map(|(_, geometry)| geometry.terminal_body_screen_rect)
                     .any(|rect| rect.contains(position))
             });
-        let terminal_events = self.terminal_events_for_viewport(ctx.viewport_id(), &events);
+        let terminal_events = self.terminal_events_for_viewport(ctx, &events);
         // Delay plain Space forwarding until we know whether the key becomes
         // the canvas-pan modifier or an actual terminal keystroke.
         self.terminal_keyboard_events = self
@@ -275,13 +283,376 @@ impl HorizonApp {
         }
     }
 
-    fn terminal_events_for_viewport(
-        &mut self,
-        viewport_id: egui::ViewportId,
-        events: &[Event],
-    ) -> Vec<TerminalInputEvent> {
+    fn terminal_events_for_viewport(&mut self, ctx: &Context, events: &[Event]) -> Vec<TerminalInputEvent> {
+        let viewport_id = ctx.viewport_id();
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
-        terminal_input_events(events, frame_keyboard_events)
+        // The push-to-talk chord is an app-level control on the root viewport
+        // (where the hotkey handler listens); keep its presses, repeats, and
+        // release out of the PTY stream without swallowing unrelated keys.
+        // Detached viewports never start root-scoped hotkeys, but they must
+        // consume a chord already held when focus moved there. Escape also
+        // cancels a recording started from a detached mic button.
+        if viewport_id != egui::ViewportId::ROOT {
+            if let Some(filtered) = self.filter_detached_speech_events(ctx, events) {
+                return terminal_input_events(&filtered, frame_keyboard_events);
+            }
+            return terminal_input_events(events, frame_keyboard_events);
+        }
+        // While the settings binder is actively capturing, every key
+        // belongs to the binder. Use the NARROW flag (not the combined
+        // capture-active that also covers the release-pending grace period),
+        // so the pending-key branch below still runs to consume and clear
+        // the captured chord's release instead of this branch eating it.
+        let capturing = super::super::shortcuts::hotkey_binder_capturing(ctx);
+        // A just-captured chord still has its release (and possibly repeats
+        // and a text event) in flight after the binder cleared its flag.
+        let captured_key_id = egui::Id::new("speech_captured_key");
+        // This accessor applies the same timeout used by global shortcut
+        // dispatch, so neither path can be wedged by a lost release.
+        let captured = pending_hotkey_capture(ctx);
+        let captured_clipboard_event = take_captured_clipboard_event(ctx);
+        let mut filtered = Vec::with_capacity(events.len());
+        let mut swallow_next_shift_text = false;
+        if self.speech_escape_cancelled {
+            self.speech_escape_release_deadline = None;
+        }
+        for event in events {
+            if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
+                continue;
+            }
+            if swallow_captured_clipboard_event(captured_clipboard_event, event) {
+                continue;
+            }
+            if capturing {
+                // Rebind owns the input, but a release from a hold that began
+                // before capture still has to retire the terminal filter's
+                // held entry before the event is consumed below.
+                clear_released_speech_hotkeys(&mut self.speech_held_bindings, event);
+            }
+            if capturing
+                && matches!(
+                    event,
+                    Event::Key { .. } | Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::Ime(_)
+                )
+            {
+                // Every input belongs to the binder while it captures — incl.
+                // the synthetic Copy/Cut/Paste egui-winit emits for Ctrl+C/X/V
+                // and IME commits — so none reaches the focused terminal.
+                continue;
+            }
+            if let Some(pending) = captured {
+                match pending_capture_event(pending, event) {
+                    PendingCaptureEvent::Release => {
+                        ctx.data_mut(|data| {
+                            data.insert_temp(captured_key_id, None::<super::super::settings::PendingCapture>);
+                        });
+                        continue;
+                    }
+                    PendingCaptureEvent::SwallowAndArmShiftText => {
+                        swallow_next_shift_text = true;
+                        continue;
+                    }
+                    PendingCaptureEvent::Swallow => continue,
+                    PendingCaptureEvent::Forward => {}
+                }
+            }
+            let bindings = self
+                .speech
+                .as_ref()
+                .map_or(&[][..], super::super::speech::SpeechSystem::profile_bindings);
+            if swallow_speech_hotkey_event(
+                &mut self.speech_held_bindings,
+                self.speech_escape_cancelled,
+                &mut self.speech_escape_release_pending,
+                &mut swallow_next_shift_text,
+                event,
+                bindings,
+            ) {
+                continue;
+            }
+            filtered.push(event.clone());
+        }
+        if !ctx.input(|input| input.viewport().focused.unwrap_or(true)) {
+            self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        }
+        self.clear_speech_release_ownership_if_idle();
+        terminal_input_events(&filtered, frame_keyboard_events)
+    }
+
+    fn filter_detached_speech_events(&mut self, ctx: &Context, events: &[Event]) -> Option<Vec<Event>> {
+        let escape_cancelled = self.speech.as_ref().is_some_and(|speech| {
+            speech.recording_target().is_some()
+                && events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::Key {
+                            key: Key::Escape,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                })
+        });
+        if escape_cancelled {
+            if let Some(speech) = self.speech.as_mut() {
+                speech.cancel();
+            }
+            self.speech_engaged_profile = None;
+            self.speech_escape_release_deadline = None;
+        }
+        if !escape_cancelled && !self.speech_escape_release_pending && self.speech_held_bindings.is_empty() {
+            return None;
+        }
+
+        let mut swallow_next_shift_text = false;
+        let filtered = events
+            .iter()
+            .filter(|event| {
+                if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
+                    return false;
+                }
+                if swallow_cancel_escape_event(escape_cancelled, &mut self.speech_escape_release_pending, event) {
+                    return false;
+                }
+                !swallow_held_speech_hotkey_event(&mut self.speech_held_bindings, &mut swallow_next_shift_text, event)
+            })
+            .cloned()
+            .collect();
+        self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        self.clear_speech_release_ownership_if_idle();
+        Some(filtered)
+    }
+
+    fn clear_speech_release_ownership_if_idle(&mut self) {
+        if !self.speech_escape_release_pending {
+            self.speech_escape_release_deadline = None;
+        }
+    }
+}
+
+/// Whether a root-viewport event belongs to a push-to-talk chord (or to
+/// an Escape that cancelled dictation) and must not reach the terminal.
+///
+/// Presses are swallowed only on a full chord match, so a modifier hotkey
+/// like `Ctrl+K` does not eat bare `K` keystrokes. Every held chord is
+/// tracked independently until its release is seen — modifiers are often
+/// released before the main key, and multiple profile keys can be down
+/// at once. The Escape consumption applies even with no hotkey configured,
+/// because mic-button dictation is cancelled with Escape too.
+///
+/// Free function over disjoint borrows so the caller can keep the binding
+/// slice borrowed from the speech system (hot path: the binding list must
+/// not be cloned per frame).
+fn swallow_speech_hotkey_event(
+    held_bindings: &mut Vec<HeldSpeechBinding>,
+    escape_cancelled: bool,
+    escape_release_pending: &mut bool,
+    swallow_next_shift_text: &mut bool,
+    event: &Event,
+    bindings: &[(usize, horizon_core::ShortcutBinding)],
+) -> bool {
+    if swallow_cancel_escape_event(escape_cancelled, escape_release_pending, event) {
+        return true;
+    }
+    if matches!(event, Event::Key { pressed: true, .. }) {
+        // A full chord press of any profile key engages holding.
+        if let Some((_, matched)) = bindings
+            .iter()
+            .find(|(_, binding)| shortcut_event_matches(event, *binding))
+        {
+            if let Some(held) = held_bindings.iter_mut().find(|held| held.binding == *matched) {
+                if matches!(event, Event::Key { repeat: false, .. }) {
+                    held.release_deadline = None;
+                }
+            } else {
+                held_bindings.push(HeldSpeechBinding::new(*matched));
+            }
+            arm_correlated_shift_text(*matched, swallow_next_shift_text);
+            return true;
+        }
+    }
+    swallow_held_speech_hotkey_event(held_bindings, swallow_next_shift_text, event)
+}
+
+/// Consume repeats, text, and the eventual release for a chord whose press
+/// was already claimed by the root viewport. Detached viewports call this
+/// without the configured binding list, so they can retire ownership after a
+/// focus move but can never start a new global push-to-talk chord.
+fn swallow_held_speech_hotkey_event(
+    held_bindings: &mut Vec<HeldSpeechBinding>,
+    swallow_next_shift_text: &mut bool,
+    event: &Event,
+) -> bool {
+    match event {
+        Event::Key { pressed: true, .. } => {
+            // Mid-hold repeats can carry drifted modifiers.
+            if let Some(held) = held_bindings
+                .iter()
+                .find(|held| event_uses_shortcut_key(event, held.binding))
+            {
+                arm_correlated_shift_text(held.binding, swallow_next_shift_text);
+                true
+            } else {
+                false
+            }
+        }
+        Event::Key { pressed: false, .. } => clear_released_speech_hotkeys(held_bindings, event),
+        // Direct glyphs and modifier-drift repeats can emit Text without an
+        // adjacent shifted key event. Layout-dependent shifted glyphs are
+        // handled by the event-correlation flag armed above.
+        Event::Text(text) => held_bindings
+            .iter()
+            .any(|held| binding_text_matches(held.binding.key, text)),
+        _ => false,
+    }
+}
+
+/// A physical-key release clears every held chord on that key. Distinct
+/// chords such as Ctrl+K and Alt+K can both be present after modifier drift;
+/// clearing all matches prevents a permanent terminal-input swallow.
+fn clear_released_speech_hotkeys(held_bindings: &mut Vec<HeldSpeechBinding>, event: &Event) -> bool {
+    let Event::Key { pressed: false, .. } = event else {
+        return false;
+    };
+    let matched = held_bindings
+        .iter()
+        .any(|held| event_uses_shortcut_key(event, held.binding));
+    if matched {
+        held_bindings.retain(|held| !event_uses_shortcut_key(event, held.binding));
+    }
+    matched
+}
+
+/// Consume a cancel-Escape's press, repeats, and later release. The pending
+/// state is shared across viewport frames so a detached terminal cannot
+/// receive a dangling kitty release event after dictation was cancelled.
+fn swallow_cancel_escape_event(escape_cancelled: bool, escape_release_pending: &mut bool, event: &Event) -> bool {
+    let Event::Key {
+        key: Key::Escape,
+        pressed,
+        ..
+    } = event
+    else {
+        return false;
+    };
+    if escape_cancelled && *pressed {
+        *escape_release_pending = true;
+        return true;
+    }
+    if *escape_release_pending {
+        if !pressed {
+            *escape_release_pending = false;
+        }
+        return true;
+    }
+    false
+}
+
+/// A consumed shifted printable key is followed immediately by its Text
+/// event in egui-winit's event batch. Consume only that adjacent Text; taking
+/// the flag here ensures any intervening event cancels the correlation.
+fn swallow_correlated_shift_text(pending: &mut bool, event: &Event) -> bool {
+    std::mem::take(pending) && matches!(event, Event::Text(_))
+}
+
+fn swallow_captured_clipboard_event(captured: bool, event: &Event) -> bool {
+    captured && is_clipboard_pseudo_event(event)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingCaptureEvent {
+    Forward,
+    Swallow,
+    SwallowAndArmShiftText,
+    Release,
+}
+
+fn pending_capture_event(pending: super::super::settings::PendingCapture, event: &Event) -> PendingCaptureEvent {
+    // Match the PHYSICAL key as well: a shifted keycap presses as one logical
+    // key (Shift+1 -> Exclamationmark) and releases as another (Num1) once
+    // Shift is lifted first.
+    let matches_pending = |key: Key, physical: Option<Key>| {
+        keys_equivalent(key, pending.key)
+            || (pending.physical_key.is_some() && physical == pending.physical_key)
+            || pending
+                .clipboard
+                .is_some_and(|clipboard| clipboard.matches_release_key(key))
+    };
+    match event {
+        Event::Key {
+            key,
+            physical_key,
+            pressed: false,
+            ..
+        } if matches_pending(*key, *physical_key) => PendingCaptureEvent::Release,
+        Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            ..
+        } if matches_pending(*key, *physical_key) && pending.shifted && egui_key_may_emit_text(*key) => {
+            PendingCaptureEvent::SwallowAndArmShiftText
+        }
+        Event::Key { key, physical_key, .. } if matches_pending(*key, *physical_key) => PendingCaptureEvent::Swallow,
+        Event::Text(text) if key_emits_text(pending.key, text) => PendingCaptureEvent::Swallow,
+        _ => PendingCaptureEvent::Forward,
+    }
+}
+
+fn arm_correlated_shift_text(binding: horizon_core::ShortcutBinding, pending: &mut bool) {
+    if binding.modifiers.shift() && shortcut_key_may_emit_text(binding.key) {
+        *pending = true;
+    }
+}
+
+fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
+    matches!(
+        key,
+        horizon_core::ShortcutKey::Letter(_)
+            | horizon_core::ShortcutKey::Digit(_)
+            | horizon_core::ShortcutKey::Comma
+            | horizon_core::ShortcutKey::Minus
+            | horizon_core::ShortcutKey::Plus
+    )
+}
+
+/// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on
+/// release when Shift is dropped first; treat them as one key so a pending
+/// capture clears on release.
+fn keys_equivalent(a: Key, b: Key) -> bool {
+    a == b || matches!((a, b), (Key::Plus, Key::Equals) | (Key::Equals, Key::Plus))
+}
+
+fn egui_key_may_emit_text(key: Key) -> bool {
+    key == Key::Space
+        || key == Key::Quote
+        || (key.symbol_or_name().chars().count() == 1
+            && !matches!(key, Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp))
+}
+
+/// The text a captured key emits alongside its key event (`Key::name()`
+/// returns display names like `Comma`, not the `,` glyph terminals see).
+fn key_emits_text(key: Key, text: &str) -> bool {
+    match key {
+        Key::Comma => text == ",",
+        Key::Minus => text == "-",
+        Key::Plus => text == "+",
+        Key::Equals => text == "=",
+        Key::Period => text == ".",
+        _ => text.eq_ignore_ascii_case(key.name()),
+    }
+}
+
+/// The text a modifier-free shortcut key emits alongside its key event.
+fn binding_text_matches(key: horizon_core::ShortcutKey, text: &str) -> bool {
+    match key {
+        horizon_core::ShortcutKey::Letter(letter) => text.eq_ignore_ascii_case(&letter.to_string()),
+        horizon_core::ShortcutKey::Digit(digit) => text == digit.to_string(),
+        horizon_core::ShortcutKey::Comma => text == ",",
+        horizon_core::ShortcutKey::Minus => text == "-",
+        // `Plus` binds both the + and = keycaps.
+        horizon_core::ShortcutKey::Plus => text == "+" || text == "=",
+        _ => false,
     }
 }
 
@@ -330,13 +701,66 @@ fn primary_selection_routing_active() -> bool {
 #[cfg(test)]
 mod tests {
     use egui::{Event, Key, Modifiers, Vec2};
+    use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        MiddlePanMode, MiddlePanTarget, next_middle_pan_active, primary_selection_routing_active,
-        wheel_pan_scroll_input,
+        HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys,
+        next_middle_pan_active, pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
+        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
+        swallow_speech_hotkey_event, wheel_pan_scroll_input,
     };
+
+    #[test]
+    fn captured_clipboard_marker_swallows_pseudo_events_only() {
+        for event in [Event::Copy, Event::Cut, Event::Paste("text".to_string())] {
+            assert!(swallow_captured_clipboard_event(true, &event));
+            assert!(!swallow_captured_clipboard_event(false, &event));
+        }
+        assert!(!swallow_captured_clipboard_event(
+            true,
+            &Event::Key {
+                key: Key::C,
+                physical_key: Some(Key::C),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }
+        ));
+    }
+
+    #[test]
+    fn clipboard_key_releases_in_a_later_frame_are_claimed() {
+        use crate::app::settings::ClipboardCapture;
+
+        // Frame one contains only the pseudo-event. egui-winit can produce it
+        // from the primary C/X/V chord, Windows Insert/Delete conventions, or
+        // a dedicated clipboard key, then delivers the ordinary release later.
+        for (clipboard, fallback, release_keys) in [
+            (ClipboardCapture::Copy, Key::C, [Key::C, Key::Insert, Key::Copy]),
+            (ClipboardCapture::Cut, Key::X, [Key::X, Key::Delete, Key::Cut]),
+            (ClipboardCapture::Paste, Key::V, [Key::V, Key::Insert, Key::Paste]),
+        ] {
+            let pending = crate::app::settings::PendingCapture {
+                key: fallback,
+                physical_key: Some(fallback),
+                shifted: false,
+                clipboard: Some(clipboard),
+                armed_at: 1.0,
+            };
+            for key in release_keys {
+                let release = Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                };
+                assert_eq!(pending_capture_event(pending, &release), PendingCaptureEvent::Release);
+            }
+        }
+    }
 
     #[test]
     fn wheel_pan_scroll_input_counts_each_wheel_event_once() {
@@ -525,11 +949,191 @@ mod tests {
         assert_eq!(primary_selection_routing_active(), cfg!(target_os = "linux"));
     }
 
+    #[test]
+    fn cancel_escape_swallows_release_in_a_later_batch() {
+        let mut release_pending = false;
+        assert!(swallow_cancel_escape_event(
+            true,
+            &mut release_pending,
+            &key_event(Key::Escape, Some(Key::Escape), true, Modifiers::NONE)
+        ));
+        assert!(release_pending);
+
+        assert!(swallow_cancel_escape_event(
+            false,
+            &mut release_pending,
+            &key_event(Key::Escape, Some(Key::Escape), false, Modifiers::NONE)
+        ));
+        assert!(!release_pending);
+    }
+
+    #[test]
+    fn cancel_escape_press_and_release_clear_pending_in_one_batch() {
+        let mut release_pending = false;
+        for event in [
+            key_event(Key::Escape, Some(Key::Escape), true, Modifiers::NONE),
+            key_event(Key::Escape, Some(Key::Escape), false, Modifiers::NONE),
+        ] {
+            assert!(swallow_cancel_escape_event(true, &mut release_pending, &event));
+        }
+        assert!(!release_pending);
+    }
+
+    #[test]
+    fn shifted_hotkey_text_is_correlated_without_swallowing_other_keys() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::SHIFT, ShortcutKey::Letter('K'));
+        let bindings = [(0, binding)];
+        let mut held = Vec::new();
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::K, Some(Key::K), true, Modifiers::SHIFT),
+            &bindings,
+        ));
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("K".to_string()),
+            &bindings,
+        ));
+        assert!(!speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::L, Some(Key::L), true, Modifiers::SHIFT),
+            &bindings,
+        ));
+        assert!(!speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("L".to_string()),
+            &bindings,
+        ));
+    }
+
+    #[test]
+    fn shifted_digit_hotkey_swallows_its_layout_glyph() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::SHIFT, ShortcutKey::Digit(1));
+        let bindings = [(0, binding)];
+        let mut held = Vec::new();
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::Exclamationmark, Some(Key::Num1), true, Modifiers::SHIFT,),
+            &bindings,
+        ));
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &Event::Text("!".to_string()),
+            &bindings,
+        ));
+    }
+
+    #[test]
+    fn rebind_capture_release_clears_held_speech_filter() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let other = ShortcutBinding::new(ShortcutModifiers::ALT, ShortcutKey::Letter('L'));
+        let mut held = vec![HeldSpeechBinding::new(binding), HeldSpeechBinding::new(other)];
+        let release = key_event(Key::K, Some(Key::K), false, Modifiers::NONE);
+
+        assert!(clear_released_speech_hotkeys(&mut held, &release));
+        assert_eq!(held, vec![HeldSpeechBinding::new(other)]);
+    }
+
+    #[test]
+    fn detached_viewport_only_swallows_owned_hotkey_events() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let mut held = vec![HeldSpeechBinding::new(binding)];
+        let mut shift_text_pending = false;
+
+        let unrelated_press = key_event(Key::L, Some(Key::L), true, Modifiers::NONE);
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &unrelated_press,
+        ));
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &Event::Text("l".to_string()),
+        ));
+
+        let release = key_event(Key::K, Some(Key::K), false, Modifiers::NONE);
+
+        assert!(swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &release
+        ));
+        assert!(held.is_empty());
+
+        let fresh_press = key_event(Key::K, Some(Key::K), true, Modifiers::CTRL);
+        assert!(!swallow_held_speech_hotkey_event(
+            &mut held,
+            &mut shift_text_pending,
+            &fresh_press,
+        ));
+    }
+
+    #[test]
+    fn new_root_press_replaces_an_old_handoff_generation() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::CTRL, ShortcutKey::Letter('K'));
+        let mut stale = HeldSpeechBinding::new(binding);
+        stale.release_deadline = Some(std::time::Instant::now());
+        let mut held = vec![stale];
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+        let bindings = [(0, binding)];
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::K, Some(Key::K), true, Modifiers::CTRL),
+            &bindings,
+        ));
+        assert_eq!(held.len(), 1);
+        assert!(held[0].release_deadline.is_none());
+    }
+
+    fn speech_event_swallowed(
+        held: &mut Vec<HeldSpeechBinding>,
+        escape_release_pending: &mut bool,
+        shift_text_pending: &mut bool,
+        event: &Event,
+        bindings: &[(usize, ShortcutBinding)],
+    ) -> bool {
+        swallow_correlated_shift_text(shift_text_pending, event)
+            || swallow_speech_hotkey_event(held, false, escape_release_pending, shift_text_pending, event, bindings)
+    }
+
     fn terminal_event(event: Event) -> TerminalInputEvent {
         TerminalInputEvent {
             event,
             key_without_modifiers_text: None,
             observed_key: None,
+        }
+    }
+
+    fn key_event(key: Key, physical_key: Option<Key>, pressed: bool, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key,
+            pressed,
+            repeat: false,
+            modifiers,
         }
     }
 

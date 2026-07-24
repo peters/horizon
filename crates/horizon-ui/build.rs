@@ -16,6 +16,8 @@ const ASSETS: &[&str] = &[
 ];
 
 fn main() -> io::Result<()> {
+    emit_cuda_runtime_link_workaround();
+
     let manifest_dir = required_path_var("CARGO_MANIFEST_DIR")?;
     let out_dir = required_path_var("OUT_DIR")?;
 
@@ -36,6 +38,34 @@ fn main() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Workaround for transcribe-cpp-sys 0.1.3: its `transcribe-link.json`
+/// manifest omits the CUDA runtime libraries for `TRANSCRIBE_CUDA` builds
+/// (`system_libs` carries only stdc++/m/pthread/dl), so every downstream
+/// bin/test target fails to link with undefined `cuda*` symbols. Emit them
+/// here until a -sys release records the CUDA deps in the manifest itself.
+fn emit_cuda_runtime_link_workaround() {
+    if env::var_os("CARGO_FEATURE_SPEECH_CUDA").is_none() {
+        return;
+    }
+    let cuda_root = env::var("CUDA_PATH")
+        .or_else(|_| env::var("CUDA_HOME"))
+        .unwrap_or_else(|_| "/usr/local/cuda".to_string());
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Windows CUDA toolkits ship import libraries under lib/x64.
+        println!("cargo:rustc-link-search=native={cuda_root}/lib/x64");
+    } else {
+        println!("cargo:rustc-link-search=native={cuda_root}/lib64");
+        // libcuda.so (driver API) resolves from the stubs dir at link time
+        // and from the installed driver at runtime.
+        println!("cargo:rustc-link-search=native={cuda_root}/lib64/stubs");
+    }
+    for lib in ["cudart", "cublas", "cublasLt", "cuda"] {
+        println!("cargo:rustc-link-lib=dylib={lib}");
+    }
+    println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    println!("cargo:rerun-if-env-changed=CUDA_HOME");
 }
 
 fn required_path_var(name: &'static str) -> io::Result<PathBuf> {

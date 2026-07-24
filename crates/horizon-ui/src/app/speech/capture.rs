@@ -1,0 +1,862 @@
+//! Microphone capture thread. cpal streams are not `Send`, so the stream is
+//! created, owned, and dropped entirely on this thread; the frame loop talks
+//! to it over mpsc channels. Every result message is tagged with the
+//! recording generation so a stale error or buffer from an earlier,
+//! cancelled recording can never affect a newer one.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use cpal::SampleFormat;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+pub const TARGET_SAMPLE_RATE: u32 = 16_000;
+/// Hard cap on a single recording so a stuck hotkey cannot grow unbounded.
+/// Applied to the 16 kHz mono output (≈37 MiB), not the raw device stream —
+/// audio is downmixed and resampled incrementally inside the callback, so
+/// high native rates cannot balloon memory before conversion.
+const MAX_RECORD_SECONDS: usize = 600;
+const MAX_OUTPUT_SAMPLES: usize = MAX_RECORD_SECONDS * TARGET_SAMPLE_RATE as usize;
+/// The frame loop pings the capture thread every frame while recording. If
+/// no ping arrives for this long, frames have stopped (e.g. a Wayland
+/// surface minimized mid-dictation, which delivers no redraw callbacks) —
+/// the microphone must not stay open, so the capture thread self-cancels.
+const HEARTBEAT_STALE: Duration = Duration::from_millis(1500);
+const HEARTBEAT_POLL: Duration = Duration::from_millis(250);
+
+pub enum CaptureCmd {
+    /// Begin recording under the given generation.
+    Start(u64),
+    /// Stop and deliver the captured audio as 16 kHz mono f32.
+    Stop,
+    /// Stop and discard.
+    Cancel,
+}
+
+/// A finished recording: 16 kHz mono samples plus the device that produced
+/// them, so downstream feedback can name the microphone actually used.
+pub struct CapturedAudio {
+    pub samples: Vec<f32>,
+    pub device: String,
+}
+
+pub enum CapturePoll {
+    Item(u64, Result<CapturedAudio, String>),
+    Empty,
+    Disconnected,
+}
+
+pub struct CaptureHandle {
+    cmd_tx: Sender<CaptureCmd>,
+    pcm_rx: Receiver<(u64, Result<CapturedAudio, String>)>,
+    heartbeat: Arc<Mutex<Instant>>,
+}
+
+impl CaptureHandle {
+    pub fn spawn(preferred_device: Option<String>) -> std::io::Result<Self> {
+        let (cmd_tx, cmd_rx) = channel();
+        let (pcm_tx, pcm_rx) = channel();
+        let heartbeat = Arc::new(Mutex::new(Instant::now()));
+        let worker_heartbeat = Arc::clone(&heartbeat);
+        thread::Builder::new()
+            .name("speech-capture".into())
+            .spawn(move || capture_loop(&cmd_rx, &pcm_tx, &worker_heartbeat, preferred_device.as_deref()))?;
+        Ok(Self {
+            cmd_tx,
+            pcm_rx,
+            heartbeat,
+        })
+    }
+
+    /// Returns false when the capture thread is no longer available.
+    #[must_use]
+    pub fn send(&self, cmd: CaptureCmd) -> bool {
+        self.cmd_tx.send(cmd).is_ok()
+    }
+
+    /// Called every frame while the engine is active: proves the frame loop
+    /// is still running so the capture thread keeps recording.
+    pub fn heartbeat(&self) {
+        *self.heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+    }
+
+    pub fn try_recv_pcm(&self) -> CapturePoll {
+        match self.pcm_rx.try_recv() {
+            Ok((generation, pcm)) => CapturePoll::Item(generation, pcm),
+            Err(TryRecvError::Empty) => CapturePoll::Empty,
+            Err(TryRecvError::Disconnected) => CapturePoll::Disconnected,
+        }
+    }
+}
+
+#[cfg(test)]
+impl CaptureHandle {
+    pub(super) fn from_test_channels(
+        cmd_tx: Sender<CaptureCmd>,
+        pcm_rx: Receiver<(u64, Result<CapturedAudio, String>)>,
+    ) -> Self {
+        Self {
+            cmd_tx,
+            pcm_rx,
+            heartbeat: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+}
+
+struct ActiveRecording {
+    // Keeps the input stream alive; dropped to stop capture.
+    _stream: cpal::Stream,
+    generation: u64,
+    device_name: String,
+    /// Already downmixed to mono and resampled to 16 kHz.
+    samples: Arc<Mutex<Vec<f32>>>,
+    resampler: Arc<Mutex<MonoResampler>>,
+    overflowed: Arc<AtomicBool>,
+}
+
+/// Stateful downmix-to-mono + linear resample to 16 kHz, fed chunk by chunk
+/// from the audio callback so only converted output is ever buffered.
+struct MonoResampler {
+    channels: usize,
+    source_rate: u32,
+    /// Source frames advanced per output sample.
+    step: f64,
+    /// Output samples emitted so far. The read position is derived from this
+    /// (`emitted * step`) rather than accumulated, so rounding cannot drift
+    /// with the callback chunk boundaries.
+    emitted: u64,
+    /// Source samples already dropped off the front of `pending`.
+    drained: u64,
+    /// Last mono sample of the previous chunk plus this chunk's mono frames.
+    pending: Vec<f32>,
+    /// Partial interleaved frame carried across callback chunks: the audio
+    /// callback is under no obligation to deliver whole frames per chunk.
+    frame_acc: f32,
+    frame_fill: usize,
+    source_frames: u64,
+}
+
+impl MonoResampler {
+    fn new(sample_rate: u32, channels: usize) -> Self {
+        Self {
+            channels: channels.max(1),
+            source_rate: sample_rate,
+            step: f64::from(sample_rate) / f64::from(TARGET_SAMPLE_RATE),
+            emitted: 0,
+            drained: 0,
+            pending: Vec::new(),
+            frame_acc: 0.0,
+            frame_fill: 0,
+            source_frames: 0,
+        }
+    }
+
+    /// Convert an interleaved chunk, appending 16 kHz mono samples to `out`.
+    ///
+    /// Downsampling (mic rate > 16 kHz, the usual case) uses a box filter:
+    /// each output sample averages the source samples across its window, so
+    /// content above 8 kHz is attenuated instead of aliasing into the speech
+    /// band (point-sampling e.g. every third sample at 48 kHz would alias).
+    /// Upsampling uses linear interpolation and retains the final source
+    /// frame until either its successor arrives or `flush` marks end-of-input.
+    /// Output positions are derived from an absolute output index, so the
+    /// result is invariant to how the source is split into callback chunks.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions are far below every cast's precision limit"
+    )]
+    fn feed(&mut self, chunk: impl Iterator<Item = f32>, out: &mut Vec<f32>) {
+        for sample in chunk {
+            self.frame_acc += sample;
+            self.frame_fill += 1;
+            if self.frame_fill == self.channels {
+                self.pending.push(self.frame_acc / usize_to_f32(self.channels));
+                self.frame_acc = 0.0;
+                self.frame_fill = 0;
+                self.source_frames += 1;
+            }
+        }
+
+        let available = self.pending.len() as f64;
+        // Emit each output sample whose full source window is buffered.
+        loop {
+            // Both edges are derived from the output index and offset by the
+            // (integer, hence exactly subtracted) drain count. Accumulating
+            // `position += step`, or deriving the end as `position + step`,
+            // rounds differently depending on how large `position` happens to
+            // be — i.e. on when `pending` was last drained, i.e. on the
+            // callback chunking. At 44.1 kHz that shifted a window by a whole
+            // sample, so the same audio converted differently.
+            let position = self.emitted as f64 * self.step - self.drained as f64;
+            let window_end = (self.emitted + 1) as f64 * self.step - self.drained as f64;
+            if window_end > available {
+                break;
+            }
+            if self.step > 1.0 {
+                // Box-average the samples covered by [position, window_end).
+                let start = position.floor() as usize;
+                let end = (window_end.ceil() as usize).min(self.pending.len());
+                let slice = &self.pending[start..end.max(start + 1)];
+                let sum: f32 = slice.iter().sum();
+                out.push(sum / usize_to_f32(slice.len()));
+            } else {
+                // Upsampling / near-unity: linear interpolation.
+                let base = position.floor() as usize;
+                let frac = (position - position.floor()) as f32;
+                // The right-hand interpolation partner can still be sitting
+                // in the next callback chunk. Hold the sample back instead of
+                // substituting `current` for the missing neighbour: doing the
+                // latter repeats the last source sample at every chunk
+                // boundary, so the converted stream would depend on how the
+                // driver happened to split the audio into callbacks.
+                if frac > 0.0 && base + 1 >= self.pending.len() {
+                    break;
+                }
+                let current = self.pending[base];
+                let next = self.pending.get(base + 1).copied().unwrap_or(current);
+                out.push(current + (next - current) * frac);
+            }
+            self.emitted += 1;
+        }
+
+        self.discard_consumed();
+    }
+
+    /// Emit the duration-derived tail once no more source frames can arrive.
+    /// Linear upsampling repeats only the final source frame where the target
+    /// timeline extends beyond the last interpolation interval.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions/counts are far below every cast's precision limit"
+    )]
+    fn flush(&mut self, out: &mut Vec<f32>) {
+        let target_samples =
+            self.source_frames.saturating_mul(u64::from(TARGET_SAMPLE_RATE)) / u64::from(self.source_rate);
+        while self.emitted < target_samples {
+            let position = self.emitted as f64 * self.step - self.drained as f64;
+            let Some(current) = self.pending.get(position.floor() as usize).copied() else {
+                break;
+            };
+            if self.step > 1.0 {
+                let window_end = (self.emitted + 1) as f64 * self.step - self.drained as f64;
+                let start = position.floor() as usize;
+                let end = (window_end.ceil() as usize).min(self.pending.len());
+                let slice = &self.pending[start..end.max(start + 1)];
+                out.push(slice.iter().sum::<f32>() / usize_to_f32(slice.len()));
+            } else {
+                let base = position.floor() as usize;
+                let frac = (position - position.floor()) as f32;
+                let next = self.pending.get(base + 1).copied().unwrap_or(current);
+                out.push(current + (next - current) * frac);
+            }
+            self.emitted += 1;
+        }
+        self.pending.clear();
+        self.drained = self.source_frames;
+        self.frame_acc = 0.0;
+        self.frame_fill = 0;
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "sample positions are far below every cast's precision limit"
+    )]
+    fn discard_consumed(&mut self) {
+        // Keep only the tail still needed for the next window. Subtracting an
+        // integer from the absolute position is exact, so `drained` always
+        // ends up at `floor(emitted * step)` however the input was chunked.
+        let next_start = self.emitted as f64 * self.step - self.drained as f64;
+        let keep_from = (next_start.floor() as usize).min(self.pending.len());
+        self.pending.drain(..keep_from);
+        self.drained += keep_from as u64;
+    }
+}
+
+/// Recover a poisoned buffer lock instead of panicking: the protected data
+/// is plain PCM samples, valid regardless of where another thread panicked.
+fn lock_samples(samples: &Mutex<Vec<f32>>) -> MutexGuard<'_, Vec<f32>> {
+    samples.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Stop the callback before flushing its retained resampler tail, then take
+/// the completed PCM buffer out of the shared allocation.
+fn finish_recording(recording: ActiveRecording) -> (u64, CapturedAudio, bool) {
+    let ActiveRecording {
+        _stream: stream,
+        generation,
+        device_name,
+        samples,
+        resampler,
+        overflowed,
+    } = recording;
+    drop(stream);
+
+    let mut capped = overflowed.load(Ordering::Relaxed);
+    let mut pcm = lock_samples(&samples);
+    if !capped {
+        resampler.lock().unwrap_or_else(PoisonError::into_inner).flush(&mut pcm);
+        if pcm.len() > MAX_OUTPUT_SAMPLES {
+            pcm.truncate(MAX_OUTPUT_SAMPLES);
+            capped = true;
+            overflowed.store(true, Ordering::Relaxed);
+        }
+    }
+    let audio = CapturedAudio {
+        samples: std::mem::take(&mut *pcm),
+        device: device_name,
+    };
+    (generation, audio, capped)
+}
+
+fn capture_loop(
+    cmd_rx: &Receiver<CaptureCmd>,
+    pcm_tx: &Sender<(u64, Result<CapturedAudio, String>)>,
+    heartbeat: &Arc<Mutex<Instant>>,
+    preferred_device: Option<&str>,
+) {
+    let mut active: Option<ActiveRecording> = None;
+    loop {
+        // Poll while recording so a stalled frame loop (minimized Wayland
+        // surface) can be detected; block indefinitely when idle.
+        let cmd = if active.is_some() {
+            match cmd_rx.recv_timeout(HEARTBEAT_POLL) {
+                Ok(cmd) => Some(cmd),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match cmd_rx.recv() {
+                Ok(cmd) => Some(cmd),
+                Err(_) => return,
+            }
+        };
+
+        let Some(cmd) = cmd else {
+            // Timeout while recording: finalize if the frame loop went silent
+            // (heartbeat stale — minimized Wayland surface) or the recording
+            // hit the length cap. Either releases the OS microphone even
+            // though no frame will run to do it.
+            let finalize = active.as_ref().is_some_and(|recording| {
+                let stale = heartbeat.lock().unwrap_or_else(PoisonError::into_inner).elapsed() > HEARTBEAT_STALE;
+                stale || recording.overflowed.load(Ordering::Relaxed)
+            });
+            if let Some(recording) = finalize.then(|| active.take()).flatten() {
+                let (generation, pcm, capped) = finish_recording(recording);
+                if capped {
+                    // Deliver what was captured up to the cap.
+                    tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; stopping");
+                    let _ = pcm_tx.send((generation, Ok(pcm)));
+                } else {
+                    tracing::warn!("speech capture heartbeat stale; microphone released");
+                    let _ = pcm_tx.send((
+                        generation,
+                        Err("recording stopped: window no longer visible".to_string()),
+                    ));
+                }
+            }
+            continue;
+        };
+
+        match cmd {
+            CaptureCmd::Start(generation) => {
+                if active.is_none() {
+                    *heartbeat.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+                    match start_recording(generation, pcm_tx.clone(), preferred_device) {
+                        Ok(recording) => active = Some(recording),
+                        Err(error) => {
+                            let _ = pcm_tx.send((generation, Err(error)));
+                        }
+                    }
+                }
+            }
+            CaptureCmd::Stop => {
+                if let Some(recording) = active.take() {
+                    let (generation, pcm, overflowed) = finish_recording(recording);
+                    if overflowed {
+                        tracing::warn!("speech recording hit the {MAX_RECORD_SECONDS}s cap; truncated");
+                    }
+                    let _ = pcm_tx.send((generation, Ok(pcm)));
+                }
+            }
+            CaptureCmd::Cancel => {
+                active = None;
+            }
+        }
+    }
+}
+
+/// Every input device the audio host reports, in host order. Used by the
+/// settings microphone picker; enumeration can block, so callers must keep
+/// it off the UI thread.
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices().map_or_else(
+        |error| {
+            tracing::warn!(%error, "could not enumerate audio input devices");
+            Vec::new()
+        },
+        |devices| {
+            devices
+                .filter_map(|device| Some(device.description().ok()?.name().to_string()))
+                .collect()
+        },
+    )
+}
+
+/// Resolve the configured device name against the host: exact
+/// case-insensitive match first, then substring, then the system default
+/// (with a warning, so a renamed or unplugged microphone is diagnosable).
+fn resolve_input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cpal::Device, String> {
+    let preferred = preferred.map(str::trim).filter(|wanted| !wanted.is_empty());
+    if let Some(wanted) = preferred {
+        let devices: Vec<(String, cpal::Device)> = host.input_devices().map_or_else(
+            |error| {
+                tracing::warn!(%error, "could not enumerate audio input devices");
+                Vec::new()
+            },
+            |devices| {
+                devices
+                    .filter_map(|device| {
+                        let name = device.description().ok()?.name().to_string();
+                        Some((name, device))
+                    })
+                    .collect()
+            },
+        );
+        let wanted_lower = wanted.to_lowercase();
+        let mut exact = None;
+        let mut substring = None;
+        for (name, device) in devices {
+            let name_lower = name.to_lowercase();
+            if name_lower == wanted_lower {
+                exact = Some((name, device));
+                break;
+            }
+            if substring.is_none() && name_lower.contains(&wanted_lower) {
+                substring = Some((name, device));
+            }
+        }
+        if let Some((name, device)) = exact.or(substring) {
+            tracing::info!(configured = wanted, device = %name, "using configured speech input device");
+            return Ok(device);
+        }
+        tracing::warn!(
+            configured = wanted,
+            "configured speech input device not found; using system default"
+        );
+    }
+    host.default_input_device()
+        .ok_or_else(|| "no microphone found (no default input device)".to_string())
+}
+
+fn start_recording(
+    generation: u64,
+    pcm_tx: Sender<(u64, Result<CapturedAudio, String>)>,
+    preferred_device: Option<&str>,
+) -> Result<ActiveRecording, String> {
+    let host = cpal::default_host();
+    let device = resolve_input_device(&host, preferred_device)?;
+    let device_name = device
+        .description()
+        .map_or_else(|_| "unknown".to_string(), |description| description.name().to_string());
+    let supported = device
+        .default_input_config()
+        .map_err(|error| format!("microphone `{device_name}`: {error}"))?;
+
+    let sample_rate = supported.sample_rate();
+    let channels = usize::from(supported.channels());
+    let sample_format = supported.sample_format();
+    let config: cpal::StreamConfig = supported.into();
+
+    // Pre-size for ~30 s of 16 kHz mono so the audio callback does not
+    // reallocate (and memcpy) tens of MiB mid-capture.
+    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(30 * TARGET_SAMPLE_RATE as usize)));
+    let resampler = Arc::new(Mutex::new(MonoResampler::new(sample_rate, channels)));
+    let overflowed = Arc::new(AtomicBool::new(false));
+
+    // Runtime stream failures (e.g. the microphone being unplugged) must
+    // reach the engine over the channel, not just the log, or the UI would
+    // stay in Recording until manually cancelled.
+    let error_device = device_name.clone();
+    let error_cb = move |error: cpal::Error| {
+        // cpal's error callback is a notification channel for recoverable
+        // conditions as well as fatal ones. An ALSA Xrun is recovered in
+        // place (prepare + start) and capture continues, and a route change
+        // keeps the stream active — aborting on those would discard a
+        // half-spoken sentence whenever the machine is briefly busy.
+        if is_recoverable_stream_error(error.kind()) {
+            tracing::warn!(%error, "recoverable speech capture stream notification; continuing");
+            return;
+        }
+        tracing::warn!(%error, "fatal speech capture stream error");
+        let _ = pcm_tx.send((generation, Err(format!("microphone `{error_device}`: {error}"))));
+    };
+    // One arm per interleaved sample type, each normalizing to f32 in
+    // [-1, 1] before the shared downmix/resample. Covers the formats real
+    // capture endpoints report: F32/I16/U16 plus 8-bit, 32-bit (incl. the
+    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64.
+    macro_rules! input_stream {
+        ($sample:ty, $to_f32:expr) => {{
+            let sink = Arc::clone(&samples);
+            let converter = Arc::clone(&resampler);
+            let full = Arc::clone(&overflowed);
+            device.build_input_stream(
+                config,
+                move |data: &[$sample], _: &cpal::InputCallbackInfo| {
+                    convert_into(&converter, &sink, &full, data.iter().map($to_f32));
+                },
+                error_cb,
+                None,
+            )
+        }};
+    }
+    let stream = match sample_format {
+        SampleFormat::F32 => input_stream!(f32, |&sample| sample),
+        SampleFormat::F64 => input_stream!(f64, |&sample| f64_to_sample(sample)),
+        SampleFormat::I8 => input_stream!(i8, |&sample| f32::from(sample) / 128.0),
+        SampleFormat::I16 => input_stream!(i16, |&sample| f32::from(sample) / 32_768.0),
+        SampleFormat::I32 => input_stream!(i32, |&sample| i32_to_sample(sample)),
+        SampleFormat::U8 => input_stream!(u8, |&sample| (f32::from(sample) - 128.0) / 128.0),
+        SampleFormat::U16 => input_stream!(u16, |&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
+        other => {
+            return Err(format!(
+                "microphone `{device_name}`: unsupported sample format {other:?}"
+            ));
+        }
+    }
+    .map_err(|error| format!("microphone `{device_name}`: {error}"))?;
+
+    stream
+        .play()
+        .map_err(|error| format!("microphone `{device_name}`: {error}"))?;
+    tracing::info!(device = %device_name, sample_rate, channels, "speech recording started");
+
+    Ok(ActiveRecording {
+        _stream: stream,
+        generation,
+        device_name,
+        samples,
+        resampler,
+        overflowed,
+    })
+}
+
+/// Audio-callback path: downmix + resample the chunk and append to the
+/// shared 16 kHz mono buffer, enforcing the output-sample cap.
+fn convert_into(
+    resampler: &Mutex<MonoResampler>,
+    sink: &Arc<Mutex<Vec<f32>>>,
+    overflowed: &Arc<AtomicBool>,
+    chunk: impl Iterator<Item = f32>,
+) {
+    let mut buffer = lock_samples(sink);
+    if buffer.len() >= MAX_OUTPUT_SAMPLES {
+        overflowed.store(true, Ordering::Relaxed);
+        return;
+    }
+    resampler
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .feed(chunk, &mut buffer);
+    if buffer.len() > MAX_OUTPUT_SAMPLES {
+        buffer.truncate(MAX_OUTPUT_SAMPLES);
+        overflowed.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Whether a cpal stream notification leaves the stream usable. These are
+/// reported through the same error callback as fatal failures, but capture
+/// keeps running, so the recording must not be torn down.
+fn is_recoverable_stream_error(kind: cpal::ErrorKind) -> bool {
+    matches!(
+        kind,
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
+    )
+}
+
+/// Narrow an f64 device sample to the f32 capture pipeline.
+#[expect(clippy::cast_possible_truncation, reason = "audio downconvert to the f32 pipeline")]
+fn f64_to_sample(sample: f64) -> f32 {
+    sample as f32
+}
+
+/// Normalize a 32-bit integer device sample to f32 in [-1, 1).
+#[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
+fn i32_to_sample(sample: i32) -> f32 {
+    sample as f32 / 2_147_483_648.0
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "sample positions/counts are far below every cast's precision limit"
+)]
+#[cfg(test)]
+pub fn to_mono_16k(samples: &[f32], sample_rate: u32, channels: usize) -> Vec<f32> {
+    let channels = channels.max(1);
+    let mono: Vec<f32> = if channels == 1 {
+        samples.to_vec()
+    } else {
+        samples
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().sum::<f32>() / usize_to_f32(channels))
+            .collect()
+    };
+
+    if sample_rate == TARGET_SAMPLE_RATE {
+        return mono;
+    }
+    if sample_rate > TARGET_SAMPLE_RATE && sample_rate.is_multiple_of(TARGET_SAMPLE_RATE) {
+        let factor = (sample_rate / TARGET_SAMPLE_RATE) as usize;
+        return mono
+            .chunks_exact(factor)
+            .map(|window| window.iter().sum::<f32>() / usize_to_f32(factor))
+            .collect();
+    }
+
+    let ratio = f64::from(sample_rate) / f64::from(TARGET_SAMPLE_RATE);
+    let out_len = (mono.len() as f64 / ratio).floor() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for index in 0..out_len {
+        let position = index as f64 * ratio;
+        let base = position.floor() as usize;
+        let frac = (position - position.floor()) as f32;
+        let current = mono.get(base).copied().unwrap_or(0.0);
+        let next = mono.get(base + 1).copied().unwrap_or(current);
+        out.push(current + (next - current) * frac);
+    }
+    out
+}
+
+#[expect(clippy::cast_precision_loss, reason = "channel/window counts are tiny")]
+fn usize_to_f32(value: usize) -> f32 {
+    value as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::channel;
+
+    use super::{
+        CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE, to_mono_16k,
+    };
+
+    fn stream_in_chunks(samples: &[f32], sample_rate: u32, chunk_sizes: &[usize]) -> (usize, Vec<f32>) {
+        let mut resampler = MonoResampler::new(sample_rate, 1);
+        let mut streamed = Vec::new();
+        let mut offset = 0;
+        let mut chunk_index = 0;
+        while offset < samples.len() {
+            let end = (offset + chunk_sizes[chunk_index % chunk_sizes.len()]).min(samples.len());
+            resampler.feed(samples[offset..end].iter().copied(), &mut streamed);
+            offset = end;
+            chunk_index += 1;
+        }
+        let before_flush = streamed.len();
+        resampler.flush(&mut streamed);
+        (before_flush, streamed)
+    }
+
+    #[test]
+    fn stereo_48k_downmixes_and_decimates() {
+        // 1 second of stereo 48 kHz: left = 0.5, right = -0.5 → mono 0.0.
+        let samples: Vec<f32> = (0..48_000).flat_map(|_| [0.5, -0.5]).collect();
+        let out = to_mono_16k(&samples, 48_000, 2);
+        assert_eq!(out.len(), TARGET_SAMPLE_RATE as usize);
+        assert!(out.iter().all(|sample| sample.abs() < 1e-6));
+    }
+
+    #[test]
+    fn mono_44100_resamples_to_16k_length() {
+        let samples = vec![0.25_f32; 44_100];
+        let out = to_mono_16k(&samples, 44_100, 1);
+        let expected = 16_000_usize;
+        assert!(
+            out.len().abs_diff(expected) <= 2,
+            "expected ~{expected} samples, got {}",
+            out.len()
+        );
+        assert!((out[100] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn native_rate_passes_through() {
+        let samples = vec![0.1_f32; 1600];
+        assert_eq!(to_mono_16k(&samples, 16_000, 1), samples);
+    }
+
+    /// The streaming path must produce the same signal as the batch helper
+    /// regardless of how the audio callback happens to chunk the input.
+    #[test]
+    #[expect(clippy::cast_precision_loss, reason = "test signal generation; indices are tiny")]
+    fn streaming_resampler_matches_batch_conversion() {
+        // 48 kHz -> 16 kHz is the common integer factor (3), where the
+        // streaming box filter and the batch box filter agree sample-for-
+        // sample; that is what the production path uses most.
+        let rate = 48_000_u32;
+        let samples: Vec<f32> = (0..rate as usize)
+            .flat_map(|index| {
+                let t = index as f32 / rate as f32;
+                let value = (t * std::f32::consts::TAU * 220.0).sin();
+                [value, value]
+            })
+            .collect();
+        let batch = to_mono_16k(&samples, rate, 2);
+
+        let mut resampler = super::MonoResampler::new(rate, 2);
+        let mut streamed = Vec::new();
+        for chunk in samples.chunks(1337) {
+            resampler.feed(chunk.iter().copied(), &mut streamed);
+        }
+        resampler.flush(&mut streamed);
+
+        assert_eq!(streamed.len(), batch.len());
+        for (index, (a, b)) in streamed.iter().zip(batch.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-4, "sample {index} diverged: {a} vs {b}");
+        }
+    }
+
+    /// An output sample must never depend on where a callback boundary fell.
+    /// The upsampling branch interpolates between two neighbouring source
+    /// samples, and the second one can still be in the next chunk; feeding
+    /// the same signal in different chunk sizes must produce byte-identical
+    /// output, including for the non-integer 44.1 kHz ratio.
+    #[test]
+    #[expect(clippy::cast_precision_loss, reason = "test signal generation; indices are tiny")]
+    fn resampler_output_is_invariant_to_chunking() {
+        // 8/12 kHz upsample, plus 44.1 kHz (non-integer downsample ratio).
+        for rate in [8_000_u32, 12_000, 44_100] {
+            let source: Vec<f32> = (0..4_000)
+                .map(|index| {
+                    let t = index as f32 / rate as f32;
+                    (t * std::f32::consts::TAU * 300.0).sin()
+                })
+                .collect();
+
+            let mut whole = Vec::new();
+            super::MonoResampler::new(rate, 1).feed(source.iter().copied(), &mut whole);
+
+            for chunk_len in [1_usize, 7, 64, 333] {
+                let mut resampler = super::MonoResampler::new(rate, 1);
+                let mut chunked = Vec::new();
+                for chunk in source.chunks(chunk_len) {
+                    resampler.feed(chunk.iter().copied(), &mut chunked);
+                }
+                // Bit patterns, not an epsilon: the claim is that chunking
+                // cannot perturb the result at all, so any difference is a
+                // regression however small.
+                let bits = |samples: &[f32]| samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+                let (got, want) = (bits(&chunked), bits(&whole));
+                let first_diff = got.iter().zip(want.iter()).position(|(a, b)| a != b);
+                assert!(
+                    got == want,
+                    "{rate} Hz chunk {chunk_len}: len {} vs {}, first diff at {first_diff:?} ({:?} vs {:?})",
+                    chunked.len(),
+                    whole.len(),
+                    first_diff.map(|i| chunked[i]),
+                    first_diff.map(|i| whole[i]),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eight_khz_upsampling_is_chunk_invariant_and_flushes_tail() {
+        let samples = [0.0, 1.0, 2.0, 3.0];
+        let (single_before_flush, single) = stream_in_chunks(&samples, 8_000, &[samples.len()]);
+        let (chunked_before_flush, chunked) = stream_in_chunks(&samples, 8_000, &[1, 2, 1]);
+
+        assert_eq!(single_before_flush, 7);
+        assert_eq!(chunked_before_flush, 7);
+        assert_eq!(single, chunked);
+        assert_eq!(single, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn twelve_khz_upsampling_is_chunk_invariant_and_preserves_tail() {
+        let samples = [0.0, 1.0, 2.0, 3.0];
+        let (single_before_flush, single) = stream_in_chunks(&samples, 12_000, &[samples.len()]);
+        let (chunked_before_flush, chunked) = stream_in_chunks(&samples, 12_000, &[2, 1, 1]);
+
+        assert_eq!(single_before_flush, 5);
+        assert_eq!(chunked_before_flush, 5);
+        assert_eq!(single, chunked);
+        assert_eq!(single, [0.0, 0.75, 1.5, 2.25, 3.0]);
+    }
+
+    #[test]
+    fn capture_poll_distinguishes_empty_items_and_disconnects() {
+        let (cmd_tx, cmd_rx) = channel();
+        let (pcm_tx, pcm_rx) = channel();
+        let handle = CaptureHandle::from_test_channels(cmd_tx, pcm_rx);
+
+        assert!(matches!(handle.try_recv_pcm(), CapturePoll::Empty));
+        let audio = CapturedAudio {
+            samples: vec![0.25],
+            device: "test-mic".to_string(),
+        };
+        pcm_tx.send((4, Ok(audio))).expect("test receiver is alive");
+        assert!(matches!(
+            handle.try_recv_pcm(),
+            CapturePoll::Item(4, Ok(audio)) if audio.samples == [0.25] && audio.device == "test-mic"
+        ));
+        drop(pcm_tx);
+        assert!(matches!(handle.try_recv_pcm(), CapturePoll::Disconnected));
+        drop(cmd_rx);
+        assert!(!handle.send(CaptureCmd::Cancel));
+    }
+
+    /// A8 smoke check: on a machine with no usable input device, starting
+    /// capture must surface an error over the channel without panicking — the
+    /// worker keeps running and the mic returns to idle. This covers both the
+    /// "no default input device" case and a phantom device whose input config
+    /// cannot be opened (a Mac Studio with no mic reports the latter); the
+    /// frame loop logs either as a `speech input error`. Gated on an env var so
+    /// `cargo test --features speech` stays green on machines with a working
+    /// microphone:
+    ///
+    /// ```sh
+    /// HORIZON_SPEECH_TEST_NO_MIC=1 \
+    ///   cargo test --features speech no_microphone -- --nocapture
+    /// ```
+    #[test]
+    fn no_microphone_start_reports_error_without_panicking() {
+        if std::env::var_os("HORIZON_SPEECH_TEST_NO_MIC").is_none() {
+            eprintln!("skipped: HORIZON_SPEECH_TEST_NO_MIC not set");
+            return;
+        }
+        let handle = CaptureHandle::spawn(None).expect("spawn capture thread");
+        assert!(handle.send(CaptureCmd::Start(7)));
+        let mut received = None;
+        for _ in 0..200 {
+            match handle.try_recv_pcm() {
+                CapturePoll::Item(generation, pcm) => {
+                    received = Some((generation, pcm));
+                    break;
+                }
+                CapturePoll::Empty => {}
+                CapturePoll::Disconnected => panic!("capture worker disconnected before replying"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        match received {
+            Some((generation, Err(message))) => {
+                assert_eq!(generation, 7, "error must carry the requesting generation");
+                eprintln!("capture-start error surfaced without panic: {message}");
+                assert!(!message.trim().is_empty(), "error message should not be empty");
+            }
+            Some((_, Ok(_))) => panic!("expected an error with no usable input device, got audio"),
+            None => panic!("capture worker sent no result within the timeout"),
+        }
+    }
+}

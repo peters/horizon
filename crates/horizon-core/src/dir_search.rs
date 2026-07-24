@@ -41,17 +41,24 @@ pub fn spawn_lookup(query: String) -> mpsc::Receiver<Vec<PathBuf>> {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var("HOME").map_or_else(|_| PathBuf::from("/"), PathBuf::from)
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home);
+    }
+    // Windows has no HOME; use the standard profile directory.
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return PathBuf::from(profile);
+    }
+    PathBuf::from("/")
 }
 
-fn expand_tilde(input: &str) -> PathBuf {
-    if let Some(rest) = input.strip_prefix('~') {
-        let home = home_dir();
-        if rest.is_empty() {
-            home
-        } else {
-            home.join(rest.strip_prefix('/').unwrap_or(rest))
-        }
+/// Expand a leading `~` to the user's home directory, like the other
+/// path-taking config fields (workspace `cwd`, ssh `identity_file`) do.
+#[must_use]
+pub fn expand_tilde(input: &str) -> PathBuf {
+    if input == "~" {
+        home_dir()
+    } else if let Some(rest) = input.strip_prefix("~/") {
+        home_dir().join(rest)
     } else {
         PathBuf::from(input)
     }
@@ -270,6 +277,8 @@ mod tests {
         assert_eq!(expand_tilde("~"), home);
         assert_eq!(expand_tilde("~/foo"), home.join("foo"));
         assert_eq!(expand_tilde("/etc"), PathBuf::from("/etc"));
+        assert_eq!(expand_tilde("~cache/model.gguf"), PathBuf::from("~cache/model.gguf"));
+        assert_eq!(expand_tilde("~alice/model.gguf"), PathBuf::from("~alice/model.gguf"));
     }
 
     #[test]

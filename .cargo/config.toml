@@ -1,0 +1,7 @@
+[alias]
+# Speech-enabled runs (see README "Speech Input"). `cargo speech` builds CPU
+# inference on Linux/Windows and Metal on macOS; -cuda/-vulkan compile those
+# GPU backends in.
+speech = "run --release --features speech"
+speech-cuda = "run --release --features speech-cuda"
+speech-vulkan = "run --release --features speech-vulkan"

@@ -313,6 +313,91 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ---
 
+## Speech Input (opt-in)
+
+Dictate straight into a terminal: every terminal-backed panel's title bar gets a mic button (Editor, Git Changes, and Usage panels have no PTY, so they get none), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
+
+It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
+
+```bash
+cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)
+cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
+cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
+```
+
+When a GPU backend is compiled in (Metal ships automatically in plain `speech` on macOS), the `auto` backend probes discrete GPUs first and always falls back to CPU; a CPU-only build simply runs on CPU.
+
+```yaml
+features:
+  speech:
+    enabled: true
+    model: /path/to/models/whisper-large-v3-Q8_0.gguf  # any transcribe.cpp GGUF
+    language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
+    task: transcribe     # translate = speak any language, insert English text
+    backend: auto        # auto | cpu | cuda | vulkan | metal
+    input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
+    hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
+    hotkey_mode: hold    # hold (Ventrilo-style) | toggle
+```
+
+The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button.
+
+Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
+
+Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
+
+Dictation outcomes that would otherwise be invisible are surfaced as a transient message: a tap too short to transcribe, a recording in which no speech was detected (named with the microphone it came from), a push-to-talk press while the previous dictation is still processing, and speech errors.
+
+### Speech profiles: one key per language
+
+For switching languages without touching settings, define **profiles** — each with its own model, language, output, and push-to-talk key. The key *is* the language (Ventrilo-style channel binds): hold **F1** to dictate Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Each profile's model loads lazily on first use and then stays warm.
+
+```yaml
+features:
+  speech:
+    enabled: true
+    backend: auto
+    hotkey_mode: hold
+    profiles:
+      - name: Norsk
+        model: ~/models/nb-whisper-large-Q8_0.gguf
+        language: "no"
+        task: transcribe
+        hotkey: F1
+      - name: English
+        model: ~/models/whisper-large-v3-Q8_0.gguf
+        language: en
+        task: transcribe
+        hotkey: F2
+      - name: NO→EN
+        model: ~/models/whisper-large-v3-Q8_0.gguf
+        language: "no"
+        task: translate
+        target_language: en
+        hotkey: F3
+```
+
+Profile hotkeys are validated against each other and against every global shortcut. The mic button uses the last-used profile; with no `profiles:` list, the flat `model`/`language`/`hotkey` fields act as a single profile as before.
+
+### Norwegian dictation (NB-Whisper)
+
+For Norwegian — including dialects — the strongest model is **NB-Whisper Large**, a Whisper fine-tune by the National Library of Norway ([NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large), trained on ~20 000 hours of Norwegian speech). It is not distributed as a GGUF, so convert it once with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (community whisper fine-tunes convert like the stock checkpoints; NbAiLab ships sharded safetensors that must be merged into a single `model.safetensors` first), quantize to `Q8_0`, then:
+
+```yaml
+features:
+  speech:
+    enabled: true
+    model: /path/to/nb-whisper-large-Q8_0.gguf
+    language: "no"        # bokmål output; "nn" for nynorsk
+    task: transcribe
+```
+
+Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
+
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal panel title bars.
+
+---
+
 ## Built With
 
 | | |
@@ -335,7 +420,7 @@ Manual smoke-test plans live under [**docs/testing**](docs/testing), including t
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 ```
 
 ---

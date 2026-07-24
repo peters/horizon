@@ -112,6 +112,9 @@ impl HorizonApp {
             let local_id_for_viewport = local_id.clone();
 
             ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _class| {
+                // Feed the focus aggregate consumed by the end-of-frame
+                // unattended-recording privacy guard.
+                self.any_viewport_focused |= viewport_ctx.input(|input| input.viewport().focused.unwrap_or(false));
                 self.render_detached_workspace_window(viewport_ctx, workspace_id, &local_id_for_viewport);
             });
         }

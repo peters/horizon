@@ -4,6 +4,7 @@ use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, a
 use crate::theme;
 
 use super::RenameEditAction;
+use super::speech::MicState;
 use super::util::{format_compact_count, usize_to_f32};
 
 #[derive(Clone, Copy)]
@@ -22,6 +23,22 @@ pub(super) struct PanelChrome<'a> {
     pub workspace_accent: Option<Color32>,
     pub attention_badge: Option<&'a (AttentionSeverity, String)>,
     pub ssh_status: Option<SshConnectionStatus>,
+    /// Speech mic control; `None` when speech input is not enabled.
+    pub mic: Option<MicControl>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MicControl {
+    pub rect: Rect,
+    pub hovered: bool,
+    pub state: MicState,
+}
+
+impl PanelChrome<'_> {
+    /// Leftmost titlebar control: badges and the title stop left of this.
+    fn controls_anchor(&self) -> Rect {
+        self.mic.map_or(self.close_rect, |mic| mic.rect)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -186,13 +203,19 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     }
 
     if let Some((severity, summary)) = chrome.attention_badge {
-        paint_attention_badge(&painter, chrome.titlebar_rect, chrome.close_rect, *severity, summary);
+        paint_attention_badge(
+            &painter,
+            chrome.titlebar_rect,
+            chrome.controls_anchor(),
+            *severity,
+            summary,
+        );
     }
     if let Some(status) = chrome.ssh_status {
         paint_ssh_status_badge(
             &painter,
             chrome.titlebar_rect,
-            chrome.close_rect,
+            chrome.controls_anchor(),
             chrome.scrollback_limit > 0,
             status,
         );
@@ -205,7 +228,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             HistoryMeter {
                 panel_id: chrome.panel_id,
                 titlebar_rect: chrome.titlebar_rect,
-                close_rect: chrome.close_rect,
+                close_rect: chrome.controls_anchor(),
                 accent,
                 history_size: chrome.history_size,
                 scrollback_limit: chrome.scrollback_limit,
@@ -214,7 +237,74 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    if let Some(mic) = chrome.mic {
+        paint_mic_control(ui, &painter, mic);
+    }
     paint_close_and_resize_controls(&painter, chrome.close_rect, chrome.resize_rect, chrome.close_hovered);
+}
+
+/// Painter-drawn microphone glyph: capsule body, U-shaped cradle, and stem.
+/// Pulses red while recording and amber while a transcription is in flight.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "pulse alpha math stays within [0, 255]"
+)]
+fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
+    // Cradle polyline offsets (radius 4.5, 22.5° steps) — precomputed so the
+    // hot chrome path allocates nothing per frame.
+    const CRADLE_OFFSETS: [Vec2; 9] = [
+        Vec2::new(4.5, 0.0),
+        Vec2::new(4.157, 1.722),
+        Vec2::new(3.182, 3.182),
+        Vec2::new(1.722, 4.157),
+        Vec2::new(0.0, 4.5),
+        Vec2::new(-1.722, 4.157),
+        Vec2::new(-3.182, 3.182),
+        Vec2::new(-4.157, 1.722),
+        Vec2::new(-4.5, 0.0),
+    ];
+    let center = mic.rect.center();
+    let time = ui.input(|input| input.time);
+    let pulse = (0.5 + 0.5 * (time * 5.0).sin() as f32).clamp(0.0, 1.0);
+
+    let color = match mic.state {
+        MicState::Idle => {
+            if mic.hovered {
+                theme::FG()
+            } else {
+                theme::alpha(theme::FG_DIM(), 140)
+            }
+        }
+        MicState::Recording => {
+            let base = Color32::from_rgb(232, 72, 72);
+            painter.circle_stroke(
+                center,
+                9.0 + pulse * 2.0,
+                Stroke::new(1.2_f32, theme::alpha(base, 90 + (pulse * 120.0) as u8)),
+            );
+            base
+        }
+        MicState::Busy => theme::alpha(theme::PALETTE_YELLOW(), 140 + (pulse * 100.0) as u8),
+    };
+
+    // Body capsule.
+    painter.rect_filled(
+        Rect::from_center_size(center + Vec2::new(0.0, -2.5), Vec2::new(5.0, 8.0)),
+        CornerRadius::same(3),
+        color,
+    );
+    // Cradle: semicircle under the body.
+    let cradle_center = center + Vec2::new(0.0, 0.5);
+    let cradle_stroke = Stroke::new(1.3_f32, color);
+    for pair in CRADLE_OFFSETS.windows(2) {
+        painter.line_segment([cradle_center + pair[0], cradle_center + pair[1]], cradle_stroke);
+    }
+    // Stem.
+    painter.line_segment(
+        [center + Vec2::new(0.0, 5.0), center + Vec2::new(0.0, 7.0)],
+        Stroke::new(1.3_f32, color),
+    );
 }
 
 fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, resize_rect: Rect, close_hovered: bool) {
@@ -248,9 +338,10 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 /// Compute the right x boundary where the title text must stop, accounting
 /// for all badges (history meter, SSH status, attention) that sit to its right.
 fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
-    let mut right = chrome.close_rect.min.x - 12.0;
+    let anchor = chrome.controls_anchor();
+    let mut right = anchor.min.x - 12.0;
     if chrome.scrollback_limit > 0 {
-        right = panel_history_badge_rect(chrome.titlebar_rect, chrome.close_rect).min.x - 8.0;
+        right = panel_history_badge_rect(chrome.titlebar_rect, anchor).min.x - 8.0;
     }
     if chrome.ssh_status.is_some() {
         // SSH badge sits left of the history meter; reserve ~90px.

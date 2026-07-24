@@ -14,10 +14,11 @@ use super::super::terminal_widget::{
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
-    PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
+    MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
-use super::util::clamp_panel_size;
+use super::speech::MicState;
+use super::util::{clamp_panel_size, primary_shortcut_label};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
 #[derive(Clone, Copy)]
@@ -52,6 +53,13 @@ struct PanelUiOutcome {
     session_rebind: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
+    mic_clicked: bool,
+}
+
+struct PanelMicInteraction {
+    response: egui::Response,
+    state: MicState,
+    enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +74,9 @@ struct PanelFrame {
     titlebar: Rect,
     body: Rect,
     close: Rect,
+    /// Mic control slot left of the close button; only interactive/painted
+    /// when speech input is enabled.
+    mic: Rect,
     resize: Rect,
 }
 
@@ -83,6 +94,12 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
+        // 26 px from the close button's center: both 16 px rects expand by
+        // 4 px for hit-testing, so the hit targets stay disjoint.
+        let mic = Rect::from_center_size(
+            Pos2::new(panel_rect.max.x - 44.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
+            Vec2::splat(16.0),
+        );
         let resize = Rect::from_min_size(
             Pos2::new(
                 panel_rect.max.x - RESIZE_HANDLE_SIZE,
@@ -96,9 +113,38 @@ impl PanelFrame {
             titlebar,
             body,
             close,
+            mic,
             resize,
         }
     }
+}
+
+const fn mic_accessibility_label(state: MicState) -> &'static str {
+    match state {
+        MicState::Idle => "Start dictation",
+        MicState::Recording => "Stop dictation; recording",
+        MicState::Busy => "Dictation transcription in progress",
+    }
+}
+
+const fn mic_control_enabled(interactive: bool, speech_active: bool, state: MicState) -> bool {
+    interactive
+        && match state {
+            MicState::Idle => !speech_active,
+            MicState::Recording => true,
+            MicState::Busy => false,
+        }
+}
+
+fn mic_widget_info(state: MicState, enabled: bool) -> egui::WidgetInfo {
+    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, mic_accessibility_label(state))
+}
+
+fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state: MicState) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
+    let response = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| mic_widget_info(state, enabled));
+    response
 }
 
 struct PanelBodyContext<'a> {
@@ -399,6 +445,61 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
+                // Dictation needs a PTY to type into: Editor/GitChanges/Usage
+                // panels have no terminal, so they get no mic control.
+                let mic_eligible = self.speech.is_some()
+                    && !matches!(
+                        snapshot.kind,
+                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
+                    );
+                let mic_response = mic_eligible.then(|| {
+                    let speech = self.speech.as_ref();
+                    let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));
+                    let enabled = ui.is_enabled()
+                        && mic_control_enabled(
+                            interactive,
+                            speech.is_some_and(super::speech::SpeechSystem::is_active),
+                            state,
+                        );
+                    let response = mic_control_response(
+                        ui,
+                        rects.mic.expand2(Vec2::splat(4.0)),
+                        ui.make_persistent_id(("panel_mic", panel_id.0)),
+                        enabled,
+                        state,
+                    );
+                    // Built lazily: the summary allocates per profile, so it
+                    // must only run for the hovered mic, not every visible
+                    // panel every frame.
+                    let response = response.on_hover_ui(|ui| {
+                        let tooltip = match state {
+                            MicState::Recording => "Recording into this panel (click to stop)".to_string(),
+                            MicState::Busy => "Transcribing dictation for this panel".to_string(),
+                            MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
+                                "Dictation is active in another panel".to_string()
+                            }
+                            MicState::Idle => speech.map_or_else(
+                                || "Dictate into this panel (click to start/stop)".to_string(),
+                                |speech| match speech.hotkey_summary(primary_shortcut_label()) {
+                                    Some(summary) => {
+                                        let verb = match speech.hotkey_mode() {
+                                            horizon_core::SpeechHotkeyMode::Hold => "hold",
+                                            horizon_core::SpeechHotkeyMode::Toggle => "press",
+                                        };
+                                        format!("Dictate into this panel (click, or {verb}: {summary})")
+                                    }
+                                    None => "Dictate into this panel (click to start/stop)".to_string(),
+                                },
+                            ),
+                        };
+                        ui.label(tooltip);
+                    });
+                    PanelMicInteraction {
+                        response,
+                        state,
+                        enabled,
+                    }
+                });
                 let resize_response = ui.interact(
                     rects.resize.expand2(Vec2::splat(6.0)),
                     ui.make_persistent_id(("panel_resize", panel_id.0)),
@@ -414,6 +515,7 @@ impl HorizonApp {
                         snapshot.is_renaming,
                         &drag_response,
                         &close_response,
+                        mic_response.as_ref().map(|mic| &mic.response),
                         &resize_response,
                         &mut outcome,
                     );
@@ -455,6 +557,11 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
+                        mic: mic_response.as_ref().map(|mic| MicControl {
+                            rect: rects.mic,
+                            hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
+                            state: mic.state,
+                        }),
                     },
                 );
 
@@ -464,7 +571,13 @@ impl HorizonApp {
                 if snapshot.is_renaming {
                     outcome.rename_action = show_inline_rename_editor(
                         ui,
-                        panel_title_content_rect(rects.titlebar, rects.close, snapshot.workspace_accent.is_some()),
+                        panel_title_content_rect(
+                            rects.titlebar,
+                            // The rename editor must stop left of the mic
+                            // control when one is shown.
+                            if mic_eligible { rects.mic } else { rects.close },
+                            snapshot.workspace_accent.is_some(),
+                        ),
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
                     );
@@ -522,9 +635,14 @@ impl HorizonApp {
         is_renaming: bool,
         drag_response: &egui::Response,
         close_response: &egui::Response,
+        mic_response: Option<&egui::Response>,
         resize_response: &egui::Response,
         outcome: &mut PanelUiOutcome,
     ) {
+        if mic_response.is_some_and(egui::Response::clicked) {
+            outcome.mic_clicked = true;
+            outcome.focus_requested = true;
+        }
         if resize_response.drag_started() || resize_response.clicked() {
             outcome.focus_requested = true;
         }
@@ -690,6 +808,15 @@ impl HorizonApp {
         if outcome.focus_requested {
             self.board.focus(panel_id);
         }
+        if outcome.mic_clicked
+            && let Some(speech) = self.speech.as_mut()
+        {
+            speech.toggle(panel_id);
+            // The hotkey handler already made its repaint decision this
+            // frame; keep frames coming so the new recording's pulse and
+            // polling start immediately.
+            ctx.request_repaint();
+        }
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);
         }
@@ -708,26 +835,4 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::clip_screen_rect_to_canvas;
-    use egui::{Pos2, Rect, Vec2};
-
-    #[test]
-    fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {
-        let canvas_rect = Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(420.0, 320.0));
-        let raw_rect = Rect::from_min_max(Pos2::new(60.0, 40.0), Pos2::new(180.0, 180.0));
-
-        assert_eq!(
-            clip_screen_rect_to_canvas(raw_rect, canvas_rect),
-            Some(Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(180.0, 180.0)))
-        );
-    }
-
-    #[test]
-    fn clip_screen_rect_to_canvas_rejects_non_positive_intersections() {
-        let canvas_rect = Rect::from_min_size(Pos2::new(100.0, 80.0), Vec2::new(320.0, 240.0));
-        let raw_rect = Rect::from_min_size(Pos2::new(430.0, 90.0), Vec2::new(80.0, 80.0));
-
-        assert_eq!(clip_screen_rect_to_canvas(raw_rect, canvas_rect), None);
-    }
-}
+mod tests;

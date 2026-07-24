@@ -2,13 +2,147 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{Config, GitWatcher, PanelKind, WorkspaceId};
+use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
 use crate::{loading_spinner, theme};
 
 use super::canvas::CanvasGridCache;
+use super::speech::SpeechEvent;
 use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
+
+const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HoldHotkeyTransition {
+    start_target: Option<PanelId>,
+    stop: bool,
+    engaged_profile: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpeechActivity {
+    Idle,
+    Recording,
+    Busy,
+}
+
+fn hold_hotkey_transition(
+    profile: usize,
+    pressed: bool,
+    released: bool,
+    engaged_profile: Option<usize>,
+    activity: SpeechActivity,
+    focused_terminal: Option<PanelId>,
+) -> HoldHotkeyTransition {
+    let mut engaged_profile = if activity == SpeechActivity::Recording {
+        engaged_profile
+    } else {
+        None
+    };
+    let start_target = if pressed && engaged_profile.is_none() && activity == SpeechActivity::Idle {
+        focused_terminal
+    } else {
+        None
+    };
+    if start_target.is_some() {
+        engaged_profile = Some(profile);
+    }
+    let stop = released && engaged_profile == Some(profile);
+    if stop {
+        engaged_profile = None;
+    }
+    HoldHotkeyTransition {
+        start_target,
+        stop,
+        engaged_profile,
+    }
+}
+
+fn speech_activity(speech: &super::speech::SpeechSystem) -> SpeechActivity {
+    if speech.recording_target().is_some() {
+        SpeechActivity::Recording
+    } else if speech.is_active() {
+        SpeechActivity::Busy
+    } else {
+        SpeechActivity::Idle
+    }
+}
+
+/// Why a matched push-to-talk press could not start a recording. Every
+/// no-op press produces a notice: a press that visibly does nothing is
+/// indistinguishable from a dead hotkey, which is exactly how the silent
+/// variants were reported.
+fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
+    let message = match activity {
+        SpeechActivity::Recording => "Another dictation is already recording — release its key first.",
+        SpeechActivity::Busy => {
+            "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
+        }
+        SpeechActivity::Idle => "Focus a terminal panel, then hold the key to dictate into it.",
+    };
+    SpeechEvent::Notice(message.to_string())
+}
+
+fn handle_profile_hotkeys(
+    ctx: &Context,
+    speech: &mut super::speech::SpeechSystem,
+    focused_terminal: Option<PanelId>,
+    presses_allowed: bool,
+    mut engaged_profile: Option<usize>,
+    events: &mut Vec<SpeechEvent>,
+) -> Option<usize> {
+    for index in 0..speech.profile_bindings().len() {
+        let (profile, binding) = speech.profile_bindings()[index];
+        let (pressed, released) =
+            ctx.input(|input| super::shortcuts::press_and_release_in_events(&input.events, binding));
+        let pressed = pressed && presses_allowed;
+        if pressed {
+            tracing::info!(
+                profile,
+                activity = ?speech_activity(speech),
+                terminal_focused = focused_terminal.is_some(),
+                "speech hotkey pressed"
+            );
+        }
+        match speech.hotkey_mode() {
+            horizon_core::SpeechHotkeyMode::Hold => {
+                let transition = hold_hotkey_transition(
+                    profile,
+                    pressed,
+                    released,
+                    engaged_profile,
+                    speech_activity(speech),
+                    focused_terminal,
+                );
+                if let Some(focused) = transition.start_target {
+                    speech.start(focused, profile);
+                } else if pressed {
+                    events.push(no_start_notice(speech_activity(speech)));
+                }
+                if transition.stop {
+                    speech.stop();
+                }
+                engaged_profile = transition.engaged_profile;
+            }
+            horizon_core::SpeechHotkeyMode::Toggle => {
+                if pressed {
+                    if speech.recording_target().is_some() {
+                        speech.stop();
+                    } else if speech_activity(speech) != SpeechActivity::Idle {
+                        // `start` below no-ops outside Idle; explain instead.
+                        events.push(no_start_notice(speech_activity(speech)));
+                    } else if let Some(focused) = focused_terminal {
+                        speech.start(focused, profile);
+                    } else {
+                        events.push(no_start_notice(SpeechActivity::Idle));
+                    }
+                }
+            }
+        }
+    }
+    engaged_profile
+}
 
 impl HorizonApp {
     #[profiling::function]
@@ -130,6 +264,9 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.sync_panel_focus_from_pointer_press(ctx);
+        // Speech runs before the fullscreen handler so that Escape cancels an
+        // active recording instead of also exiting panel fullscreen.
+        self.handle_speech_input(ctx);
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
@@ -150,6 +287,298 @@ impl HorizonApp {
         self.maybe_start_update_check();
 
         had_terminal_output
+    }
+
+    /// Push-to-talk hotkey handling plus draining speech results into the
+    /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
+    ///
+    /// The hotkey listens on the root viewport only; panels in detached
+    /// windows still dictate via their mic button.
+    fn handle_speech_input(&mut self, ctx: &Context) {
+        let now = Instant::now();
+        self.expire_speech_release_ownership(now);
+        self.speech_escape_cancelled = false;
+        // The hotkey targets the focused panel, but only terminal-backed
+        // panels can receive typed text.
+        let focused_terminal = self.board.focused.filter(|id| {
+            self.board.panel(*id).is_some_and(|panel| {
+                // The root-viewport hotkey must not dictate into a panel
+                // living in a detached window (documented main-window scope).
+                panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
+            })
+        });
+        // Capture-state hygiene must run even without a speech runtime
+        // (stub builds, or Speech Input disabled with Rebind still armed):
+        // a stale flag would suppress global shortcuts indefinitely.
+        let mut capturing_hotkey: bool = ctx
+            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+            .unwrap_or(false);
+        if capturing_hotkey && !self.settings_speech_tab_open() {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
+            capturing_hotkey = false;
+        }
+        // A just-captured chord suppresses global shortcuts until its key
+        // release is seen; if the window loses focus first, that release may
+        // never arrive (Wayland/macOS), so recover the pending key here or it
+        // would disable every shortcut indefinitely.
+        let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        if !root_focused_now {
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("speech_captured_key"),
+                    None::<super::settings::PendingCapture>,
+                );
+            });
+        }
+
+        if !root_focused_now {
+            self.stop_hold_on_focus_loss(ctx, now);
+        }
+
+        let Some(speech) = self.speech.as_mut() else {
+            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            self.reset_speech_input_state(root_focused_now);
+            return;
+        };
+
+        // Invariant: the active target panel must still exist — across
+        // Recording, AwaitingPcm, and Transcribing. Covers every removal
+        // path (single close, workspace bulk close, session teardown), so
+        // the mic can't stay open and a busy engine can't wedge behind a
+        // vanished panel while inference finishes into nothing.
+        if let Some(target) = speech.active_target()
+            && self.board.panel(target).is_none()
+        {
+            speech.cancel();
+            // Held bindings persist until their release is consumed, so a
+            // key-up after the panel vanished cannot leak into the terminal.
+            self.speech_engaged_profile = None;
+            tracing::info!("recording target panel disappeared; recording cancelled");
+        }
+
+        // Seed the per-frame focus aggregate with the root viewport; each
+        // detached viewport ORs itself in during rendering, and the privacy
+        // guard in `finalize_frame` cancels an unattended recording when no
+        // Horizon window has focus (see `cancel_unattended_recording`).
+        let root_focused = root_focused_now;
+        self.any_viewport_focused = root_focused;
+
+        // While the settings binder is capturing a new hotkey, the pressed
+        // chord must not also trigger the current binding. And while a
+        // text-entry surface is open (settings, command palette, search,
+        // rename), a printable hotkey belongs to that surface — engaging
+        // would both type and record. Terminal focus is NOT such a surface:
+        // dictating into the focused terminal is the normal case. Only new
+        // presses are gated; releases below always run so a hold started
+        // before opening a surface still stops.
+        let text_surface_active = self.settings.is_some()
+            || self.command_palette.is_some()
+            || self.search_overlay.is_some()
+            || self.renaming_panel.is_some()
+            || self.renaming_workspace.is_some();
+        let mut events = Vec::new();
+        // A push-to-talk chord pressed while its presses are gated must not
+        // read as a dead hotkey — say why nothing started. The binder's own
+        // capture is exempt: there the press is being recorded, not ignored.
+        if text_surface_active && !capturing_hotkey {
+            let gated_press = ctx.input(|input| {
+                speech
+                    .profile_bindings()
+                    .iter()
+                    .any(|(_, binding)| super::shortcuts::press_and_release_in_events(&input.events, *binding).0)
+            });
+            if gated_press {
+                events.push(super::speech::SpeechEvent::Notice(
+                    "Push-to-talk is paused while settings, search, or a rename field is open.".to_string(),
+                ));
+            }
+        }
+        self.speech_engaged_profile = handle_profile_hotkeys(
+            ctx,
+            speech,
+            focused_terminal,
+            !capturing_hotkey && !text_surface_active,
+            self.speech_engaged_profile,
+            &mut events,
+        );
+
+        if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            speech.cancel();
+            self.speech_engaged_profile = None;
+            // Consume the Escape: fullscreen exit and the terminal must not
+            // also react to a keypress that meant "cancel dictation".
+            self.speech_escape_cancelled = true;
+        }
+        if speech.is_active() {
+            // Keep frames coming so the pulse animates and poll() runs
+            // promptly even when the terminal is otherwise idle, but bounded
+            // so a long transcription doesn't spin the render loop.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Publish the selected backend for the settings UI (relevant when
+        // the config says `auto`). Clear it while unknown so a stale value
+        // from before a live config rebuild is not displayed.
+        match speech.active_backend() {
+            Some(backend) => {
+                let backend = backend.to_string();
+                ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_active_backend"), backend));
+            }
+            None => {
+                ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            }
+        }
+
+        events.extend(speech.poll());
+        // Capture/worker failures can end Recording during poll(), after the
+        // transition above ran. Drop ownership before rendering can start a
+        // new mic-button recording in this same frame.
+        if speech.recording_target().is_none() {
+            self.speech_engaged_profile = None;
+        }
+        self.inject_speech_events(events);
+    }
+
+    /// Deliver transcripts into their target panels (mirrors
+    /// `poll_primary_selection_paste`); errors are logged.
+    fn inject_speech_events(&mut self, events: Vec<super::speech::SpeechEvent>) {
+        for event in events {
+            match event {
+                super::speech::SpeechEvent::Text { target, text } => {
+                    let Some(panel) = self.board.panel_mut(target) else {
+                        tracing::warn!("speech target panel closed before transcription finished");
+                        continue;
+                    };
+                    let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+                        continue;
+                    };
+                    // Trailing space so consecutive dictations don't fuse words.
+                    let bytes = input::paste_bytes(&format!("{text} "), mode, true);
+                    panel.write_input(&bytes);
+                }
+                super::speech::SpeechEvent::Notice(message) => {
+                    tracing::info!(%message, "speech notice");
+                    self.show_speech_notice(message, false);
+                }
+                super::speech::SpeechEvent::Error(message) => {
+                    tracing::warn!(%message, "speech input error");
+                    self.show_speech_notice(format!("Speech input error: {message}"), true);
+                }
+            }
+        }
+    }
+
+    pub(super) fn show_speech_notice(&mut self, message: impl Into<String>, error: bool) {
+        self.speech_notice = Some(super::SpeechNotice {
+            message: message.into(),
+            error,
+            shown_at: Instant::now(),
+        });
+    }
+
+    /// Bottom-center transient feedback for dictation outcomes that would
+    /// otherwise be invisible (ignored presses, empty transcripts, errors).
+    pub(super) fn render_speech_notice(&mut self, ctx: &Context) {
+        const NOTICE_TTL: Duration = Duration::from_secs(5);
+        let Some(notice) = &self.speech_notice else {
+            return;
+        };
+        let elapsed = notice.shown_at.elapsed();
+        let Some(remaining) = NOTICE_TTL.checked_sub(elapsed).filter(|left| !left.is_zero()) else {
+            self.speech_notice = None;
+            return;
+        };
+        ctx.request_repaint_after(remaining);
+        let (icon, tint) = if notice.error {
+            ("⚠", theme::PALETTE_YELLOW())
+        } else {
+            ("🎤", theme::FG())
+        };
+        egui::Area::new(egui::Id::new("speech_notice_overlay"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon).color(tint).size(12.0));
+                        ui.label(egui::RichText::new(&notice.message).color(theme::FG()).size(12.0));
+                    });
+                });
+            });
+    }
+
+    /// Privacy guard: on Wayland and macOS, winit synthesizes no key release
+    /// when a window loses focus mid-hold, so the release that would stop a
+    /// recording never arrives — and a recording in a detached window gets no
+    /// root-viewport event at all. Evaluated after every viewport rendered:
+    /// if no Horizon window has focus, the microphone must not stay open.
+    fn cancel_unattended_recording(&mut self) {
+        if self.any_viewport_focused {
+            return;
+        }
+        self.speech_engaged_profile = None;
+        if let Some(speech) = self.speech.as_mut()
+            && speech.recording_target().is_some()
+        {
+            speech.cancel();
+            tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
+        }
+    }
+
+    /// Hold-mode release detection is root-only, but the release can land in
+    /// a detached Horizon window when focus moved there mid-hold (and on
+    /// Wayland/macOS focus loss synthesizes no key release at all). Treat root
+    /// focus loss as the recording release, but retain terminal-filter state:
+    /// a detached viewport must still consume the physical key-up.
+    fn stop_hold_on_focus_loss(&mut self, ctx: &Context, now: Instant) {
+        self.arm_speech_release_ownership(ctx, now);
+        let Some(speech) = self.speech.as_mut() else {
+            return;
+        };
+        if self.speech_engaged_profile.is_some() && speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold {
+            speech.stop();
+            self.speech_engaged_profile = None;
+        }
+    }
+
+    pub(in crate::app) fn arm_speech_release_ownership(&mut self, ctx: &Context, now: Instant) {
+        let deadline = now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT;
+        let mut armed = false;
+        for held in &mut self.speech_held_bindings {
+            if held.release_deadline.is_none() {
+                held.release_deadline = Some(deadline);
+                armed = true;
+            }
+        }
+        if self.speech_escape_release_pending && self.speech_escape_release_deadline.is_none() {
+            self.speech_escape_release_deadline = Some(deadline);
+            armed = true;
+        }
+        if armed {
+            ctx.request_repaint_after(SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+        }
+    }
+
+    fn expire_speech_release_ownership(&mut self, now: Instant) {
+        self.speech_held_bindings
+            .retain(|held| held.release_deadline.is_none_or(|deadline| now < deadline));
+        if self
+            .speech_escape_release_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.speech_escape_release_pending = false;
+            self.speech_escape_release_deadline = None;
+        }
+    }
+
+    /// Seed the focus aggregate when speech is unavailable. Held-chord state
+    /// remains until a viewport consumes the release or its bounded ownership
+    /// window expires.
+    fn reset_speech_input_state(&mut self, root_focused: bool) {
+        self.any_viewport_focused = root_focused;
+        if !root_focused {
+            self.speech_engaged_profile = None;
+        }
     }
 
     fn poll_primary_selection_paste(&mut self) {
@@ -374,6 +803,7 @@ impl HorizonApp {
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
+        self.cancel_unattended_recording();
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);
@@ -430,12 +860,16 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use std::time::{Duration, Instant};
 
     use eframe::CreationContext;
     use egui::Context;
-    use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+    use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
 
-    use super::HorizonApp;
+    use super::{
+        HoldHotkeyTransition, HorizonApp, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
+    };
+    use crate::app::HeldSpeechBinding;
     use crate::input;
 
     fn test_app() -> HorizonApp {
@@ -473,5 +907,195 @@ mod tests {
         app.finalize_frame(&ctx, false, 0, 0);
 
         assert!(repaint_requests.load(Ordering::Relaxed) > 0);
+    }
+
+    /// Root focus may move directly into a detached Horizon viewport. Keep
+    /// ownership across a transient all-unfocused pass, but bound it in case
+    /// the destination viewport never receives the key-up.
+    #[test]
+    fn focus_loss_ownership_survives_handoff_and_expires_without_key_up() {
+        let ctx = Context::default();
+        let now = Instant::now();
+        let mut app = test_app();
+        let chord = horizon_core::ShortcutBinding::new(
+            horizon_core::ShortcutModifiers::CTRL,
+            horizon_core::ShortcutKey::Letter('K'),
+        );
+        // Pressed with no terminal focused: the filter holds the chord, but
+        // the engine never engaged a profile.
+        app.speech_held_bindings.push(HeldSpeechBinding::new(chord));
+        app.speech_engaged_profile = None;
+        app.speech_escape_release_pending = true;
+
+        app.stop_hold_on_focus_loss(&ctx, now);
+
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert_eq!(app.speech_held_bindings[0].binding, chord);
+        assert!(app.speech_escape_release_pending);
+        assert_eq!(
+            app.speech_held_bindings[0].release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+        assert_eq!(
+            app.speech_escape_release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+
+        app.any_viewport_focused = false;
+        app.cancel_unattended_recording();
+
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert!(app.speech_escape_release_pending);
+
+        let later = now + Duration::from_secs(1);
+        let newer_chord = horizon_core::ShortcutBinding::new(
+            horizon_core::ShortcutModifiers::ALT,
+            horizon_core::ShortcutKey::Letter('L'),
+        );
+        app.speech_held_bindings.push(HeldSpeechBinding::new(newer_chord));
+        // A newly consumed Escape is a separate ownership generation.
+        app.speech_escape_release_deadline = None;
+        app.arm_speech_release_ownership(&ctx, later);
+
+        assert_eq!(
+            app.speech_held_bindings[0].release_deadline,
+            Some(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+        assert_eq!(
+            app.speech_held_bindings[1].release_deadline,
+            Some(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+        assert_eq!(
+            app.speech_escape_release_deadline,
+            Some(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT)
+        );
+
+        app.expire_speech_release_ownership(now + SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert_eq!(app.speech_held_bindings[0].binding, newer_chord);
+        assert!(app.speech_escape_release_pending);
+
+        app.expire_speech_release_ownership(later + SPEECH_RELEASE_OWNERSHIP_TIMEOUT);
+
+        assert!(app.speech_held_bindings.is_empty());
+        assert!(!app.speech_escape_release_pending);
+        assert!(app.speech_escape_release_deadline.is_none());
+    }
+
+    /// End-to-end press path for profile push-to-talk: a synthetic F-key
+    /// egui event must engage the matching profile, start capture, and stop
+    /// on release. Guards the full parse → match → engine chain that no
+    /// smoke lane could exercise live (the mac runner has no input device).
+    #[cfg(feature = "speech")]
+    #[test]
+    fn f_key_events_drive_profile_hold_dictation_end_to_end() {
+        use egui::{Event, Key, Modifiers, RawInput};
+
+        let press = |key| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let release = |key| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let frame = |events| RawInput {
+            events,
+            ..RawInput::default()
+        };
+
+        let ctx = Context::default();
+        let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1", "F2", "F3"]);
+        let target = PanelId(7);
+        let mut engaged = None;
+        let mut events = Vec::new();
+
+        // A key with no profile binding must not engage anything.
+        let _ = ctx.run(frame(vec![press(Key::K)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
+        });
+        assert_eq!(engaged, None);
+        assert_eq!(speech.recording_target(), None);
+
+        // F2 engages the second profile and starts capture into the target.
+        let _ = ctx.run(frame(vec![press(Key::F2)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
+        });
+        assert_eq!(engaged, Some(1));
+        assert_eq!(speech.recording_target(), Some(target));
+        assert!(channels.capture_start_requested());
+
+        // Releasing the engaged key stops the hold (recording ends, the
+        // engine moves on to awaiting the captured PCM).
+        let _ = ctx.run(frame(vec![release(Key::F2)]), |ctx| {
+            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
+        });
+        assert_eq!(engaged, None);
+        assert_eq!(speech.recording_target(), None);
+        assert!(speech.is_active());
+        // Unbound keys, a clean start, and a clean stop must not produce
+        // ignored-press notices.
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
+        let focused = PanelId(7);
+        let starts = HoldHotkeyTransition {
+            start_target: Some(focused),
+            stop: false,
+            engaged_profile: Some(1),
+        };
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, Some(focused)),
+            starts
+        );
+
+        let ignored = HoldHotkeyTransition {
+            start_target: None,
+            stop: false,
+            engaged_profile: None,
+        };
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Recording, Some(focused)),
+            ignored
+        );
+        assert_eq!(
+            hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, None),
+            ignored
+        );
+    }
+
+    #[test]
+    fn hold_hotkey_same_batch_tap_stops_only_its_own_recording() {
+        let focused = PanelId(7);
+        assert_eq!(
+            hold_hotkey_transition(1, true, true, None, SpeechActivity::Idle, Some(focused)),
+            HoldHotkeyTransition {
+                start_target: Some(focused),
+                stop: true,
+                engaged_profile: None,
+            }
+        );
+
+        let mic_button_press = hold_hotkey_transition(1, true, false, None, SpeechActivity::Recording, Some(focused));
+        assert_eq!(mic_button_press.engaged_profile, None);
+        assert!(!hold_hotkey_transition(1, false, true, None, SpeechActivity::Recording, Some(focused)).stop);
+        assert!(hold_hotkey_transition(1, false, true, Some(1), SpeechActivity::Recording, Some(focused)).stop);
+        assert!(!hold_hotkey_transition(2, false, true, Some(1), SpeechActivity::Recording, Some(focused)).stop);
+    }
+
+    #[test]
+    fn hold_hotkey_drops_stale_ownership_after_recording_ends() {
+        let transition = hold_hotkey_transition(1, false, true, Some(1), SpeechActivity::Busy, Some(PanelId(7)));
+        assert_eq!(transition.engaged_profile, None);
+        assert!(!transition.stop);
     }
 }

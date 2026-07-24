@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
+pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
 use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -453,11 +454,15 @@ impl Default for OverlaysConfig {
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
+    pub speech: SpeechConfig,
 }
 
 impl Default for FeaturesConfig {
     fn default() -> Self {
-        Self { attention_feed: true }
+        Self {
+            attention_feed: true,
+            speech: SpeechConfig::default(),
+        }
     }
 }
 
@@ -606,12 +611,9 @@ impl Config {
 
     #[must_use]
     pub fn expand_tilde(s: &str) -> PathBuf {
-        if let Some(rest) = s.strip_prefix("~/")
-            && let Ok(home) = std::env::var("HOME")
-        {
-            return PathBuf::from(home).join(rest);
-        }
-        PathBuf::from(s)
+        // Single implementation shared with speech model paths, so every
+        // path-taking config field expands `~` identically.
+        crate::dir_search::expand_tilde(s)
     }
 
     /// Validate semantic config rules that deserialization alone cannot catch.
@@ -620,7 +622,8 @@ impl Config {
     ///
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
-        self.shortcuts.resolve()?;
+        let shortcuts = self.shortcuts.resolve()?;
+        crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }

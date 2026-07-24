@@ -18,6 +18,7 @@ mod settings;
 mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
 mod updates;
@@ -35,7 +36,7 @@ use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
     PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -143,6 +144,29 @@ impl DetachedWorkspaceViewportState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeldSpeechBinding {
+    binding: ShortcutBinding,
+    release_deadline: Option<Instant>,
+}
+
+impl HeldSpeechBinding {
+    const fn new(binding: ShortcutBinding) -> Self {
+        Self {
+            binding,
+            release_deadline: None,
+        }
+    }
+}
+
+/// Transient dictation feedback shown bottom-center: outcomes that would
+/// otherwise be invisible (ignored presses, empty transcripts, errors).
+struct SpeechNotice {
+    message: String,
+    error: bool,
+    shown_at: Instant,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -163,6 +187,25 @@ pub struct HorizonApp {
     ime_commit_normalizer: input::ImeCommitNormalizer,
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
+    speech: Option<speech::SpeechSystem>,
+    /// Every push-to-talk chord currently held (used to keep their key
+    /// events, repeats, and releases out of the terminal input stream —
+    /// multiple profile keys can be down simultaneously).
+    speech_held_bindings: Vec<HeldSpeechBinding>,
+    /// The profile whose chord press started the active hold-mode recording;
+    /// releases only stop a recording when set (a no-op press must not stop a
+    /// mic-button recording).
+    speech_engaged_profile: Option<usize>,
+    /// Escape was consumed to cancel a recording this frame.
+    speech_escape_cancelled: bool,
+    /// The cancel-Escape's release has not yet been seen; it must also be
+    /// kept out of the terminal stream (kitty release reporting).
+    speech_escape_release_pending: bool,
+    speech_escape_release_deadline: Option<Instant>,
+    speech_notice: Option<SpeechNotice>,
+    /// Whether any Horizon viewport (root or detached) reported focus this
+    /// frame; evaluated at end of frame to cancel unattended recordings.
+    any_viewport_focused: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -207,6 +250,7 @@ pub struct HorizonApp {
     last_session_catalog_refresh: Option<Instant>,
     last_terminal_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
+    speech_model_info_cache: settings::SpeechModelInfoCache,
     session_manager: Option<RuntimeSessionManagerState>,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
@@ -289,8 +333,9 @@ impl HorizonApp {
         app
     }
 
-    fn initial_state(config: &Config, bootstrap: AppBootstrap) -> Self {
-        let AppBootstrap {
+    fn initial_state(
+        config: &Config,
+        AppBootstrap {
             config_path,
             session_store,
             observed_keyboard_inputs,
@@ -301,8 +346,8 @@ impl HorizonApp {
             next_surge_update_check_at,
             shortcuts,
             action_commands_cache,
-        } = bootstrap;
-
+        }: AppBootstrap,
+    ) -> Self {
         Self {
             board,
             panels_to_close: Vec::new(),
@@ -336,6 +381,14 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
+            speech: speech::SpeechSystem::from_config(&config.features.speech),
+            speech_held_bindings: Vec::new(),
+            speech_engaged_profile: None,
+            speech_escape_cancelled: false,
+            speech_escape_release_pending: false,
+            speech_escape_release_deadline: None,
+            speech_notice: None,
+            any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
             window_config: config.window.clone(),
@@ -353,6 +406,7 @@ impl HorizonApp {
             last_session_catalog_refresh: None,
             last_terminal_output_at: Some(Instant::now()),
             settings: None,
+            speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             managed_install,
             surge_update_check_rx: None,
@@ -488,6 +542,7 @@ impl eframe::App for HorizonApp {
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
         self.render_active_view(ctx);
+        self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
     }
 

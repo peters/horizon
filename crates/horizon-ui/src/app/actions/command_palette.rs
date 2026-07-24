@@ -139,6 +139,11 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn handle_shortcuts(&mut self, ctx: &Context) {
+        // A chord being captured by the settings hotkey binder must not
+        // trigger the shortcut it happens to match.
+        if crate::app::shortcuts::hotkey_capture_active(ctx) {
+            return;
+        }
         let shortcut_bindings: &[(_, CommandId)] = &[
             (self.shortcuts.zoom_reset, CommandId::ZoomReset),
             (self.shortcuts.zoom_in, CommandId::ZoomIn),

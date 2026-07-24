@@ -208,6 +208,15 @@ impl HorizonApp {
 
     fn prepare_session_switch(&mut self) {
         self.auto_save_runtime_state();
+        // Panel ids restart from 1 in the next board; a transcript finishing
+        // after the switch must not inject into an unrelated same-id panel,
+        // and no microphone may survive the teardown. Rebuilding drops the
+        // workers (cancelling any in-flight inference via their tokens).
+        self.speech = super::speech::SpeechSystem::from_config(&self.template_config.features.speech);
+        // Held bindings persist until their release is consumed by the
+        // terminal filter, so a key-up after the switch cannot leak into a
+        // new-board terminal; only stop-attribution is reset.
+        self.speech_engaged_profile = None;
         let _ = self.board.begin_async_shutdown();
         self.git_watchers.clear();
         self.release_active_session_lease();

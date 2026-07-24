@@ -10,6 +10,12 @@ repository.workspace = true
 
 [features]
 trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
+# Opt-in speech input (mic button + push-to-talk hotkey). CPU-only inference
+# by default; add one of the GPU variants below to compile a GPU backend in.
+# Backend selection at runtime stays automatic with CPU fallback either way.
+speech = ["dep:transcribe-cpp", "dep:cpal"]
+speech-cuda = ["speech", "transcribe-cpp/cuda"]
+speech-vulkan = ["speech", "transcribe-cpp/vulkan"]
 
 [[bin]]
 name = "horizon"
@@ -36,3 +42,5 @@ egui_commonmark.workspace = true
 arboard.workspace = true
 tokio.workspace = true
 surge-core.workspace = true
+transcribe-cpp = { workspace = true, optional = true }
+cpal = { workspace = true, optional = true }

@@ -55,7 +55,12 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # `speech` (CPU) is the widest feature set a plain runner can build:
+      # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
+      # Rust surface is identical to `speech` (they only toggle native
+      # backends). cpal needs the ALSA headers on Linux.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 
   clippy-strict:
     name: Clippy (strict)
@@ -67,7 +72,10 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
-      - run: cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      # `--features speech` so the unwrap/expect ban also covers the speech
+      # runtime code (needs the ALSA headers to build cpal on Linux).
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
   clippy-pedantic:
     name: Clippy (pedantic — advisory)
@@ -79,9 +87,10 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: Run pedantic audit (non-blocking)
         run: |
-          cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic || {
+          cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic || {
             echo "::warning::Pedantic lint debt detected (non-blocking advisory job)."
           }
 
@@ -110,6 +119,13 @@ jobs:
         with:
           key: ${{ matrix.cache_key }}
       - run: cargo test --workspace
+      # Speech tests (resampler, GGUF reader, shortcut matchers, engine
+      # state machine) run on every OS in the matrix so the native audio
+      # linkage (ALSA / CoreAudio) is exercised on each supported target;
+      # the no-mic and real-model paths stay env-gated off.
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo test --workspace --features speech
 
   windows-smoke:
     name: Windows test build
@@ -123,6 +139,10 @@ jobs:
         with:
           key: windows-test-build
       - run: cargo test --workspace --no-run
+      # The speech feature is advertised on Windows too (WASAPI capture via
+      # cpal); build it so a Windows-only break cannot pass CI. Compiling the
+      # vendored C++ tree here is the point — tests are not run.
+      - run: cargo test --workspace --features speech --no-run
 
   snap-build-inputs:
     name: Snap Build Inputs

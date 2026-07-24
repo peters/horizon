@@ -2,6 +2,11 @@ mod bar;
 mod general;
 mod presets;
 mod shortcuts;
+mod speech;
+#[cfg(test)]
+pub(in crate::app) use speech::ClipboardCapture;
+pub(in crate::app) use speech::PendingCapture;
+pub(in crate::app) use speech::SpeechModelInfoCache;
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
@@ -134,7 +139,7 @@ impl HorizonApp {
 
         let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ctx, &config_path, editor);
+            render_settings_panel(ctx, &config_path, editor, &mut self.speech_model_info_cache);
         }
     }
 
@@ -216,7 +221,31 @@ impl HorizonApp {
         }
     }
 
+    /// Whether the settings General tab — which hosts the speech hotkey
+    /// binders (flat editor and per-profile rows alike) — is currently open.
+    /// Used to auto-disarm a stale capture.
+    pub(super) fn settings_speech_tab_open(&self) -> bool {
+        self.settings.as_ref().is_some_and(|editor| {
+            editor.active_tab == SettingsTab::General
+                && editor
+                    .editing_config
+                    .as_ref()
+                    .is_some_and(|config| config.features.speech.enabled)
+        })
+    }
+
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
+        // Speech applies live: rebuild the subsystem whenever its config
+        // changed (drops any in-flight recording, which is acceptable for a
+        // settings change). Covers both settings saves and file reloads.
+        if self.template_config.features.speech != config.features.speech {
+            self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
+            // Held bindings persist until their release is consumed (kitty
+            // release safety); only stop-attribution is reset.
+            self.speech_engaged_profile = None;
+            self.speech_escape_cancelled = false;
+            tracing::info!("speech configuration changed; speech system rebuilt");
+        }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =
@@ -243,7 +272,12 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     }
 }
 
-fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut SettingsEditor) {
+fn render_settings_panel(
+    ctx: &Context,
+    config_path: &str,
+    editor: &mut SettingsEditor,
+    model_info_cache: &mut speech::SpeechModelInfoCache,
+) {
     let viewport_width = util::viewport_local_rect(ctx).width();
     let default_width = settings_panel_default_width(viewport_width);
 
@@ -269,12 +303,18 @@ fn render_settings_panel(ctx: &Context, config_path: &str, editor: &mut Settings
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, available),
+                tab => render_gui_tab(ui, tab, editor, model_info_cache, available),
             }
         });
 }
 
-fn render_gui_tab(ui: &mut egui::Ui, tab: SettingsTab, editor: &mut SettingsEditor, available: Vec2) {
+fn render_gui_tab(
+    ui: &mut egui::Ui,
+    tab: SettingsTab,
+    editor: &mut SettingsEditor,
+    model_info_cache: &mut speech::SpeechModelInfoCache,
+    available: Vec2,
+) {
     let Some(ref mut config) = editor.editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
@@ -289,7 +329,7 @@ fn render_gui_tab(ui: &mut egui::Ui, tab: SettingsTab, editor: &mut SettingsEdit
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let changed = match tab {
-                SettingsTab::General => general::render(ui, config),
+                SettingsTab::General => general::render(ui, config, model_info_cache),
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 // Yaml is handled before this function is called.
@@ -359,5 +399,5 @@ fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0));
+    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0)).wrap());
 }

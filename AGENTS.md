@@ -31,6 +31,7 @@ No Rust toolchain or system headers are needed for this path.
   - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake`
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
 - **Windows:** MSVC build tools (installed automatically by `rustup` on the `msvc` target). DX12/Vulkan drivers ship with the GPU driver.
+- **Speech input (`--features speech`, opt-in):** additionally needs **CMake** and a **C++ compiler** (to build the vendored transcribe.cpp), plus on Linux the ALSA headers (`libasound2-dev`/`alsa-lib-devel`) for microphone capture. The default build does not require these.
 
 #### Build & Run
 
@@ -45,7 +46,8 @@ cargo run --release
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --features speech   # speech tier (needs CMake + ALSA headers)
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 ```
 
 If any step fails, read the error, fix the prerequisite, and retry. On Linux, missing system headers are the most common issue — look for `pkg-config` or linker errors and install the corresponding `-dev` package.
@@ -88,10 +90,13 @@ crates/
 ```bash
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
+# `--features speech` is the widest runner-buildable set (GPU features need
+# machine toolchains and add no Rust surface; needs libasound2-dev on Linux)
 RUSTFLAGS="-D warnings" cargo test --workspace
-cargo clippy --all-targets --all-features -- -D warnings
-cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
+RUSTFLAGS="-D warnings" cargo test --workspace --features speech
+cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
 - Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
@@ -134,8 +139,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 
 | Tier | Command | Status |
 |------|---------|--------|
-| Blocking | `cargo clippy --all-targets --all-features -- -D warnings` | Must pass |
-| Strict | `cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
+| Blocking | `cargo clippy --all-targets --features speech,trace-profiling -- -D warnings` | Must pass |
+| Strict | `cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
 | Pedantic | `cargo clippy ... -W clippy::pedantic` | Advisory (will promote) |
 
 ### Commit Guidelines
@@ -181,6 +186,26 @@ When cutting a new release, generate concise release notes from the commits sinc
 - Unless release-specific behavior is the thing under test, prefer `target/debug/horizon` for smoke testing so iteration stays fast while validating UI and interaction correctness
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
 - Temporary smoke-test plans are validation artifacts, not permanent docs. Delete them after the UI validation pass is complete unless the user explicitly asks to keep them.
+
+### Cross-Machine Smoke-Test Handoff
+
+Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is coordinated **through PR comments**, so agents on different machines can hand work to each other asynchronously:
+
+- The implementing agent opens the PR, adds a smoke-test plan under `docs/testing/`, and posts a comment:
+  `SMOKE-TEST REQUEST <machine/os> — plan: docs/testing/<file>.md — scope: <which lanes>`
+- The executing agent on the target machine checks out the PR branch, runs its lane of the plan, **fixes what it can and pushes those commits to the PR branch**, then replies with a report:
+
+  ```
+  SMOKE-TEST REPORT (<machine/os>)
+  - <step>: pass | fail — short note
+  - ...
+  Summary: <what was fixed, what remains, anything the next agent must know>
+  SMOKE-TEST: DONE
+  ```
+
+  The final line must be exactly `SMOKE-TEST: DONE` — waiting agents poll the PR for that marker. Never put the marker in a REQUEST comment; only in a completed REPORT.
+- Any agent may then post a further `SMOKE-TEST REQUEST` (more scope, another machine) and the loop repeats — request → report → request → report — until every requested lane passes and the PR is ready.
+- An agent resuming work on a PR must read the newest `SMOKE-TEST REPORT` comment before continuing.
 
 ### Smoke Test Reliability
 
