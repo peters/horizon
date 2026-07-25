@@ -44,6 +44,10 @@ pub(crate) struct SearchOverlay {
     cached_results: SearchResults,
     display_rows: Vec<DisplayRow>,
     request_focus: bool,
+    /// Whether the toolbar input had keyboard focus at its last render.
+    /// The always-present toolbar bar means the overlay OBJECT existing
+    /// proves nothing — push-to-talk gating must ask for this instead.
+    input_focused: bool,
     options_dirty: bool,
     /// When the query last changed; search fires after the debounce window.
     query_changed_at: Option<Instant>,
@@ -73,6 +77,7 @@ impl SearchOverlay {
             cached_results: SearchResults::default(),
             display_rows: Vec::new(),
             request_focus: true,
+            input_focused: true,
             options_dirty: false,
             query_changed_at: None,
             pending_terminal_refresh: false,
@@ -102,8 +107,18 @@ impl SearchOverlay {
     pub(crate) fn new_inactive() -> Self {
         Self {
             request_focus: false,
+            input_focused: false,
             ..Self::new()
         }
+    }
+
+    /// Whether the search input had keyboard focus at its last render (or
+    /// has focus requested). This — not the overlay's existence — is the
+    /// "typing into search" signal: the toolbar keeps an inactive overlay
+    /// allocated on every frame.
+    #[must_use]
+    pub(crate) fn input_focused(&self) -> bool {
+        self.input_focused
     }
 
     /// Render the search input inline in the toolbar. Returns an action
@@ -116,6 +131,7 @@ impl SearchOverlay {
         let text_edit_id = ui.make_persistent_id("toolbar_search_input");
         let input_has_focus =
             self.request_focus || ui.input(|input| input.focused) && ui.memory(|memory| memory.has_focus(text_edit_id));
+        self.input_focused = input_has_focus;
         let input_hovered = ui.rect_contains_pointer(input_rect);
 
         paint_toolbar_search_input(ui, input_rect, input_has_focus, input_hovered, !self.query.is_empty());
@@ -435,6 +451,20 @@ mod tests {
 
         overlay.note_query_changed(second_change);
         assert_eq!(overlay.query_changed_at, Some(second_change));
+    }
+
+    #[test]
+    fn toolbar_overlay_reports_input_focus_only_when_focused() {
+        // The toolbar keeps an inactive overlay allocated on every frame;
+        // if its mere existence counted as "typing into search", every
+        // push-to-talk press would be gated permanently (it was).
+        let inactive = SearchOverlay::new_inactive();
+        assert!(!inactive.input_focused());
+
+        // A palette-activated overlay requests focus and must gate
+        // immediately, before the first render delivers real focus.
+        let activated = SearchOverlay::new();
+        assert!(activated.input_focused());
     }
 
     #[test]

@@ -84,6 +84,21 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
     SpeechEvent::Notice(message.to_string())
 }
 
+/// Which text surface ate a gated push-to-talk press, for the notice. The
+/// priority order mirrors `text_surface_active`; rename fields are the
+/// remaining case.
+fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing: bool) -> &'static str {
+    if settings_open {
+        "the settings window is open"
+    } else if palette_open {
+        "the command palette is open"
+    } else if search_capturing {
+        "the search field has focus"
+    } else {
+        "a rename field is open"
+    }
+}
+
 fn handle_profile_hotkeys(
     ctx: &Context,
     speech: &mut super::speech::SpeechSystem,
@@ -365,21 +380,30 @@ impl HorizonApp {
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding. And while a
-        // text-entry surface is open (settings, command palette, search,
-        // rename), a printable hotkey belongs to that surface — engaging
-        // would both type and record. Terminal focus is NOT such a surface:
-        // dictating into the focused terminal is the normal case. Only new
-        // presses are gated; releases below always run so a hold started
-        // before opening a surface still stops.
+        // text-entry surface is capturing keys (settings, command palette,
+        // a focused search input, rename), a printable hotkey belongs to
+        // that surface — engaging would both type and record. Terminal
+        // focus is NOT such a surface: dictating into the focused terminal
+        // is the normal case. Only new presses are gated; releases below
+        // always run so a hold started before opening a surface still
+        // stops. The search overlay OBJECT exists on every frame (the
+        // toolbar keeps an inactive one allocated), so it gates only while
+        // its input is actually focused — `is_some()` here once gated every
+        // press on every instance, permanently and silently.
+        let search_capturing = self
+            .search_overlay
+            .as_ref()
+            .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
         let text_surface_active = self.settings.is_some()
             || self.command_palette.is_some()
-            || self.search_overlay.is_some()
+            || search_capturing
             || self.renaming_panel.is_some()
             || self.renaming_workspace.is_some();
         let mut events = Vec::new();
         // A push-to-talk chord pressed while its presses are gated must not
-        // read as a dead hotkey — say why nothing started. The binder's own
-        // capture is exempt: there the press is being recorded, not ignored.
+        // read as a dead hotkey — say exactly which surface is eating the
+        // press, so a stale gate state can never hide again. The binder's
+        // own capture is exempt: there the press is recorded, not ignored.
         if text_surface_active && !capturing_hotkey {
             let gated_press = ctx.input(|input| {
                 speech
@@ -388,9 +412,14 @@ impl HorizonApp {
                     .any(|(_, binding)| super::shortcuts::press_and_release_in_events(&input.events, *binding).0)
             });
             if gated_press {
-                events.push(super::speech::SpeechEvent::Notice(
-                    "Push-to-talk is paused while settings, search, or a rename field is open.".to_string(),
-                ));
+                let surface = gated_press_surface(
+                    self.settings.is_some(),
+                    self.command_palette.is_some(),
+                    search_capturing,
+                );
+                events.push(super::speech::SpeechEvent::Notice(format!(
+                    "Push-to-talk press ignored: {surface}."
+                )));
             }
         }
         self.speech_engaged_profile = handle_profile_hotkeys(
