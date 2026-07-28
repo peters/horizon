@@ -239,6 +239,13 @@ impl HorizonApp {
         // changed (drops any in-flight recording, which is acceptable for a
         // settings change). Covers both settings saves and file reloads.
         if self.template_config.features.speech != config.features.speech {
+            // Retire the old system BEFORE constructing the replacement: an
+            // assignment's RHS runs first, and `from_config` can start
+            // loading immediately (preloaded profiles), so the old workers
+            // must already be registered as retiring or a preloader sails
+            // past the retirement guard and loads beside a still-resident
+            // model.
+            self.speech = None;
             self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
             // Held bindings persist until their release is consumed (kitty
             // release safety); only stop-attribution is reset.

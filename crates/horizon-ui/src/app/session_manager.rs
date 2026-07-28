@@ -212,6 +212,11 @@ impl HorizonApp {
         // after the switch must not inject into an unrelated same-id panel,
         // and no microphone may survive the teardown. Rebuilding drops the
         // workers (cancelling any in-flight inference via their tokens).
+        // Old system retired BEFORE the replacement is constructed:
+        // `from_config` can start loading immediately (preloaded profiles),
+        // and a preloader must find these workers already registered as
+        // retiring.
+        self.speech = None;
         self.speech = super::speech::SpeechSystem::from_config(&self.template_config.features.speech);
         // Held bindings persist until their release is consumed by the
         // terminal filter, so a key-up after the switch cannot leak into a
