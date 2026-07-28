@@ -112,10 +112,20 @@ pub struct Job {
     pub generation: u64,
 }
 
+/// Generation tag on a `ModelLoaded` produced by a startup preload rather
+/// than a dictation run. Real recording generations start at 1 (the engine
+/// increments before use), so 0 is unambiguous.
+pub const PRELOAD_GENERATION: u64 = 0;
+
 pub enum WorkerEvent {
     /// The model finished loading; reports the backend actually selected
-    /// (interesting when the config says `auto`).
+    /// (interesting when the config says `auto`). `generation` is
+    /// [`PRELOAD_GENERATION`] when a startup preload did the load.
     ModelLoaded { generation: u64, backend: String },
+    /// A startup preload could not load the model. Surfaced immediately: a
+    /// broken model path should be visible at launch, not on the first
+    /// dictation attempt.
+    PreloadFailed { message: String },
     Done {
         target: PanelId,
         generation: u64,
@@ -268,6 +278,7 @@ struct Settings {
     task: Task,
     target_language: Option<String>,
     backend: Backend,
+    preload: bool,
 }
 
 impl Settings {
@@ -299,6 +310,7 @@ impl Settings {
                 SpeechBackend::Vulkan => Backend::Vulkan,
                 SpeechBackend::Metal => Backend::Metal,
             },
+            preload: profile.preload,
         }
     }
 }
@@ -316,6 +328,31 @@ fn worker_loop(
     // cache entry upgradable) for as long as the worker lives.
     let mut model: Option<Arc<Model>> = None;
     let mut active_backend: Option<String> = None;
+    if settings.preload {
+        // Load before waiting for the first job so the first dictation is
+        // instant. Same serialized-load path as a lazy load: concurrent
+        // preloads across profiles queue on the global load lock, and a
+        // preloader waits out retiring workers exactly like any loader. A
+        // failed preload only reports — the next job retries the load.
+        match ensure_session(settings, shutdown, life, &mut session, &mut model) {
+            Ok(loaded_backend) => {
+                if let Some(backend) = loaded_backend {
+                    active_backend = Some(backend.clone());
+                    let _ = event_tx.send(WorkerEvent::ModelLoaded {
+                        generation: PRELOAD_GENERATION,
+                        backend,
+                    });
+                }
+            }
+            Err(message) => {
+                tracing::warn!(%message, model = %settings.model_path, "speech model preload failed");
+                let _ = event_tx.send(WorkerEvent::PreloadFailed { message });
+            }
+        }
+        if shutdown.is_cancelled() {
+            return;
+        }
+    }
     while let Ok(job) = job_rx.recv() {
         if shutdown.is_cancelled() {
             return;
@@ -489,8 +526,10 @@ mod tests {
 
     use transcribe_cpp::{Model, RunOptions};
 
+    use horizon_core::{SpeechBackend, SpeechProfile};
+
     use super::super::capture::to_mono_16k;
-    use super::{RETIRING, WorkerLife, await_retiring_workers, register_retiring_worker};
+    use super::{RETIRING, WorkerEvent, WorkerHandle, WorkerLife, await_retiring_workers, register_retiring_worker};
 
     // These tests exercise process-global retirement state and must not
     // observe each other's temporary worker entries under the parallel test
@@ -598,6 +637,36 @@ mod tests {
         drop(other);
         waiter_thread.join().expect("waiter thread panicked");
         assert!(RETIRING.lock().unwrap_or_else(PoisonError::into_inner).is_empty());
+    }
+
+    /// A `preload` profile attempts its load before any job arrives, and a
+    /// failed preload reports without wedging the worker. Uses the shared
+    /// retirement lock: the load path waits on the process-global retiring
+    /// set, which other tests populate with fake entries.
+    #[test]
+    fn preload_reports_failure_for_missing_model_before_any_job() {
+        let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let profile = SpeechProfile {
+            model: "/nonexistent/horizon-preload-test.gguf".to_string(),
+            preload: true,
+            ..SpeechProfile::default()
+        };
+        let handle = WorkerHandle::spawn(&profile, SpeechBackend::Cpu).expect("spawn worker");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let message = loop {
+            match handle.try_recv_event() {
+                Ok(WorkerEvent::PreloadFailed { message }) => break message,
+                Ok(_) => panic!("unexpected worker event before the preload failure"),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    assert!(Instant::now() < deadline, "no preload failure within 10s");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("worker exited without reporting the preload failure")
+                }
+            }
+        };
+        assert!(!message.is_empty());
     }
 
     /// End-to-end pipeline check against a real model, gated on env vars so

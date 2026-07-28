@@ -3,7 +3,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel, sync_channel};
 use horizon_core::{PanelId, SpeechHotkeyMode};
 
 use super::super::capture::{CaptureCmd, CaptureHandle, CapturedAudio};
-use super::super::worker::{Job, WorkerEvent, WorkerHandle};
+use super::super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
 use super::{MIN_PCM_SAMPLES, ProfileRuntime, SpeechEvent, SpeechSystem, State};
 
 struct Harness {
@@ -125,6 +125,39 @@ fn short_tap_stops_and_returns_to_idle_without_worker_job() {
     ));
     assert_eq!(speech.state, State::Idle);
     assert!(matches!(harness.job_rx.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn preload_events_publish_backend_and_surface_failures() {
+    let (mut speech, harness) = test_system();
+
+    // A preload's ModelLoaded arrives while Idle and must not be dropped as
+    // stale: the settings backend display should be truthful before the
+    // first dictation.
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::ModelLoaded {
+            generation: PRELOAD_GENERATION,
+            backend: "CUDA0".to_string(),
+        })
+        .expect("queue preload success");
+    assert!(speech.poll().is_empty());
+    assert_eq!(speech.active_backend(), Some("CUDA0"));
+    assert_eq!(speech.state, State::Idle);
+
+    // A failed preload surfaces immediately, naming the profile.
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::PreloadFailed {
+            message: "model not found".to_string(),
+        })
+        .expect("queue preload failure");
+    let events = speech.poll();
+    assert!(matches!(
+        events.as_slice(),
+        [SpeechEvent::Error(message)] if message.contains("Test") && message.contains("model not found")
+    ));
+    assert_eq!(speech.state, State::Idle);
 }
 
 #[test]

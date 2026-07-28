@@ -338,6 +338,7 @@ features:
     input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
+    preload: false       # true = load the model at startup; first dictation becomes instant
 ```
 
 The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button.
@@ -350,7 +351,7 @@ Dictation outcomes that would otherwise be invisible are surfaced as a transient
 
 ### Speech profiles: one key per language
 
-For switching languages without touching settings, define **profiles** — each with its own model, language, output, and push-to-talk key. The key *is* the language (Ventrilo-style channel binds): hold **F1** to dictate Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Each profile's model loads lazily on first use and then stays warm.
+For switching languages without touching settings, define **profiles** — each with its own model, language, output, and push-to-talk key. The key *is* the language (Ventrilo-style channel binds): hold **F1** to dictate Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Each profile's model loads lazily on first use and then stays warm; set `preload: true` on a profile to load it at startup instead, so its first dictation is instant (the model's memory is resident from launch — budget accordingly).
 
 ```yaml
 features:
@@ -364,6 +365,7 @@ features:
         language: "no"
         task: transcribe
         hotkey: F1
+        preload: true    # optional: load at startup for an instant first dictation
       - name: English
         model: ~/models/whisper-large-v3-Q8_0.gguf
         language: en

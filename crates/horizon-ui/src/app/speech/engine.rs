@@ -11,7 +11,7 @@ use std::sync::mpsc::TryRecvError;
 use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
 use super::capture::{CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio};
-use super::worker::{Job, WorkerEvent, WorkerHandle};
+use super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
 use super::{MicState, SpeechEvent};
 
 /// Recordings shorter than this are dropped as accidental taps.
@@ -398,12 +398,25 @@ impl SpeechSystem {
     fn handle_worker_event(&mut self, profile: usize, event: WorkerEvent, events: &mut Vec<SpeechEvent>) {
         match event {
             WorkerEvent::ModelLoaded { generation, backend } => {
-                if matches!(self.state, State::Transcribing { profile: p, generation: g, .. } if p == profile && g == generation)
+                if generation == PRELOAD_GENERATION {
+                    // A startup preload finished; publish the backend so the
+                    // settings display is truthful before the first run.
+                    tracing::info!(profile, %backend, "speech model preloaded");
+                    self.active_backend = Some(backend);
+                } else if matches!(self.state, State::Transcribing { profile: p, generation: g, .. } if p == profile && g == generation)
                 {
                     self.active_backend = Some(backend);
                 } else {
                     tracing::debug!(generation, profile, "stale model-loaded event ignored");
                 }
+            }
+            WorkerEvent::PreloadFailed { message } => {
+                // Not fatal (the next dictation retries the load), but a bad
+                // model path must be visible at launch, not on first use.
+                let label = self.profiles.get(profile).map_or("?", |runtime| runtime.label.as_str());
+                events.push(SpeechEvent::Error(format!(
+                    "preloading the `{label}` speech model failed: {message}"
+                )));
             }
             WorkerEvent::Done {
                 target,

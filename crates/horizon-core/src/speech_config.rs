@@ -35,6 +35,10 @@ pub struct SpeechConfig {
     /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
     pub hotkey: String,
     pub hotkey_mode: SpeechHotkeyMode,
+    /// Load the model at startup instead of on the first dictation. First
+    /// use becomes instant at the cost of the model's memory being resident
+    /// from launch. (For profile configs, set `preload` per profile.)
+    pub preload: bool,
     /// Named speech profiles, each with its own push-to-talk key (e.g.
     /// F1 = Norwegian via NB-Whisper, F2 = English via whisper-large-v3).
     /// When empty, the flat fields above act as a single unnamed profile.
@@ -53,6 +57,7 @@ impl Default for SpeechConfig {
             input_device: String::new(),
             hotkey: "F9".to_string(),
             hotkey_mode: SpeechHotkeyMode::Hold,
+            preload: false,
             profiles: Vec::new(),
         }
     }
@@ -75,6 +80,10 @@ pub struct SpeechProfile {
     /// and may leave this empty; every later profile needs a hotkey to be
     /// reachable (the mic button reuses the last profile a hotkey started).
     pub hotkey: String,
+    /// Load this profile's model at startup instead of on first use. First
+    /// dictation becomes instant at the cost of the model staying resident
+    /// from launch.
+    pub preload: bool,
 }
 
 impl Default for SpeechProfile {
@@ -86,6 +95,7 @@ impl Default for SpeechProfile {
             task: SpeechTask::Transcribe,
             target_language: "en".to_string(),
             hotkey: String::new(),
+            preload: false,
         }
     }
 }
@@ -103,6 +113,7 @@ impl SpeechConfig {
                 task: self.task,
                 target_language: self.target_language.clone(),
                 hotkey: self.hotkey.clone(),
+                preload: self.preload,
             }]
         } else {
             self.profiles.clone()
@@ -295,6 +306,21 @@ fn validate_speech_binding(
 #[cfg(test)]
 mod tests {
     use crate::{Config, FeaturesConfig};
+
+    #[test]
+    fn preload_parses_and_defaults_off() {
+        assert!(!super::SpeechConfig::default().preload);
+        assert!(!super::SpeechProfile::default().preload);
+
+        let speech: super::SpeechConfig = serde_yaml::from_str("enabled: true\npreload: true").expect("flat parse");
+        assert!(speech.preload);
+        // The flat field reaches the synthesized single profile.
+        assert!(speech.resolved_profiles()[0].preload);
+
+        let profile: super::SpeechProfile =
+            serde_yaml::from_str("model: /m.gguf\npreload: true").expect("profile parse");
+        assert!(profile.preload);
+    }
 
     #[test]
     fn speech_config_defaults_are_disabled_hold_f9() {
