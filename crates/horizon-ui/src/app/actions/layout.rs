@@ -104,22 +104,21 @@ impl HorizonApp {
             zones.push(rect);
         }
 
-        let minimap_height =
-            if self.fixed_overlays_visible() && self.minimap_visible && !self.board.workspaces.is_empty() {
-                let overlays = &self.template_config.overlays;
-                let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
-                let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
-                zones.push(Rect::from_min_size(
-                    Pos2::new(
-                        viewport.max.x - MINIMAP_MARGIN - width,
-                        viewport.max.y - MINIMAP_MARGIN - height,
-                    ),
-                    Vec2::new(width, height),
-                ));
-                height
-            } else {
-                0.0
-            };
+        let minimap_height = if self.fixed_overlays_visible() && self.minimap_visible && self.any_attached_workspace() {
+            let overlays = &self.template_config.overlays;
+            let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
+            let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
+            zones.push(Rect::from_min_size(
+                Pos2::new(
+                    viewport.max.x - MINIMAP_MARGIN - width,
+                    viewport.max.y - MINIMAP_MARGIN - height,
+                ),
+                Vec2::new(width, height),
+            ));
+            height
+        } else {
+            0.0
+        };
 
         if self.fixed_overlays_visible()
             && self.template_config.features.attention_feed

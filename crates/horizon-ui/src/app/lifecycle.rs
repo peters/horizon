@@ -74,12 +74,14 @@ fn speech_activity(speech: &super::speech::SpeechSystem) -> SpeechActivity {
 /// indistinguishable from a dead hotkey, which is exactly how the silent
 /// variants were reported.
 fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
+    // Mode-neutral wording: these fire for hold and toggle hotkeys alike,
+    // and the same activity states are reachable from the mic button.
     let message = match activity {
-        SpeechActivity::Recording => "Another dictation is already recording — release its key first.",
+        SpeechActivity::Recording => "Another dictation is already recording — stop it first.",
         SpeechActivity::Busy => {
             "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
         }
-        SpeechActivity::Idle => "Focus a terminal panel, then hold the key to dictate into it.",
+        SpeechActivity::Idle => "Focus a terminal panel to dictate into it.",
     };
     SpeechEvent::Notice(message.to_string())
 }
@@ -431,7 +433,11 @@ impl HorizonApp {
             &mut events,
         );
 
-        if speech.recording_target().is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        // Escape cancels every active speech state, not just Recording:
+        // AwaitingPcm and Transcribing cover the multi-second first-use
+        // model load, exactly when a user most wants to abort — and
+        // `SpeechSystem::cancel` supports all of them.
+        if speech.is_active() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             speech.cancel();
             self.speech_engaged_profile = None;
             // Consume the Escape: fullscreen exit and the terminal must not

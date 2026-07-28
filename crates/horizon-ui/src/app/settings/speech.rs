@@ -93,13 +93,19 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     }
 
     // The microphone applies to every profile, so it renders in both the
-    // profiles and the flat single-model layout.
+    // profiles and the flat single-model layout. Backend and hotkey mode
+    // are global too, but the flat grid below already hosts them — render
+    // them here only for the profiles layout, which returns early.
     ui.add_space(6.0);
-    egui::Grid::new("settings_speech_mic_grid")
+    egui::Grid::new("settings_speech_shared_grid")
         .num_columns(2)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             changed |= speech_microphone_row(ui, config);
+            if !config.features.speech.profiles.is_empty() {
+                changed |= speech_backend_row(ui, config);
+                changed |= speech_hotkey_mode_row(ui, config);
+            }
         });
 
     // With named profiles, the flat single-model editor below would
@@ -158,29 +164,32 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             changed |= render_hotkey_binder(ui, config);
             ui.end_row();
 
-            // `config` is reborrowed by the hotkey binder above.
-            let speech_reborrow = &mut config.features.speech;
-            ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
-            egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
-                .selected_text(match speech_reborrow.hotkey_mode {
-                    SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
-                    SpeechHotkeyMode::Toggle => "Toggle",
-                })
-                .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(
-                            &mut speech_reborrow.hotkey_mode,
-                            SpeechHotkeyMode::Hold,
-                            "Hold (Ventrilo-style)",
-                        )
-                        .changed();
-                    changed |= ui
-                        .selectable_value(&mut speech_reborrow.hotkey_mode, SpeechHotkeyMode::Toggle, "Toggle")
-                        .changed();
-                });
-            ui.end_row();
+            changed |= speech_hotkey_mode_row(ui, config);
         });
 
+    changed
+}
+
+/// Global hold/toggle picker; rendered in both the flat and the profiles
+/// layout (the mode applies to every push-to-talk key).
+fn speech_hotkey_mode_row(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    let speech = &mut config.features.speech;
+    ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
+    egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
+        .selected_text(match speech.hotkey_mode {
+            SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
+            SpeechHotkeyMode::Toggle => "Toggle",
+        })
+        .show_ui(ui, |ui| {
+            changed |= ui
+                .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Hold, "Hold (Ventrilo-style)")
+                .changed();
+            changed |= ui
+                .selectable_value(&mut speech.hotkey_mode, SpeechHotkeyMode::Toggle, "Toggle")
+                .changed();
+        });
+    ui.end_row();
     changed
 }
 

@@ -340,11 +340,12 @@ impl SpeechSystem {
         if pcm.len() < MIN_PCM_SAMPLES {
             // An accidental tap must not vanish without a trace: in hold
             // mode "press and let go" is the natural first thing to try,
-            // and silence here reads as dead hotkeys.
+            // and silence here reads as dead hotkeys. Mode-neutral wording:
+            // toggle hotkeys and the mic button reach this path too.
             tracing::info!(samples = pcm.len(), device = %device, "speech recording too short; dropped");
             self.state = State::Idle;
             events.push(SpeechEvent::Notice(format!(
-                "Recording too short ({seconds:.1} s) — keep the key held down while speaking, then release."
+                "Recording too short ({seconds:.1} s) — speak while the recording runs, then stop it."
             )));
             return;
         }

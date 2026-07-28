@@ -23,6 +23,17 @@ impl HorizonApp {
             .is_some_and(|workspace| self.detached_workspaces.contains_key(&workspace.local_id))
     }
 
+    /// Whether any workspace still lives in the root window. The root
+    /// minimap renders only then; the overlay exclusion zone and every
+    /// other consumer must share this predicate, or the minimap's corner
+    /// becomes a phantom zone that eats clicks with nothing drawn there.
+    pub(super) fn any_attached_workspace(&self) -> bool {
+        self.board
+            .workspaces
+            .iter()
+            .any(|workspace| !self.workspace_is_detached(workspace.id))
+    }
+
     pub(super) fn workspace_collision_scope(
         &self,
         visible_detached_workspace: Option<WorkspaceId>,

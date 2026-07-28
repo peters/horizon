@@ -303,11 +303,9 @@ fn minimap_hit_target(
 
 fn scope_has_content(app: &HorizonApp, scope: MinimapScope) -> bool {
     match scope {
-        MinimapScope::Attached => app
-            .board
-            .workspaces
-            .iter()
-            .any(|workspace| !app.workspace_is_detached(workspace.id)),
+        // Shared with the overlay exclusion zone: render and exclusion
+        // must agree, or the corner eats clicks with no minimap drawn.
+        MinimapScope::Attached => app.any_attached_workspace(),
         MinimapScope::Workspace(workspace_id) => app.board.workspace(workspace_id).is_some(),
     }
 }
