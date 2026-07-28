@@ -4,10 +4,11 @@ use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
 use egui::{Key, PointerButton, Pos2, Rect, Vec2};
 use horizon_core::{
-    Panel, PanelKind, SelectionType, ShortcutBinding, ShortcutKey, ShortcutModifiers, SshConnectionStatus, TerminalSide,
+    Panel, PanelKind, SelectionType, ShortcutBinding, ShortcutKey, ShortcutModifiers, SshConnectionStatus,
 };
 
 mod selection_drag;
+mod viewport_scroll;
 
 use super::super::input::{self, TerminalInputEvent};
 use super::super::primary_selection::PrimarySelection;
@@ -15,6 +16,10 @@ use crate::app::shortcuts::shortcut_event_matches;
 
 use self::selection_drag::SelectionFrameOutcome;
 pub(crate) use self::selection_drag::TerminalSelectionDragState;
+use self::viewport_scroll::{
+    SELECTION_AUTO_SCROLL_INTERVAL, handle_claimed_primary_selection_event, handle_pointer_selection_drag,
+    update_pointer_selection_endpoint,
+};
 use super::ime::{prepare_terminal_keyboard_events, store_terminal_ime_enabled, terminal_ime_enabled};
 use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
@@ -135,12 +140,13 @@ pub(super) fn handle_terminal_pointer_input(
         selection_drag,
         selection_drag_threshold,
     );
-    handle_pointer_events(
+    let local_scrollback_changed = handle_pointer_events(
         &events,
         panel,
         &pointer_context,
         selection_outcome.claimed_primary_pointer,
     );
+    update_active_selection_after_scrollback(local_scrollback_changed, panel, &pointer_context, selection_drag);
     maybe_copy_selection_to_primary(
         panel,
         interaction,
@@ -157,6 +163,31 @@ pub(super) fn handle_terminal_pointer_input(
         && terminal.clickable_at_point(point.line, point.column).is_some()
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+}
+
+fn update_active_selection_after_scrollback(
+    scrollback_changed: bool,
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    selection_drag: &TerminalSelectionDragState,
+) {
+    if scrollback_changed
+        && selection_drag.active_for(panel.id)
+        && pointer.pointer_buttons.primary
+        && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
+        && let Some(pos) = pointer
+            .active_pointer_pos
+            .or_else(|| response_pointer_pos(&pointer.interaction.body))
+    {
+        update_pointer_selection_endpoint(
+            panel,
+            pos,
+            pointer.interaction.layout.body,
+            pointer.metrics,
+            pointer.visible_rows,
+            pointer.visible_cols,
+        );
     }
 }
 
@@ -261,7 +292,8 @@ fn handle_pointer_events(
     panel: &mut Panel,
     pointer: &PointerContext<'_>,
     local_primary_selection_claimed: bool,
-) {
+) -> bool {
+    let mut local_scrollback_changed = false;
     for event in events {
         match event {
             egui::Event::PointerButton {
@@ -271,6 +303,14 @@ fn handle_pointer_events(
                 modifiers,
             } => {
                 if local_primary_selection_claimed && *button == PointerButton::Primary {
+                    handle_claimed_primary_selection_event(
+                        panel,
+                        pointer,
+                        *pos,
+                        *pressed,
+                        *modifiers,
+                        &mut local_scrollback_changed,
+                    );
                     continue;
                 }
                 if !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers) {
@@ -332,13 +372,19 @@ fn handle_pointer_events(
                     match action {
                         input::WheelAction::Pty(bytes) if !bytes.is_empty() => panel.write_input(&bytes),
                         input::WheelAction::Pty(_) => {}
-                        input::WheelAction::Scrollback(lines) => panel.scroll_scrollback_by(lines),
+                        input::WheelAction::Scrollback(lines) => {
+                            let scrollback_before = panel.terminal().map_or(0, horizon_core::Terminal::scrollback);
+                            panel.scroll_scrollback_by(lines);
+                            local_scrollback_changed |=
+                                panel.terminal().map_or(0, horizon_core::Terminal::scrollback) != scrollback_before;
+                        }
                     }
                 }
             }
             _ => {}
         }
     }
+    local_scrollback_changed
 }
 
 fn handle_terminal_body_pointer_actions(
@@ -395,7 +441,7 @@ fn handle_terminal_body_pointer_actions(
         && let Some(pos) = body_pointer_pos
     {
         selection_drag.mark_dragged(panel.id, pos, selection_drag_threshold);
-        handle_pointer_selection_drag(
+        let auto_scrolled = handle_pointer_selection_drag(
             panel,
             pos,
             pointer.interaction.layout.body,
@@ -403,6 +449,9 @@ fn handle_terminal_body_pointer_actions(
             pointer.visible_rows,
             pointer.visible_cols,
         );
+        if auto_scrolled {
+            pointer.ui_ctx.request_repaint_after(SELECTION_AUTO_SCROLL_INTERVAL);
+        }
     }
 
     if selection_drag.active_for(panel.id)
@@ -591,42 +640,6 @@ fn pointer_button_event_any_pos(
 
 fn response_pointer_pos(response: &egui::Response) -> Option<Pos2> {
     response.interact_pointer_pos().or_else(|| response.hover_pos())
-}
-
-fn handle_pointer_selection_drag(
-    panel: &mut Panel,
-    pos: Pos2,
-    body_rect: Rect,
-    metrics: &GridMetrics,
-    visible_rows: u16,
-    visible_cols: u16,
-) {
-    if pos.y < body_rect.min.y {
-        let overshoot = body_rect.min.y - pos.y;
-        let lines = (overshoot / metrics.line_height).ceil().max(1.0);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = (lines as i32).min(5);
-        panel.scroll_scrollback_by(lines);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(0, 0, TerminalSide::Left);
-        }
-    } else if pos.y > body_rect.max.y {
-        let overshoot = pos.y - body_rect.max.y;
-        let lines = (overshoot / metrics.line_height).ceil().max(1.0);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = (lines as i32).min(5);
-        panel.scroll_scrollback_by(-lines);
-        let last_row = visible_rows.saturating_sub(1);
-        let last_col = visible_cols.saturating_sub(1);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
-        }
-    } else if let Some(point) = grid_point_from_position(body_rect, pos, metrics, visible_rows, visible_cols) {
-        let side = cell_side(pos, body_rect, metrics, point);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(point.line, point.column, side);
-        }
-    }
 }
 
 pub(super) fn handle_terminal_keyboard_input(
