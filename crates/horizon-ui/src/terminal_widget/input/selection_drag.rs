@@ -53,4 +53,5 @@ impl TerminalSelectionDragState {
 pub(super) struct SelectionFrameOutcome {
     pub(super) copy_completed_selection: bool,
     pub(super) claimed_primary_pointer: bool,
+    pub(super) release_completes_drag: bool,
 }

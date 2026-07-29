@@ -1,7 +1,5 @@
-use super::{
-    PointerSupport, TerminalSelectionDragState, handle_pointer_selection_drag, handle_terminal_pointer_input,
-    pointer_button_event_any_pos, pointer_button_event_pos,
-};
+use super::frame_events::{pointer_button_event_any_pos, pointer_button_event_pos};
+use super::{PointerSupport, TerminalSelectionDragState, handle_pointer_selection_drag, handle_terminal_pointer_input};
 use crate::primary_selection::PrimarySelection;
 use crate::terminal_widget::layout::{GridMetrics, terminal_interaction, terminal_layout};
 use egui::{
@@ -491,5 +489,69 @@ fn press_before_wheel_preserves_the_pre_scroll_selection_anchor() {
         harness.selected_last_line(),
         harness.viewport_line(4),
         "the held drag endpoint should still track the post-scroll pointer row"
+    );
+}
+
+#[test]
+fn release_then_press_in_one_frame_keeps_the_new_drag_extendable() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame(Vec::new());
+    let body_rect = harness.frame(Vec::new());
+    let first_anchor = cell_position(body_rect, 0, 0, 0.25);
+    let held_pointer = cell_position(body_rect, 2, 5, 0.75);
+    let second_anchor = cell_position(body_rect, 5, 0, 0.25);
+    let extended = cell_position(body_rect, 6, 10, 0.75);
+
+    harness.frame(primary_press(first_anchor));
+    harness.frame(vec![Event::PointerMoved(held_pointer)]);
+
+    let mut events = primary_release(held_pointer);
+    events.extend(primary_press(second_anchor));
+    harness.frame(events);
+
+    harness.frame(vec![Event::PointerMoved(extended)]);
+
+    assert_eq!(
+        harness.selected_first_line(),
+        harness.viewport_line(5),
+        "a same-frame release and press must anchor a fresh selection at the new press"
+    );
+    assert_eq!(
+        harness.selected_last_line(),
+        harness.viewport_line(6),
+        "the still-held pointer must keep extending the selection restarted by a same-frame release and press"
+    );
+}
+
+#[test]
+fn release_wheel_and_press_in_one_frame_anchor_the_new_drag_post_scroll() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame(Vec::new());
+    let body_rect = harness.frame(Vec::new());
+    let first_anchor = cell_position(body_rect, 0, 0, 0.25);
+    let held_pointer = cell_position(body_rect, 2, 5, 0.75);
+    let second_anchor = cell_position(body_rect, 5, 0, 0.25);
+    let extended = cell_position(body_rect, 6, 10, 0.75);
+
+    harness.frame(primary_press(first_anchor));
+    harness.frame(vec![Event::PointerMoved(held_pointer)]);
+
+    let mut events = primary_release(held_pointer);
+    events.extend(wheel(-1.0));
+    events.extend(primary_press(second_anchor));
+    harness.frame(events);
+    assert_eq!(harness.scrollback(), 9);
+
+    harness.frame(vec![Event::PointerMoved(extended)]);
+
+    assert_eq!(
+        harness.selected_first_line(),
+        harness.viewport_line(5),
+        "a press after a same-frame release and wheel must anchor in the post-scroll viewport"
+    );
+    assert_eq!(
+        harness.selected_last_line(),
+        harness.viewport_line(6),
+        "the drag restarted across a same-frame scroll must stay extendable by the held pointer"
     );
 }

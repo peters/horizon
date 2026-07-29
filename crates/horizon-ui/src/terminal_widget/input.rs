@@ -1,31 +1,33 @@
-use std::collections::VecDeque;
-
 use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
-use egui::{Key, PointerButton, Pos2, Rect, Vec2};
-use horizon_core::{
-    Panel, PanelKind, SelectionType, ShortcutBinding, ShortcutKey, ShortcutModifiers, SshConnectionStatus,
-};
+use egui::{Key, PointerButton, Pos2, Vec2};
+use horizon_core::Panel;
 
+mod frame_events;
+mod keyboard;
+mod routing;
 mod selection_drag;
 mod viewport_scroll;
 
-use super::super::input::{self, TerminalInputEvent};
+use super::super::input;
 use super::super::primary_selection::PrimarySelection;
-use crate::app::shortcuts::shortcut_event_matches;
 
+use self::frame_events::{PointerFrameEvents, final_primary_release_index, pointer_event_targets_rect, transform_pos};
+pub(crate) use self::keyboard::SSH_RECONNECT_SHORTCUT;
+pub(super) use self::keyboard::handle_terminal_keyboard_input;
+pub(super) use self::routing::pty_mouse_reporting_enabled;
+use self::routing::{
+    local_primary_selection_allowed, pointer_button_event_needs_handling, pointer_button_routes_to_pty_mouse,
+    pointer_button_starts_local_selection, pointer_motion_routes_to_pty_mouse,
+};
 use self::selection_drag::SelectionFrameOutcome;
 pub(crate) use self::selection_drag::TerminalSelectionDragState;
 use self::viewport_scroll::{
-    SELECTION_AUTO_SCROLL_INTERVAL, handle_claimed_primary_selection_event, handle_pointer_selection_drag,
+    SELECTION_AUTO_SCROLL_INTERVAL, handle_pointer_selection_drag, start_local_selection_at,
     update_pointer_selection_endpoint,
 };
-use super::ime::{prepare_terminal_keyboard_events, store_terminal_ime_enabled, terminal_ime_enabled};
-use super::layout::{GridMetrics, TerminalInteraction, cell_side, grid_point_from_position};
+use super::layout::{GridMetrics, TerminalInteraction, grid_point_from_position};
 use super::scrollbar::{scrollbar_pointer_to_scrollback, scrollbar_thumb_height};
-
-pub(crate) const SSH_RECONNECT_SHORTCUT: ShortcutBinding =
-    ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
 
 pub(super) struct PointerSupport<'a> {
     pub metrics: &'a GridMetrics,
@@ -80,21 +82,7 @@ pub(super) fn handle_terminal_pointer_input(
 
     // Only clone events for the panel that actually needs pointer processing.
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
-    let body_primary_press_pos = pointer_button_event_pos(
-        &events,
-        from_global,
-        PointerButton::Primary,
-        true,
-        interaction.layout.body,
-    );
-    let primary_release_pos = pointer_button_event_any_pos(&events, from_global, PointerButton::Primary, false);
-    let body_middle_press_pos = pointer_button_event_pos(
-        &events,
-        from_global,
-        PointerButton::Middle,
-        true,
-        interaction.layout.body,
-    );
+    let frame_events = PointerFrameEvents::collect(&events, from_global, interaction.layout.body);
 
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;
@@ -134,17 +122,21 @@ pub(super) fn handle_terminal_pointer_input(
     let selection_outcome = handle_terminal_body_pointer_actions(
         panel,
         &pointer_context,
-        body_primary_press_pos,
-        primary_release_pos,
-        body_middle_press_pos,
+        &frame_events,
         selection_drag,
         selection_drag_threshold,
     );
+    let release_replay_index = if selection_outcome.release_completes_drag {
+        final_primary_release_index(&events)
+    } else {
+        None
+    };
     let local_scrollback_changed = handle_pointer_events(
         &events,
         panel,
         &pointer_context,
         selection_outcome.claimed_primary_pointer,
+        release_replay_index,
     );
     update_active_selection_after_scrollback(local_scrollback_changed, panel, &pointer_context, selection_drag);
     maybe_copy_selection_to_primary(
@@ -216,85 +208,15 @@ fn should_handle_terminal_pointer(
         })
 }
 
-pub(super) fn pty_mouse_reporting_enabled(terminal_mode: TermMode, modifiers: egui::Modifiers) -> bool {
-    !modifiers.shift && terminal_mode.intersects(alacritty_terminal::term::TermMode::MOUSE_MODE)
-}
-
-fn pointer_button_checks_clickable_target(
-    button: egui::PointerButton,
-    pressed: bool,
-    modifiers: egui::Modifiers,
-) -> bool {
-    (modifiers.ctrl || modifiers.command) && button == egui::PointerButton::Primary && pressed
-}
-
-fn local_primary_selection_allowed(modifiers: egui::Modifiers) -> bool {
-    !modifiers.alt && !modifiers.ctrl && !modifiers.command
-}
-
-fn pointer_button_uses_local_selection(
-    terminal_mode: TermMode,
-    button: egui::PointerButton,
-    modifiers: egui::Modifiers,
-) -> bool {
-    button == egui::PointerButton::Primary
-        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
-}
-
-fn pointer_button_starts_local_selection(
-    terminal_mode: TermMode,
-    button: egui::PointerButton,
-    pressed: bool,
-    modifiers: egui::Modifiers,
-) -> bool {
-    pressed && pointer_button_uses_local_selection(terminal_mode, button, modifiers)
-}
-
-fn pointer_drag_updates_local_selection(
-    terminal_mode: TermMode,
-    buttons: input::PointerButtons,
-    modifiers: egui::Modifiers,
-) -> bool {
-    buttons.primary
-        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
-}
-
-fn pointer_button_routes_to_pty_mouse(
-    terminal_mode: TermMode,
-    button: egui::PointerButton,
-    modifiers: egui::Modifiers,
-) -> bool {
-    pty_mouse_reporting_enabled(terminal_mode, modifiers)
-        && !pointer_button_uses_local_selection(terminal_mode, button, modifiers)
-}
-
-fn pointer_button_event_needs_handling(
-    terminal_mode: TermMode,
-    button: egui::PointerButton,
-    pressed: bool,
-    modifiers: egui::Modifiers,
-) -> bool {
-    pointer_button_checks_clickable_target(button, pressed, modifiers)
-        || pointer_button_routes_to_pty_mouse(terminal_mode, button, modifiers)
-}
-
-fn pointer_motion_routes_to_pty_mouse(
-    terminal_mode: TermMode,
-    buttons: input::PointerButtons,
-    modifiers: egui::Modifiers,
-) -> bool {
-    pty_mouse_reporting_enabled(terminal_mode, modifiers)
-        && !pointer_drag_updates_local_selection(terminal_mode, buttons, modifiers)
-}
-
 fn handle_pointer_events(
     events: &[egui::Event],
     panel: &mut Panel,
     pointer: &PointerContext<'_>,
     local_primary_selection_claimed: bool,
+    release_replay_index: Option<usize>,
 ) -> bool {
     let mut local_scrollback_changed = false;
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
         match event {
             egui::Event::PointerButton {
                 pos,
@@ -303,14 +225,25 @@ fn handle_pointer_events(
                 modifiers,
             } => {
                 if local_primary_selection_claimed && *button == PointerButton::Primary {
-                    handle_claimed_primary_selection_event(
-                        panel,
-                        pointer,
-                        *pos,
-                        *pressed,
-                        *modifiers,
-                        &mut local_scrollback_changed,
-                    );
+                    // Replay selection endpoints for presses and drag-completing
+                    // releases that follow a same-frame scrollback change, so
+                    // they anchor in the viewport the user actually saw.
+                    let pos = transform_pos(pointer.from_global, *pos);
+                    if *pressed {
+                        if local_scrollback_changed && local_primary_selection_allowed(*modifiers) {
+                            start_local_selection_at(panel, pointer, pos);
+                        }
+                    } else if local_scrollback_changed && release_replay_index == Some(index) {
+                        update_pointer_selection_endpoint(
+                            panel,
+                            pos,
+                            pointer.interaction.layout.body,
+                            pointer.metrics,
+                            pointer.visible_rows,
+                            pointer.visible_cols,
+                        );
+                        local_scrollback_changed = false;
+                    }
                     continue;
                 }
                 if !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers) {
@@ -390,9 +323,7 @@ fn handle_pointer_events(
 fn handle_terminal_body_pointer_actions(
     panel: &mut Panel,
     pointer: &PointerContext<'_>,
-    body_primary_press_pos: Option<Pos2>,
-    primary_release_pos: Option<Pos2>,
-    body_middle_press_pos: Option<Pos2>,
+    frame_events: &PointerFrameEvents,
     selection_drag: &mut TerminalSelectionDragState,
     selection_drag_threshold: f32,
 ) -> SelectionFrameOutcome {
@@ -404,7 +335,7 @@ fn handle_terminal_body_pointer_actions(
         .active_pointer_pos
         .or_else(|| response_pointer_pos(&pointer.interaction.body));
 
-    if body_middle_press_pos.is_some()
+    if frame_events.body_middle_press_pos.is_some()
         && !pty_mouse_reporting_enabled(pointer.terminal_mode, pointer.current_modifiers)
         && should_request_primary_paste(PointerButton::Middle, true, pointer.current_modifiers)
     {
@@ -414,7 +345,8 @@ fn handle_terminal_body_pointer_actions(
         return outcome;
     }
 
-    if let Some(pos) = body_primary_press_pos
+    let mut drag_restarted_by_press = false;
+    if let Some(pos) = frame_events.body_primary_press_pos
         && pointer_button_starts_local_selection(
             pointer.terminal_mode,
             PointerButton::Primary,
@@ -433,7 +365,14 @@ fn handle_terminal_body_pointer_actions(
         );
         selection_drag.start(panel.id, pos);
         outcome.claimed_primary_pointer = true;
+        drag_restarted_by_press = true;
     }
+
+    // A release only completes the drag when no later in-body press restarted
+    // it; a same-frame release followed by a fresh press hands the still-held
+    // pointer to the new selection instead of finishing it.
+    outcome.release_completes_drag = frame_events.primary_release_ends_frame
+        || (frame_events.primary_release_pos.is_some() && !drag_restarted_by_press);
 
     if selection_drag.active_for(panel.id)
         && pointer.pointer_buttons.primary
@@ -455,9 +394,9 @@ fn handle_terminal_body_pointer_actions(
     }
 
     if selection_drag.active_for(panel.id)
-        && primary_release_pos.is_some()
+        && outcome.release_completes_drag
         && panel.terminal().is_some_and(horizon_core::Terminal::has_selection)
-        && let Some(pos) = primary_release_pos.or(body_pointer_pos)
+        && let Some(pos) = frame_events.primary_release_pos.or(body_pointer_pos)
     {
         selection_drag.mark_dragged(panel.id, pos, selection_drag_threshold);
         handle_pointer_selection_drag(
@@ -470,7 +409,7 @@ fn handle_terminal_body_pointer_actions(
         );
     }
 
-    if selection_drag.active_for(panel.id) && (primary_release_pos.is_some() || !pointer.pointer_buttons.primary) {
+    if selection_drag.active_for(panel.id) && (outcome.release_completes_drag || !pointer.pointer_buttons.primary) {
         outcome.copy_completed_selection = selection_drag.finish(panel.id);
     }
 
@@ -504,25 +443,7 @@ fn handle_pointer_button(
     }
 
     if pointer_button_starts_local_selection(pointer.terminal_mode, button, pressed, modifiers) {
-        if let Some(point) = grid_point_from_position(
-            pointer.interaction.layout.body,
-            pos,
-            pointer.metrics,
-            pointer.visible_rows,
-            pointer.visible_cols,
-        ) {
-            let sel_type = if pointer.interaction.body.triple_clicked() {
-                SelectionType::Lines
-            } else if pointer.interaction.body.double_clicked() {
-                SelectionType::Semantic
-            } else {
-                SelectionType::Simple
-            };
-            let side = cell_side(pos, pointer.interaction.layout.body, pointer.metrics, point);
-            if let Some(terminal) = panel.terminal_mut() {
-                terminal.start_selection(sel_type, point.line, point.column, side);
-            }
-        }
+        start_local_selection_at(panel, pointer, pos);
     } else if pointer_button_routes_to_pty_mouse(pointer.terminal_mode, button, modifiers)
         && let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,
@@ -587,394 +508,8 @@ fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &Ter
     }
 }
 
-fn transform_pos(from_global: Option<TSTransform>, pos: Pos2) -> Pos2 {
-    from_global.map_or(pos, |transform| transform * pos)
-}
-
-fn pointer_event_targets_rect(events: &[egui::Event], from_global: Option<TSTransform>, rect: Rect) -> bool {
-    events.iter().any(|event| match event {
-        egui::Event::PointerButton { pos, .. } | egui::Event::PointerMoved(pos) => {
-            rect.contains(transform_pos(from_global, *pos))
-        }
-        _ => false,
-    })
-}
-
-fn pointer_button_event_pos(
-    events: &[egui::Event],
-    from_global: Option<TSTransform>,
-    button: PointerButton,
-    pressed: bool,
-    rect: Rect,
-) -> Option<Pos2> {
-    events.iter().rev().find_map(|event| match event {
-        egui::Event::PointerButton {
-            pos,
-            button: event_button,
-            pressed: event_pressed,
-            ..
-        } if *event_button == button && *event_pressed == pressed => {
-            let pos = transform_pos(from_global, *pos);
-            rect.contains(pos).then_some(pos)
-        }
-        _ => None,
-    })
-}
-
-fn pointer_button_event_any_pos(
-    events: &[egui::Event],
-    from_global: Option<TSTransform>,
-    button: PointerButton,
-    pressed: bool,
-) -> Option<Pos2> {
-    events.iter().rev().find_map(|event| match event {
-        egui::Event::PointerButton {
-            pos,
-            button: event_button,
-            pressed: event_pressed,
-            ..
-        } if *event_button == button && *event_pressed == pressed => Some(transform_pos(from_global, *pos)),
-        _ => None,
-    })
-}
-
 fn response_pointer_pos(response: &egui::Response) -> Option<Pos2> {
     response.interact_pointer_pos().or_else(|| response.hover_pos())
-}
-
-pub(super) fn handle_terminal_keyboard_input(
-    ui: &egui::Ui,
-    terminal_id: egui::Id,
-    panel: &mut Panel,
-    events: &[TerminalInputEvent],
-    primary_selection: &PrimarySelection,
-    local_ssh_reconnect_enabled: bool,
-) -> bool {
-    if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
-        return true;
-    }
-
-    let Some(terminal) = panel.terminal_mut() else {
-        return false;
-    };
-    let mode = terminal.mode();
-    let mut forwarder = KeyboardInputForwarder::default();
-    let mut ime_enabled = terminal_ime_enabled(ui, terminal_id);
-    let events = prepare_terminal_keyboard_events(events, ime_enabled);
-
-    for event in &events {
-        match &event.event {
-            egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_)) => {
-                ime_enabled = true;
-            }
-            egui::Event::Ime(egui::ImeEvent::Disabled) => {
-                ime_enabled = false;
-            }
-            egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                if matches!(&event.event, egui::Event::Ime(egui::ImeEvent::Commit(_))) {
-                    ime_enabled = false;
-                }
-                let emission = forwarder.on_text(text, mode);
-                if emission.clears_selection {
-                    terminal.clear_selection();
-                }
-                if !emission.bytes.is_empty() {
-                    terminal.write_input(&emission.bytes);
-                }
-            }
-            egui::Event::Paste(text) => {
-                terminal.clear_selection();
-                let bytes = input::paste_bytes(text, mode, true);
-                terminal.write_input(&bytes);
-            }
-            egui::Event::Copy => {
-                if event.is_plain_ctrl_c_copy_command() {
-                    terminal.write_input(&[3]);
-                } else if let Some(text) = terminal.selection_to_string() {
-                    primary_selection.copy(&text);
-                    ui.ctx().copy_text(text);
-                    terminal.clear_selection();
-                }
-            }
-            egui::Event::Cut => {
-                if let Some(text) = terminal.selection_to_string() {
-                    primary_selection.copy(&text);
-                    ui.ctx().copy_text(text);
-                    terminal.clear_selection();
-                }
-                terminal.write_input(&[24]);
-            }
-            egui::Event::Key { .. } => {
-                let emission = forwarder.on_key(event, mode);
-                if !emission.bytes.is_empty() {
-                    terminal.write_input(&emission.bytes);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let emission = forwarder.finish();
-    if !emission.bytes.is_empty() {
-        terminal.write_input(&emission.bytes);
-    }
-
-    store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
-
-    false
-}
-
-fn disconnected_ssh_reconnect_requested(
-    kind: PanelKind,
-    ssh_status: Option<SshConnectionStatus>,
-    events: &[TerminalInputEvent],
-) -> bool {
-    kind == PanelKind::Ssh
-        && matches!(ssh_status, Some(SshConnectionStatus::Disconnected))
-        && events.iter().any(|input_event| {
-            matches!(
-                &input_event.event,
-                egui::Event::Key {
-                    pressed: true,
-                    repeat: false,
-                    ..
-                }
-            ) && shortcut_event_matches(&input_event.event, SSH_RECONNECT_SHORTCUT)
-        })
-}
-
-#[derive(Default)]
-struct KeyboardInputForwarder {
-    suppressed_text: VecDeque<String>,
-    deferred_text_key: Option<DeferredTextKey>,
-}
-
-impl KeyboardInputForwarder {
-    fn on_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
-        if let Some(mut deferred) = self.deferred_text_key.take() {
-            if let Some(actual_text) = deferred.synthetic_text.as_deref() {
-                if actual_text != text {
-                    // Drop stale synthetic state if a later text event does not
-                    // belong to the deferred key.
-                    return InputEmission::raw_text(text);
-                }
-            } else {
-                let emission = deferred.resolve_text(text, mode);
-                if deferred.synthetic_text.is_some() {
-                    self.deferred_text_key = Some(deferred);
-                }
-                return emission;
-            }
-        }
-
-        if self.suppressed_text.front().is_some_and(|expected| expected == text) {
-            self.suppressed_text.pop_front();
-            return InputEmission::default();
-        }
-
-        InputEmission::raw_text(text)
-    }
-
-    fn on_key(&mut self, input_event: &TerminalInputEvent, mode: TermMode) -> InputEmission {
-        let egui::Event::Key {
-            key,
-            physical_key,
-            pressed,
-            repeat,
-            modifiers,
-            ..
-        } = &input_event.event
-        else {
-            return InputEmission::default();
-        };
-
-        let key_identity =
-            input::KeyIdentity::new(*key, *physical_key, input_event.key_without_modifiers_text.as_deref());
-        let context = input::KeyEventContext::new(*pressed, *repeat, *modifiers, mode);
-        let mut emission = InputEmission::default();
-
-        if let Some(deferred) = self.deferred_text_key.as_mut() {
-            if let Some(actual_text) = deferred.synthetic_text.as_deref() {
-                if !pressed && deferred.matches(*key, *physical_key) {
-                    if let Some(translation) = input::translate_text_event(
-                        input::KeyIdentity::new(*key, *physical_key, deferred.key_without_modifiers_text.as_deref()),
-                        actual_text,
-                        input::KeyEventContext::new(false, *repeat, *modifiers, mode),
-                    ) {
-                        emission.bytes.extend_from_slice(&translation.bytes);
-                    }
-                    self.deferred_text_key = None;
-                    return emission;
-                }
-
-                if !deferred.matches(*key, *physical_key) {
-                    self.deferred_text_key = None;
-                }
-            } else if !pressed && deferred.matches(*key, *physical_key) {
-                deferred.release_seen = true;
-                deferred.release_translation = input::translate_key_event_with_physical(
-                    key_identity,
-                    input::KeyEventContext::new(false, *repeat, *modifiers, mode),
-                );
-                return emission;
-            } else if !deferred.matches(*key, *physical_key) {
-                emission.bytes.extend_from_slice(&deferred.flush_fallback());
-                self.deferred_text_key = None;
-            }
-        }
-
-        if let Some(translation) = input::translate_key_event_with_physical(key_identity, context) {
-            if *pressed
-                && translation.suppress_text.is_some()
-                && (modifiers.alt
-                    || mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
-                    || input::should_defer_textual_key(*key, *physical_key, *pressed, *modifiers, mode))
-            {
-                self.deferred_text_key = Some(DeferredTextKey::new(
-                    *key,
-                    *physical_key,
-                    input_event.key_without_modifiers_text.as_deref(),
-                    *modifiers,
-                    Some(translation),
-                ));
-                return emission;
-            }
-
-            if let Some(text) = translation.suppress_text {
-                self.suppressed_text.push_back(text);
-            }
-            emission.bytes.extend_from_slice(&translation.bytes);
-            return emission;
-        }
-
-        if input::should_defer_textual_key(*key, *physical_key, *pressed, *modifiers, mode) {
-            self.deferred_text_key = Some(DeferredTextKey::new(
-                *key,
-                *physical_key,
-                input_event.key_without_modifiers_text.as_deref(),
-                *modifiers,
-                None,
-            ));
-        }
-
-        emission
-    }
-
-    fn finish(&mut self) -> InputEmission {
-        let Some(deferred) = self.deferred_text_key.take() else {
-            return InputEmission::default();
-        };
-
-        if deferred.synthetic_text.is_some() {
-            return InputEmission::default();
-        }
-
-        InputEmission::pty(deferred.flush_fallback())
-    }
-}
-
-struct DeferredTextKey {
-    key: Key,
-    physical_key: Option<Key>,
-    key_without_modifiers_text: Option<String>,
-    modifiers: egui::Modifiers,
-    press_translation: Option<input::KeyTranslation>,
-    release_translation: Option<input::KeyTranslation>,
-    release_seen: bool,
-    synthetic_text: Option<String>,
-}
-
-impl DeferredTextKey {
-    fn new(
-        key: Key,
-        physical_key: Option<Key>,
-        key_without_modifiers_text: Option<&str>,
-        modifiers: egui::Modifiers,
-        press_translation: Option<input::KeyTranslation>,
-    ) -> Self {
-        Self {
-            key,
-            physical_key,
-            key_without_modifiers_text: key_without_modifiers_text.map(ToOwned::to_owned),
-            modifiers,
-            press_translation,
-            release_translation: None,
-            release_seen: false,
-            synthetic_text: None,
-        }
-    }
-
-    fn matches(&self, key: Key, physical_key: Option<Key>) -> bool {
-        self.key == key && self.physical_key == physical_key
-    }
-
-    fn resolve_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
-        if self
-            .press_translation
-            .as_ref()
-            .and_then(|translation| translation.suppress_text.as_deref())
-            .is_some_and(|expected| expected == text)
-        {
-            return InputEmission::pty(self.flush_fallback());
-        }
-
-        if let Some(translation) = input::translate_text_event(
-            input::KeyIdentity::new(self.key, self.physical_key, self.key_without_modifiers_text.as_deref()),
-            text,
-            input::KeyEventContext::new(true, false, self.modifiers, mode),
-        ) {
-            let mut bytes = translation.bytes;
-            if self.release_seen
-                && let Some(release) = input::translate_text_event(
-                    input::KeyIdentity::new(self.key, self.physical_key, self.key_without_modifiers_text.as_deref()),
-                    text,
-                    input::KeyEventContext::new(false, false, self.modifiers, mode),
-                )
-            {
-                bytes.extend_from_slice(&release.bytes);
-            } else {
-                self.synthetic_text = Some(text.to_owned());
-            }
-            return InputEmission::pty(bytes);
-        }
-
-        InputEmission::raw_text(text)
-    }
-
-    fn flush_fallback(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        if let Some(translation) = self.press_translation.as_ref() {
-            bytes.extend_from_slice(&translation.bytes);
-        }
-        if self.release_seen
-            && let Some(translation) = self.release_translation.as_ref()
-        {
-            bytes.extend_from_slice(&translation.bytes);
-        }
-        bytes
-    }
-}
-
-#[derive(Default)]
-struct InputEmission {
-    bytes: Vec<u8>,
-    clears_selection: bool,
-}
-
-impl InputEmission {
-    fn pty(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            clears_selection: false,
-        }
-    }
-
-    fn raw_text(text: &str) -> Self {
-        Self {
-            bytes: text.as_bytes().to_vec(),
-            clears_selection: true,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -985,13 +520,8 @@ mod selection_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        KeyboardInputForwarder, TerminalInputEvent, disconnected_ssh_reconnect_requested, pointer_button_event_pos,
-        pointer_event_targets_rect, selection_copy_completed, should_request_primary_paste,
-    };
-    use alacritty_terminal::term::TermMode;
-    use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
-    use horizon_core::{PanelKind, SshConnectionStatus};
+    use super::{selection_copy_completed, should_request_primary_paste};
+    use egui::{Modifiers, PointerButton};
 
     #[test]
     fn middle_click_requests_primary_paste_only_on_linux_without_ctrl_or_cmd() {
@@ -1021,375 +551,5 @@ mod tests {
         assert!(selection_copy_completed(false, true, false));
         assert!(selection_copy_completed(false, false, true));
         assert!(!selection_copy_completed(false, false, false));
-    }
-
-    #[test]
-    fn pointer_button_event_uses_press_position_inside_rect() {
-        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
-        let events = vec![Event::PointerButton {
-            pos: Pos2::new(12.0, 6.0),
-            button: PointerButton::Primary,
-            pressed: true,
-            modifiers: Modifiers::NONE,
-        }];
-
-        assert_eq!(
-            pointer_button_event_pos(&events, None, PointerButton::Primary, true, rect),
-            Some(Pos2::new(12.0, 6.0))
-        );
-    }
-
-    #[test]
-    fn pointer_events_detect_positions_inside_rect() {
-        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
-        let events = vec![Event::PointerMoved(Pos2::new(12.0, 6.0))];
-
-        assert!(pointer_event_targets_rect(&events, None, rect));
-    }
-
-    #[test]
-    fn disconnected_ssh_panels_request_reconnect_from_local_shortcut() {
-        assert!(disconnected_ssh_reconnect_requested(
-            PanelKind::Ssh,
-            Some(SshConnectionStatus::Disconnected),
-            &[key_event(
-                Key::R,
-                Some(Key::R),
-                None,
-                true,
-                false,
-                Modifiers::COMMAND | Modifiers::SHIFT,
-            )],
-        ));
-    }
-
-    #[test]
-    fn connected_ssh_panels_ignore_local_reconnect_shortcut() {
-        assert!(!disconnected_ssh_reconnect_requested(
-            PanelKind::Ssh,
-            Some(SshConnectionStatus::Connected),
-            &[key_event(
-                Key::R,
-                Some(Key::R),
-                None,
-                true,
-                false,
-                Modifiers::COMMAND | Modifiers::SHIFT,
-            )],
-        ));
-    }
-
-    #[test]
-    fn non_ssh_panels_ignore_local_reconnect_shortcut() {
-        assert!(!disconnected_ssh_reconnect_requested(
-            PanelKind::Shell,
-            None,
-            &[key_event(
-                Key::R,
-                Some(Key::R),
-                None,
-                true,
-                false,
-                Modifiers::COMMAND | Modifiers::SHIFT,
-            )],
-        ));
-    }
-
-    #[test]
-    fn repeated_reconnect_shortcut_does_not_queue_another_restart() {
-        assert!(!disconnected_ssh_reconnect_requested(
-            PanelKind::Ssh,
-            Some(SshConnectionStatus::Disconnected),
-            &[key_event(
-                Key::R,
-                Some(Key::R),
-                None,
-                true,
-                true,
-                Modifiers::COMMAND | Modifiers::SHIFT,
-            )],
-        ));
-    }
-
-    #[test]
-    fn altgr_text_after_release_stays_on_text_path_without_report_all_keys() {
-        let events = vec![
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::ALT),
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::ALT),
-            text_event("@"),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b"@");
-    }
-
-    #[test]
-    fn shifted_symbol_uses_text_reconciliation_without_forcing_kitty_sequences() {
-        let events = vec![
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::SHIFT),
-            text_event("@"),
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::SHIFT),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b"@");
-    }
-
-    #[test]
-    fn plain_space_stays_on_text_path_in_kitty_basic_mode() {
-        let events = vec![
-            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
-            text_event(" "),
-            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b" ");
-    }
-
-    #[test]
-    fn repeated_spaces_do_not_get_dropped_in_kitty_basic_mode() {
-        let events = vec![
-            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
-            text_event(" "),
-            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
-            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE),
-            text_event(" "),
-            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::NONE),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b"  ");
-    }
-
-    #[test]
-    fn shifted_space_stays_on_text_path_in_kitty_basic_mode() {
-        let events = vec![
-            key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::SHIFT),
-            text_event(" "),
-            key_event(Key::Space, Some(Key::Space), Some(" "), false, false, Modifiers::SHIFT),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b" ");
-    }
-
-    /// Regression: on some Linux setups, `AltGr` is NOT reported as
-    /// `modifiers.alt` by winit. The key event must not leak the base
-    /// key ("2") ahead of the later text event ("@"), even when kitty
-    /// keyboard mode is active.
-    #[test]
-    fn altgr_without_alt_modifier_in_kitty_mode_does_not_leak_base_key() {
-        let events = vec![
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::NONE),
-            text_event("@"),
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::NONE),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, b"@");
-    }
-
-    /// Same scenario as above but in non-kitty mode: the text event
-    /// should pass through as raw "@" with no preceding "2".
-    #[test]
-    fn altgr_without_alt_modifier_in_legacy_mode_emits_only_text() {
-        let events = vec![
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), true, false, Modifiers::NONE),
-            text_event("@"),
-            key_event(Key::Num2, Some(Key::Num2), Some("2"), false, false, Modifiers::NONE),
-        ];
-
-        let bytes = forward_bytes(&events, TermMode::NONE);
-
-        assert_eq!(bytes, b"@");
-    }
-
-    #[test]
-    fn shifted_international_key_stays_on_text_path_without_report_all_keys() {
-        let events = vec![
-            key_event(
-                Key::OpenBracket,
-                Some(Key::OpenBracket),
-                Some("å"),
-                true,
-                false,
-                Modifiers::SHIFT,
-            ),
-            text_event("Å"),
-            key_event(
-                Key::OpenBracket,
-                Some(Key::OpenBracket),
-                Some("å"),
-                false,
-                false,
-                Modifiers::SHIFT,
-            ),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
-        );
-
-        assert_eq!(bytes, "Å".as_bytes());
-    }
-
-    #[test]
-    fn report_all_keys_keeps_printable_text_on_kitty_sequence_path() {
-        let events = vec![
-            key_event(
-                Key::OpenBracket,
-                Some(Key::OpenBracket),
-                Some("å"),
-                true,
-                false,
-                Modifiers::SHIFT,
-            ),
-            text_event("Å"),
-            key_event(
-                Key::OpenBracket,
-                Some(Key::OpenBracket),
-                Some("å"),
-                false,
-                false,
-                Modifiers::SHIFT,
-            ),
-        ];
-
-        let bytes = forward_bytes(
-            &events,
-            TermMode::DISAMBIGUATE_ESC_CODES
-                | TermMode::REPORT_EVENT_TYPES
-                | TermMode::REPORT_ALTERNATE_KEYS
-                | TermMode::REPORT_ALL_KEYS_AS_ESC,
-        );
-
-        assert_eq!(bytes, b"\x1b[229:197:91;2u\x1b[229:197:91;2:3u");
-    }
-
-    #[test]
-    fn legacy_c0_key_events_are_forwarded_in_legacy_mode() {
-        let cases: [(&str, TerminalInputEvent, &[u8]); 6] = [
-            (
-                "shift enter",
-                key_event(Key::Enter, Some(Key::Enter), None, true, false, Modifiers::SHIFT),
-                b"\r",
-            ),
-            (
-                "alt escape",
-                key_event(Key::Escape, Some(Key::Escape), None, true, false, Modifiers::ALT),
-                b"\x1b\x1b",
-            ),
-            (
-                "ctrl backspace",
-                key_event(Key::Backspace, Some(Key::Backspace), None, true, false, Modifiers::CTRL),
-                b"\x08",
-            ),
-            (
-                "alt backspace",
-                key_event(Key::Backspace, Some(Key::Backspace), None, true, false, Modifiers::ALT),
-                b"\x1b\x7f",
-            ),
-            (
-                "ctrl shift tab",
-                key_event(
-                    Key::Tab,
-                    Some(Key::Tab),
-                    None,
-                    true,
-                    false,
-                    Modifiers::CTRL | Modifiers::SHIFT,
-                ),
-                b"\x1b[Z",
-            ),
-            (
-                "alt shift tab",
-                key_event(
-                    Key::Tab,
-                    Some(Key::Tab),
-                    None,
-                    true,
-                    false,
-                    Modifiers::ALT | Modifiers::SHIFT,
-                ),
-                b"\x1b\x1b[Z",
-            ),
-        ];
-
-        for (name, event, expected) in cases {
-            let bytes = forward_bytes(&[event], TermMode::NONE);
-            assert_eq!(bytes, expected, "{name}");
-        }
-    }
-
-    fn forward_bytes(events: &[TerminalInputEvent], mode: TermMode) -> Vec<u8> {
-        let mut forwarder = KeyboardInputForwarder::default();
-        let mut bytes = Vec::new();
-
-        for event in events {
-            let emission = match &event.event {
-                Event::Text(text) | Event::Ime(egui::ImeEvent::Commit(text)) => forwarder.on_text(text, mode),
-                Event::Key { .. } => forwarder.on_key(event, mode),
-                _ => continue,
-            };
-            bytes.extend_from_slice(&emission.bytes);
-        }
-
-        bytes.extend_from_slice(&forwarder.finish().bytes);
-        bytes
-    }
-
-    fn key_event(
-        key: Key,
-        physical_key: Option<Key>,
-        key_without_modifiers_text: Option<&str>,
-        pressed: bool,
-        repeat: bool,
-        modifiers: Modifiers,
-    ) -> TerminalInputEvent {
-        TerminalInputEvent {
-            event: Event::Key {
-                key,
-                physical_key,
-                pressed,
-                repeat,
-                modifiers,
-            },
-            key_without_modifiers_text: key_without_modifiers_text.map(ToOwned::to_owned),
-            observed_key: None,
-        }
-    }
-
-    fn text_event(text: &str) -> TerminalInputEvent {
-        TerminalInputEvent {
-            event: Event::Text(text.to_owned()),
-            key_without_modifiers_text: None,
-            observed_key: None,
-        }
     }
 }

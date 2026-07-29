@@ -1,42 +1,12 @@
 use std::time::Duration;
 
-use egui::{Modifiers, PointerButton, Pos2, Rect};
-use horizon_core::{Panel, TerminalSide};
+use egui::{Pos2, Rect};
+use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use super::super::layout::{GridMetrics, cell_side, grid_point_from_position};
-use super::{PointerContext, handle_pointer_button, transform_pos};
+use super::PointerContext;
 
 pub(super) const SELECTION_AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(16);
-
-pub(super) fn handle_claimed_primary_selection_event(
-    panel: &mut Panel,
-    pointer: &PointerContext<'_>,
-    global_pos: Pos2,
-    pressed: bool,
-    modifiers: Modifiers,
-    scrollback_changed: &mut bool,
-) {
-    if pressed && *scrollback_changed {
-        handle_pointer_button(
-            panel,
-            pointer,
-            transform_pos(pointer.from_global, global_pos),
-            PointerButton::Primary,
-            true,
-            modifiers,
-        );
-    } else if !pressed && *scrollback_changed {
-        update_pointer_selection_endpoint(
-            panel,
-            transform_pos(pointer.from_global, global_pos),
-            pointer.interaction.layout.body,
-            pointer.metrics,
-            pointer.visible_rows,
-            pointer.visible_cols,
-        );
-        *scrollback_changed = false;
-    }
-}
 
 pub(super) fn handle_pointer_selection_drag(
     panel: &mut Panel,
@@ -63,6 +33,29 @@ pub(super) fn handle_pointer_selection_drag(
     } else {
         update_pointer_selection_endpoint(panel, pos, body_rect, metrics, visible_rows, visible_cols);
         false
+    }
+}
+
+pub(super) fn start_local_selection_at(panel: &mut Panel, pointer: &PointerContext<'_>, pos: Pos2) {
+    let body_rect = pointer.interaction.layout.body;
+    if let Some(point) = grid_point_from_position(
+        body_rect,
+        pos,
+        pointer.metrics,
+        pointer.visible_rows,
+        pointer.visible_cols,
+    ) {
+        let sel_type = if pointer.interaction.body.triple_clicked() {
+            SelectionType::Lines
+        } else if pointer.interaction.body.double_clicked() {
+            SelectionType::Semantic
+        } else {
+            SelectionType::Simple
+        };
+        let side = cell_side(pos, body_rect, pointer.metrics, point);
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.start_selection(sel_type, point.line, point.column, side);
+        }
     }
 }
 

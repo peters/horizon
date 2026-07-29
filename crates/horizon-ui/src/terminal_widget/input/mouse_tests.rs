@@ -1,4 +1,4 @@
-use super::{
+use super::routing::{
     pointer_button_checks_clickable_target, pointer_button_event_needs_handling, pointer_button_routes_to_pty_mouse,
     pointer_button_starts_local_selection, pointer_drag_updates_local_selection, pointer_motion_routes_to_pty_mouse,
 };
