@@ -54,6 +54,11 @@ impl SpeechSystem {
     }
 
     #[must_use]
+    pub fn has_pending_preloads(&self) -> bool {
+        false
+    }
+
+    #[must_use]
     pub fn active_backend(&self) -> Option<&str> {
         None
     }

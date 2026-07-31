@@ -528,11 +528,15 @@ impl eframe::App for HorizonApp {
         }
 
         if !self.prepare_frame(ctx) {
+            self.poll_speech_runtime(ctx, Vec::new());
+            self.render_speech_notice(ctx);
             return;
         }
 
         if self.startup_chooser.is_some() {
+            self.poll_speech_runtime(ctx, Vec::new());
             self.render_startup_chooser(ctx);
+            self.render_speech_notice(ctx);
             return;
         }
 

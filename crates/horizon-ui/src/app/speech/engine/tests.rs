@@ -38,11 +38,13 @@ fn test_system() -> (SpeechSystem, Harness) {
             ProfileRuntime {
                 label: "Test".to_string(),
                 binding: None,
+                preload_pending: false,
                 worker,
             },
             ProfileRuntime {
                 label: "Other".to_string(),
                 binding: None,
+                preload_pending: false,
                 worker: other_worker,
             },
         ],
@@ -130,6 +132,8 @@ fn short_tap_stops_and_returns_to_idle_without_worker_job() {
 #[test]
 fn preload_events_publish_backend_and_surface_failures() {
     let (mut speech, harness) = test_system();
+    speech.profiles[0].preload_pending = true;
+    assert!(speech.has_pending_preloads());
 
     // A preload's ModelLoaded arrives while Idle and must not be dropped as
     // stale: the settings backend display should be truthful before the
@@ -144,8 +148,10 @@ fn preload_events_publish_backend_and_surface_failures() {
     assert!(speech.poll().is_empty());
     assert_eq!(speech.active_backend(), Some("CUDA0"));
     assert_eq!(speech.state, State::Idle);
+    assert!(!speech.has_pending_preloads());
 
     // A failed preload surfaces immediately, naming the profile.
+    speech.profiles[0].preload_pending = true;
     harness
         .worker_event_tx
         .send(WorkerEvent::PreloadFailed {
@@ -156,6 +162,24 @@ fn preload_events_publish_backend_and_surface_failures() {
     assert!(matches!(
         events.as_slice(),
         [SpeechEvent::Error(message)] if message.contains("Test") && message.contains("model not found")
+    ));
+    assert_eq!(speech.state, State::Idle);
+    assert!(!speech.has_pending_preloads());
+}
+
+#[test]
+fn disconnected_preloader_clears_pending_state_and_surfaces_failure() {
+    let (mut speech, harness) = test_system();
+    speech.profiles[0].preload_pending = true;
+    drop(harness.worker_event_tx);
+
+    let events = speech.poll();
+
+    assert!(!speech.has_pending_preloads());
+    assert!(matches!(
+        events.as_slice(),
+        [SpeechEvent::Error(message)]
+            if message.contains("Test") && message.contains("worker stopped unexpectedly")
     ));
     assert_eq!(speech.state, State::Idle);
 }

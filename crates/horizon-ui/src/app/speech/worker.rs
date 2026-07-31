@@ -1,6 +1,6 @@
 //! Transcription worker thread. Owns the transcribe.cpp model and session;
-//! the model is loaded lazily on the first job so enabling the feature does
-//! not slow down app startup, and a failed load is retried on the next job.
+//! the model is loaded lazily on the first job unless its profile opts into
+//! startup preloading. A failed load is retried on the next job.
 
 use std::collections::HashMap;
 use std::fmt;

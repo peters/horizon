@@ -51,6 +51,7 @@ enum State {
 struct ProfileRuntime {
     label: String,
     binding: Option<ShortcutBinding>,
+    preload_pending: bool,
     worker: WorkerHandle,
 }
 
@@ -117,7 +118,12 @@ impl SpeechSystem {
                     return None;
                 }
             };
-            profiles.push(ProfileRuntime { label, binding, worker });
+            profiles.push(ProfileRuntime {
+                label,
+                binding,
+                preload_pending: profile.preload,
+                worker,
+            });
         }
         let resolved_bindings = profiles
             .iter()
@@ -208,6 +214,12 @@ impl SpeechSystem {
     #[must_use]
     pub fn is_active(&self) -> bool {
         !matches!(self.state, State::Idle)
+    }
+
+    /// Whether a startup model load still needs its worker event drained.
+    #[must_use]
+    pub fn has_pending_preloads(&self) -> bool {
+        self.profiles.iter().any(|profile| profile.preload_pending)
     }
 
     /// Mic-button semantics: start (with the last-used profile) when idle,
@@ -381,6 +393,13 @@ impl SpeechSystem {
                     Ok(event) => event,
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
+                        if self.profiles[index].preload_pending {
+                            self.profiles[index].preload_pending = false;
+                            let label = &self.profiles[index].label;
+                            events.push(SpeechEvent::Error(format!(
+                                "preloading the `{label}` speech model failed: speech transcription worker stopped unexpectedly"
+                            )));
+                        }
                         if matches!(self.state, State::Transcribing { profile, .. } if profile == index) {
                             self.state = State::Idle;
                             events.push(SpeechEvent::Error(
@@ -399,6 +418,9 @@ impl SpeechSystem {
         match event {
             WorkerEvent::ModelLoaded { generation, backend } => {
                 if generation == PRELOAD_GENERATION {
+                    if let Some(runtime) = self.profiles.get_mut(profile) {
+                        runtime.preload_pending = false;
+                    }
                     // A startup preload finished; publish the backend so the
                     // settings display is truthful before the first run.
                     tracing::info!(profile, %backend, "speech model preloaded");
@@ -411,6 +433,9 @@ impl SpeechSystem {
                 }
             }
             WorkerEvent::PreloadFailed { message } => {
+                if let Some(runtime) = self.profiles.get_mut(profile) {
+                    runtime.preload_pending = false;
+                }
                 // Not fatal (the next dictation retries the load), but a bad
                 // model path must be visible at launch, not on first use.
                 let label = self.profiles.get(profile).map_or("?", |runtime| runtime.label.as_str());
@@ -468,7 +493,7 @@ pub(in crate::app) struct TestSpeechChannels {
     capture_cmds: std::sync::mpsc::Receiver<CaptureCmd>,
     _pcm: std::sync::mpsc::Sender<(u64, Result<CapturedAudio, String>)>,
     _jobs: Vec<std::sync::mpsc::Receiver<Job>>,
-    _events: Vec<std::sync::mpsc::Sender<WorkerEvent>>,
+    events: Vec<std::sync::mpsc::Sender<WorkerEvent>>,
 }
 
 #[cfg(test)]
@@ -476,6 +501,23 @@ impl TestSpeechChannels {
     /// Whether the capture thread was told to start recording.
     pub(in crate::app) fn capture_start_requested(&self) -> bool {
         matches!(self.capture_cmds.try_recv(), Ok(CaptureCmd::Start(_)))
+    }
+
+    pub(in crate::app) fn complete_preload(&self, backend: &str) {
+        self.events[0]
+            .send(WorkerEvent::ModelLoaded {
+                generation: PRELOAD_GENERATION,
+                backend: backend.to_string(),
+            })
+            .expect("queue preload success");
+    }
+
+    pub(in crate::app) fn fail_preload(&self, message: &str) {
+        self.events[0]
+            .send(WorkerEvent::PreloadFailed {
+                message: message.to_string(),
+            })
+            .expect("queue preload failure");
     }
 }
 
@@ -496,6 +538,7 @@ impl SpeechSystem {
             profiles.push(ProfileRuntime {
                 label: format!("profile {}", index + 1),
                 binding: Some(ShortcutBinding::parse(hotkey).expect("test hotkey must parse")),
+                preload_pending: false,
                 worker: WorkerHandle::from_test_channels(job_tx, event_rx),
             });
             jobs.push(job_rx);
@@ -522,9 +565,16 @@ impl SpeechSystem {
                 capture_cmds: capture_cmd_rx,
                 _pcm: pcm_tx,
                 _jobs: jobs,
-                _events: events,
+                events,
             },
         )
+    }
+
+    /// An idle test system with one startup preload and inert channels.
+    pub(in crate::app) fn with_test_preload() -> (Self, TestSpeechChannels) {
+        let (mut speech, channels) = Self::with_test_bindings(&["F1"]);
+        speech.profiles[0].preload_pending = true;
+        (speech, channels)
     }
 }
 
