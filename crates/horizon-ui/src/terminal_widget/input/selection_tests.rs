@@ -1,4 +1,5 @@
 use super::frame_events::{pointer_button_event_any_pos, pointer_button_event_pos};
+use super::selection_drag::AutoScrollCadence;
 use super::{PointerSupport, TerminalSelectionDragState, handle_pointer_selection_drag, handle_terminal_pointer_input};
 use crate::primary_selection::PrimarySelection;
 use crate::terminal_widget::layout::{GridMetrics, terminal_interaction, terminal_layout};
@@ -67,15 +68,20 @@ impl PointerHarness {
     }
 
     fn frame(&mut self, events: Vec<Event>) -> Rect {
+        let frame_time = f64::from(self.frame_index) / 60.0;
+        self.frame_index += 1;
+        self.frame_at(frame_time, events)
+    }
+
+    fn frame_at(&mut self, frame_time: f64, events: Vec<Event>) -> Rect {
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 320.0))),
-            time: Some(f64::from(self.frame_index) / 60.0),
+            time: Some(frame_time),
             predicted_dt: 0.0,
             events,
             ..RawInput::default()
         };
         input.viewport_id = ViewportId::ROOT;
-        self.frame_index += 1;
         self.ctx.begin_pass(input);
 
         let mut body_rect = Rect::NOTHING;
@@ -182,13 +188,17 @@ fn cell_position(body_rect: Rect, row: u16, column: u16, horizontal_fraction: f3
 }
 
 fn primary_press(position: Pos2) -> Vec<Event> {
+    primary_press_with_modifiers(position, Modifiers::NONE)
+}
+
+fn primary_press_with_modifiers(position: Pos2, modifiers: Modifiers) -> Vec<Event> {
     vec![
         Event::PointerMoved(position),
         Event::PointerButton {
             pos: position,
             button: PointerButton::Primary,
             pressed: true,
-            modifiers: Modifiers::NONE,
+            modifiers,
         },
     ]
 }
@@ -346,6 +356,88 @@ fn selection_auto_scroll_repaints_only_while_held_drag_can_move_viewport() {
 }
 
 #[test]
+fn selection_auto_scroll_is_gated_by_frame_time_and_release_does_not_bypass_deadline() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame_at(0.0, Vec::new());
+    let body_rect = harness.frame_at(0.0, Vec::new());
+    let anchor = cell_position(body_rect, 4, 0, 0.25);
+    let below = Pos2::new(body_rect.center().x, body_rect.max.y + LINE_HEIGHT);
+
+    harness.frame_at(0.0, primary_press(anchor));
+    harness.frame_at(0.0, vec![Event::PointerMoved(below)]);
+    assert_eq!(harness.scrollback(), 9);
+
+    harness.frame_at(0.005, Vec::new());
+    assert_eq!(harness.scrollback(), 9, "a 5 ms repaint must not auto-scroll again");
+    assert!(matches!(
+        harness.selection_drag.auto_scroll_cadence(harness.panel.id, 0.005),
+        Some(AutoScrollCadence::Waiting(wait)) if wait == Duration::from_millis(11)
+    ));
+
+    harness.frame_at(0.010, Vec::new());
+    assert_eq!(
+        harness.scrollback(),
+        9,
+        "a 10 ms repaint must preserve the original deadline"
+    );
+    assert!(matches!(
+        harness.selection_drag.auto_scroll_cadence(harness.panel.id, 0.010),
+        Some(AutoScrollCadence::Waiting(wait)) if wait == Duration::from_millis(6)
+    ));
+
+    harness.frame_at(0.016, Vec::new());
+    assert_eq!(
+        harness.scrollback(),
+        8,
+        "the deadline permits exactly one further scroll"
+    );
+    for _ in 0..8 {
+        harness.frame_at(0.016, Vec::new());
+    }
+    assert_eq!(
+        harness.scrollback(),
+        8,
+        "repeated passes at the same frame time must not accelerate auto-scroll"
+    );
+
+    harness.frame_at(0.020, primary_release(below));
+    assert_eq!(
+        harness.scrollback(),
+        8,
+        "a release before the next deadline must not add an untimed scroll"
+    );
+    assert!(!harness.selection_drag.active_for(harness.panel.id));
+    harness.frame_at(0.040, Vec::new());
+    assert_eq!(harness.scrollback(), 8);
+}
+
+#[test]
+fn selection_auto_scroll_reentry_resets_the_deadline() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame_at(0.0, Vec::new());
+    let body_rect = harness.frame_at(0.0, Vec::new());
+    let anchor = cell_position(body_rect, 4, 0, 0.25);
+    let inside = cell_position(body_rect, 6, 4, 0.5);
+    let below = Pos2::new(body_rect.center().x, body_rect.max.y + LINE_HEIGHT);
+
+    harness.frame_at(0.0, primary_press(anchor));
+    harness.frame_at(0.0, vec![Event::PointerMoved(below)]);
+    assert_eq!(harness.scrollback(), 9);
+
+    harness.frame_at(0.005, vec![Event::PointerMoved(inside)]);
+    assert_eq!(harness.scrollback(), 9);
+    harness.frame_at(0.006, vec![Event::PointerMoved(below)]);
+    assert_eq!(
+        harness.scrollback(),
+        8,
+        "leaving the body again starts a fresh auto-scroll interval"
+    );
+
+    harness.frame_at(0.007, primary_release(inside));
+    assert!(!harness.selection_drag.active_for(harness.panel.id));
+}
+
+#[test]
 fn wheel_down_during_selection_tracks_the_pointer_in_the_post_scroll_viewport() {
     let mut harness = PointerHarness::new(10);
     harness.frame(Vec::new());
@@ -465,6 +557,30 @@ fn wheel_before_press_starts_selection_in_the_post_scroll_viewport() {
 }
 
 #[test]
+fn wheel_before_alt_press_replays_local_anchor_in_normal_mode() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame(Vec::new());
+    let body_rect = harness.frame(Vec::new());
+    let anchor = cell_position(body_rect, 1, 0, 0.25);
+    let pointer = cell_position(body_rect, 4, 10, 0.75);
+    let pre_scroll_anchor = harness.viewport_line(1);
+
+    let mut events = wheel(-1.0);
+    events.extend(primary_press_with_modifiers(anchor, Modifiers::ALT));
+    events.push(Event::PointerMoved(pointer));
+    harness.frame(events);
+
+    assert_eq!(harness.scrollback(), 9);
+    assert_ne!(harness.viewport_line(1), pre_scroll_anchor);
+    assert_eq!(
+        harness.selected_first_line(),
+        harness.viewport_line(1),
+        "Alt+press after wheel-down must anchor in the post-scroll viewport when mouse reporting is inactive"
+    );
+    assert_eq!(harness.selected_last_line(), harness.viewport_line(4));
+}
+
+#[test]
 fn press_before_wheel_preserves_the_pre_scroll_selection_anchor() {
     let mut harness = PointerHarness::new(10);
     harness.frame(Vec::new());
@@ -521,6 +637,57 @@ fn release_then_press_in_one_frame_keeps_the_new_drag_extendable() {
         harness.viewport_line(6),
         "the still-held pointer must keep extending the selection restarted by a same-frame release and press"
     );
+}
+
+#[test]
+fn inside_release_then_outside_press_completes_at_the_release_position() {
+    let mut harness = PointerHarness::new(10);
+    harness.frame(Vec::new());
+    let body_rect = harness.frame(Vec::new());
+    let anchor = cell_position(body_rect, 1, 0, 0.25);
+    let release = cell_position(body_rect, 4, 10, 0.75);
+    let outside = Pos2::new(body_rect.max.x + 20.0, body_rect.max.y + LINE_HEIGHT);
+    let farther_outside = outside + Vec2::new(20.0, LINE_HEIGHT);
+    let mut events = primary_press(anchor);
+    events.push(Event::PointerMoved(release));
+    events.extend(primary_release(release));
+    events.push(Event::PointerMoved(outside));
+    events.push(Event::PointerButton {
+        pos: outside,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+
+    harness.frame(events);
+
+    assert_eq!(harness.selected_first_line(), harness.viewport_line(1));
+    assert_eq!(
+        harness.selected_last_line(),
+        harness.viewport_line(4),
+        "the outside press must not replace the completed release endpoint"
+    );
+    assert!(!harness.selection_drag.active_for(harness.panel.id));
+    let completed_selection = harness
+        .panel
+        .terminal()
+        .expect("terminal")
+        .selection_to_string()
+        .expect("selection");
+
+    harness.frame(vec![Event::PointerMoved(farther_outside)]);
+
+    assert!(!harness.selection_drag.active_for(harness.panel.id));
+    assert_eq!(
+        harness
+            .panel
+            .terminal()
+            .expect("terminal")
+            .selection_to_string()
+            .expect("selection"),
+        completed_selection
+    );
+    harness.frame(primary_release(farther_outside));
 }
 
 #[test]
