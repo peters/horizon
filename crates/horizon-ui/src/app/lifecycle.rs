@@ -533,6 +533,8 @@ impl HorizonApp {
     /// otherwise be invisible (ignored presses, empty transcripts, errors).
     pub(super) fn render_speech_notice(&mut self, ctx: &Context) {
         const NOTICE_TTL: Duration = Duration::from_secs(5);
+        const NOTICE_MAX_WIDTH: f32 = 720.0;
+        const NOTICE_VIEWPORT_MARGIN: f32 = 48.0;
         let Some(notice) = &self.speech_notice else {
             return;
         };
@@ -547,15 +549,19 @@ impl HorizonApp {
         } else {
             ("🎤", theme::FG())
         };
+        let max_width = (ctx.content_rect().width() - NOTICE_VIEWPORT_MARGIN).clamp(1.0, NOTICE_MAX_WIDTH);
         egui::Area::new(egui::Id::new("speech_notice_overlay"))
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .order(egui::Order::Foreground)
             .interactable(false)
             .show(ctx, |ui| {
+                ui.set_max_width(max_width);
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_top(|ui| {
                         ui.label(egui::RichText::new(icon).color(tint).size(12.0));
-                        ui.label(egui::RichText::new(&notice.message).color(theme::FG()).size(12.0));
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&notice.message).color(theme::FG()).size(12.0)).wrap(),
+                        );
                     });
                 });
             });
@@ -1075,6 +1081,41 @@ mod tests {
                 .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
         );
         drop(bootstrap_tx);
+    }
+
+    #[test]
+    fn long_speech_notice_stays_within_a_narrow_viewport() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(880.0, 632.0));
+        let ctx = Context::default();
+        let mut app = test_app();
+        app.show_speech_notice(
+            "Speech input error: preloading the `Default` speech model failed: \
+             failed to load a model from a deliberately long temporary path because the file was not found",
+            true,
+        );
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..egui::RawInput::default()
+            },
+            |ctx| app.render_speech_notice(ctx),
+        );
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..egui::RawInput::default()
+            },
+            |ctx| app.render_speech_notice(ctx),
+        );
+        let bounds = output
+            .shapes
+            .iter()
+            .map(|shape| shape.shape.visual_bounding_rect())
+            .filter(|bounds| bounds.is_finite() && bounds.is_positive())
+            .reduce(egui::Rect::union)
+            .expect("speech notice should paint");
+
+        assert!(screen.expand(1.0).contains_rect(bounds), "notice bounds {bounds:?}");
     }
 
     /// Root focus may move directly into a detached Horizon viewport. Keep
