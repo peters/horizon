@@ -135,8 +135,8 @@ mod tests {
     use crate::app::speech::global_hotkeys::GlobalHotkeyStatus;
 
     #[cfg(not(target_os = "macos"))]
-    use super::UNSUPPORTED_PLATFORM_COPY;
-    use super::{CHECKBOX_LABEL, actions_for_status, effective_status, status_text};
+    use super::{CHECKBOX_LABEL, UNSUPPORTED_PLATFORM_COPY};
+    use super::{actions_for_status, effective_status, status_text};
 
     #[test]
     fn status_copy_names_bindings_and_runtime_failures() {
