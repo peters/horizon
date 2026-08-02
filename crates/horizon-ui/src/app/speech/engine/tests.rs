@@ -4,6 +4,7 @@ use horizon_core::{PanelId, SpeechHotkeyMode};
 
 use super::super::capture::{CaptureCmd, CaptureHandle, CapturedAudio};
 use super::super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
+use super::super::{ExternalTargetId, SpeechTarget};
 use super::{MIN_PCM_SAMPLES, ProfileRuntime, SpeechEvent, SpeechSystem, State};
 
 struct Harness {
@@ -20,6 +21,10 @@ fn captured(samples: Vec<f32>) -> CapturedAudio {
         samples,
         device: "test-mic".to_string(),
     }
+}
+
+const fn terminal(panel: PanelId) -> SpeechTarget {
+    SpeechTarget::Terminal(panel)
 }
 
 fn test_system() -> (SpeechSystem, Harness) {
@@ -70,7 +75,8 @@ fn test_system() -> (SpeechSystem, Harness) {
 }
 
 fn start_and_stop(speech: &mut SpeechSystem, harness: &Harness, target: PanelId) -> u64 {
-    speech.start(target, 0);
+    let target = terminal(target);
+    assert!(speech.start(target, 0));
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
@@ -95,13 +101,12 @@ fn submit_recording(speech: &mut SpeechSystem, harness: &Harness, target: PanelI
         .expect("queue PCM");
     assert!(speech.poll().is_empty());
     let job = harness.job_rx.try_recv().expect("worker job");
-    assert_eq!(job.target, target);
     assert_eq!(job.generation, generation);
     assert_eq!(job.pcm.len(), MIN_PCM_SAMPLES);
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: terminal(target),
             profile: 0,
             generation,
         }
@@ -189,7 +194,7 @@ fn cancel_returns_to_idle_from_recording_and_awaiting_pcm() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
 
-    speech.start(target, 0);
+    assert!(speech.start(terminal(target), 0));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
         CaptureCmd::Start(1)
@@ -216,16 +221,16 @@ fn start_is_ignored_while_busy_and_for_unknown_profiles() {
     let first = PanelId(1);
     let second = PanelId(2);
 
-    speech.start(first, 0);
+    assert!(speech.start(terminal(first), 0));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("first start"),
         CaptureCmd::Start(1)
     ));
-    speech.start(second, 1);
+    assert!(!speech.start(terminal(second), 1));
     assert_eq!(
         speech.state,
         State::Recording {
-            target: first,
+            target: terminal(first),
             profile: 0
         }
     );
@@ -236,7 +241,7 @@ fn start_is_ignored_while_busy_and_for_unknown_profiles() {
         harness.capture_cmd_rx.try_recv().expect("cancel"),
         CaptureCmd::Cancel
     ));
-    speech.start(second, 99);
+    assert!(!speech.start(terminal(second), 99));
     assert_eq!(speech.state, State::Idle);
     assert!(matches!(harness.capture_cmd_rx.try_recv(), Err(TryRecvError::Empty)));
 }
@@ -252,7 +257,13 @@ fn toggle_stops_only_the_panel_that_owns_the_recording() {
         CaptureCmd::Start(1)
     ));
     speech.toggle(PanelId(4));
-    assert_eq!(speech.state, State::Recording { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: terminal(target),
+            profile: 0
+        }
+    );
     assert!(matches!(harness.capture_cmd_rx.try_recv(), Err(TryRecvError::Empty)));
 
     speech.toggle(target);
@@ -260,7 +271,13 @@ fn toggle_stops_only_the_panel_that_owns_the_recording() {
         harness.capture_cmd_rx.try_recv().expect("stop command"),
         CaptureCmd::Stop
     ));
-    assert_eq!(speech.state, State::AwaitingPcm { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::AwaitingPcm {
+            target: terminal(target),
+            profile: 0
+        }
+    );
 }
 
 #[test]
@@ -268,7 +285,7 @@ fn mic_button_reuses_the_last_hotkey_profile() {
     let (mut speech, harness) = test_system();
     let target = PanelId(5);
 
-    speech.start(target, 1);
+    assert!(speech.start(terminal(target), 1));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("profile start"),
         CaptureCmd::Start(1)
@@ -284,14 +301,20 @@ fn mic_button_reuses_the_last_hotkey_profile() {
         harness.capture_cmd_rx.try_recv().expect("toggle start"),
         CaptureCmd::Start(2)
     ));
-    assert_eq!(speech.state, State::Recording { target, profile: 1 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: terminal(target),
+            profile: 1
+        }
+    );
 }
 
 #[test]
 fn current_capture_error_cancels_recording_and_returns_to_idle() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    assert!(speech.start(terminal(target), 0));
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
@@ -319,7 +342,7 @@ fn current_capture_error_cancels_recording_and_returns_to_idle() {
 #[test]
 fn disconnected_capture_worker_returns_recording_to_idle() {
     let (mut speech, harness) = test_system();
-    speech.start(PanelId(7), 0);
+    assert!(speech.start(terminal(PanelId(7)), 0));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
         CaptureCmd::Start(1)
@@ -339,7 +362,7 @@ fn disconnected_capture_worker_returns_recording_to_idle() {
 fn auto_finalized_pcm_while_recording_is_submitted() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    assert!(speech.start(terminal(target), 0));
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
@@ -353,13 +376,12 @@ fn auto_finalized_pcm_while_recording_is_submitted() {
     assert!(speech.poll().is_empty());
 
     let job = harness.job_rx.try_recv().expect("worker job");
-    assert_eq!(job.target, target);
     assert_eq!(job.generation, generation);
     assert_eq!(job.pcm.len(), MIN_PCM_SAMPLES);
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: terminal(target),
             profile: 0,
             generation,
         }
@@ -382,7 +404,6 @@ fn matching_worker_success_and_failure_complete_the_active_generation() {
     harness
         .worker_event_tx
         .send(WorkerEvent::Done {
-            target,
             generation: job.generation,
             text: "hello".to_string(),
         })
@@ -394,14 +415,13 @@ fn matching_worker_success_and_failure_complete_the_active_generation() {
     assert!(matches!(
         events.as_slice(),
         [SpeechEvent::Text { target: event_target, text }]
-            if *event_target == target && text == "hello"
+            if *event_target == terminal(target) && text == "hello"
     ));
 
     let job = submit_recording(&mut speech, &harness, target);
     harness
         .worker_event_tx
         .send(WorkerEvent::Failed {
-            target,
             generation: job.generation,
             message: "failed".to_string(),
         })
@@ -409,6 +429,107 @@ fn matching_worker_success_and_failure_complete_the_active_generation() {
     let events = speech.poll();
     assert_eq!(speech.state, State::Idle);
     assert!(matches!(events.as_slice(), [SpeechEvent::Error(message)] if message == "failed"));
+}
+
+#[test]
+fn worker_completion_uses_the_external_target_owned_by_the_active_generation() {
+    let (mut speech, harness) = test_system();
+    let target = SpeechTarget::External(ExternalTargetId::from_raw(41));
+    assert!(speech.start(target, 0));
+    let generation = speech.generation;
+    assert!(matches!(
+        harness.capture_cmd_rx.try_recv().expect("start command"),
+        CaptureCmd::Start(value) if value == generation
+    ));
+    speech.stop();
+    assert!(matches!(
+        harness.capture_cmd_rx.try_recv().expect("stop command"),
+        CaptureCmd::Stop
+    ));
+    harness
+        .pcm_tx
+        .send((generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
+        .expect("queue PCM");
+    assert!(speech.poll().is_empty());
+    let job = harness.job_rx.try_recv().expect("worker job");
+
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::Done {
+            generation: job.generation,
+            text: "external".to_string(),
+        })
+        .expect("queue result");
+
+    let events = speech.poll();
+    assert!(matches!(
+        events.as_slice(),
+        [SpeechEvent::Text { target: event_target, text }]
+            if *event_target == target && text == "external"
+    ));
+    assert_eq!(speech.state, State::Idle);
+}
+
+#[test]
+fn short_failed_and_cancelled_external_runs_never_emit_text() {
+    let (mut speech, harness) = test_system();
+    let target = SpeechTarget::External(ExternalTargetId::from_raw(51));
+
+    assert!(speech.start(target, 0));
+    let short_generation = speech.generation;
+    let _ = harness.capture_cmd_rx.try_recv().expect("short start");
+    speech.stop();
+    let _ = harness.capture_cmd_rx.try_recv().expect("short stop");
+    harness
+        .pcm_tx
+        .send((short_generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES - 1]))))
+        .expect("queue short PCM");
+    let events = speech.poll();
+    assert!(matches!(events.as_slice(), [SpeechEvent::Notice(_)]));
+    assert!(!events.iter().any(|event| matches!(event, SpeechEvent::Text { .. })));
+
+    assert!(speech.start(target, 0));
+    let failed_generation = speech.generation;
+    let _ = harness.capture_cmd_rx.try_recv().expect("failed start");
+    speech.stop();
+    let _ = harness.capture_cmd_rx.try_recv().expect("failed stop");
+    harness
+        .pcm_tx
+        .send((failed_generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
+        .expect("queue failed PCM");
+    assert!(speech.poll().is_empty());
+    let _ = harness.job_rx.try_recv().expect("failed worker job");
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::Failed {
+            generation: failed_generation,
+            message: "failed".to_string(),
+        })
+        .expect("queue failure");
+    let events = speech.poll();
+    assert!(matches!(events.as_slice(), [SpeechEvent::Error(_)]));
+    assert!(!events.iter().any(|event| matches!(event, SpeechEvent::Text { .. })));
+
+    assert!(speech.start(target, 0));
+    let cancelled_generation = speech.generation;
+    let _ = harness.capture_cmd_rx.try_recv().expect("cancelled start");
+    speech.stop();
+    let _ = harness.capture_cmd_rx.try_recv().expect("cancelled stop");
+    harness
+        .pcm_tx
+        .send((cancelled_generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
+        .expect("queue cancelled PCM");
+    assert!(speech.poll().is_empty());
+    let _ = harness.job_rx.try_recv().expect("cancelled worker job");
+    speech.cancel();
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::Done {
+            generation: cancelled_generation,
+            text: "late".to_string(),
+        })
+        .expect("queue late result");
+    assert!(speech.poll().is_empty());
 }
 
 #[test]
@@ -427,12 +548,10 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
             backend: "stale backend".to_string(),
         },
         WorkerEvent::Done {
-            target,
             generation: old_job.generation,
             text: "stale".to_string(),
         },
         WorkerEvent::Failed {
-            target,
             generation: old_job.generation,
             message: "stale failure".to_string(),
         },
@@ -444,7 +563,7 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: terminal(target),
             profile: 0,
             generation: current_job.generation,
         }
@@ -453,7 +572,6 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     harness
         .worker_event_tx
         .send(WorkerEvent::Done {
-            target,
             generation: current_job.generation,
             text: "current".to_string(),
         })
@@ -462,7 +580,7 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     assert!(matches!(
         events.as_slice(),
         [SpeechEvent::Text { target: event_target, text }]
-            if *event_target == target && text == "current"
+            if *event_target == terminal(target) && text == "current"
     ));
     assert_eq!(speech.state, State::Idle);
 }
@@ -536,7 +654,7 @@ fn full_worker_queue_is_bounded_and_returns_to_idle() {
 fn cancelled_capture_generation_is_ignored_after_restart() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    assert!(speech.start(terminal(target), 0));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("first start"),
         CaptureCmd::Start(1)
@@ -547,7 +665,7 @@ fn cancelled_capture_generation_is_ignored_after_restart() {
         CaptureCmd::Cancel
     ));
 
-    speech.start(target, 0);
+    assert!(speech.start(terminal(target), 0));
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("second start"),
         CaptureCmd::Start(2)
@@ -557,6 +675,12 @@ fn cancelled_capture_generation_is_ignored_after_restart() {
         .send((1, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue stale PCM");
     assert!(speech.poll().is_empty());
-    assert_eq!(speech.state, State::Recording { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: terminal(target),
+            profile: 0
+        }
+    );
     assert!(matches!(harness.job_rx.try_recv(), Err(TryRecvError::Empty)));
 }

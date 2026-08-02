@@ -137,6 +137,11 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        // Session activation is an ownership boundary even when it does not
+        // pass through the session-manager switch path (for example, the
+        // startup chooser). A late transcript must never target the new
+        // board, and a held global key must not remain attributed to it.
+        self.clear_speech_runtime_ownership();
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();
         self.detached_workspaces = runtime_state
             .detached_workspaces

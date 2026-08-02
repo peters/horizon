@@ -12,7 +12,7 @@ use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
 use super::capture::{CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio};
 use super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
-use super::{MicState, SpeechEvent};
+use super::{MicState, SpeechEvent, SpeechTarget};
 
 /// Recordings shorter than this are dropped as accidental taps.
 const MIN_PCM_SAMPLES: usize = 4_000; // 0.25 s at 16 kHz
@@ -30,19 +30,19 @@ fn seconds_of(samples: usize) -> f32 {
 enum State {
     Idle,
     Recording {
-        target: PanelId,
+        target: SpeechTarget,
         profile: usize,
     },
     /// Mic stopped; awaiting the captured PCM from the capture thread. A
     /// capture error here still returns to Idle.
     AwaitingPcm {
-        target: PanelId,
+        target: SpeechTarget,
         profile: usize,
     },
     /// The worker owns the job; only its Done/Failed returns to Idle, and a
     /// late capture stream-error is ignored.
     Transcribing {
-        target: PanelId,
+        target: SpeechTarget,
         profile: usize,
         generation: u64,
     },
@@ -183,24 +183,34 @@ impl SpeechSystem {
     #[must_use]
     pub fn mic_state_for(&self, panel: PanelId) -> MicState {
         match self.state {
-            State::Recording { target, .. } if target == panel => MicState::Recording,
-            State::AwaitingPcm { target, .. } | State::Transcribing { target, .. } if target == panel => MicState::Busy,
+            State::Recording {
+                target: SpeechTarget::Terminal(target),
+                ..
+            } if target == panel => MicState::Recording,
+            State::AwaitingPcm {
+                target: SpeechTarget::Terminal(target),
+                ..
+            }
+            | State::Transcribing {
+                target: SpeechTarget::Terminal(target),
+                ..
+            } if target == panel => MicState::Busy,
             _ => MicState::Idle,
         }
     }
 
     #[must_use]
-    pub fn recording_target(&self) -> Option<PanelId> {
+    pub fn recording_target(&self) -> Option<SpeechTarget> {
         match self.state {
             State::Recording { target, .. } => Some(target),
             _ => None,
         }
     }
 
-    /// The target panel of any active state (recording, awaiting PCM, or
-    /// transcribing), for the "target must still exist" invariant.
+    /// The target of any active state (recording, awaiting PCM, or
+    /// transcribing), for target-lifetime and revalidation invariants.
     #[must_use]
-    pub fn active_target(&self) -> Option<PanelId> {
+    pub fn active_target(&self) -> Option<SpeechTarget> {
         match self.state {
             State::Recording { target, .. }
             | State::AwaitingPcm { target, .. }
@@ -225,15 +235,21 @@ impl SpeechSystem {
     /// Mic-button semantics: start (with the last-used profile) when idle,
     /// stop when this panel is recording.
     pub fn toggle(&mut self, target: PanelId) {
+        let target = SpeechTarget::Terminal(target);
         match self.state {
-            State::Idle => self.start(target, self.last_used),
+            State::Idle => {
+                let _ = self.start(target, self.last_used);
+            }
             State::Recording { target: current, .. } if current == target => self.stop(),
             // Recording another panel or transcription in flight: ignore.
             State::Recording { .. } | State::AwaitingPcm { .. } | State::Transcribing { .. } => {}
         }
     }
 
-    pub fn start(&mut self, target: PanelId, profile: usize) {
+    /// Start a recording and claim `target`; returns whether the claim was
+    /// accepted. Callers use the result to release freshly captured external
+    /// targets when the engine was already busy.
+    pub fn start(&mut self, target: SpeechTarget, profile: usize) -> bool {
         if matches!(self.state, State::Idle) && profile < self.profiles.len() {
             self.generation += 1;
             self.last_used = profile;
@@ -241,6 +257,9 @@ impl SpeechSystem {
                 tracing::error!("speech capture worker unavailable while starting recording");
             }
             self.state = State::Recording { target, profile };
+            true
+        } else {
+            false
         }
     }
 
@@ -367,11 +386,7 @@ impl SpeechSystem {
         };
         tracing::info!(seconds, device = %device, profile = %runtime.label, "speech recording submitted");
         self.last_capture = Some((device, seconds));
-        match runtime.worker.submit(Job {
-            pcm,
-            target,
-            generation,
-        }) {
+        match runtime.worker.submit(Job { pcm, generation }) {
             Ok(()) => {
                 self.state = State::Transcribing {
                     target,
@@ -443,12 +458,14 @@ impl SpeechSystem {
                     "preloading the `{label}` speech model failed: {message}"
                 )));
             }
-            WorkerEvent::Done {
-                target,
-                generation,
-                text,
-            } => {
-                if matches!(self.state, State::Transcribing { profile: p, target: t, generation: g } if p == profile && t == target && g == generation)
+            WorkerEvent::Done { generation, text } => {
+                if let State::Transcribing {
+                    target,
+                    profile: active_profile,
+                    generation: active_generation,
+                } = self.state
+                    && active_profile == profile
+                    && active_generation == generation
                 {
                     self.state = State::Idle;
                     if text.is_empty() {
@@ -469,12 +486,8 @@ impl SpeechSystem {
                     tracing::debug!(generation, profile, "stale transcription result ignored");
                 }
             }
-            WorkerEvent::Failed {
-                target,
-                generation,
-                message,
-            } => {
-                if matches!(self.state, State::Transcribing { profile: p, target: t, generation: g } if p == profile && t == target && g == generation)
+            WorkerEvent::Failed { generation, message } => {
+                if matches!(self.state, State::Transcribing { profile: p, generation: g, .. } if p == profile && g == generation)
                 {
                     self.state = State::Idle;
                     events.push(SpeechEvent::Error(message));
@@ -568,6 +581,10 @@ impl SpeechSystem {
                 events,
             },
         )
+    }
+
+    pub(in crate::app) fn set_test_hotkey_mode(&mut self, mode: SpeechHotkeyMode) {
+        self.hotkey_mode = mode;
     }
 
     /// An idle test system with one startup preload and inert channels.

@@ -15,6 +15,7 @@ Options:
   --install                 Copy the built bundle into the applications directory.
   --applications-dir <dir>  Destination for --install (default: \$APPLICATIONS_DIR or /Applications).
   --version <version>       Set version of Horizon build.
+  --binary <path>           Binary to bundle (default: target/release/horizon).
   --speech                  Bundle a speech-enabled build: adds the microphone
                             usage description the OS requires to prompt for
                             microphone access. Omit for plain builds.
@@ -56,6 +57,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --install) INSTALL=1; shift ;;
     --speech) SPEECH=1; shift ;;
+    --binary)
+      [[ $# -gt 1 ]] || { printf 'Error: --binary requires an argument\n' >&2; exit 1; }
+      BINARY="$2"
+      if [[ "$BINARY" != /* ]]; then
+        BINARY="$ROOT_DIR/$BINARY"
+      fi
+      shift 2 ;;
     --applications-dir)
       [[ $# -gt 1 ]] || { printf 'Error: --applications-dir requires an argument\n' >&2; exit 1; }
       APPLICATIONS_DIR="$2"; shift 2 ;;
@@ -69,7 +77,7 @@ done
 
 if [[ ! -x "$BINARY" ]]; then
   printf 'Error: binary not found at %s\n' "$BINARY" >&2
-  printf 'Run `cargo build --release` first.\n' >&2
+  printf 'Build the requested binary first.\n' >&2
   exit 1
 fi
 
@@ -108,7 +116,7 @@ fi
 SPEECH_FIELDS=""
 if [[ "$SPEECH" -eq 1 ]]; then
   SPEECH_FIELDS="  <key>NSMicrophoneUsageDescription</key>
-  <string>Horizon uses the microphone for push-to-talk speech input into terminal panels.</string>
+  <string>Horizon uses the microphone for speech input into terminal panels and focused text fields.</string>
 "
 fi
 

@@ -7,7 +7,7 @@
 
 use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
-use super::{MicState, SpeechEvent};
+use super::{MicState, SpeechEvent, SpeechTarget};
 
 pub struct SpeechSystem {}
 
@@ -39,12 +39,12 @@ impl SpeechSystem {
     }
 
     #[must_use]
-    pub fn recording_target(&self) -> Option<PanelId> {
+    pub fn recording_target(&self) -> Option<SpeechTarget> {
         None
     }
 
     #[must_use]
-    pub fn active_target(&self) -> Option<PanelId> {
+    pub fn active_target(&self) -> Option<SpeechTarget> {
         None
     }
 
@@ -65,7 +65,9 @@ impl SpeechSystem {
 
     pub fn toggle(&mut self, _target: PanelId) {}
 
-    pub fn start(&mut self, _target: PanelId, _profile: usize) {}
+    pub fn start(&mut self, _target: SpeechTarget, _profile: usize) -> bool {
+        false
+    }
 
     pub fn stop(&mut self) {}
 

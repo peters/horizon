@@ -2,6 +2,15 @@ use egui::{Event, InputState, Key, Modifiers};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 const CAPTURED_CLIPBOARD_EVENT_ID: &str = "speech_captured_clipboard_event";
+const PENDING_CAPTURE_ID: &str = "speech_captured_key";
+const CAPTURED_RELEASE_CLAIM_ID: &str = "speech_captured_release_claim";
+const TIMED_OUT_CAPTURE_ID: &str = "speech_timed_out_capture";
+
+#[derive(Clone, Copy)]
+struct CapturedReleaseClaim {
+    pending: super::settings::PendingCapture,
+    input_time: f64,
+}
 
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
     shortcut_pressed_in_events(&input.events, binding)
@@ -45,28 +54,133 @@ pub(crate) fn is_clipboard_pseudo_event(event: &Event) -> bool {
 /// cannot wedge shortcuts or typing.
 const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
 
+pub(in crate::app) fn request_pending_hotkey_capture_timeout(ctx: &egui::Context) {
+    ctx.request_repaint_after(std::time::Duration::from_secs_f64(PENDING_CAPTURE_TIMEOUT));
+}
+
 /// Return the pending captured chord after expiring stale state. Global
 /// shortcut dispatch and terminal filtering must share this cleanup path.
 pub(in crate::app) fn pending_hotkey_capture(ctx: &egui::Context) -> Option<super::settings::PendingCapture> {
-    let pending_id = egui::Id::new("speech_captured_key");
+    let pending_id = egui::Id::new(PENDING_CAPTURE_ID);
     let pending = ctx
         .data(|data| data.get_temp::<Option<super::settings::PendingCapture>>(pending_id))
         .flatten();
     let expired =
-        pending.is_some_and(|capture| ctx.input(|input| input.time) - capture.armed_at > PENDING_CAPTURE_TIMEOUT);
+        pending.is_some_and(|capture| ctx.input(|input| input.time) - capture.armed_at >= PENDING_CAPTURE_TIMEOUT);
     if expired {
-        ctx.data_mut(|data| data.insert_temp(pending_id, None::<super::settings::PendingCapture>));
+        ctx.data_mut(|data| {
+            data.insert_temp(pending_id, None::<super::settings::PendingCapture>);
+            if let Some(pending) = pending {
+                data.insert_temp(egui::Id::new(TIMED_OUT_CAPTURE_ID), pending);
+            }
+        });
         None
     } else {
         pending
     }
 }
 
+pub(in crate::app) fn take_timed_out_hotkey_capture(ctx: &egui::Context) -> Option<super::settings::PendingCapture> {
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(TIMED_OUT_CAPTURE_ID);
+        let capture = data.get_temp::<super::settings::PendingCapture>(id);
+        data.remove::<super::settings::PendingCapture>(id);
+        capture
+    })
+}
+
 pub(crate) fn hotkey_capture_active(ctx: &egui::Context) -> bool {
     // True while the binder is capturing, and while a just-captured chord's
     // key is still held (its repeats/release must not fire the shortcut it
     // was bound to).
-    hotkey_binder_capturing(ctx) || pending_hotkey_capture(ctx).is_some()
+    let capturing = hotkey_binder_capturing(ctx);
+    let Some(pending) = pending_hotkey_capture(ctx) else {
+        discard_stale_release_claim(ctx);
+        return capturing;
+    };
+    let released = ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| pending_capture_release_matches(pending, event))
+    });
+    if !released {
+        return true;
+    }
+
+    // Resume global registration in the release frame even when the board is
+    // blank and no terminal filter runs. Preserve a one-pass claim so a
+    // focused terminal still swallows the release later in this same pass.
+    let input_time = ctx.input(|input| input.time);
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(PENDING_CAPTURE_ID),
+            None::<super::settings::PendingCapture>,
+        );
+        data.insert_temp(
+            egui::Id::new(CAPTURED_RELEASE_CLAIM_ID),
+            CapturedReleaseClaim { pending, input_time },
+        );
+    });
+    capturing
+}
+
+pub(in crate::app) fn pending_hotkey_capture_for_filter(
+    ctx: &egui::Context,
+) -> Option<super::settings::PendingCapture> {
+    if let Some(pending) = pending_hotkey_capture(ctx) {
+        return Some(pending);
+    }
+    let input_time = ctx.input(|input| input.time);
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(CAPTURED_RELEASE_CLAIM_ID);
+        let claim = data.get_temp::<CapturedReleaseClaim>(id);
+        data.remove::<CapturedReleaseClaim>(id);
+        claim
+            .filter(|claim| claim.input_time.to_bits() == input_time.to_bits())
+            .map(|claim| claim.pending)
+    })
+}
+
+pub(in crate::app) fn pending_capture_key_matches(
+    pending: super::settings::PendingCapture,
+    key: Key,
+    physical_key: Option<Key>,
+) -> bool {
+    keys_equivalent(key, pending.key)
+        || (pending.physical_key.is_some() && physical_key == pending.physical_key)
+        || pending
+            .clipboard
+            .is_some_and(|clipboard| clipboard.matches_release_key(key))
+}
+
+fn pending_capture_release_matches(pending: super::settings::PendingCapture, event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key {
+            key,
+            physical_key,
+            pressed: false,
+            ..
+        } if pending_capture_key_matches(pending, *key, *physical_key)
+    )
+}
+
+fn discard_stale_release_claim(ctx: &egui::Context) {
+    let input_time = ctx.input(|input| input.time);
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(CAPTURED_RELEASE_CLAIM_ID);
+        if data
+            .get_temp::<CapturedReleaseClaim>(id)
+            .is_some_and(|claim| claim.input_time.to_bits() != input_time.to_bits())
+        {
+            data.remove::<CapturedReleaseClaim>(id);
+        }
+    });
+}
+
+fn keys_equivalent(a: Key, b: Key) -> bool {
+    a == b || matches!((a, b), (Key::Plus, Key::Equals) | (Key::Equals, Key::Plus))
 }
 
 /// Scan a frame's events for a press (initial, non-repeat) and a release of
@@ -251,8 +365,9 @@ mod tests {
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
     use super::{
-        event_uses_shortcut_key, hotkey_capture_active, mark_captured_clipboard_event, press_and_release_in_events,
-        shortcut_pressed, take_captured_clipboard_event,
+        event_uses_shortcut_key, hotkey_capture_active, mark_captured_clipboard_event,
+        pending_hotkey_capture_for_filter, press_and_release_in_events, shortcut_pressed,
+        take_captured_clipboard_event, take_timed_out_hotkey_capture,
     };
 
     #[test]
@@ -362,6 +477,34 @@ mod tests {
     }
 
     #[test]
+    fn captured_release_resumes_globals_and_remains_claimed_for_terminal_filter() {
+        let ctx = egui::Context::default();
+        let mut raw = RawInput {
+            time: Some(2.0),
+            ..RawInput::default()
+        };
+        raw.events.push(key_event(Key::F11, false, false, Modifiers::NONE));
+        ctx.begin_pass(raw);
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("speech_captured_key"),
+                Some(crate::app::settings::PendingCapture {
+                    key: Key::F11,
+                    physical_key: Some(Key::F11),
+                    shifted: false,
+                    clipboard: None,
+                    armed_at: 1.0,
+                }),
+            );
+        });
+
+        assert!(!hotkey_capture_active(&ctx));
+        assert!(pending_hotkey_capture_for_filter(&ctx).is_some());
+        assert!(pending_hotkey_capture_for_filter(&ctx).is_none());
+        let _ = ctx.end_pass();
+    }
+
+    #[test]
     fn expired_pending_capture_does_not_block_global_shortcuts() {
         let ctx = egui::Context::default();
         ctx.begin_pass(RawInput {
@@ -383,6 +526,9 @@ mod tests {
         });
 
         assert!(!hotkey_capture_active(&ctx));
+        let timed_out = take_timed_out_hotkey_capture(&ctx).expect("timeout carries the captured key");
+        assert_eq!(timed_out.key, Key::F11);
+        assert!(take_timed_out_hotkey_capture(&ctx).is_none());
         let pending = ctx.data(|data| {
             data.get_temp::<Option<crate::app::settings::PendingCapture>>(pending_id)
                 .flatten()

@@ -6,12 +6,16 @@ use egui::Ui;
 use horizon_core::speech_model::SpeechModelInfo;
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
-use crate::app::shortcuts::{is_clipboard_pseudo_event, mark_captured_clipboard_event};
+use crate::app::shortcuts::{
+    is_clipboard_pseudo_event, mark_captured_clipboard_event, request_pending_hotkey_capture_timeout,
+};
 use crate::app::speech::built_with_speech;
+use crate::app::speech::global_hotkeys::{GlobalHotkeyAction, GlobalHotkeyStatus};
 
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
 
+mod global_dictation;
 mod model_info;
 pub(in crate::app) use model_info::SpeechModelInfoCache;
 use model_info::SpeechModelInfoState;
@@ -64,10 +68,20 @@ enum HotkeyCaptureAttempt {
     },
     ClipboardReserved(ClipboardCapture),
 }
+
+pub(super) struct Response {
+    pub changed: bool,
+    pub global_hotkey_action: Option<GlobalHotkeyAction>,
+}
 use crate::app::util::primary_shortcut_label;
 use crate::theme;
 
-pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut SpeechModelInfoCache) -> bool {
+pub(super) fn render(
+    ui: &mut Ui,
+    config: &mut Config,
+    model_info_cache: &mut SpeechModelInfoCache,
+    global_hotkey_status: &GlobalHotkeyStatus,
+) -> Response {
     let mut changed = false;
 
     changed |= ui
@@ -88,8 +102,17 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         );
     }
 
+    ui.add_space(10.0);
+    let rebinding = crate::app::shortcuts::hotkey_capture_active(ui.ctx());
+    let global_dictation = global_dictation::render(ui, config, global_hotkey_status, rebinding);
+    changed |= global_dictation.changed;
+    let global_hotkey_action = global_dictation.action;
+
     if !config.features.speech.enabled {
-        return changed;
+        return Response {
+            changed,
+            global_hotkey_action,
+        };
     }
 
     // The microphone applies to every profile, so it renders in both the
@@ -139,7 +162,10 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             ui,
             "Push-to-talk presses are paused while this window is open — Rebind… also shows what any key press delivers.",
         );
-        return changed;
+        return Response {
+            changed,
+            global_hotkey_action,
+        };
     }
 
     let model_path = config.features.speech.model.clone();
@@ -167,7 +193,10 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             changed |= speech_hotkey_mode_row(ui, config);
         });
 
-    changed
+    Response {
+        changed,
+        global_hotkey_action,
+    }
 }
 
 /// Global hold/toggle picker; rendered in both the flat and the profiles
@@ -668,6 +697,7 @@ fn arm_pending_capture(
             }),
         );
     });
+    request_pending_hotkey_capture_timeout(ui.ctx());
 }
 
 fn hotkey_capture_attempt(events: &[egui::Event]) -> Option<HotkeyCaptureAttempt> {

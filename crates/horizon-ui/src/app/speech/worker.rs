@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use horizon_core::{PanelId, SpeechBackend, SpeechProfile, SpeechTask};
+use horizon_core::{SpeechBackend, SpeechProfile, SpeechTask};
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
 
 /// `Model::load_with` cannot be interrupted, so loads are serialized across
@@ -108,7 +108,6 @@ fn register_retiring_worker(life: &Weak<WorkerLife>) {
 
 pub struct Job {
     pub pcm: Vec<f32>,
-    pub target: PanelId,
     pub generation: u64,
 }
 
@@ -121,18 +120,21 @@ pub enum WorkerEvent {
     /// The model finished loading; reports the backend actually selected
     /// (interesting when the config says `auto`). `generation` is
     /// [`PRELOAD_GENERATION`] when a startup preload did the load.
-    ModelLoaded { generation: u64, backend: String },
+    ModelLoaded {
+        generation: u64,
+        backend: String,
+    },
     /// A startup preload could not load the model. Surfaced immediately: a
     /// broken model path should be visible at launch, not on the first
     /// dictation attempt.
-    PreloadFailed { message: String },
+    PreloadFailed {
+        message: String,
+    },
     Done {
-        target: PanelId,
         generation: u64,
         text: String,
     },
     Failed {
-        target: PanelId,
         generation: u64,
         message: String,
     },
@@ -369,7 +371,6 @@ fn worker_loop(
             finish_run(run_cancels, job.generation);
             continue;
         }
-        let target = job.target;
         let result = ensure_session(settings, shutdown, life, &mut session, &mut model).and_then(|loaded_backend| {
             if let Some(backend) = loaded_backend {
                 active_backend = Some(backend);
@@ -408,14 +409,12 @@ fn worker_loop(
         }
         let event = match result {
             Ok(text) => WorkerEvent::Done {
-                target,
                 generation: job.generation,
                 text: sanitize_transcript(&text),
             },
             Err(message) => {
                 tracing::warn!(%message, "speech transcription error");
                 WorkerEvent::Failed {
-                    target,
                     generation: job.generation,
                     message,
                 }

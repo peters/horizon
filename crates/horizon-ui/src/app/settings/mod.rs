@@ -10,8 +10,9 @@ pub(in crate::app) use speech::SpeechModelInfoCache;
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
-use horizon_core::Config;
+use horizon_core::{Config, SpeechConfig};
 
+use super::speech::global_hotkeys::{GlobalHotkeyAction, GlobalHotkeyStatus};
 use super::util::{self, atomic_write};
 use super::{HorizonApp, resolve_shortcuts};
 use crate::theme;
@@ -67,6 +68,18 @@ enum SettingsAction {
     Save,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeConfigSource {
+    Preview,
+    Committed,
+}
+
+impl RuntimeConfigSource {
+    const fn reconfigures_global_hotkeys(self) -> bool {
+        matches!(self, Self::Committed)
+    }
+}
+
 impl HorizonApp {
     pub(super) fn toggle_settings(&mut self) {
         if let Some(editor) = self.settings.take() {
@@ -104,6 +117,7 @@ impl HorizonApp {
     }
 
     pub(super) fn render_settings(&mut self, ctx: &Context) {
+        let global_hotkey_status = self.speech_global_hotkeys.status().clone();
         let Some((buffer, original)) = self
             .settings
             .as_ref()
@@ -138,14 +152,52 @@ impl HorizonApp {
         self.apply_settings_action(action);
 
         let config_path = self.config_path.display().to_string();
+        let mut global_hotkey_action = None;
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ctx, &config_path, editor, &mut self.speech_model_info_cache);
+            global_hotkey_action = render_settings_panel(
+                ctx,
+                &config_path,
+                editor,
+                &mut self.speech_model_info_cache,
+                &global_hotkey_status,
+            );
+        }
+
+        // The binder owns global speech keys through the captured-key release
+        // grace period. Closing or leaving the Speech settings tab resumes the
+        // manager's retained committed set without adopting draft bindings.
+        self.sync_speech_hotkey_rebinding(ctx);
+
+        // Permission prompts and retries are explicit button actions. Consume
+        // them only after the SettingsEditor borrow above has ended, and use
+        // the saved config rather than the live-preview draft.
+        if let Some(action) = global_hotkey_action
+            && let Some(committed_speech) = committed_speech_config(&original)
+        {
+            let runtime_available = self.speech.is_some();
+            let runtime_config = super::speech::global_hotkey_runtime_config(&committed_speech, runtime_available);
+            if runtime_available {
+                match action {
+                    GlobalHotkeyAction::GrantAccessibility => self
+                        .speech_global_hotkeys
+                        .grant_accessibility_and_retry(&runtime_config),
+                    GlobalHotkeyAction::RetryRegistration => {
+                        self.speech_global_hotkeys.retry(&runtime_config);
+                    }
+                }
+            } else {
+                self.speech_global_hotkeys.reconfigure_committed(&runtime_config);
+                self.show_speech_notice(
+                    "Global speech hotkeys remain off because the speech input runtime is unavailable.",
+                    true,
+                );
+            }
         }
     }
 
     fn apply_live_preview(&mut self, config: &Config) {
         self.board.sync_workspace_metadata(config);
-        self.apply_runtime_config(config);
+        self.apply_runtime_config_preview(config);
     }
 
     fn apply_settings_action(&mut self, action: SettingsAction) {
@@ -234,11 +286,47 @@ impl HorizonApp {
         })
     }
 
+    /// Apply a settings draft without committing global key registrations.
+    /// The global-hotkey owner hooks the committed `apply_runtime_config`
+    /// path below, while previews retain the currently saved registration set.
+    fn apply_runtime_config_preview(&mut self, config: &Config) {
+        self.apply_runtime_config_with_source(config, RuntimeConfigSource::Preview);
+    }
+
+    /// Apply configuration loaded from a committed source (settings Save or
+    /// an external config-file reload). Global registration reconfiguration
+    /// belongs on this path, not in `apply_runtime_config_preview`.
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
-        // Speech applies live: rebuild the subsystem whenever its config
-        // changed (drops any in-flight recording, which is acceptable for a
-        // settings change). Covers both settings saves and file reloads.
-        if self.template_config.features.speech != config.features.speech {
+        self.apply_runtime_config_with_source(config, RuntimeConfigSource::Committed);
+    }
+
+    fn apply_runtime_config_with_source(&mut self, config: &Config, source: RuntimeConfigSource) {
+        let runtime_config = runtime_config_for_source(&self.template_config, config, source);
+        if source.reconfigures_global_hotkeys() {
+            // A committed reload is an ownership boundary even when only the
+            // global-scope flag changed and the speech engine itself can stay.
+            self.clear_speech_runtime_ownership();
+        }
+        self.apply_runtime_config_inner(&runtime_config);
+        if source.reconfigures_global_hotkeys() {
+            let runtime_config =
+                super::speech::global_hotkey_runtime_config(&config.features.speech, self.speech.is_some());
+            self.speech_global_hotkeys.reconfigure_committed(&runtime_config);
+        }
+    }
+
+    fn apply_runtime_config_inner(&mut self, config: &Config) {
+        // Rebuild speech on committed settings saves and file reloads. Draft
+        // previews preserve the committed speech block above so the engine
+        // and global profile-index mapping cannot diverge.
+        if !self
+            .template_config
+            .features
+            .speech
+            .engine_equivalent(&config.features.speech)
+        {
+            // Release any target owned by the engine before dropping it.
+            self.clear_speech_runtime_ownership();
             // Retire the old system BEFORE constructing the replacement: an
             // assignment's RHS runs first, and `from_config` can start
             // loading immediately (preloaded profiles), so the old workers
@@ -266,6 +354,22 @@ impl HorizonApp {
     }
 }
 
+fn runtime_config_for_source(current: &Config, incoming: &Config, source: RuntimeConfigSource) -> Config {
+    let mut runtime = incoming.clone();
+    if source == RuntimeConfigSource::Preview {
+        // The global manager intentionally retains the saved profile-index
+        // mapping until Save. Keep the speech engine on that same committed
+        // profile set so an unsaved reorder/disable cannot redirect or swallow
+        // a system-wide key.
+        runtime.features.speech = current.features.speech.clone();
+    }
+    runtime
+}
+
+fn committed_speech_config(saved_yaml: &str) -> Option<SpeechConfig> {
+    Config::from_yaml(saved_yaml).ok().map(|config| config.features.speech)
+}
+
 pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
     (viewport_width * 0.3).clamp(340.0, 900.0)
 }
@@ -284,9 +388,11 @@ fn render_settings_panel(
     config_path: &str,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
-) {
+    global_hotkey_status: &GlobalHotkeyStatus,
+) -> Option<GlobalHotkeyAction> {
     let viewport_width = util::viewport_local_rect(ctx).width();
     let default_width = settings_panel_default_width(viewport_width);
+    let mut global_hotkey_action = None;
 
     egui::SidePanel::right(SETTINGS_PANEL_ID)
         .default_width(default_width)
@@ -310,9 +416,13 @@ fn render_settings_panel(
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, model_info_cache, available),
+                tab => {
+                    global_hotkey_action =
+                        render_gui_tab(ui, tab, editor, model_info_cache, global_hotkey_status, available);
+                }
             }
         });
+    global_hotkey_action
 }
 
 fn render_gui_tab(
@@ -320,23 +430,29 @@ fn render_gui_tab(
     tab: SettingsTab,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
+    global_hotkey_status: &GlobalHotkeyStatus,
     available: Vec2,
-) {
+) -> Option<GlobalHotkeyAction> {
     let Some(ref mut config) = editor.editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
                 .color(theme::PALETTE_RED())
                 .size(12.0),
         );
-        return;
+        return None;
     };
 
+    let mut global_hotkey_action = None;
     egui::ScrollArea::vertical()
         .max_height(available.y)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let changed = match tab {
-                SettingsTab::General => general::render(ui, config, model_info_cache),
+                SettingsTab::General => {
+                    let response = general::render(ui, config, model_info_cache, global_hotkey_status);
+                    global_hotkey_action = response.global_hotkey_action;
+                    response.changed
+                }
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 // Yaml is handled before this function is called.
@@ -346,6 +462,7 @@ fn render_gui_tab(
                 editor.buffer = yaml;
             }
         });
+    global_hotkey_action
 }
 
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
@@ -407,4 +524,48 @@ fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0)).wrap());
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{Config, SpeechProfile};
+
+    use super::{RuntimeConfigSource, committed_speech_config, runtime_config_for_source};
+
+    #[test]
+    fn only_committed_runtime_config_reconfigures_global_hotkeys() {
+        assert!(!RuntimeConfigSource::Preview.reconfigures_global_hotkeys());
+        assert!(RuntimeConfigSource::Committed.reconfigures_global_hotkeys());
+    }
+
+    #[test]
+    fn explicit_global_actions_use_saved_yaml_not_the_preview_draft() {
+        let saved = "features:\n  speech:\n    dictate_outside_horizon: false\n";
+        let draft = "features:\n  speech:\n    dictate_outside_horizon: true\n";
+
+        let saved_speech = committed_speech_config(saved).expect("saved config parses");
+        let draft_speech = committed_speech_config(draft).expect("draft config parses");
+        assert!(!saved_speech.dictate_outside_horizon);
+        assert!(draft_speech.dictate_outside_horizon);
+    }
+
+    #[test]
+    fn preview_keeps_committed_speech_profiles_until_save() {
+        let mut current = Config::default();
+        current.features.speech.enabled = true;
+        current.features.speech.profiles = vec![SpeechProfile {
+            name: "saved F1".to_string(),
+            hotkey: "F1".to_string(),
+            ..SpeechProfile::default()
+        }];
+        let mut draft = current.clone();
+        draft.features.speech.enabled = false;
+        draft.features.speech.profiles[0].name = "unsaved reorder".to_string();
+
+        let preview = runtime_config_for_source(&current, &draft, RuntimeConfigSource::Preview);
+        assert_eq!(preview.features.speech, current.features.speech);
+
+        let committed = runtime_config_for_source(&current, &draft, RuntimeConfigSource::Committed);
+        assert_eq!(committed.features.speech, draft.features.speech);
+    }
 }

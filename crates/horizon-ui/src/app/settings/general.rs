@@ -1,21 +1,32 @@
 use egui::Ui;
 use horizon_core::{AppearanceTheme, Config};
 
+use crate::app::speech::global_hotkeys::{GlobalHotkeyAction, GlobalHotkeyStatus};
 use crate::theme;
 
+pub(super) struct Response {
+    pub changed: bool,
+    pub global_hotkey_action: Option<GlobalHotkeyAction>,
+}
+
 /// Render the General settings tab: window dimensions, feature toggles,
-/// and overlay sizes.  Returns `true` when any value was modified.
+/// and overlay sizes.
 pub(super) fn render(
     ui: &mut Ui,
     config: &mut Config,
     model_info_cache: &mut super::speech::SpeechModelInfoCache,
-) -> bool {
+    global_hotkey_status: &GlobalHotkeyStatus,
+) -> Response {
     let mut changed = false;
     changed |= render_window_section(ui, config);
     changed |= render_appearance_section(ui, config);
-    changed |= render_features_section(ui, config, model_info_cache);
+    let features = render_features_section(ui, config, model_info_cache, global_hotkey_status);
+    changed |= features.changed;
     changed |= render_overlays_section(ui, config);
-    changed
+    Response {
+        changed,
+        global_hotkey_action: features.global_hotkey_action,
+    }
 }
 
 fn render_window_section(ui: &mut Ui, config: &mut Config) -> bool {
@@ -104,8 +115,10 @@ fn render_features_section(
     ui: &mut Ui,
     config: &mut Config,
     model_info_cache: &mut super::speech::SpeechModelInfoCache,
-) -> bool {
+    global_hotkey_status: &GlobalHotkeyStatus,
+) -> super::speech::Response {
     let mut changed = false;
+    let mut global_hotkey_action = None;
     super::section_heading(ui, "Features");
     super::section_card(ui, |ui| {
         changed |= ui
@@ -117,9 +130,14 @@ fn render_features_section(
         super::dim_label(ui, "Show a notification feed for agent activity.");
 
         ui.add_space(10.0);
-        changed |= super::speech::render(ui, config, model_info_cache);
+        let speech = super::speech::render(ui, config, model_info_cache, global_hotkey_status);
+        changed |= speech.changed;
+        global_hotkey_action = speech.global_hotkey_action;
     });
-    changed
+    super::speech::Response {
+        changed,
+        global_hotkey_action,
+    }
 }
 
 fn render_overlays_section(ui: &mut Ui, config: &mut Config) -> bool {

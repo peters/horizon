@@ -16,6 +16,10 @@ use crate::shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey};
 #[serde(default)]
 pub struct SpeechConfig {
     pub enabled: bool,
+    /// Register every configured speech-profile hotkey system-wide while
+    /// Horizon runs. macOS only in v1; other platforms parse and preserve the
+    /// setting but do not register global keys.
+    pub dictate_outside_horizon: bool,
     /// Path to a transcribe.cpp GGUF model (e.g. nb-whisper-large-Q8_0.gguf).
     pub model: String,
     /// Source language hint (ISO code such as `no`, `nn`, `en`) or `auto`.
@@ -49,6 +53,7 @@ impl Default for SpeechConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            dictate_outside_horizon: false,
             model: String::new(),
             language: "auto".to_string(),
             task: SpeechTask::Transcribe,
@@ -118,6 +123,18 @@ impl SpeechConfig {
         } else {
             self.profiles.clone()
         }
+    }
+
+    /// Whether two configs require the audio/transcription engine to be
+    /// rebuilt. Global hotkey scope is owned separately and must not restart
+    /// microphone or model workers when it is the only changed field.
+    #[must_use]
+    pub fn engine_equivalent(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        let mut right = other.clone();
+        left.dictate_outside_horizon = false;
+        right.dictate_outside_horizon = false;
+        left == right
     }
 }
 
@@ -326,6 +343,7 @@ mod tests {
     fn speech_config_defaults_are_disabled_hold_f9() {
         let speech = FeaturesConfig::default().speech;
         assert!(!speech.enabled);
+        assert!(!speech.dictate_outside_horizon);
         assert_eq!(speech.language, "auto");
         assert_eq!(speech.task, super::SpeechTask::Transcribe);
         assert_eq!(speech.backend, super::SpeechBackend::Auto);
@@ -344,6 +362,7 @@ features:
     backend: cuda
     hotkey: F9
     hotkey_mode: toggle
+    dictate_outside_horizon: true
 ";
         let config = Config::from_yaml(yaml).expect("speech config should parse");
         let speech = &config.features.speech;
@@ -353,6 +372,7 @@ features:
         assert_eq!(speech.task, super::SpeechTask::Translate);
         assert_eq!(speech.backend, super::SpeechBackend::Cuda);
         assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Toggle);
+        assert!(speech.dictate_outside_horizon);
 
         let round_tripped = Config::from_yaml(&config.to_yaml().expect("serialize")).expect("re-parse");
         assert_eq!(round_tripped.features.speech, *speech);
@@ -361,6 +381,53 @@ features:
     fn config_without_speech_block_still_parses() {
         let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
         assert!(!config.features.speech.enabled);
+        assert!(!config.features.speech.dictate_outside_horizon);
+    }
+    #[test]
+    fn legacy_profile_yaml_without_external_dictation_stays_valid() {
+        let yaml = r"
+features:
+  speech:
+    enabled: true
+    backend: auto
+    hotkey_mode: hold
+    profiles:
+      - name: Norsk
+        model: /models/nb-whisper-large-Q8_0.gguf
+        language: no
+        task: transcribe
+        hotkey: F1
+      - name: English
+        model: /models/whisper-large-v3-Q8_0.gguf
+        language: en
+        task: transcribe
+        hotkey: F2
+      - name: NO to EN
+        model: /models/whisper-large-v3-Q8_0.gguf
+        language: no
+        task: translate
+        target_language: en
+        hotkey: F3
+";
+
+        let config = Config::from_yaml(yaml).expect("legacy profile config should parse");
+        assert!(!config.features.speech.dictate_outside_horizon);
+        assert_eq!(config.features.speech.profiles.len(), 3);
+
+        let serialized = config.to_yaml().expect("serialize legacy config");
+        let round_tripped = Config::from_yaml(&serialized).expect("re-parse serialized config");
+        assert!(!round_tripped.features.speech.dictate_outside_horizon);
+        assert_eq!(round_tripped.features.speech.profiles, config.features.speech.profiles);
+    }
+    #[test]
+    fn external_dictation_scope_does_not_change_engine_equivalence() {
+        let left = super::SpeechConfig::default();
+        let mut right = left.clone();
+        right.dictate_outside_horizon = true;
+        assert!(left.engine_equivalent(&right));
+
+        right.hotkey_mode = super::SpeechHotkeyMode::Toggle;
+        assert!(!left.engine_equivalent(&right));
     }
     #[test]
     fn validate_rejects_malformed_speech_hotkey_only_when_enabled() {

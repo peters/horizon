@@ -13,7 +13,14 @@ trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-traci
 # Opt-in speech input (mic button + push-to-talk hotkey). CPU-only inference
 # by default; add one of the GPU variants below to compile a GPU backend in.
 # Backend selection at runtime stays automatic with CPU fallback either way.
-speech = ["dep:transcribe-cpp", "dep:cpal"]
+speech = [
+  "dep:transcribe-cpp",
+  "dep:cpal",
+  "dep:global-hotkey",
+  "dep:accessibility",
+  "dep:macos-accessibility-client",
+  "dep:core-foundation",
+]
 speech-cuda = ["speech", "transcribe-cpp/cuda"]
 speech-vulkan = ["speech", "transcribe-cpp/vulkan"]
 
@@ -44,3 +51,9 @@ tokio.workspace = true
 surge-core.workspace = true
 transcribe-cpp = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = { workspace = true, optional = true }
+accessibility = { workspace = true, optional = true }
+macos-accessibility-client = { workspace = true, optional = true }
+core-foundation = { workspace = true, optional = true }

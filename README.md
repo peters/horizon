@@ -338,14 +338,17 @@ features:
     input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
+    dictate_outside_horizon: false # macOS only: reserve speech hotkeys system-wide
     preload: false       # true = load the model at startup; first dictation becomes instant
 ```
 
-The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button.
+By default, push-to-talk listens only in Horizon's main window and targets its focused terminal panel; panels in detached windows can still dictate via their title-bar mic button. On macOS, `dictate_outside_horizon: true` registers the same configured profile hotkeys system-wide while Horizon runs. Those keys are reserved globally while registration is active, so bindings such as F1 and F3 no longer open Firefox Help or Find.
+
+External dictation inserts into the exact editable field focused when the hotkey is pressed. Horizon revalidates the application, window, and Accessibility element throughout dictation and immediately before insertion; any focus, permission, or editability change discards the result without falling back to another field. Insertion uses macOS Accessibility selected-text replacement, preserves every clipboard flavor, appends the normal trailing space, and never sends Enter or submits a form. It requires Microphone and Accessibility permission, but not Input Monitoring. Permission prompting is explicit under Settings → Speech Input via **Grant Accessibility…**.
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
 
-Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
+Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes normally apply live. On macOS it also shows global-registration and Accessibility status, pauses all global bindings while Rebind is capturing, and offers explicit permission and retry actions. Registration is all-or-nothing: one unsupported or unavailable binding leaves browser keys untouched while the mic button and Horizon-local speech remain available. If macOS reports the rare case that a system key could not be released, Settings requires a Horizon restart instead of offering an unsafe retry.
 
 Dictation outcomes that would otherwise be invisible are surfaced as a transient message: a tap too short to transcribe, a recording in which no speech was detected (named with the microphone it came from), a push-to-talk press while the previous dictation is still processing, and speech errors.
 
@@ -359,6 +362,7 @@ features:
     enabled: true
     backend: auto
     hotkey_mode: hold
+    dictate_outside_horizon: false # set true on macOS for focused fields in other apps
     profiles:
       - name: Norsk
         model: ~/models/nb-whisper-large-Q8_0.gguf

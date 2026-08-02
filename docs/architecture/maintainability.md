@@ -42,6 +42,9 @@ back into large multi-purpose modules.
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows
+  - `speech/`: speech-engine integration, target ownership, and platform
+    adapters; global-key and Accessibility objects stay on the UI thread while
+    worker modules own only capture and transcription jobs
   - `persistence`: runtime/config save glue
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
   - `workspace`: workspace frame orchestration and rename/drag UI, with

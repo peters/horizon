@@ -188,6 +188,14 @@ pub struct HorizonApp {
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     speech: Option<speech::SpeechSystem>,
+    /// Main-thread owner of the transactional macOS global registrations.
+    speech_global_hotkeys: speech::global_hotkeys::GlobalHotkeys,
+    /// Main-thread registry for opaque external Accessibility targets.
+    speech_external_targets: speech::external_text::ExternalTextTargets,
+    /// Terminal results completed before detached viewports contribute their
+    /// focus state. Delivery waits until the frame-wide focus aggregate is
+    /// final so a first unfocused frame cannot race a late transcript.
+    pending_terminal_speech: Vec<(PanelId, String)>,
     /// Every push-to-talk chord currently held (used to keep their key
     /// events, repeats, and releases out of the terminal input stream —
     /// multiple profile keys can be down simultaneously).
@@ -320,7 +328,7 @@ impl HorizonApp {
             shortcuts,
             action_commands_cache,
         };
-        let mut app = Self::initial_state(config, bootstrap);
+        let mut app = Self::initial_state(config, bootstrap, &cc.egui_ctx);
 
         match startup {
             StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
@@ -347,7 +355,10 @@ impl HorizonApp {
             shortcuts,
             action_commands_cache,
         }: AppBootstrap,
+        context: &Context,
     ) -> Self {
+        let speech = speech::SpeechSystem::from_config(&config.features.speech);
+        let global_hotkey_config = speech::global_hotkey_runtime_config(&config.features.speech, speech.is_some());
         Self {
             board,
             panels_to_close: Vec::new(),
@@ -381,7 +392,10 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
-            speech: speech::SpeechSystem::from_config(&config.features.speech),
+            speech,
+            speech_global_hotkeys: speech::global_hotkeys::GlobalHotkeys::new(context, &global_hotkey_config),
+            speech_external_targets: speech::external_text::ExternalTextTargets::new(),
+            pending_terminal_speech: Vec::new(),
             speech_held_bindings: Vec::new(),
             speech_engaged_profile: None,
             speech_escape_cancelled: false,

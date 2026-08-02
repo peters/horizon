@@ -5,8 +5,8 @@ use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::shortcuts::{
-    event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
-    shortcut_pressed, take_captured_clipboard_event,
+    event_uses_shortcut_key, is_clipboard_pseudo_event, pending_capture_key_matches, pending_hotkey_capture_for_filter,
+    shortcut_event_matches, shortcut_pressed, take_captured_clipboard_event,
 };
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
@@ -309,7 +309,7 @@ impl HorizonApp {
         let captured_key_id = egui::Id::new("speech_captured_key");
         // This accessor applies the same timeout used by global shortcut
         // dispatch, so neither path can be wedged by a lost release.
-        let captured = pending_hotkey_capture(ctx);
+        let captured = pending_hotkey_capture_for_filter(ctx);
         let captured_clipboard_event = take_captured_clipboard_event(ctx);
         let mut filtered = Vec::with_capacity(events.len());
         let mut swallow_next_shift_text = false;
@@ -394,9 +394,7 @@ impl HorizonApp {
                 })
         });
         if escape_cancelled {
-            if let Some(speech) = self.speech.as_mut() {
-                speech.cancel();
-            }
+            self.cancel_active_speech();
             self.speech_engaged_profile = None;
             self.speech_escape_release_deadline = None;
         }
@@ -571,13 +569,7 @@ fn pending_capture_event(pending: super::super::settings::PendingCapture, event:
     // Match the PHYSICAL key as well: a shifted keycap presses as one logical
     // key (Shift+1 -> Exclamationmark) and releases as another (Num1) once
     // Shift is lifted first.
-    let matches_pending = |key: Key, physical: Option<Key>| {
-        keys_equivalent(key, pending.key)
-            || (pending.physical_key.is_some() && physical == pending.physical_key)
-            || pending
-                .clipboard
-                .is_some_and(|clipboard| clipboard.matches_release_key(key))
-    };
+    let matches_pending = |key: Key, physical: Option<Key>| pending_capture_key_matches(pending, key, physical);
     match event {
         Event::Key {
             key,
@@ -614,13 +606,6 @@ fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
             | horizon_core::ShortcutKey::Minus
             | horizon_core::ShortcutKey::Plus
     )
-}
-
-/// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on
-/// release when Shift is dropped first; treat them as one key so a pending
-/// capture clears on release.
-fn keys_equivalent(a: Key, b: Key) -> bool {
-    a == b || matches!((a, b), (Key::Plus, Key::Equals) | (Key::Equals, Key::Plus))
 }
 
 fn egui_key_may_emit_text(key: Key) -> bool {
