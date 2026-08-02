@@ -6,7 +6,7 @@ Horizon releases are tag-driven.
 - `vX.Y.Z` is a stable release.
 - Publishing a GitHub Release with one of those tags triggers the release workflow, which uploads the platform binaries to the same GitHub Release.
 - The same release workflow can also be started manually with an existing tag to recover a failed release after fixing workflow automation, without bumping the version.
-- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag in `peters/horizon-updates`, publish the classic `horizon-ui` snap to the Snap Store, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`.
+- Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag in `peters/horizon-updates`, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`. Snap Store publication is currently paused.
 
 ## Source Of Truth
 
@@ -60,7 +60,7 @@ The release workflow validates:
 - the GitHub prerelease checkbox matches the tag suffix
 - the tag's base version matches `Cargo.toml`
 
-If the workflow itself needs a fix after a release was already published, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path reuses the existing GitHub Release instead of requiring a bumped version tag. The manual form also lets you leave Snap publication disabled while recovering the rest of the stable release if the Snap Store side is not ready yet.
+If the workflow itself needs a fix after a release was already published, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path reuses the existing GitHub Release instead of requiring a bumped version tag. The manual form's `publish_snap` input is currently disabled and has no effect while Snap Store publication is paused.
 
 Then it:
 
@@ -70,7 +70,7 @@ Then it:
 - uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
 - for stable releases in `peters/horizon`, publishes Surge update metadata and package artifacts to the internal `surge` GitHub Release tag in `peters/horizon-updates` using the `stable` channel
 - for stable releases in non-canonical staging repos, defaults Surge update storage to the current repository so hosted smoke can stay self-contained
-- for stable releases, builds the classic `horizon-ui` snap from [`snap/snapcraft.yaml`](../snap/snapcraft.yaml) and releases it to the Snap Store `stable` channel
+- Snap Store publication is currently paused; the `publish-snap` job and its `publish_snap` manual input remain disabled
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 - in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
@@ -107,16 +107,16 @@ Stable-release packaging assumes:
   - `horizon-installer-win-x64.exe`
 - the stable release uploads the four raw assets plus the four installer assets before the tap update runs
 - the canonical `peters/horizon` repo publishes Surge storage to the dedicated GitHub Release tag `surge` in `peters/horizon-updates`
-- `snap/snapcraft.yaml` continues to package Horizon as a classic snap named `horizon-ui`
+- `snap/snapcraft.yaml` remains available for the classic `horizon-ui` snap, but the release job is currently paused
 - `SURGE_STORAGE_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/horizon-updates`
-- `SNAPCRAFT_STORE_CREDENTIALS` is configured in the `peters/horizon` repository secrets with credentials exported for the `horizon-ui` snap
+- `SNAPCRAFT_STORE_CREDENTIALS` is not currently required while Snap Store publication is paused
 - `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
 - `WINGET_PKGS_TOKEN` is configured in the `peters/horizon` repository secrets with write access to the `peters/winget-pkgs` fork
 - `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
 WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
 
-If a stable release is missing one of those assets, the Surge storage token, the Snap Store credentials, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Snap, Homebrew, Surge, or WinGet update.
+If a stable release is missing one of those assets, the Surge storage token, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
 
 ## Cross-Platform Installer And Update Smoke
 
