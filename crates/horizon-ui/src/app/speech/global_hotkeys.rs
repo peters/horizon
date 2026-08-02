@@ -213,9 +213,7 @@ fn native_hotkey(binding: ShortcutBinding) -> Result<NativeHotkey, String> {
         ShortcutKey::Comma => NativeKey::Comma,
         ShortcutKey::Minus => NativeKey::Minus,
         ShortcutKey::Plus => {
-            return Err(
-                "Plus is not supported by macOS global hotkeys; use a physical key with explicit modifiers".to_string(),
-            );
+            return Err("Plus is not supported by macOS global hotkeys; choose another key".to_string());
         }
         ShortcutKey::Digit(digit @ 0..=9) => NativeKey::Digit(digit),
         ShortcutKey::Letter(letter @ 'A'..='Z') => NativeKey::Letter(letter),

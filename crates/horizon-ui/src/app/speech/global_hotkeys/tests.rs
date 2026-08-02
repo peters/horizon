@@ -25,7 +25,10 @@ fn maps_function_keys_and_macos_modifiers() {
     let unsupported = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(21));
     assert!(native_hotkey(unsupported).is_err());
     let shifted_symbol = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Plus);
-    assert!(native_hotkey(shifted_symbol).is_err());
+    assert_eq!(
+        native_hotkey(shifted_symbol),
+        Err("Plus is not supported by macOS global hotkeys; choose another key".to_string())
+    );
 }
 
 #[test]
