@@ -1,8 +1,9 @@
-use egui::{Context, Event, Id, Key, Modifiers, Pos2, RawInput, Rect, Vec2};
+use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use horizon_core::{AgentSessionBinding, PanelKind};
 
 use super::{
     MicState, clip_screen_rect_to_canvas, mic_accessibility_label, mic_control_enabled, mic_control_response,
-    mic_widget_info,
+    mic_widget_info, render_session_rebind_options,
 };
 
 fn key_press(key: Key) -> Event {
@@ -40,6 +41,34 @@ fn mic_frame(ctx: &Context, events: Vec<Event>, enabled: bool, request_focus: bo
         .inner;
     let output = ctx.end_pass();
     (clicked, output.platform_output.events_description())
+}
+
+fn rebind_options_frame(
+    ctx: &Context,
+    events: Vec<Event>,
+    options: &[(String, AgentSessionBinding)],
+) -> super::SessionRebindRenderOutcome {
+    let input = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 320.0))),
+        events,
+        ..RawInput::default()
+    };
+    ctx.begin_pass(input);
+    let outcome = egui::CentralPanel::default()
+        .show(ctx, |ui| render_session_rebind_options(ui, options))
+        .inner;
+    let _ = ctx.end_pass();
+    outcome
+}
+
+fn session_binding(session_id: &str) -> AgentSessionBinding {
+    AgentSessionBinding::new(
+        PanelKind::Codex,
+        session_id.to_string(),
+        Some("/repo".to_string()),
+        None,
+        None,
+    )
 }
 
 #[test]
@@ -110,4 +139,43 @@ fn disabled_mic_ignores_focused_keyboard_activation() {
     let (clicked, description) = mic_frame(&ctx, vec![key_press(Key::Enter)], false, false);
     assert!(!clicked);
     assert!(description.is_empty());
+}
+
+#[test]
+fn clicking_a_rebind_and_restart_row_returns_the_exact_session() {
+    let ctx = Context::default();
+    let options = vec![
+        ("First session · 11111111".to_string(), session_binding("session-1")),
+        ("Second session · 22222222".to_string(), session_binding("session-2")),
+    ];
+    let initial = rebind_options_frame(&ctx, Vec::new(), &options);
+    let second_row = initial.option_rects.get(1).expect("second rebind row").center();
+
+    let pressed = rebind_options_frame(
+        &ctx,
+        vec![
+            Event::PointerMoved(second_row),
+            Event::PointerButton {
+                pos: second_row,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &options,
+    );
+    assert!(pressed.binding.is_none());
+
+    let released = rebind_options_frame(
+        &ctx,
+        vec![Event::PointerButton {
+            pos: second_row,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        &options,
+    );
+
+    assert_eq!(released.binding, Some(options[1].1.clone()));
 }
