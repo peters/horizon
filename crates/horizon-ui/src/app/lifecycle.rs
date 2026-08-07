@@ -307,6 +307,21 @@ impl HorizonApp {
         had_terminal_output
     }
 
+    fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {
+        let Some(speech) = self.speech.as_mut() else {
+            return false;
+        };
+        if speech.active_target() != Some(panel_id) {
+            return false;
+        }
+
+        speech.cancel();
+        // Held bindings remain owned until their physical release is consumed,
+        // so the release cannot leak into either the old or replacement PTY.
+        self.speech_engaged_profile = None;
+        true
+    }
+
     /// Push-to-talk hotkey handling plus draining speech results into the
     /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
     ///
@@ -353,26 +368,30 @@ impl HorizonApp {
             self.stop_hold_on_focus_loss(ctx, now);
         }
 
-        let Some(speech) = self.speech.as_mut() else {
+        if self.speech.is_none() {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
             self.reset_speech_input_state(root_focused_now);
             return;
-        };
+        }
 
         // Invariant: the active target panel must still exist — across
         // Recording, AwaitingPcm, and Transcribing. Covers every removal
         // path (single close, workspace bulk close, session teardown), so
         // the mic can't stay open and a busy engine can't wedge behind a
         // vanished panel while inference finishes into nothing.
-        if let Some(target) = speech.active_target()
-            && self.board.panel(target).is_none()
-        {
-            speech.cancel();
-            // Held bindings persist until their release is consumed, so a
-            // key-up after the panel vanished cannot leak into the terminal.
-            self.speech_engaged_profile = None;
+        let vanished_target = self
+            .speech
+            .as_ref()
+            .and_then(super::speech::SpeechSystem::active_target)
+            .filter(|target| self.board.panel(*target).is_none());
+        if let Some(target) = vanished_target {
+            let _ = self.cancel_speech_target(target);
             tracing::info!("recording target panel disappeared; recording cancelled");
         }
+
+        let Some(speech) = self.speech.as_mut() else {
+            return;
+        };
 
         // Seed the per-frame focus aggregate with the root viewport; each
         // detached viewport ORs itself in during rendering, and the privacy
@@ -735,6 +754,9 @@ impl HorizonApp {
     }
 
     pub(super) fn queue_panel_restart(&mut self, panel_id: PanelId) {
+        if self.cancel_speech_target(panel_id) {
+            tracing::info!(panel_id = panel_id.0, "active dictation cancelled before panel restart");
+        }
         if !self.panels_to_restart.contains(&panel_id) {
             self.panels_to_restart.push(panel_id);
         }
@@ -928,9 +950,9 @@ mod tests {
     };
     use std::time::{Duration, Instant};
 
-    use eframe::CreationContext;
     use egui::Context;
     use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
+    use tempfile::TempDir;
 
     use super::{
         HoldHotkeyTransition, HorizonApp, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
@@ -938,17 +960,15 @@ mod tests {
     use crate::app::HeldSpeechBinding;
     use crate::input;
 
-    fn test_app() -> HorizonApp {
+    fn test_app() -> (TempDir, HorizonApp) {
         let temp = tempfile::tempdir().expect("temp dir");
         let config_path = temp.path().join("config.yaml");
         let home = HorizonHome::from_root(temp.path().join(".horizon"));
         let session_store = SessionStore::new(home, config_path.clone());
         let config = Config::default();
         let ctx = Context::default();
-        let cc = CreationContext::_new_kittest(ctx);
-
-        HorizonApp::new(
-            &cc,
+        let app = HorizonApp::new_with_egui_context(
+            &ctx,
             &config,
             config_path,
             session_store,
@@ -956,13 +976,14 @@ mod tests {
                 runtime_state: Box::new(RuntimeState::default()),
             },
             input::ObservedKeyboardInputs::default(),
-        )
+        );
+        (temp, app)
     }
 
     #[test]
     fn finalize_frame_requests_repaint_when_theme_application_is_deferred() {
         let ctx = Context::default();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         app.theme_applied = false;
         let repaint_requests = Arc::new(AtomicUsize::new(0));
         let repaint_requests_for_callback = Arc::clone(&repaint_requests);
@@ -979,7 +1000,7 @@ mod tests {
     #[test]
     fn empty_board_keeps_polling_preloads_and_publishes_success_in_the_drain_frame() {
         let ctx = Context::default();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
         app.speech = Some(speech);
         app.theme_applied = true;
@@ -1035,7 +1056,7 @@ mod tests {
         use horizon_core::{StartupChooser, StartupPromptReason};
 
         let ctx = Context::default();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         app.startup_chooser = Some(crate::app::StartupChooserState::new(StartupChooser {
             reason: StartupPromptReason::LiveConflict,
             config_path: "/tmp/horizon-config.yaml".to_string(),
@@ -1065,7 +1086,7 @@ mod tests {
     #[test]
     fn startup_loading_view_drains_and_renders_preload_failure() {
         let ctx = Context::default();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
         app.startup_receiver = Some(bootstrap_rx);
         let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
@@ -1093,7 +1114,7 @@ mod tests {
     fn long_speech_notice_stays_within_a_narrow_viewport() {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(880.0, 632.0));
         let ctx = Context::default();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         app.show_speech_notice(
             "Speech input error: preloading the `Default` speech model failed: \
              failed to load a model from a deliberately long temporary path because the file was not found",
@@ -1131,7 +1152,7 @@ mod tests {
     fn focus_loss_ownership_survives_handoff_and_expires_without_key_up() {
         let ctx = Context::default();
         let now = Instant::now();
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         let chord = horizon_core::ShortcutBinding::new(
             horizon_core::ShortcutModifiers::CTRL,
             horizon_core::ShortcutKey::Letter('K'),
@@ -1196,6 +1217,46 @@ mod tests {
         assert!(app.speech_held_bindings.is_empty());
         assert!(!app.speech_escape_release_pending);
         assert!(app.speech_escape_release_deadline.is_none());
+    }
+
+    #[cfg(feature = "speech")]
+    #[test]
+    fn panel_restart_cancels_only_targeted_speech_and_retains_held_binding() {
+        let (_temp, mut app) = test_app();
+        let target = PanelId(7);
+        let other = PanelId(8);
+        let chord = horizon_core::ShortcutBinding::parse("F1").expect("valid test shortcut");
+        let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
+        speech.start(target, 0);
+        assert!(channels.capture_start_requested());
+        app.speech = Some(speech);
+        app.speech_engaged_profile = Some(0);
+        app.speech_held_bindings.push(HeldSpeechBinding::new(chord));
+
+        app.queue_panel_restart(other);
+
+        assert_eq!(
+            app.speech
+                .as_ref()
+                .and_then(super::super::speech::SpeechSystem::active_target),
+            Some(target)
+        );
+        assert_eq!(app.speech_engaged_profile, Some(0));
+
+        app.queue_panel_restart(target);
+        app.queue_panel_restart(target);
+
+        assert!(
+            app.speech
+                .as_ref()
+                .and_then(super::super::speech::SpeechSystem::active_target)
+                .is_none()
+        );
+        assert!(app.speech_engaged_profile.is_none());
+        assert_eq!(app.panels_to_restart, vec![other, target]);
+        assert_eq!(app.speech_held_bindings.len(), 1);
+        assert_eq!(app.speech_held_bindings[0].binding, chord);
+        assert!(app.speech_held_bindings[0].release_deadline.is_none());
     }
 
     /// End-to-end press path for profile push-to-talk: a synthetic F-key
