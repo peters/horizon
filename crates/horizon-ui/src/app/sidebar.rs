@@ -602,7 +602,7 @@ impl HorizonApp {
                     )
                     .clicked()
             {
-                self.panels_to_restart.push(panel_id);
+                self.queue_panel_restart(panel_id);
                 ui.close();
             }
             if ui

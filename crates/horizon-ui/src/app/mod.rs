@@ -296,13 +296,31 @@ impl HorizonApp {
         startup: StartupDecision,
         observed_keyboard_inputs: input::ObservedKeyboardInputs,
     ) -> Self {
+        Self::new_with_egui_context(
+            &cc.egui_ctx,
+            config,
+            config_path,
+            session_store,
+            startup,
+            observed_keyboard_inputs,
+        )
+    }
+
+    fn new_with_egui_context(
+        egui_ctx: &Context,
+        config: &Config,
+        config_path: PathBuf,
+        session_store: SessionStore,
+        startup: StartupDecision,
+        observed_keyboard_inputs: input::ObservedKeyboardInputs,
+    ) -> Self {
         let shortcuts = resolve_shortcuts(config);
         let action_commands_cache =
             super::command_registry::action_commands(&shortcuts, self::util::primary_shortcut_label());
-        cc.egui_ctx.set_fonts(configure_fonts());
+        egui_ctx.set_fonts(configure_fonts());
         let mut board = Board::new();
         board.attention_enabled = config.features.attention_feed;
-        let resolved_theme = theme::resolve_theme(config.appearance.theme, cc.egui_ctx.system_theme());
+        let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 
         let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());

@@ -324,7 +324,7 @@ impl HorizonApp {
                             );
                         }
                         if reconnect_requested {
-                            self.panels_to_restart.push(panel_id);
+                            self.queue_panel_restart(panel_id);
                         }
                     },
                 );
@@ -650,7 +650,7 @@ impl HorizonApp {
                             );
                         }
                         if reconnect_requested {
-                            self.panels_to_restart.push(panel_id);
+                            self.queue_panel_restart(panel_id);
                         }
                     },
                 );
@@ -749,7 +749,7 @@ impl HorizonApp {
                 ui.separator();
                 let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };
                 if ui.button(restart_label).clicked() {
-                    self.panels_to_restart.push(panel_id);
+                    self.queue_panel_restart(panel_id);
                     ui.close();
                 }
             }

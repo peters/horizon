@@ -734,6 +734,12 @@ impl HorizonApp {
         }
     }
 
+    pub(super) fn queue_panel_restart(&mut self, panel_id: PanelId) {
+        if !self.panels_to_restart.contains(&panel_id) {
+            self.panels_to_restart.push(panel_id);
+        }
+    }
+
     #[profiling::function]
     pub(super) fn apply_panel_transitions(&mut self) {
         let panels_to_close = std::mem::take(&mut self.panels_to_close);

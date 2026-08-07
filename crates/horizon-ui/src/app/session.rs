@@ -419,7 +419,7 @@ impl HorizonApp {
             session_id: binding.session_id.clone(),
         };
         panel.set_session_binding(Some(binding));
-        self.panels_to_restart.push(panel_id);
+        self.queue_panel_restart(panel_id);
         true
     }
 }
@@ -446,16 +446,16 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates};
-    use eframe::CreationContext;
     use egui::Context;
     use horizon_core::{
         AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
         RuntimeState, SessionStore, StartupDecision, WorkspaceState,
     };
+    use tempfile::TempDir;
 
     use crate::input;
 
-    fn test_app() -> HorizonApp {
+    fn test_app() -> (TempDir, HorizonApp) {
         let temp = tempfile::tempdir().expect("temp dir");
         let config_path = temp.path().join("config.yaml");
         let session_store = SessionStore::new(
@@ -463,9 +463,9 @@ mod tests {
             config_path.clone(),
         );
         let config = Config::default();
-        let cc = CreationContext::_new_kittest(Context::default());
-        HorizonApp::new(
-            &cc,
+        let ctx = Context::default();
+        let app = HorizonApp::new_with_egui_context(
+            &ctx,
             &config,
             config_path,
             session_store,
@@ -473,7 +473,8 @@ mod tests {
                 runtime_state: Box::new(RuntimeState::default()),
             },
             input::ObservedKeyboardInputs::default(),
-        )
+        );
+        (temp, app)
     }
 
     #[cfg(windows)]
@@ -783,7 +784,7 @@ mod tests {
 
     #[test]
     fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
-        let mut app = test_app();
+        let (_temp, mut app) = test_app();
         let workspace_id = app.board.create_workspace("test");
         let (command, args) = exiting_command();
         let panel_id = app
@@ -806,6 +807,7 @@ mod tests {
             Some(42),
         );
 
+        assert!(app.rebind_and_restart_panel_session(panel_id, binding.clone()));
         assert!(app.rebind_and_restart_panel_session(panel_id, binding.clone()));
 
         let panel = app.board.panel(panel_id).expect("rebound panel");
