@@ -410,7 +410,7 @@ impl HorizonApp {
             .collect()
     }
 
-    pub(super) fn rebind_panel_session(&mut self, panel_id: PanelId, binding: AgentSessionBinding) -> bool {
+    pub(super) fn rebind_and_restart_panel_session(&mut self, panel_id: PanelId, binding: AgentSessionBinding) -> bool {
         let Some(panel) = self.board.panel_mut(panel_id) else {
             return false;
         };
@@ -419,6 +419,7 @@ impl HorizonApp {
             session_id: binding.session_id.clone(),
         };
         panel.set_session_binding(Some(binding));
+        self.queue_panel_restart(panel_id);
         true
     }
 }
@@ -445,7 +446,49 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates};
-    use horizon_core::{PanelId, PanelKind, PanelResume, PanelState, RuntimeState, WorkspaceState};
+    use egui::Context;
+    use horizon_core::{
+        AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
+        RuntimeState, SessionStore, StartupDecision, WorkspaceState,
+    };
+    use tempfile::TempDir;
+
+    use crate::input;
+
+    fn test_app() -> (TempDir, HorizonApp) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let session_store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join(".horizon")),
+            config_path.clone(),
+        );
+        let config = Config::default();
+        let ctx = Context::default();
+        let app = HorizonApp::new_with_egui_context(
+            &ctx,
+            &config,
+            config_path,
+            session_store,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+            input::ObservedKeyboardInputs::default(),
+        );
+        (temp, app)
+    }
+
+    #[cfg(windows)]
+    fn exiting_command() -> (String, Vec<String>) {
+        (
+            "cmd.exe".to_string(),
+            vec!["/C".to_string(), "exit".to_string(), "0".to_string()],
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn exiting_command() -> (String, Vec<String>) {
+        ("/bin/sh".to_string(), vec!["-c".to_string(), "exit 0".to_string()])
+    }
 
     #[test]
     fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
@@ -737,5 +780,44 @@ mod tests {
         });
 
         assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
+        let (_temp, mut app) = test_app();
+        let workspace_id = app.board.create_workspace("test");
+        let (command, args) = exiting_command();
+        let panel_id = app
+            .board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Codex,
+                    command: Some(command),
+                    args,
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("create agent panel");
+        let binding = AgentSessionBinding::new(
+            PanelKind::Codex,
+            "session-2".to_string(),
+            Some("/repo".to_string()),
+            Some("Recovered session".to_string()),
+            Some(42),
+        );
+
+        assert!(app.rebind_and_restart_panel_session(panel_id, binding.clone()));
+        assert!(app.rebind_and_restart_panel_session(panel_id, binding.clone()));
+
+        let panel = app.board.panel(panel_id).expect("rebound panel");
+        assert_eq!(
+            panel.resume,
+            PanelResume::Session {
+                session_id: "session-2".to_string(),
+            }
+        );
+        assert_eq!(panel.session_binding.as_ref(), Some(&binding));
+        assert_eq!(app.panels_to_restart, vec![panel_id]);
     }
 }

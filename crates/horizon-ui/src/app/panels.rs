@@ -50,10 +50,38 @@ struct PanelUiOutcome {
     resize_delta: Vec2,
     commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
-    session_rebind: Option<AgentSessionBinding>,
+    session_rebind_and_restart: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
     mic_clicked: bool,
+}
+
+#[derive(Default)]
+struct SessionRebindRenderOutcome {
+    binding: Option<AgentSessionBinding>,
+    #[cfg(test)]
+    option_rects: Vec<Rect>,
+}
+
+fn render_session_rebind_options(
+    ui: &mut egui::Ui,
+    rebind_options: &[(String, AgentSessionBinding)],
+) -> SessionRebindRenderOutcome {
+    let mut outcome = SessionRebindRenderOutcome::default();
+    ui.set_min_width(280.0);
+    for (label, binding) in rebind_options {
+        let text = format!("Rebind & Restart · {label}");
+        let button = egui::Button::new(egui::RichText::new(text).size(12.0).color(theme::FG_SOFT())).frame(false);
+        let response = ui.add(button);
+        #[cfg(test)]
+        outcome.option_rects.push(response.rect);
+        if response.clicked() {
+            outcome.binding = Some(binding.clone());
+            ui.close();
+            break;
+        }
+    }
+    outcome
 }
 
 struct PanelMicInteraction {
@@ -296,7 +324,7 @@ impl HorizonApp {
                             );
                         }
                         if reconnect_requested {
-                            self.panels_to_restart.push(panel_id);
+                            self.queue_panel_restart(panel_id);
                         }
                     },
                 );
@@ -622,7 +650,7 @@ impl HorizonApp {
                             );
                         }
                         if reconnect_requested {
-                            self.panels_to_restart.push(panel_id);
+                            self.queue_panel_restart(panel_id);
                         }
                     },
                 );
@@ -710,16 +738,7 @@ impl HorizonApp {
             // actually open instead of every frame for every panel.
             let rebind_options = self.session_rebind_options(panel_id);
             if !rebind_options.is_empty() {
-                ui.set_min_width(260.0);
-                for (label, binding) in &rebind_options {
-                    let text = format!("Rebind Session · {label}");
-                    let button =
-                        egui::Button::new(egui::RichText::new(text).size(12.0).color(theme::FG_SOFT())).frame(false);
-                    if ui.add(button).clicked() {
-                        outcome.session_rebind = Some(binding.clone());
-                        ui.close();
-                    }
-                }
+                outcome.session_rebind_and_restart = render_session_rebind_options(ui, &rebind_options).binding;
                 ui.separator();
             }
             if ui.button("New Workspace").clicked() {
@@ -730,7 +749,7 @@ impl HorizonApp {
                 ui.separator();
                 let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };
                 if ui.button(restart_label).clicked() {
-                    self.panels_to_restart.push(panel_id);
+                    self.queue_panel_restart(panel_id);
                     ui.close();
                 }
             }
@@ -823,8 +842,8 @@ impl HorizonApp {
         if let Some(workspace_id) = outcome.workspace_assignment {
             self.workspace_assignments.push((panel_id, workspace_id));
         }
-        if let Some(binding) = outcome.session_rebind.clone()
-            && self.rebind_panel_session(panel_id, binding)
+        if let Some(binding) = outcome.session_rebind_and_restart.clone()
+            && self.rebind_and_restart_panel_session(panel_id, binding)
         {
             self.mark_runtime_dirty();
             ctx.request_repaint();
