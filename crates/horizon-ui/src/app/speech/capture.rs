@@ -4,6 +4,7 @@
 //! recording generation so a stale error or buffer from an earlier,
 //! cancelled recording can never affect a newer one.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -394,9 +395,17 @@ fn capture_loop(
     }
 }
 
-/// Every input device the audio host reports, in host order. Used by the
-/// settings microphone picker; enumeration can block, so callers must keep
-/// it off the UI thread.
+fn deduplicate_device_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    names
+        .into_iter()
+        .filter(|name| seen.insert(name.to_lowercase()))
+        .collect()
+}
+
+/// Every distinct input device name the audio host reports, in host order.
+/// Used by the settings microphone picker; enumeration can block, so callers
+/// must keep it off the UI thread.
 pub fn list_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     host.input_devices().map_or_else(
@@ -405,9 +414,7 @@ pub fn list_input_devices() -> Vec<String> {
             Vec::new()
         },
         |devices| {
-            devices
-                .filter_map(|device| Some(device.description().ok()?.name().to_string()))
-                .collect()
+            deduplicate_device_names(devices.filter_map(|device| Some(device.description().ok()?.name().to_string())))
         },
     )
 }
@@ -648,8 +655,32 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use super::{
-        CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE, to_mono_16k,
+        CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE,
+        deduplicate_device_names, to_mono_16k,
     };
+
+    #[test]
+    fn device_names_are_deduplicated_case_insensitively_in_host_order() {
+        let names = [
+            "Logitech BRIO, USB Audio",
+            "RØDE NT-USB+, USB Audio",
+            "RØDE NT-USB+, USB Audio",
+            "USB Audio Front Microphone",
+            "røde nt-usb+, usb audio",
+            "RØDE NT-USB+ Mono",
+            "Logitech BRIO, USB Audio",
+        ];
+
+        assert_eq!(
+            deduplicate_device_names(names.into_iter().map(str::to_owned)),
+            [
+                "Logitech BRIO, USB Audio",
+                "RØDE NT-USB+, USB Audio",
+                "USB Audio Front Microphone",
+                "RØDE NT-USB+ Mono",
+            ]
+        );
+    }
 
     fn stream_in_chunks(samples: &[f32], sample_rate: u32, chunk_sizes: &[usize]) -> (usize, Vec<f32>) {
         let mut resampler = MonoResampler::new(sample_rate, 1);

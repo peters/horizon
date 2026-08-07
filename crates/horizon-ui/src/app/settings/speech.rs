@@ -235,6 +235,10 @@ fn input_device_list(ui: &Ui) -> Option<std::sync::Arc<Vec<String>>> {
 /// Global microphone picker. Dictating into one microphone while capture
 /// reads another (e.g. a webcam mic as system default) yields empty
 /// transcripts that present as broken hotkeys, so the device is explicit.
+fn input_device_names_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
+}
+
 fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Microphone").color(theme::FG_SOFT()).size(12.0));
@@ -260,7 +264,7 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
                     Some(device_names) => {
                         let mut current_listed = current.is_empty();
                         for device in device_names {
-                            let is_current = *device == current;
+                            let is_current = input_device_names_equal(device, &current);
                             current_listed |= is_current;
                             if ui.selectable_label(is_current, device).clicked() && !is_current {
                                 config.features.speech.input_device.clone_from(device);
@@ -781,8 +785,20 @@ mod tests {
 
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
-        hotkey_capture_attempt, render_hotkey_binder, speech_output_row,
+        hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder, speech_output_row,
     };
+
+    #[test]
+    fn input_device_selection_uses_case_insensitive_name_matching() {
+        assert!(input_device_names_equal(
+            "RØDE NT-USB+, USB Audio",
+            "røde nt-usb+, usb audio"
+        ));
+        assert!(!input_device_names_equal(
+            "RØDE NT-USB+, USB Audio",
+            "RØDE NT-USB+ Mono"
+        ));
+    }
 
     #[test]
     fn pending_model_metadata_does_not_rewrite_translation_target() {
