@@ -191,4 +191,9 @@ fn saved_config_drift_disables_repeated_setup_launches_until_save() {
 
     assert!(!editor.has_valid_saved_config);
     assert!(!speech::SpeechSetupLaunchGate::new(editor.has_valid_saved_config, false).can_launch());
+    editor.speech_agent_setup.rescan();
+    assert_eq!(
+        editor.speech_agent_setup.launch_error_message_for_test(),
+        Some("saved config changed")
+    );
 }

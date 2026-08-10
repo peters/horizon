@@ -168,7 +168,20 @@ pub(in crate::app) struct SpeechSetupRenderResult {
 pub(in crate::app) struct SpeechAgentSetupState {
     probes: AgentProbeCache,
     manual_expanded: bool,
-    launch_error: Option<String>,
+    launch_error: Option<SpeechSetupLaunchError>,
+}
+
+enum SpeechSetupLaunchError {
+    Transient(String),
+    SavedConfig(String),
+}
+
+impl SpeechSetupLaunchError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Transient(message) | Self::SavedConfig(message) => message,
+        }
+    }
 }
 
 impl SpeechAgentSetupState {
@@ -204,20 +217,35 @@ impl SpeechAgentSetupState {
 
     pub(in crate::app) fn rescan(&mut self) {
         self.probes.invalidate();
-        self.clear_launch_error();
+        self.clear_transient_launch_error();
     }
 
     pub(in crate::app) fn set_launch_error(&mut self, error: impl Into<String>) {
-        self.launch_error = Some(error.into());
+        self.launch_error = Some(SpeechSetupLaunchError::Transient(error.into()));
+    }
+
+    pub(in crate::app) fn set_saved_config_error(&mut self, error: impl Into<String>) {
+        self.launch_error = Some(SpeechSetupLaunchError::SavedConfig(error.into()));
     }
 
     pub(in crate::app) fn clear_launch_error(&mut self) {
         self.launch_error = None;
     }
 
+    pub(in crate::app) fn clear_transient_launch_error(&mut self) {
+        if matches!(self.launch_error, Some(SpeechSetupLaunchError::Transient(_))) {
+            self.launch_error = None;
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::app) fn expand_manual_for_test(&mut self) {
         self.manual_expanded = true;
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn launch_error_message_for_test(&self) -> Option<&str> {
+        self.launch_error.as_ref().map(SpeechSetupLaunchError::message)
     }
 
     #[cfg(test)]
@@ -372,7 +400,7 @@ impl SpeechAgentSetupState {
         }
 
         let agent = requested_agent?;
-        self.launch_error = None;
+        self.clear_transient_launch_error();
         match (
             selected_setup_preset(config, agent),
             self.probes.resolved_command(agent),
@@ -382,14 +410,14 @@ impl SpeechAgentSetupState {
                 Some(SpeechSetupRequest { agent, preset })
             }
             (Some(_), None) => {
-                self.launch_error = Some(format!(
+                self.set_launch_error(format!(
                     "{} detection completed without a resolved executable. Rescan and try again.",
                     agent.display_name()
                 ));
                 None
             }
             (None, _) => {
-                self.launch_error = Some(format!(
+                self.set_launch_error(format!(
                     "No safe {} panel preset is available. Restore the default preset and rescan.",
                     agent.display_name()
                 ));
@@ -429,7 +457,14 @@ impl SpeechAgentSetupState {
     fn render_launch_error(&self, ui: &mut Ui) {
         if let Some(error) = &self.launch_error {
             ui.add_space(5.0);
-            ui.add(egui::Label::new(egui::RichText::new(error).color(theme::PALETTE_RED()).size(11.0)).wrap());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(error.message())
+                        .color(theme::PALETTE_RED())
+                        .size(11.0),
+                )
+                .wrap(),
+            );
         }
     }
 }

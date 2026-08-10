@@ -3,8 +3,8 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig, SpeechProfile};
 use super::detection::AgentProbeCache;
 use super::{
     AvailabilitySummary, SAVE_OR_REVERT_MESSAGE, SpeechAgentSetupState, SpeechSetupAgent, SpeechSetupAgentAvailability,
-    SpeechSetupLaunchGate, SpeechSetupProbeFailure, SpeechSetupReadiness, availability_summary, available_agents,
-    selected_setup_preset, validate_setup_saved_config,
+    SpeechSetupLaunchError, SpeechSetupLaunchGate, SpeechSetupProbeFailure, SpeechSetupReadiness, availability_summary,
+    available_agents, selected_setup_preset, validate_setup_saved_config,
 };
 
 fn preset(name: &str, kind: PanelKind, command: Option<&str>, args: &[&str]) -> PresetConfig {
@@ -318,13 +318,19 @@ fn pending_and_failed_detection_are_never_reported_as_missing() {
 }
 
 #[test]
-fn setup_state_rescan_clears_launch_error_and_returns_to_checking() {
+fn setup_state_clears_only_recovered_errors_and_rescans() {
     let mut state = SpeechAgentSetupState::new();
     state.set_launch_error("spawn failed");
-    state.clear_launch_error();
+    state.clear_transient_launch_error();
     assert!(state.launch_error.is_none());
 
-    state.set_launch_error("probe failed");
+    state.set_saved_config_error("saved config changed");
+    state.clear_transient_launch_error();
+    assert!(matches!(
+        state.launch_error,
+        Some(SpeechSetupLaunchError::SavedConfig(_))
+    ));
+
     state.probes.set_test_availability(
         SpeechSetupAgentAvailability::Missing,
         SpeechSetupAgentAvailability::Missing,
@@ -332,7 +338,10 @@ fn setup_state_rescan_clears_launch_error_and_returns_to_checking() {
 
     state.rescan();
 
-    assert!(state.launch_error.is_none());
+    assert!(matches!(
+        state.launch_error,
+        Some(SpeechSetupLaunchError::SavedConfig(_))
+    ));
     assert_eq!(
         state.availability(SpeechSetupAgent::Codex),
         SpeechSetupAgentAvailability::Checking
@@ -341,6 +350,9 @@ fn setup_state_rescan_clears_launch_error_and_returns_to_checking() {
         state.availability(SpeechSetupAgent::Claude),
         SpeechSetupAgentAvailability::Checking
     );
+
+    state.clear_launch_error();
+    assert!(state.launch_error.is_none());
 }
 
 #[test]

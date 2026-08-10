@@ -253,7 +253,7 @@ impl HorizonApp {
                         editor.buffer.clone_from(&original);
                         editor.editing_config = parsed;
                         editor.status = SettingsStatus::None;
-                        editor.speech_agent_setup.clear_launch_error();
+                        editor.speech_agent_setup.clear_transient_launch_error();
                     }
                 }
             }
@@ -265,7 +265,7 @@ impl HorizonApp {
                     editor.editing_config = Config::from_yaml(&default_yaml).ok();
                     editor.buffer = default_yaml;
                     editor.status = SettingsStatus::LivePreview;
-                    editor.speech_agent_setup.clear_launch_error();
+                    editor.speech_agent_setup.clear_transient_launch_error();
                 }
             }
             SettingsAction::Save => {
@@ -356,7 +356,7 @@ impl HorizonApp {
 
 fn record_setup_saved_config_failure(editor: &mut SettingsEditor, error: String) {
     editor.has_valid_saved_config = false;
-    editor.speech_agent_setup.set_launch_error(error);
+    editor.speech_agent_setup.set_saved_config_error(error);
 }
 
 fn load_settings_yaml(config_path: &std::path::Path, fallback: String) -> LoadedSettingsYaml {
