@@ -4,18 +4,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
+use crate::agent_definition;
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
-use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, claude_session_transcript_exists, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
-use crate::{AgentIntegrationKind, AgentResumeMode, agent_definition};
 
+#[cfg(test)]
+use super::agent_launch::{
+    AGENT_LAUNCH_HELPER_ARG, platform_default_shell, resolve_default_shell, shell_escape, windows_setup_agent_command,
+    wrap_agent_command,
+};
+use super::agent_launch::{
+    AgentLaunchContext, default_shell, resolve_agent_launch_command, validate_agent_launch_options,
+};
 use super::{
     AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SCROLLBACK_LIMIT,
     DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
@@ -36,26 +43,19 @@ struct TerminalLaunchTrace<'a> {
     resume: &'a PanelResume,
     session_binding: Option<&'a AgentSessionBinding>,
     should_resume_binding: bool,
-    cwd: Option<&'a str>,
-    cmd: String,
+    details: TerminalLaunchDetails<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TerminalLaunchDetails<'a> {
+    Redacted,
+    Visible { cwd: Option<&'a str>, cmd: String },
 }
 
 struct ResolvedTerminalLaunch {
     session_binding: Option<AgentSessionBinding>,
     program: String,
     launch_args: Vec<String>,
-}
-
-/// Session-related inputs for building an agent launch command.
-#[derive(Clone, Copy)]
-pub(super) struct AgentLaunchContext<'a> {
-    pub(super) resume: &'a PanelResume,
-    pub(super) session_binding: Option<&'a AgentSessionBinding>,
-    pub(super) should_resume_binding: bool,
-    /// True when reconnecting an existing panel (restore or restart) rather
-    /// than launching a newly added one; continue-style agents only pass
-    /// their continue flag when reconnecting.
-    pub(super) is_restore: bool,
 }
 
 struct TerminalPanelBuildArgs {
@@ -72,6 +72,7 @@ struct TerminalPanelBuildArgs {
     has_custom_name: bool,
     launch_command: Option<String>,
     launch_args: Vec<String>,
+    agent_login_shell: bool,
     launch_cwd: Option<PathBuf>,
     ssh_connection: Option<SshConnection>,
 }
@@ -132,6 +133,7 @@ impl StaticPanelSeed {
             last_output_at_millis: None,
             launch_command,
             launch_args: Vec::new(),
+            agent_login_shell: false,
             launch_cwd,
             ssh_connection: None,
             ssh_status: None,
@@ -140,6 +142,7 @@ impl StaticPanelSeed {
 }
 
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Panel> {
+    validate_agent_launch_options(&opts)?;
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 
     match opts.kind {
@@ -203,6 +206,7 @@ pub(super) fn restore_failure_panel(
         size,
         session_binding,
         template,
+        agent_login_shell,
         ..
     } = opts;
 
@@ -232,6 +236,7 @@ pub(super) fn restore_failure_panel(
             has_custom_name,
             launch_command: command,
             launch_args: args,
+            agent_login_shell,
             launch_cwd: cwd,
             ssh_connection: saved_ssh_connection,
         },
@@ -256,13 +261,15 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         session_binding,
         template,
         transcript_root,
+        initial_agent_prompt,
+        agent_login_shell,
         restore_as_disconnected_snapshot,
         is_restore,
         ..
     } = opts;
 
     let (transcript, replay_bytes, had_persisted_transcript_state) =
-        prepare_transcript_restore(id, kind, transcript_root, &local_id);
+        prepare_transcript_launch(id, kind, transcript_root, &local_id, initial_agent_prompt.is_some());
     let saved_command = command.clone();
     let saved_args = args.clone();
     let saved_cwd = cwd.clone();
@@ -276,8 +283,10 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         args,
         ssh_connection,
         session_binding,
+        initial_agent_prompt.as_deref(),
         saved_cwd.as_ref(),
         transcript.as_ref(),
+        agent_login_shell,
         is_restore,
     );
     let ResolvedTerminalLaunch {
@@ -306,6 +315,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         has_custom_name,
         launch_command: saved_command,
         launch_args: saved_args,
+        agent_login_shell,
         launch_cwd: saved_cwd,
         ssh_connection: saved_ssh_connection,
     };
@@ -426,8 +436,10 @@ fn resolve_terminal_launch(
     args: Vec<String>,
     ssh_connection: Option<SshConnection>,
     session_binding: Option<AgentSessionBinding>,
+    initial_agent_prompt: Option<&str>,
     saved_cwd: Option<&PathBuf>,
     transcript: Option<&PanelTranscript>,
+    agent_login_shell: bool,
     is_restore: bool,
 ) -> ResolvedTerminalLaunch {
     let saved_cwd_string = saved_cwd.map(|path| path.display().to_string());
@@ -448,6 +460,8 @@ fn resolve_terminal_launch(
             resume,
             session_binding: session_binding.as_ref(),
             should_resume_binding,
+            initial_agent_prompt,
+            agent_login_shell,
             is_restore,
         },
     );
@@ -457,8 +471,12 @@ fn resolve_terminal_launch(
         resume,
         session_binding: session_binding.as_ref(),
         should_resume_binding,
-        cwd: saved_cwd_string.as_deref(),
-        cmd: format!("{program} {}", launch_args.join(" ")),
+        details: terminal_launch_details(
+            saved_cwd_string.as_deref(),
+            &program,
+            &launch_args,
+            initial_agent_prompt.is_some() || agent_login_shell,
+        ),
     };
     log_terminal_launch(id, &launch_trace);
 
@@ -494,6 +512,7 @@ fn build_terminal_panel(
         has_custom_name,
         launch_command,
         launch_args,
+        agent_login_shell,
         launch_cwd,
         ssh_connection,
     } = panel_args;
@@ -518,6 +537,7 @@ fn build_terminal_panel(
         terminal_title: String::new(),
         launch_command,
         launch_args,
+        agent_login_shell,
         launch_cwd,
         ssh_connection,
         ssh_status,
@@ -531,21 +551,51 @@ fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -
     )
 }
 
+fn terminal_launch_details<'a>(
+    cwd: Option<&'a str>,
+    program: &str,
+    launch_args: &[String],
+    redact: bool,
+) -> TerminalLaunchDetails<'a> {
+    if redact {
+        TerminalLaunchDetails::Redacted
+    } else {
+        TerminalLaunchDetails::Visible {
+            cwd,
+            cmd: format!("{program} {}", launch_args.join(" ")),
+        }
+    }
+}
+
 fn log_terminal_launch(id: PanelId, trace: &TerminalLaunchTrace<'_>) {
     if !trace.kind.is_agent() {
         return;
     }
 
-    tracing::info!(
-        panel_id = id.0,
-        kind = ?trace.kind,
-        resume = ?trace.resume,
-        session_id = trace.session_binding.map(|binding| binding.session_id.as_str()),
-        should_resume = trace.should_resume_binding,
-        cwd = trace.cwd,
-        cmd = %trace.cmd,
-        "launching agent panel"
-    );
+    match &trace.details {
+        TerminalLaunchDetails::Redacted => {
+            tracing::info!(
+                panel_id = id.0,
+                kind = ?trace.kind,
+                resume = ?trace.resume,
+                session_id = trace.session_binding.map(|binding| binding.session_id.as_str()),
+                should_resume = trace.should_resume_binding,
+                "launching agent panel (command details redacted)"
+            );
+        }
+        TerminalLaunchDetails::Visible { cwd, cmd } => {
+            tracing::info!(
+                panel_id = id.0,
+                kind = ?trace.kind,
+                resume = ?trace.resume,
+                session_id = trace.session_binding.map(|binding| binding.session_id.as_str()),
+                should_resume = trace.should_resume_binding,
+                cwd,
+                cmd = %cmd,
+                "launching agent panel"
+            );
+        }
+    }
 }
 
 fn spawn_editor(mut seed: StaticPanelSeed, command: Option<String>) -> Result<Panel> {
@@ -647,66 +697,6 @@ pub(super) fn resolve_launch_command(
     }
 }
 
-fn resolve_agent_launch_command(
-    command: Option<String>,
-    args: Vec<String>,
-    kind: PanelKind,
-    launch: AgentLaunchContext<'_>,
-) -> (String, Vec<String>) {
-    let Some(definition) = agent_definition(kind) else {
-        unreachable!("agent launch requested for non-agent panel: {kind:?}");
-    };
-    let program = command.unwrap_or_else(|| definition.default_command.to_string());
-    let mut launch_args = match definition.integration {
-        AgentIntegrationKind::None => Vec::new(),
-        AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
-    };
-
-    match definition.resume_mode {
-        AgentResumeMode::ExactSubcommand { subcommand } => {
-            launch_args.extend(args);
-            if launch.should_resume_binding {
-                if let Some(binding) = launch.session_binding {
-                    launch_args.extend([subcommand.to_string(), binding.session_id.clone()]);
-                }
-            } else if let PanelResume::Session { session_id } = launch.resume {
-                launch_args.extend([subcommand.to_string(), session_id.clone()]);
-            }
-        }
-        AgentResumeMode::ExactFlag {
-            flag,
-            fresh_session_flag,
-        } => {
-            if launch.should_resume_binding {
-                if let Some(binding) = launch.session_binding {
-                    launch_args.extend([flag.to_string(), binding.session_id.clone()]);
-                }
-            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, launch.session_binding) {
-                // Fresh launch under the panel's pre-assigned session id so
-                // the binding matches the session the CLI will create.
-                launch_args.extend([fresh_session_flag.to_string(), binding.session_id.clone()]);
-            } else if let PanelResume::Session { session_id } = launch.resume {
-                launch_args.extend([flag.to_string(), session_id.clone()]);
-            } else if let Some(fresh_session_flag) = fresh_session_flag {
-                launch_args.extend([fresh_session_flag.to_string(), Uuid::new_v4().to_string()]);
-            }
-            launch_args.extend(args);
-        }
-        AgentResumeMode::ContinueFlag { flag } => {
-            launch_args.extend(args);
-            // Continue-style agents have no per-session ids, so `resume:
-            // last` maps to the continue flag, and only when reconnecting an
-            // existing panel; a newly added panel always starts fresh.
-            if launch.is_restore && matches!(launch.resume, PanelResume::Last) {
-                launch_args.push(flag.to_string());
-            }
-        }
-        AgentResumeMode::None => launch_args.extend(args),
-    }
-
-    wrap_in_login_shell(program, launch_args)
-}
-
 pub fn current_unix_millis() -> i64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -741,6 +731,20 @@ fn prepare_transcript_restore(
     };
 
     (transcript, replay_bytes, had_persisted_state)
+}
+
+fn prepare_transcript_launch(
+    id: PanelId,
+    kind: PanelKind,
+    transcript_root: Option<PathBuf>,
+    local_id: &str,
+    has_initial_agent_prompt: bool,
+) -> (Option<PanelTranscript>, Vec<u8>, bool) {
+    if has_initial_agent_prompt {
+        return (None, Vec::new(), false);
+    }
+
+    prepare_transcript_restore(id, kind, transcript_root, local_id)
 }
 
 fn resolve_session_binding(
@@ -800,30 +804,6 @@ fn resolve_session_binding(
     (session_binding, should_resume_binding)
 }
 
-fn wrap_in_login_shell(program: String, args: Vec<String>) -> (String, Vec<String>) {
-    let shell = default_shell();
-    let mut command = vec![program];
-    command.extend(args);
-    let joined = command
-        .iter()
-        .map(|argument| shell_escape(argument))
-        .collect::<Vec<_>>()
-        .join(" ");
-    (shell, vec!["-ic".to_string(), joined])
-}
-
-fn shell_escape(argument: &str) -> String {
-    if argument.is_empty()
-        || argument.contains(|character: char| {
-            character.is_whitespace() || character == '\'' || character == '"' || character == '\\' || character == '$'
-        })
-    {
-        format!("'{}'", argument.replace('\'', "'\\''"))
-    } else {
-        argument.to_string()
-    }
-}
-
 fn shell_launch_args(args: Vec<String>, use_login_shell: bool) -> Vec<String> {
     if use_login_shell && args.is_empty() {
         vec!["-l".to_string()]
@@ -840,33 +820,12 @@ const PLATFORM_USES_LOGIN_SHELL: bool = cfg!(any(
     target_os = "dragonfly"
 ));
 
-pub(super) const fn platform_default_shell() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "/bin/zsh"
-    } else {
-        "/bin/bash"
-    }
-}
-
-fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
-}
-
 pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
     let mut env = HashMap::new();
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
     }
     env
-}
-
-fn horizon_claude_plugin_args() -> Vec<String> {
-    let path = HorizonHome::resolve().claude_plugin_dir();
-    if path.is_dir() {
-        vec!["--plugin-dir".to_string(), path.display().to_string()]
-    } else {
-        Vec::new()
-    }
 }
 
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
@@ -891,214 +850,4 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shell_launch_args_adds_login_flag_when_requested() {
-        assert_eq!(shell_launch_args(Vec::new(), true), vec!["-l".to_string()]);
-    }
-
-    #[test]
-    fn disconnected_snapshot_launch_command_exits_without_reconnecting() {
-        let (program, args) = disconnected_snapshot_launch_command();
-
-        if cfg!(windows) {
-            assert_eq!(program, "cmd.exe");
-            assert_eq!(args, vec!["/C".to_string(), "exit".to_string()]);
-        } else {
-            assert_eq!(program, default_shell());
-            assert_eq!(args, vec!["-c".to_string(), "exit".to_string()]);
-        }
-    }
-
-    #[test]
-    fn prepare_transcript_restore_treats_empty_root_as_fresh_state() {
-        let transcript_root = tempfile::tempdir().expect("tempdir");
-
-        let (_, replay_bytes, had_persisted_state) = prepare_transcript_restore(
-            PanelId(1),
-            PanelKind::Ssh,
-            Some(transcript_root.path().to_path_buf()),
-            "ssh-panel",
-        );
-
-        assert!(replay_bytes.is_empty());
-        assert!(!had_persisted_state);
-    }
-
-    #[test]
-    fn prepare_transcript_restore_detects_empty_persisted_transcript() {
-        let transcript_root = tempfile::tempdir().expect("tempdir");
-        std::fs::write(transcript_root.path().join("ssh-panel.bin"), b"").expect("write transcript");
-
-        let (_, replay_bytes, had_persisted_state) = prepare_transcript_restore(
-            PanelId(1),
-            PanelKind::Ssh,
-            Some(transcript_root.path().to_path_buf()),
-            "ssh-panel",
-        );
-
-        assert!(replay_bytes.is_empty());
-        assert!(had_persisted_state);
-    }
-
-    fn fresh_launch_context(resume: &PanelResume) -> AgentLaunchContext<'_> {
-        AgentLaunchContext {
-            resume,
-            session_binding: None,
-            should_resume_binding: false,
-            is_restore: false,
-        }
-    }
-
-    #[test]
-    fn resolve_launch_command_preserves_custom_shell_without_args() {
-        let (program, args) = resolve_launch_command(
-            Some("/usr/local/bin/custom-shell".to_string()),
-            Vec::new(),
-            None,
-            PanelKind::Shell,
-            fresh_launch_context(&PanelResume::Fresh),
-        );
-
-        assert_eq!(program, "/usr/local/bin/custom-shell");
-        assert!(args.is_empty());
-    }
-
-    #[test]
-    fn resolve_launch_command_adds_login_flag_only_for_default_shell() {
-        let (program, args) = resolve_launch_command(
-            None,
-            Vec::new(),
-            None,
-            PanelKind::Shell,
-            fresh_launch_context(&PanelResume::Fresh),
-        );
-
-        assert_eq!(program, default_shell());
-        if PLATFORM_USES_LOGIN_SHELL {
-            assert_eq!(args, vec!["-l".to_string()]);
-        } else {
-            assert!(args.is_empty());
-        }
-    }
-
-    #[test]
-    fn resolve_launch_command_prefers_structured_ssh_connection() {
-        let connection = SshConnection {
-            host: "prod-api".to_string(),
-            user: Some("deploy".to_string()),
-            port: Some(2222),
-            ..SshConnection::default()
-        };
-
-        let (program, args) = resolve_launch_command(
-            Some("custom-ignored".to_string()),
-            vec!["--ignored".to_string()],
-            Some(connection),
-            PanelKind::Ssh,
-            fresh_launch_context(&PanelResume::Fresh),
-        );
-
-        assert_eq!(program, "ssh");
-        assert_eq!(
-            args,
-            vec![
-                "-p".to_string(),
-                "2222".to_string(),
-                "-o".to_string(),
-                "ServerAliveInterval=15".to_string(),
-                "-o".to_string(),
-                "ServerAliveCountMax=1".to_string(),
-                "deploy@prod-api".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn claude_fresh_launch_preassigns_session_binding() {
-        let (binding, should_resume) = resolve_session_binding(
-            PanelKind::Claude,
-            &PanelResume::Fresh,
-            None,
-            Some("/repo"),
-            None,
-            |_| false,
-        );
-
-        let binding = binding.expect("fresh Claude panels are bound to their session at launch");
-        assert!(!should_resume);
-        assert_eq!(binding.kind, PanelKind::Claude);
-        assert_eq!(binding.cwd.as_deref(), Some("/repo"));
-        assert!(!binding.session_id.is_empty());
-        assert!(binding.updated_at.is_some());
-    }
-
-    #[test]
-    fn non_claude_fresh_launch_stays_unbound() {
-        let (binding, should_resume) =
-            resolve_session_binding(PanelKind::Codex, &PanelResume::Fresh, None, Some("/repo"), None, |_| {
-                false
-            });
-
-        assert!(binding.is_none());
-        assert!(!should_resume);
-    }
-
-    #[test]
-    fn claude_binding_resumes_only_when_transcript_exists() {
-        let binding = AgentSessionBinding::new(PanelKind::Claude, "session-1".to_string(), None, None, None);
-
-        let (_, resume_with_missing_transcript) = resolve_session_binding(
-            PanelKind::Claude,
-            &PanelResume::Fresh,
-            Some(binding.clone()),
-            None,
-            None,
-            |_| false,
-        );
-        let (_, resume_with_existing_transcript) = resolve_session_binding(
-            PanelKind::Claude,
-            &PanelResume::Fresh,
-            Some(binding),
-            None,
-            None,
-            |_| true,
-        );
-
-        assert!(!resume_with_missing_transcript);
-        assert!(resume_with_existing_transcript);
-    }
-
-    #[test]
-    fn claude_fresh_launch_command_uses_preassigned_session_id() {
-        let binding = AgentSessionBinding::new(
-            PanelKind::Claude,
-            "11111111-2222-3333-4444-555555555555".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        let (_, args) = resolve_launch_command(
-            None,
-            Vec::new(),
-            None,
-            PanelKind::Claude,
-            AgentLaunchContext {
-                resume: &PanelResume::Fresh,
-                session_binding: Some(&binding),
-                should_resume_binding: false,
-                is_restore: false,
-            },
-        );
-
-        let joined = args.join(" ");
-        assert!(
-            joined.contains("--session-id 11111111-2222-3333-4444-555555555555"),
-            "{joined}"
-        );
-        assert!(!joined.contains("--resume"), "{joined}");
-    }
-}
+mod tests;

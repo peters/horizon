@@ -4,9 +4,14 @@ mod presets;
 mod shortcuts;
 mod speech;
 #[cfg(test)]
+mod tests;
+#[cfg(test)]
 pub(in crate::app) use speech::ClipboardCapture;
 pub(in crate::app) use speech::PendingCapture;
 pub(in crate::app) use speech::SpeechModelInfoCache;
+#[cfg(test)]
+pub(in crate::app) use speech::SpeechSetupAgent;
+pub(in crate::app) use speech::{SpeechSetupRequest, speech_setup_prompt};
 mod yaml_editor;
 
 use egui::{Color32, Context, Margin, Stroke, Vec2};
@@ -54,8 +59,15 @@ pub(super) struct SettingsEditor {
     pub(super) buffer: String,
     pub(super) original: String,
     pub(super) status: SettingsStatus,
+    has_valid_saved_config: bool,
     active_tab: SettingsTab,
     editing_config: Option<Config>,
+    speech_agent_setup: speech::SpeechAgentSetupState,
+}
+
+struct LoadedSettingsYaml {
+    content: String,
+    has_valid_saved_config: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -74,25 +86,23 @@ impl HorizonApp {
                 self.apply_live_preview(&config);
             }
         } else {
-            let content = self.load_or_generate_config_yaml();
+            let loaded = self.load_or_generate_config_yaml();
+            let content = loaded.content;
             let editing_config = Config::from_yaml(&content).ok();
             self.settings = Some(SettingsEditor {
                 original: content.clone(),
                 buffer: content,
                 status: SettingsStatus::None,
+                has_valid_saved_config: loaded.has_valid_saved_config,
                 active_tab: SettingsTab::General,
                 editing_config,
+                speech_agent_setup: speech::SpeechAgentSetupState::new(),
             });
         }
     }
 
-    fn load_or_generate_config_yaml(&self) -> String {
-        if let Ok(content) = std::fs::read_to_string(&self.config_path)
-            && Config::from_yaml(&content).is_ok()
-        {
-            return content;
-        }
-        self.template_config_yaml()
+    fn load_or_generate_config_yaml(&self) -> LoadedSettingsYaml {
+        load_settings_yaml(&self.config_path, self.template_config_yaml())
     }
 
     fn template_config_yaml(&self) -> String {
@@ -104,11 +114,13 @@ impl HorizonApp {
     }
 
     pub(super) fn render_settings(&mut self, ctx: &Context) {
-        let Some((buffer, original)) = self
-            .settings
-            .as_ref()
-            .map(|editor| (editor.buffer.clone(), editor.original.clone()))
-        else {
+        let Some((buffer, original, has_valid_saved_config)) = self.settings.as_ref().map(|editor| {
+            (
+                editor.buffer.clone(),
+                editor.original.clone(),
+                editor.has_valid_saved_config,
+            )
+        }) else {
             return;
         };
 
@@ -130,6 +142,7 @@ impl HorizonApp {
         }
 
         let has_changes = buffer != original;
+        let launch_gate = speech::SpeechSetupLaunchGate::new(is_valid && has_valid_saved_config, has_changes);
         let Some(editor) = self.settings.as_ref() else {
             return;
         };
@@ -138,8 +151,79 @@ impl HorizonApp {
         self.apply_settings_action(action);
 
         let config_path = self.config_path.display().to_string();
-        if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ctx, &config_path, editor, &mut self.speech_model_info_cache);
+        let workspace_cwd = self
+            .board
+            .active_workspace
+            .and_then(|workspace_id| self.board.workspace(workspace_id))
+            .and_then(|workspace| workspace.cwd.clone());
+        let setup_request = self.settings.as_mut().and_then(|editor| {
+            render_settings_panel(
+                ctx,
+                &config_path,
+                editor,
+                &mut self.speech_model_info_cache,
+                launch_gate,
+                workspace_cwd.as_deref(),
+            )
+        });
+        if let Some(request) = setup_request {
+            let launch_gate_after_render =
+                self.settings
+                    .as_ref()
+                    .map_or(speech::SpeechSetupLaunchGate::new(false, false), |editor| {
+                        speech::SpeechSetupLaunchGate::new(
+                            Config::from_yaml(&editor.buffer).is_ok() && editor.has_valid_saved_config,
+                            editor.buffer != editor.original,
+                        )
+                    });
+            if launch_gate_after_render.can_launch() {
+                self.handle_speech_setup_request(ctx, &request);
+            } else if let Some(editor) = self.settings.as_mut()
+                && let Some(reason) = launch_gate_after_render.blocked_reason()
+            {
+                editor.speech_agent_setup.set_launch_error(reason);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    fn handle_speech_setup_request(&mut self, ctx: &Context, request: &SpeechSetupRequest) {
+        let Some((launch_gate, expected_saved_contents)) = self.settings.as_ref().map(|editor| {
+            (
+                speech::SpeechSetupLaunchGate::new(
+                    Config::from_yaml(&editor.buffer).is_ok() && editor.has_valid_saved_config,
+                    editor.buffer != editor.original,
+                ),
+                editor.original.clone(),
+            )
+        }) else {
+            return;
+        };
+        if let Some(reason) = launch_gate.blocked_reason() {
+            if let Some(editor) = self.settings.as_mut() {
+                editor.speech_agent_setup.set_launch_error(reason);
+            }
+            ctx.request_repaint();
+            return;
+        }
+        if let Err(error) = speech::validate_setup_saved_config(&self.config_path, &expected_saved_contents) {
+            if let Some(editor) = self.settings.as_mut() {
+                record_setup_saved_config_failure(editor, error);
+            }
+            ctx.request_repaint();
+            return;
+        }
+
+        match self.launch_speech_setup_agent(ctx, request) {
+            Ok(_) => {
+                self.settings = None;
+            }
+            Err(error) => {
+                if let Some(editor) = self.settings.as_mut() {
+                    editor.speech_agent_setup.set_launch_error(error.to_string());
+                    ctx.request_repaint();
+                }
+            }
         }
     }
 
@@ -202,6 +286,7 @@ impl HorizonApp {
                     if let Some(editor) = self.settings.as_mut() {
                         editor.original.clone_from(&buffer);
                         editor.status = SettingsStatus::Saved;
+                        editor.has_valid_saved_config = true;
                     }
                     tracing::info!("config saved to {}", self.config_path.display());
                 }
@@ -266,6 +351,24 @@ impl HorizonApp {
     }
 }
 
+fn record_setup_saved_config_failure(editor: &mut SettingsEditor, error: String) {
+    editor.has_valid_saved_config = false;
+    editor.speech_agent_setup.set_launch_error(error);
+}
+
+fn load_settings_yaml(config_path: &std::path::Path, fallback: String) -> LoadedSettingsYaml {
+    match std::fs::read_to_string(config_path) {
+        Ok(content) if Config::from_yaml(&content).is_ok() => LoadedSettingsYaml {
+            content,
+            has_valid_saved_config: true,
+        },
+        Ok(_) | Err(_) => LoadedSettingsYaml {
+            content: fallback,
+            has_valid_saved_config: false,
+        },
+    }
+}
+
 pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
     (viewport_width * 0.3).clamp(340.0, 900.0)
 }
@@ -284,9 +387,12 @@ fn render_settings_panel(
     config_path: &str,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
-) {
+    launch_gate: speech::SpeechSetupLaunchGate,
+    workspace_cwd: Option<&std::path::Path>,
+) -> Option<SpeechSetupRequest> {
     let viewport_width = util::viewport_local_rect(ctx).width();
     let default_width = settings_panel_default_width(viewport_width);
+    let mut setup_request = None;
 
     egui::SidePanel::right(SETTINGS_PANEL_ID)
         .default_width(default_width)
@@ -310,9 +416,14 @@ fn render_settings_panel(
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, model_info_cache, available),
+                tab => {
+                    setup_request =
+                        render_gui_tab(ui, tab, editor, model_info_cache, launch_gate, workspace_cwd, available);
+                }
             }
         });
+
+    setup_request
 }
 
 fn render_gui_tab(
@@ -320,23 +431,47 @@ fn render_gui_tab(
     tab: SettingsTab,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
+    launch_gate: speech::SpeechSetupLaunchGate,
+    workspace_cwd: Option<&std::path::Path>,
     available: Vec2,
-) {
+) -> Option<SpeechSetupRequest> {
+    match deserialize_gui_config(&editor.buffer) {
+        Ok(config) if editor.editing_config.is_none() => {
+            editor.editing_config = Some(config);
+        }
+        Ok(_) => {}
+        Err(_) => {
+            return render_invalid_gui_tab(ui, tab, editor, model_info_cache, launch_gate, workspace_cwd, available);
+        }
+    }
+
     let Some(ref mut config) = editor.editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
                 .color(theme::PALETTE_RED())
                 .size(12.0),
         );
-        return;
+        return None;
     };
 
+    let mut setup_request = None;
     egui::ScrollArea::vertical()
         .max_height(available.y)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let changed = match tab {
-                SettingsTab::General => general::render(ui, config, model_info_cache),
+                SettingsTab::General => {
+                    let result = general::render(
+                        ui,
+                        config,
+                        model_info_cache,
+                        &mut editor.speech_agent_setup,
+                        launch_gate,
+                        workspace_cwd,
+                    );
+                    setup_request = result.speech_setup_request;
+                    result.changed
+                }
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 // Yaml is handled before this function is called.
@@ -346,6 +481,55 @@ fn render_gui_tab(
                 editor.buffer = yaml;
             }
         });
+
+    setup_request
+}
+
+fn render_invalid_gui_tab(
+    ui: &mut egui::Ui,
+    tab: SettingsTab,
+    editor: &mut SettingsEditor,
+    model_info_cache: &mut speech::SpeechModelInfoCache,
+    launch_gate: speech::SpeechSetupLaunchGate,
+    workspace_cwd: Option<&std::path::Path>,
+    available: Vec2,
+) -> Option<SpeechSetupRequest> {
+    let fallback_config = editor
+        .editing_config
+        .clone()
+        .or_else(|| Config::from_yaml(&editor.original).ok());
+    let mut setup_request = None;
+
+    egui::ScrollArea::vertical()
+        .max_height(available.y)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Unable to parse current configuration")
+                    .color(theme::PALETTE_RED())
+                    .size(12.0),
+            );
+            dim_label(ui, "Fix the YAML or revert your changes to edit settings here.");
+
+            if tab == SettingsTab::General
+                && let Some(config) = fallback_config.as_ref()
+            {
+                ui.add_space(12.0);
+                section_heading(ui, "Features");
+                section_card(ui, |ui| {
+                    setup_request = speech::render_read_only(
+                        ui,
+                        config,
+                        model_info_cache,
+                        &mut editor.speech_agent_setup,
+                        launch_gate,
+                        workspace_cwd,
+                    );
+                });
+            }
+        });
+
+    setup_request
 }
 
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
@@ -378,10 +562,20 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
         }
     });
 
-    // Re-parse buffer when switching from YAML to a GUI tab.
-    if old_tab == SettingsTab::Yaml && editor.active_tab != SettingsTab::Yaml {
-        editor.editing_config = Config::from_yaml(&editor.buffer).ok();
+    // Re-deserialize the buffer when switching from YAML to a GUI tab. Keep
+    // semantically invalid configurations editable so users can complete a
+    // multi-step GUI edit (for example, enable speech and then choose a
+    // model). Only malformed/unrenderable YAML keeps the last good snapshot.
+    if old_tab == SettingsTab::Yaml
+        && editor.active_tab != SettingsTab::Yaml
+        && let Ok(config) = deserialize_gui_config(&editor.buffer)
+    {
+        editor.editing_config = Some(config);
     }
+}
+
+fn deserialize_gui_config(contents: &str) -> Result<Config, serde_yaml::Error> {
+    serde_yaml::from_str(contents)
 }
 
 // -- Shared section helpers used by tab modules --------------------------

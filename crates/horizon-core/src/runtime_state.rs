@@ -237,6 +237,7 @@ impl RuntimeState {
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
                             args: panel.launch_args.clone(),
+                            agent_login_shell: panel.agent_login_shell,
                             cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
                                 panel.launch_cwd.clone()
                             } else {
@@ -404,6 +405,8 @@ pub struct PanelState {
     pub kind: PanelKind,
     pub command: Option<String>,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_login_shell: bool,
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_connection: Option<SshConnection>,
@@ -443,6 +446,7 @@ impl PanelState {
             kind: panel.kind,
             command: command.clone(),
             args: args.clone(),
+            agent_login_shell: false,
             cwd: cwd.clone(),
             ssh_connection: ssh_connection.clone(),
             rows: panel.rows,
@@ -475,6 +479,7 @@ impl PanelState {
             },
             command: self.command.clone(),
             args: self.args.clone(),
+            agent_login_shell: self.agent_login_shell,
             cwd: self.cwd.as_deref().map(Config::expand_tilde),
             ssh_connection: self.ssh_connection.clone(),
             rows: self.rows,
@@ -487,6 +492,7 @@ impl PanelState {
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             transcript_root: None,
+            initial_agent_prompt: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
         }
@@ -501,6 +507,7 @@ impl Default for PanelState {
             kind: PanelKind::default(),
             command: None,
             args: Vec::new(),
+            agent_login_shell: false,
             cwd: None,
             ssh_connection: None,
             rows: DEFAULT_ROWS,
@@ -653,6 +660,45 @@ mod tests {
                 .map(|binding| binding.session_id.as_str()),
             Some("session-42")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_shot_agent_prompt_is_excluded_from_panel_and_runtime_launch_state() {
+        let prompt = "PRIVATE one-shot setup prompt at /home/user/private/model.gguf";
+        let preset_args = vec!["--setup-safe-default".to_string()];
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("speech setup");
+        let panel_id = board
+            .create_panel(
+                PanelOptions {
+                    name: Some("Speech Input Setup — Codex".to_string()),
+                    kind: PanelKind::Codex,
+                    command: Some("/bin/echo".to_string()),
+                    args: preset_args.clone(),
+                    initial_agent_prompt: Some(prompt.to_string()),
+                    agent_login_shell: true,
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("agent panel should spawn");
+
+        let panel = board.panel(panel_id).expect("spawned panel");
+        assert_eq!(panel.launch_args, preset_args);
+        assert!(panel.agent_login_shell);
+
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let saved_panel = &state.workspaces[0].panels[0];
+        assert_eq!(saved_panel.args, preset_args);
+        assert!(saved_panel.agent_login_shell);
+        assert!(!state.to_yaml().expect("runtime yaml").contains(prompt));
+
+        let restored_options = saved_panel.to_panel_options();
+        assert!(restored_options.initial_agent_prompt.is_none());
+        assert!(restored_options.agent_login_shell);
+
+        board.shutdown_terminal_panels();
     }
 
     #[test]

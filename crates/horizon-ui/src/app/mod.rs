@@ -103,6 +103,18 @@ struct ActiveSession {
     persistent: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingTerminalFocus {
+    panel_id: PanelId,
+    viewport_id: ViewportId,
+}
+
+impl PendingTerminalFocus {
+    fn matches(self, panel_id: PanelId, viewport_id: ViewportId) -> bool {
+        self.panel_id == panel_id && self.viewport_id == viewport_id
+    }
+}
+
 struct StartupChooserState {
     chooser: StartupChooser,
     selected_session_id: Option<String>,
@@ -210,6 +222,7 @@ pub struct HorizonApp {
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
     panel_render_order: Vec<(PanelId, usize)>,
+    pending_terminal_focus: Option<PendingTerminalFocus>,
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
     terminal_selection_drag: TerminalSelectionDragState,
@@ -453,6 +466,7 @@ impl HorizonApp {
             terminal_keyboard_events: Vec::new(),
             git_watchers: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
+            pending_terminal_focus: None,
             primary_selection: PrimarySelection::new(),
             terminal_selection_drag: TerminalSelectionDragState::default(),
             config_last_mtime,

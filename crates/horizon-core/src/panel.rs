@@ -1,3 +1,4 @@
+mod agent_launch;
 mod spawn;
 
 use std::borrow::Cow;
@@ -16,13 +17,12 @@ use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
-pub use self::spawn::current_unix_millis;
+use self::agent_launch::AgentLaunchContext;
 #[cfg(test)]
-use self::spawn::platform_default_shell;
-use self::spawn::{
-    AgentLaunchContext, agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind,
-    spawn_panel,
-};
+use self::agent_launch::platform_default_shell;
+pub use self::agent_launch::{AGENT_LAUNCH_HELPER_ARG, resolved_default_shell};
+pub use self::spawn::current_unix_millis;
+use self::spawn::{agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind, spawn_panel};
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
@@ -125,6 +125,13 @@ pub struct PanelOptions {
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub transcript_root: Option<PathBuf>,
+    /// One-shot positional prompt for a newly launched agent. This value is
+    /// consumed during the initial spawn and is never retained on [`Panel`].
+    pub initial_agent_prompt: Option<String>,
+    /// Use setup launch semantics: an interactive login shell on Unix and the
+    /// native process helper on Windows. Unlike the one-shot prompt, this mode
+    /// is retained for restart and restore.
+    pub agent_login_shell: bool,
     pub restore_as_disconnected_snapshot: bool,
     /// True when this panel is being restored from persisted state rather
     /// than newly added; continue-style agents only reconnect on restore.
@@ -149,6 +156,8 @@ impl Default for PanelOptions {
             session_binding: None,
             template: None,
             transcript_root: None,
+            initial_agent_prompt: None,
+            agent_login_shell: false,
             restore_as_disconnected_snapshot: false,
             is_restore: false,
         }
@@ -177,6 +186,8 @@ pub struct Panel {
     pub launch_command: Option<String>,
     /// Original launch args (for persistence).
     pub launch_args: Vec<String>,
+    /// Stable setup launch mode used for this agent.
+    pub(crate) agent_login_shell: bool,
     /// Working directory (for persistence).
     pub launch_cwd: Option<PathBuf>,
     /// Structured SSH connection metadata, when this is an SSH panel.
@@ -463,11 +474,22 @@ impl Panel {
                 resume: &self.resume,
                 session_binding: self.session_binding.as_ref(),
                 should_resume_binding: should_resume,
+                initial_agent_prompt: None,
+                agent_login_shell: self.agent_login_shell,
                 is_restore: true,
             },
         );
 
-        if self.kind.is_agent() {
+        if self.kind.is_agent() && self.agent_login_shell {
+            tracing::info!(
+                panel_id = self.id.0,
+                kind = ?self.kind,
+                resume = ?self.resume,
+                session_id = self.session_binding.as_ref().map(|b| b.session_id.as_str()),
+                should_resume,
+                "restarting setup agent panel (command details redacted)"
+            );
+        } else if self.kind.is_agent() {
             tracing::info!(
                 panel_id = self.id.0,
                 kind = ?self.kind,
@@ -632,6 +654,7 @@ mod tests {
             last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),
+            agent_login_shell: false,
             launch_cwd: None,
             ssh_connection: None,
             ssh_status: None,
@@ -710,6 +733,8 @@ mod tests {
                 resume: &PanelResume::Last,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -735,6 +760,8 @@ mod tests {
                 },
                 session_binding: Some(&binding),
                 should_resume_binding: true,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -757,6 +784,8 @@ mod tests {
                 resume: &PanelResume::Fresh,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -784,6 +813,8 @@ mod tests {
                 resume: &PanelResume::Fresh,
                 session_binding: Some(&binding),
                 should_resume_binding: true,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -807,6 +838,8 @@ mod tests {
                 resume: &PanelResume::Last,
                 session_binding: Some(&binding),
                 should_resume_binding: true,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -834,6 +867,8 @@ mod tests {
                 },
                 session_binding: Some(&binding),
                 should_resume_binding: true,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -857,6 +892,8 @@ mod tests {
                 resume: &PanelResume::Fresh,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -880,6 +917,8 @@ mod tests {
                 resume: &PanelResume::Fresh,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -901,6 +940,8 @@ mod tests {
                 },
                 session_binding: Some(&binding),
                 should_resume_binding: true,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -921,6 +962,8 @@ mod tests {
                 resume: &PanelResume::Fresh,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -945,6 +988,8 @@ mod tests {
                 resume: &PanelResume::Last,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: true,
             },
         );
@@ -963,6 +1008,8 @@ mod tests {
                 resume: &PanelResume::Last,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );
@@ -985,6 +1032,8 @@ mod tests {
                 resume: &PanelResume::Last,
                 session_binding: None,
                 should_resume_binding: false,
+                initial_agent_prompt: None,
+                agent_login_shell: false,
                 is_restore: false,
             },
         );

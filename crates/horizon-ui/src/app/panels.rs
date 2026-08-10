@@ -181,6 +181,7 @@ struct PanelBodyContext<'a> {
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
+    request_terminal_focus: bool,
     reconnect_requested: &'a mut bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
@@ -205,6 +206,7 @@ fn show_panel_body_contents(
             ui,
             is_focused,
             interactive,
+            body_context.request_terminal_focus,
             body_context.terminal_selection_drag,
             TerminalKeyboardContext {
                 keyboard_events: body_context.keyboard_events,
@@ -317,6 +319,7 @@ impl HorizonApp {
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    request_terminal_focus: false,
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
@@ -445,6 +448,10 @@ impl HorizonApp {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
+        let terminal_focus_requested = self
+            .pending_terminal_focus
+            .is_some_and(|pending| pending.matches(panel_id, ctx.viewport_id()));
+        let mut terminal_focus_consumed = false;
 
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
@@ -622,6 +629,8 @@ impl HorizonApp {
                         let terminal_grid_cache = &mut self.terminal_grid_cache;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
+                            let request_terminal_focus =
+                                terminal_focus_requested && interactive && panel.terminal().is_some();
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(editor_preview_cache.entry(panel_id).or_default())
                             } else {
@@ -643,11 +652,13 @@ impl HorizonApp {
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    request_terminal_focus,
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                 },
                             );
+                            terminal_focus_consumed = request_terminal_focus;
                         }
                         if reconnect_requested {
                             self.queue_panel_restart(panel_id);
@@ -655,6 +666,14 @@ impl HorizonApp {
                     },
                 );
             });
+
+        if terminal_focus_consumed
+            && self
+                .pending_terminal_focus
+                .is_some_and(|pending| pending.matches(panel_id, ctx.viewport_id()))
+        {
+            self.pending_terminal_focus = None;
+        }
 
         outcome
     }

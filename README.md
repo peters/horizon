@@ -347,6 +347,8 @@ Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.
 
 Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
 
+If speech support is not ready yet, the same section offers **Set up Speech Input**. Horizon detects locally available Codex and Claude installations and can open a fresh agent panel in the active workspace with a one-shot setup request. The agent starts with read-only inspection and asks before installing packages, downloading a model, replacing a managed binary, or restarting Horizon. Manual controls remain available from **Configure manually**, and audio processing stays local after the selected model has been downloaded.
+
 Dictation outcomes that would otherwise be invisible are surfaced as a transient message: a tap too short to transcribe, a recording in which no speech was detected (named with the microphone it came from), a push-to-talk press while the previous dictation is still processing, and speech errors.
 
 ### Speech profiles: one key per language

@@ -17,6 +17,9 @@ back into large multi-purpose modules.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
+- `panel.rs` owns panel state and lifecycle entry points; command construction
+  belongs in `panel/agent_launch.rs`, while PTY spawning and its behavior-split
+  tests belong in `panel/spawn.rs` and `panel/spawn/tests/`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   session discovery and external-store parsing belong in `runtime_state/`
   helper modules.
@@ -49,6 +52,9 @@ back into large multi-purpose modules.
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
   instead of extending a single file.
+- Settings feature helpers follow the same boundary: Speech Input setup card
+  state stays in `settings/speech/agent_setup.rs`, while executable discovery
+  and bounded platform probes stay in its `detection/` leaves.
 
 ## File Size Policy
 

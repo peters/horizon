@@ -150,6 +150,34 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
     }
 }
 
+pub(crate) fn agent_args_contain_session_directive(kind: PanelKind, args: &[String]) -> bool {
+    let definition_match = agent_definition(kind).is_some_and(|definition| match definition.resume_mode {
+        AgentResumeMode::ExactSubcommand { subcommand } => args.iter().any(|argument| argument == subcommand),
+        AgentResumeMode::ExactFlag {
+            flag,
+            fresh_session_flag,
+        } => args.iter().any(|argument| {
+            matches_flag(argument, flag)
+                || fresh_session_flag.is_some_and(|fresh_flag| matches_flag(argument, fresh_flag))
+        }),
+        AgentResumeMode::ContinueFlag { flag } => args.iter().any(|argument| matches_flag(argument, flag)),
+        AgentResumeMode::None => false,
+    });
+
+    definition_match
+        || kind == PanelKind::Claude
+            && args.iter().any(|argument| {
+                argument.starts_with("-c") || argument.starts_with("-r") || matches_flag(argument, "--continue")
+            })
+}
+
+fn matches_flag(argument: &str, flag: &str) -> bool {
+    argument == flag
+        || argument
+            .strip_prefix(flag)
+            .is_some_and(|suffix| suffix.starts_with('='))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AgentResumeMode, PanelKind, agent_definition};

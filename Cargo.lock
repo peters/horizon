@@ -1481,6 +1481,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1506,6 +1507,7 @@ dependencies = [
  "horizon-core",
  "horizon-cursor",
  "profiling",
+ "rustix 1.1.4",
  "serde_yaml",
  "surge-core",
  "tempfile",

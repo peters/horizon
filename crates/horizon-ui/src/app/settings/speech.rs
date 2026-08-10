@@ -2,6 +2,8 @@
 //! language / output pickers, backend gating, and the press-to-bind hotkey
 //! capture flow. Split from `general.rs` per the module-size guardrail.
 
+use std::path::Path;
+
 use egui::Ui;
 use horizon_core::speech_model::SpeechModelInfo;
 use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
@@ -12,6 +14,12 @@ use crate::app::speech::built_with_speech;
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
 
+mod agent_setup;
+#[cfg(test)]
+pub(in crate::app) use agent_setup::SpeechSetupAgent;
+pub(in crate::app) use agent_setup::{
+    SpeechAgentSetupState, SpeechSetupLaunchGate, SpeechSetupRequest, speech_setup_prompt, validate_setup_saved_config,
+};
 mod model_info;
 pub(in crate::app) use model_info::SpeechModelInfoCache;
 use model_info::SpeechModelInfoState;
@@ -67,7 +75,51 @@ enum HotkeyCaptureAttempt {
 use crate::app::util::primary_shortcut_label;
 use crate::theme;
 
-pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut SpeechModelInfoCache) -> bool {
+pub(super) struct SpeechSettingsRenderResult {
+    pub(super) changed: bool,
+    pub(super) setup_request: Option<SpeechSetupRequest>,
+}
+
+pub(super) fn render(
+    ui: &mut Ui,
+    config: &mut Config,
+    model_info_cache: &mut SpeechModelInfoCache,
+    agent_setup: &mut SpeechAgentSetupState,
+    launch_gate: SpeechSetupLaunchGate,
+    workspace_cwd: Option<&Path>,
+) -> SpeechSettingsRenderResult {
+    let setup = agent_setup.render(ui, config, built_with_speech(), launch_gate, workspace_cwd);
+    let changed = setup.show_manual_controls && render_manual_controls(ui, config, model_info_cache);
+
+    SpeechSettingsRenderResult {
+        changed,
+        setup_request: setup.request,
+    }
+}
+
+/// Render setup assistance from the last valid configuration while the YAML
+/// editor contains an invalid draft. Setup-state actions such as rescan and
+/// manual disclosure remain usable, while configuration controls are visible
+/// but disabled so they cannot replace the invalid draft.
+pub(super) fn render_read_only(
+    ui: &mut Ui,
+    config: &Config,
+    model_info_cache: &mut SpeechModelInfoCache,
+    agent_setup: &mut SpeechAgentSetupState,
+    launch_gate: SpeechSetupLaunchGate,
+    workspace_cwd: Option<&Path>,
+) -> Option<SpeechSetupRequest> {
+    let setup = agent_setup.render(ui, config, built_with_speech(), launch_gate, workspace_cwd);
+    if setup.show_manual_controls {
+        let mut snapshot = config.clone();
+        ui.add_enabled_ui(false, |ui| {
+            render_manual_controls(ui, &mut snapshot, model_info_cache);
+        });
+    }
+    setup.request
+}
+
+fn render_manual_controls(ui: &mut Ui, config: &mut Config, model_info_cache: &mut SpeechModelInfoCache) -> bool {
     let mut changed = false;
 
     changed |= ui

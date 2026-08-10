@@ -30,6 +30,26 @@ const fn grid_cache_allowed(content_requires_refresh: bool, hover_requires_refre
     !(content_requires_refresh || hover_requires_refresh || drag_active)
 }
 
+fn terminal_has_keyboard_focus(
+    ui: &egui::Ui,
+    interaction: &layout::TerminalInteraction,
+    is_active_panel: bool,
+) -> bool {
+    let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
+    let other_widget_has_focus = ui
+        .memory(egui::Memory::focused)
+        .is_some_and(|focused| focused != interaction.body.id);
+    window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus))
+}
+
+const fn should_forward_terminal_keyboard_input(
+    interactive: bool,
+    has_terminal_focus: bool,
+    requested_focus_this_frame: bool,
+) -> bool {
+    interactive && has_terminal_focus && !requested_focus_this_frame
+}
+
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
     grid_cache: Option<&'a mut TerminalGridCache>,
@@ -54,6 +74,7 @@ impl<'a> TerminalView<'a> {
         ui: &mut egui::Ui,
         is_active_panel: bool,
         interactive: bool,
+        request_focus: bool,
         selection_drag: &mut TerminalSelectionDragState,
         keyboard: TerminalKeyboardContext<'_>,
     ) -> bool {
@@ -69,6 +90,9 @@ impl<'a> TerminalView<'a> {
             .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);
+        if interactive && request_focus {
+            interaction.body.request_focus();
+        }
         if interactive {
             handle_terminal_pointer_input(
                 ui,
@@ -84,12 +108,7 @@ impl<'a> TerminalView<'a> {
                 },
             );
         }
-        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
-        let other_widget_has_focus = ui
-            .memory(egui::Memory::focused)
-            .is_some_and(|focused| focused != interaction.body.id);
-        let has_terminal_focus =
-            window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
+        let has_terminal_focus = terminal_has_keyboard_focus(ui, &interaction, is_active_panel);
         self.panel.set_focused(has_terminal_focus);
 
         if interactive && has_terminal_focus {
@@ -157,7 +176,7 @@ impl<'a> TerminalView<'a> {
             self.grid_cache = grid_cache;
         }
 
-        if interactive && has_terminal_focus {
+        if should_forward_terminal_keyboard_input(interactive, has_terminal_focus, request_focus) {
             *keyboard.reconnect_requested |= handle_terminal_keyboard_input(
                 ui,
                 interaction.body.id,
@@ -191,7 +210,12 @@ pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> la
 
 #[cfg(test)]
 mod tests {
-    use super::{grid_cache_allowed, hover_requires_grid_refresh};
+    use egui::{Context, RawInput, Rect, Vec2};
+
+    use super::{
+        grid_cache_allowed, hover_requires_grid_refresh, should_forward_terminal_keyboard_input,
+        terminal_has_keyboard_focus, terminal_interaction, terminal_layout,
+    };
 
     #[test]
     fn mouse_reporting_hover_bypasses_grid_cache() {
@@ -210,5 +234,38 @@ mod tests {
     fn dynamic_content_and_drags_bypass_grid_cache() {
         assert!(!grid_cache_allowed(true, false, false));
         assert!(!grid_cache_allowed(false, false, true));
+    }
+
+    #[test]
+    fn requested_terminal_focus_replaces_an_old_widget_focus_for_keyboard_routing() {
+        let ctx = Context::default();
+        let mut requested_body_id = None;
+        let _ = ctx.run(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(640.0, 480.0))),
+                ..RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let old = ui.button("old focus");
+                    old.request_focus();
+                    let interaction =
+                        terminal_interaction(ui, terminal_layout(Vec2::new(400.0, 240.0), 8.0, 17.0), 7, true);
+                    assert!(!terminal_has_keyboard_focus(ui, &interaction, true));
+
+                    interaction.body.request_focus();
+                    requested_body_id = Some(interaction.body.id);
+                    assert!(terminal_has_keyboard_focus(ui, &interaction, true));
+                });
+            },
+        );
+
+        assert_eq!(ctx.memory(egui::Memory::focused), requested_body_id);
+    }
+
+    #[test]
+    fn focus_transfer_drops_the_activation_frames_keyboard_input() {
+        assert!(!should_forward_terminal_keyboard_input(true, true, true));
+        assert!(should_forward_terminal_keyboard_input(true, true, false));
     }
 }

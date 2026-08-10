@@ -1,21 +1,43 @@
+use std::path::Path;
+
 use egui::Ui;
 use horizon_core::{AppearanceTheme, Config};
 
 use crate::theme;
 
 /// Render the General settings tab: window dimensions, feature toggles,
-/// and overlay sizes.  Returns `true` when any value was modified.
+/// and overlay sizes.
+pub(super) struct GeneralRenderResult {
+    pub(super) changed: bool,
+    pub(super) speech_setup_request: Option<super::speech::SpeechSetupRequest>,
+}
+
 pub(super) fn render(
     ui: &mut Ui,
     config: &mut Config,
     model_info_cache: &mut super::speech::SpeechModelInfoCache,
-) -> bool {
+    agent_setup: &mut super::speech::SpeechAgentSetupState,
+    launch_gate: super::speech::SpeechSetupLaunchGate,
+    workspace_cwd: Option<&Path>,
+) -> GeneralRenderResult {
     let mut changed = false;
+    let mut speech_setup_request = None;
     changed |= render_window_section(ui, config);
     changed |= render_appearance_section(ui, config);
-    changed |= render_features_section(ui, config, model_info_cache);
+    changed |= render_features_section(
+        ui,
+        config,
+        model_info_cache,
+        agent_setup,
+        launch_gate,
+        workspace_cwd,
+        &mut speech_setup_request,
+    );
     changed |= render_overlays_section(ui, config);
-    changed
+    GeneralRenderResult {
+        changed,
+        speech_setup_request,
+    }
 }
 
 fn render_window_section(ui: &mut Ui, config: &mut Config) -> bool {
@@ -104,6 +126,10 @@ fn render_features_section(
     ui: &mut Ui,
     config: &mut Config,
     model_info_cache: &mut super::speech::SpeechModelInfoCache,
+    agent_setup: &mut super::speech::SpeechAgentSetupState,
+    launch_gate: super::speech::SpeechSetupLaunchGate,
+    workspace_cwd: Option<&Path>,
+    speech_setup_request: &mut Option<super::speech::SpeechSetupRequest>,
 ) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Features");
@@ -117,7 +143,9 @@ fn render_features_section(
         super::dim_label(ui, "Show a notification feed for agent activity.");
 
         ui.add_space(10.0);
-        changed |= super::speech::render(ui, config, model_info_cache);
+        let result = super::speech::render(ui, config, model_info_cache, agent_setup, launch_gate, workspace_cwd);
+        changed |= result.changed;
+        *speech_setup_request = result.setup_request;
     });
     changed
 }

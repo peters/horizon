@@ -18,20 +18,26 @@ mod terminal_widget;
 mod theme;
 mod usage_widget;
 
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use app::HorizonApp;
 use std::sync::Arc;
 
 use eframe::{egui_wgpu, wgpu};
 use horizon_core::{
-    Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser, StartupDecision,
-    WindowConfig,
+    AGENT_LAUNCH_HELPER_ARG, Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser,
+    StartupDecision, WindowConfig,
 };
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
+    if let Some(exit_code) = run_agent_launch_helper() {
+        std::process::exit(exit_code);
+    }
+
     init_tracing();
 
     let horizon_home = HorizonHome::resolve();
@@ -102,6 +108,69 @@ fn main() -> eframe::Result {
         }),
         observed_keyboard_inputs,
     )
+}
+
+fn run_agent_launch_helper() -> Option<i32> {
+    let request = parse_agent_launch_helper(std::env::args_os().skip(1))?;
+    let (program, args) = match request {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("Horizon agent launch helper: {error}");
+            return Some(2);
+        }
+    };
+
+    let status = agent_launch_command(program, args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+    Some(match status {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(error) => {
+            eprintln!("Horizon agent launch helper failed: {error}");
+            1
+        }
+    })
+}
+
+fn agent_launch_command(program: OsString, args: Vec<OsString>) -> Command {
+    let mut command = Command::new(program);
+    command.args(args);
+    command
+}
+
+fn parse_agent_launch_helper(
+    args: impl IntoIterator<Item = OsString>,
+) -> Option<Result<(OsString, Vec<OsString>), &'static str>> {
+    let mut args = args.into_iter();
+    if args.next().as_deref() != Some(OsStr::new(AGENT_LAUNCH_HELPER_ARG)) {
+        return None;
+    }
+    let Some(program) = args.next() else {
+        return Some(Err("missing target executable"));
+    };
+    if program.is_empty() {
+        return Some(Err("target executable is empty"));
+    }
+
+    Some(Ok((program, args.map(normalize_agent_launch_helper_arg).collect())))
+}
+
+fn normalize_agent_launch_helper_arg(argument: OsString) -> OsString {
+    #[cfg(windows)]
+    {
+        normalize_windows_agent_launch_helper_arg(&argument)
+    }
+    #[cfg(not(windows))]
+    {
+        argument
+    }
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_agent_launch_helper_arg(argument: &OsStr) -> OsString {
+    argument.to_string_lossy().replace(['\r', '\n'], " ").into()
 }
 
 /// Select a wgpu adapter that can actually present to the given surface.
@@ -346,9 +415,19 @@ fn parse_cli_args() -> CliArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::{OsStr, OsString};
+
+    #[cfg(windows)]
+    use std::fs;
+
     use horizon_core::{SessionSummary, StartupChooser, StartupPromptReason};
 
-    use super::{startup_chooser_window_config, summarize_adapter, wgpu};
+    #[cfg(windows)]
+    use super::agent_launch_command;
+    use super::{
+        AGENT_LAUNCH_HELPER_ARG, normalize_windows_agent_launch_helper_arg, parse_agent_launch_helper,
+        startup_chooser_window_config, summarize_adapter, wgpu,
+    };
 
     fn chooser_with_sessions(session_count: usize) -> StartupChooser {
         StartupChooser {
@@ -417,5 +496,105 @@ mod tests {
         });
 
         assert_eq!(summary.matches("same").count(), 1);
+    }
+
+    #[test]
+    fn internal_agent_launch_helper_requires_marker_and_target() {
+        assert!(parse_agent_launch_helper([OsString::from("--blank")]).is_none());
+        let missing_target = parse_agent_launch_helper([OsString::from(AGENT_LAUNCH_HELPER_ARG)])
+            .expect("helper marker")
+            .expect_err("target is required");
+        assert_eq!(missing_target, "missing target executable");
+
+        let (program, args) = parse_agent_launch_helper([
+            OsString::from(AGENT_LAUNCH_HELPER_ARG),
+            OsString::from(r"C:\Tools\agent.cmd"),
+            OsString::from("--safe-flag"),
+            OsString::from("setup prompt"),
+        ])
+        .expect("helper marker")
+        .expect("valid helper request");
+        assert_eq!(program, OsStr::new(r"C:\Tools\agent.cmd"));
+        assert_eq!(args, ["--safe-flag", "setup prompt"]);
+    }
+
+    #[test]
+    fn windows_helper_flattens_batch_unsafe_line_breaks_only() {
+        let prompt = OsStr::new("first line\r\nsecond & third %PATH%");
+
+        assert_eq!(
+            normalize_windows_agent_launch_helper_arg(prompt),
+            OsStr::new("first line  second & third %PATH%")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_helper_round_trips_arguments_without_command_injection() {
+        let directory = tempfile::tempdir().expect("temporary batch helper directory");
+        let sentinel = directory.path().join("command-injection-sentinel");
+        let raw_arguments = [
+            "value with spaces".to_string(),
+            r#"quotes "inside" and backslashes C:\Program Files\Agent\"#.to_string(),
+            r#"operators &|<>^%! stay literal"#.to_string(),
+            r#"environment token %PATH% stays literal"#.to_string(),
+            "Unicode: Blåbær Ω Привет 漢字".to_string(),
+            "first line\r\nsecond line\nthird line\rfourth line".to_string(),
+            r#"& echo injected>"%HORIZON_AGENT_HELPER_SENTINEL%" & rem"#.to_string(),
+        ];
+        let expected_arguments = [
+            raw_arguments[0].clone(),
+            raw_arguments[1].clone(),
+            raw_arguments[2].clone(),
+            raw_arguments[3].clone(),
+            raw_arguments[4].clone(),
+            "first line  second line third line fourth line".to_string(),
+            raw_arguments[6].clone(),
+        ];
+
+        for extension in ["cmd", "bat"] {
+            let script = directory.path().join(format!("agent shim.{extension}"));
+            let capture = directory.path().join(format!("capture-{extension}.txt"));
+            fs::write(
+                &script,
+                "@echo off\r\n\
+                 setlocal DisableDelayedExpansion\r\n\
+                 chcp 65001 >nul\r\n\
+                 set \"HORIZON_CAPTURE_ARG_1=%~1\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_2=%~2\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_3=%~3\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_4=%~4\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_5=%~5\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_6=%~6\"\r\n\
+                 set \"HORIZON_CAPTURE_ARG_7=%~7\"\r\n\
+                 set HORIZON_CAPTURE_ARG_ > \"%HORIZON_AGENT_HELPER_CAPTURE%\"\r\n\
+                 exit /b 0\r\n",
+            )
+            .expect("write batch helper");
+
+            let mut helper_arguments = vec![OsString::from(AGENT_LAUNCH_HELPER_ARG), script.clone().into_os_string()];
+            helper_arguments.extend(raw_arguments.iter().map(OsString::from));
+            let (program, arguments) = parse_agent_launch_helper(helper_arguments)
+                .expect("helper marker")
+                .expect("valid helper request");
+            let status = agent_launch_command(program, arguments)
+                .env("HORIZON_AGENT_HELPER_CAPTURE", &capture)
+                .env("HORIZON_AGENT_HELPER_SENTINEL", &sentinel)
+                .status()
+                .expect("execute batch helper");
+
+            assert!(status.success(), "{extension} helper failed with {status}");
+            assert!(
+                !sentinel.exists(),
+                "{extension} helper executed argument text as a command"
+            );
+            let captured = fs::read_to_string(&capture).expect("read captured arguments");
+            let expected = expected_arguments
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| format!("HORIZON_CAPTURE_ARG_{}={argument}", index + 1))
+                .collect::<Vec<_>>();
+            assert_eq!(captured.lines().collect::<Vec<_>>(), expected);
+        }
     }
 }
