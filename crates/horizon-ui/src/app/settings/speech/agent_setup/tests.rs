@@ -321,6 +321,10 @@ fn pending_and_failed_detection_are_never_reported_as_missing() {
 fn setup_state_rescan_clears_launch_error_and_returns_to_checking() {
     let mut state = SpeechAgentSetupState::new();
     state.set_launch_error("spawn failed");
+    state.clear_launch_error();
+    assert!(state.launch_error.is_none());
+
+    state.set_launch_error("probe failed");
     state.probes.set_test_availability(
         SpeechSetupAgentAvailability::Missing,
         SpeechSetupAgentAvailability::Missing,

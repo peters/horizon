@@ -253,6 +253,7 @@ impl HorizonApp {
                         editor.buffer.clone_from(&original);
                         editor.editing_config = parsed;
                         editor.status = SettingsStatus::None;
+                        editor.speech_agent_setup.clear_launch_error();
                     }
                 }
             }
@@ -264,6 +265,7 @@ impl HorizonApp {
                     editor.editing_config = Config::from_yaml(&default_yaml).ok();
                     editor.buffer = default_yaml;
                     editor.status = SettingsStatus::LivePreview;
+                    editor.speech_agent_setup.clear_launch_error();
                 }
             }
             SettingsAction::Save => {
@@ -287,6 +289,7 @@ impl HorizonApp {
                         editor.original.clone_from(&buffer);
                         editor.status = SettingsStatus::Saved;
                         editor.has_valid_saved_config = true;
+                        editor.speech_agent_setup.clear_launch_error();
                     }
                     tracing::info!("config saved to {}", self.config_path.display());
                 }

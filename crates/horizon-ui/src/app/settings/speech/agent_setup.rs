@@ -204,11 +204,15 @@ impl SpeechAgentSetupState {
 
     pub(in crate::app) fn rescan(&mut self) {
         self.probes.invalidate();
-        self.launch_error = None;
+        self.clear_launch_error();
     }
 
     pub(in crate::app) fn set_launch_error(&mut self, error: impl Into<String>) {
         self.launch_error = Some(error.into());
+    }
+
+    pub(in crate::app) fn clear_launch_error(&mut self) {
+        self.launch_error = None;
     }
 
     #[cfg(test)]
