@@ -96,12 +96,20 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
 }
 
 pub(super) fn truncate_session_label(label: &str) -> String {
-    const MAX_CHARS: usize = 40;
-    if label.chars().count() <= MAX_CHARS {
+    truncate_chars(label, 40)
+}
+
+/// Caps `label` at `max_chars` characters, ending a truncated result with an
+/// ellipsis that counts toward the budget.
+pub(super) fn truncate_chars(label: &str, max_chars: usize) -> String {
+    if label.chars().count() <= max_chars {
         return label.to_string();
     }
+    if max_chars == 0 {
+        return String::new();
+    }
 
-    let mut truncated = label.chars().take(MAX_CHARS - 1).collect::<String>();
+    let mut truncated = label.chars().take(max_chars - 1).collect::<String>();
     truncated.push('…');
     truncated
 }
@@ -223,8 +231,34 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label};
+    use super::{OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label, truncate_chars};
     use egui::{Pos2, Rect, Vec2};
+
+    #[test]
+    fn truncate_chars_keeps_short_labels_untouched() {
+        assert_eq!(truncate_chars("build", 8), "build");
+        assert_eq!(truncate_chars("exactly8", 8), "exactly8");
+    }
+
+    #[test]
+    fn truncate_chars_caps_at_budget_including_ellipsis() {
+        let truncated = truncate_chars("docker compose up", 8);
+
+        assert_eq!(truncated, "docker …");
+        assert_eq!(truncated.chars().count(), 8);
+    }
+
+    #[test]
+    fn truncate_chars_honors_tiny_budgets() {
+        assert_eq!(truncate_chars("abc", 0), "");
+        assert_eq!(truncate_chars("abc", 1), "…");
+        assert_eq!(truncate_chars("", 0), "");
+    }
+
+    #[test]
+    fn truncate_chars_counts_characters_not_bytes() {
+        assert_eq!(truncate_chars("blåbærsyltetøy", 6), "blåbæ…");
+    }
 
     fn default_panel_canvas_pos(index: usize) -> Pos2 {
         const PANEL_COLUMN_SPACING: f32 = 540.0;

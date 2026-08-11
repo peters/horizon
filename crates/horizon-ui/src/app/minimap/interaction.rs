@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use egui::{Context, CursorIcon, Id, Order, PopupAnchor, Pos2, Rect, Sense, Tooltip, Ui, Vec2};
+use egui::{Context, CursorIcon, Id, Label, Order, PopupAnchor, Pos2, Rect, Sense, TextWrapMode, Tooltip, Ui, Vec2};
 use horizon_core::{Board, Panel, PanelId, WorkspaceId};
+
+use crate::app::util::truncate_chars;
 
 use super::{
     HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, MinimapHitTarget, MinimapModel, MinimapScope, minimap_model,
@@ -110,11 +112,15 @@ fn restore_minimap_panel_focus(board: &mut Board, target: MinimapHitTarget, fitt
     }
 }
 
+/// The longest hover label worth showing; terminal titles can carry whole
+/// command lines, and the tooltip lays its text out on a single line.
+const TARGET_LABEL_MAX_CHARS: usize = 96;
+
 /// Human-readable name for a hovered minimap target, shared by the tooltip
 /// and the accessibility label so assistive tech announces what a sighted
 /// user sees.
 fn minimap_target_label(app: &HorizonApp, target: MinimapHitTarget) -> Option<String> {
-    match target {
+    let label = match target {
         MinimapHitTarget::Panel { panel_id, .. } => app
             .board
             .panel(panel_id)
@@ -128,7 +134,8 @@ fn minimap_target_label(app: &HorizonApp, target: MinimapHitTarget) -> Option<St
                 if panel_count == 1 { "" } else { "s" }
             )
         }),
-    }
+    };
+    label.map(|label| truncate_chars(&label, TARGET_LABEL_MAX_CHARS))
 }
 
 /// The minimap is one painter-backed surface rather than a widget per target,
@@ -153,15 +160,20 @@ fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered
         return;
     };
 
+    // Two guards against egui's open-tooltip re-measure loop: an always-open
+    // area is laid out inside last frame's size, so a wrapping label narrows a
+    // little every frame until the tooltip collapses into a glyph-wide strip.
+    // Laying the label out unwrapped keeps its width text-driven, and seeding
+    // the id per target gives every target a fresh sizing pass.
     Tooltip::always_open(
         ui.ctx().clone(),
         ui.layer_id(),
-        overlay_id.with("minimap_hover_tooltip"),
+        overlay_id.with(("minimap_hover_tooltip", target)),
         PopupAnchor::Pointer,
     )
     .gap(12.0)
     .show(|ui| {
-        ui.label(text);
+        ui.add(Label::new(text).wrap_mode(TextWrapMode::Extend));
     });
 }
 
