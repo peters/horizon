@@ -141,7 +141,8 @@ impl RuntimeState {
         self.pan_offset = None;
     }
 
-    /// Assigns catalog sessions to legacy `resume: last` panels that were
+    /// Repairs Codex bindings that reference parent-controlled threads, then
+    /// assigns catalog sessions to legacy `resume: last` panels that were
     /// persisted without a session binding.
     ///
     /// `busy_session_ids` lists sessions currently open in a running agent
@@ -152,10 +153,61 @@ impl RuntimeState {
         &mut self,
         catalog: &AgentSessionCatalog,
         busy_session_ids: &HashSet<String>,
-    ) {
+    ) -> bool {
         self.ensure_local_ids();
 
+        let mut changed = false;
         let mut used_session_ids = busy_session_ids.clone();
+        for panel in self.workspaces.iter().flat_map(|workspace| &workspace.panels) {
+            if panel.kind != PanelKind::Codex {
+                continue;
+            }
+            let session_id = panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str())
+                .or(match &panel.resume {
+                    PanelResume::Session { session_id } => Some(session_id.as_str()),
+                    PanelResume::Fresh | PanelResume::Last => None,
+                });
+            if let Some(session_id) = session_id
+                && !catalog.is_parent_controlled_codex_binding(session_id)
+            {
+                used_session_ids.insert(session_id.to_string());
+            }
+        }
+
+        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
+            if panel.kind != PanelKind::Codex {
+                continue;
+            }
+            let session_id = match (&panel.session_binding, &panel.resume) {
+                (Some(binding), _) => Some(binding.session_id.clone()),
+                (None, PanelResume::Session { session_id }) => Some(session_id.clone()),
+                (None, PanelResume::Fresh | PanelResume::Last) => None,
+            };
+            let Some(session_id) = session_id else {
+                continue;
+            };
+            if !catalog.is_parent_controlled_codex_binding(&session_id) {
+                continue;
+            }
+            let canonical_binding = catalog
+                .canonical_codex_binding(&session_id)
+                .filter(|binding| used_session_ids.insert(binding.session_id.clone()));
+            if let Some(canonical_binding) = canonical_binding {
+                if matches!(panel.resume, PanelResume::Session { .. }) {
+                    panel.resume = PanelResume::Session {
+                        session_id: canonical_binding.session_id.clone(),
+                    };
+                }
+                panel.session_binding = Some(canonical_binding);
+            } else {
+                panel.resume = PanelResume::Fresh;
+                panel.session_binding = None;
+            }
+            changed = true;
+        }
 
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
             if !panel.kind.supports_session_binding() {
@@ -172,6 +224,7 @@ impl RuntimeState {
                     Some(panel.name.clone()),
                     None,
                 ));
+                changed = true;
             }
 
             if let Some(binding) = &panel.session_binding {
@@ -198,8 +251,11 @@ impl RuntimeState {
             for (panel, candidate) in panels.into_iter().zip(candidates) {
                 used_session_ids.insert(candidate.session_id.clone());
                 panel.session_binding = Some(candidate.into_binding());
+                changed = true;
             }
         }
+
+        changed
     }
 
     #[must_use]

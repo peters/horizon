@@ -19,7 +19,8 @@ back into large multi-purpose modules.
   `terminal/` leaf modules.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   session discovery and external-store parsing belong in `runtime_state/`
-  helper modules.
+  helper modules. Provider-specific session-store parsing belongs in focused
+  leaves such as `runtime_state/agent_sessions/codex.rs`.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

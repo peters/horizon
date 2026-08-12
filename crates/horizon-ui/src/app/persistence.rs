@@ -24,6 +24,10 @@ impl HorizonApp {
             return;
         };
 
+        if self.pending_startup_runtime_state.is_some() {
+            return;
+        }
+
         let detached_workspaces = self
             .detached_workspaces
             .iter()

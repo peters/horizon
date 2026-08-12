@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -10,11 +10,15 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::opencode_paths::opencode_db_path;
 
-use super::{AgentSessionBinding, PanelKind, normalize_cwd};
+use super::{AgentSessionBinding, PanelKind, PanelResume, RuntimeState, normalize_cwd};
+
+mod codex;
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentSessionCatalog {
     sessions: Vec<AgentSessionRecord>,
+    codex_root_aliases: HashMap<String, AgentSessionRecord>,
+    codex_child_binding_ids: HashSet<String>,
 }
 
 impl AgentSessionCatalog {
@@ -24,12 +28,51 @@ impl AgentSessionCatalog {
     ///
     /// Returns an error if one of the underlying local session stores cannot be opened.
     pub fn load() -> Result<Self> {
-        let mut sessions = load_claude_sessions()?;
-        sessions.extend(load_codex_sessions()?);
-        sessions.extend(load_opencode_sessions()?);
-        sessions.extend(load_pi_sessions()?);
+        Self::load_with_codex_binding_ids(&HashSet::new())
+    }
+
+    /// Load sessions and resolve any persisted Codex bindings that reference
+    /// parent-controlled child threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the underlying local session stores cannot be opened.
+    pub fn load_for_runtime_state(runtime_state: &RuntimeState) -> Result<Self> {
+        let codex_binding_ids = runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| panel.kind == PanelKind::Codex)
+            .filter_map(|panel| match (&panel.session_binding, &panel.resume) {
+                (Some(binding), _) => Some(binding.session_id.as_str()),
+                (None, PanelResume::Session { session_id }) => Some(session_id.as_str()),
+                (None, PanelResume::Fresh | PanelResume::Last) => None,
+            })
+            .map(str::to_owned)
+            .collect();
+        Self::load_with_codex_binding_ids(&codex_binding_ids)
+    }
+
+    fn load_with_codex_binding_ids(codex_binding_ids: &HashSet<String>) -> Result<Self> {
+        let mut sessions = Vec::new();
+        extend_best_effort(&mut sessions, "Claude", load_claude_sessions());
+        let codex = if codex_binding_ids.is_empty() {
+            codex::load_sessions(codex_binding_ids).unwrap_or_else(|error| {
+                tracing::warn!("failed loading Codex sessions: {error}");
+                codex::CodexSessions::default()
+            })
+        } else {
+            codex::load_sessions(codex_binding_ids)?
+        };
+        sessions.extend(codex.sessions);
+        extend_best_effort(&mut sessions, "OpenCode", load_opencode_sessions());
+        extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
         sessions.sort_by_key(|session| Reverse(session.updated_at));
-        Ok(Self { sessions })
+        Ok(Self {
+            sessions,
+            codex_root_aliases: codex.root_aliases,
+            codex_child_binding_ids: codex.child_binding_ids,
+        })
     }
 
     #[must_use]
@@ -47,6 +90,24 @@ impl AgentSessionCatalog {
             })
             .cloned()
             .collect()
+    }
+
+    pub(super) fn canonical_codex_binding(&self, session_id: &str) -> Option<AgentSessionBinding> {
+        self.codex_root_aliases
+            .get(session_id)
+            .cloned()
+            .map(AgentSessionRecord::into_binding)
+    }
+
+    pub(super) fn is_parent_controlled_codex_binding(&self, session_id: &str) -> bool {
+        self.codex_child_binding_ids.contains(session_id)
+    }
+}
+
+fn extend_best_effort(sessions: &mut Vec<AgentSessionRecord>, provider: &str, loaded: Result<Vec<AgentSessionRecord>>) {
+    match loaded {
+        Ok(loaded) => sessions.extend(loaded),
+        Err(error) => tracing::warn!("failed loading {provider} sessions: {error}"),
     }
 }
 
@@ -273,44 +334,6 @@ fn file_updated_at_millis(path: &Path) -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| Error::State(format!("failed to read mtime for {}: {error}", path.display())))?;
     i64::try_from(elapsed.as_millis()).map_err(|error| Error::State(error.to_string()))
-}
-
-fn load_codex_sessions() -> Result<Vec<AgentSessionRecord>> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return Ok(Vec::new());
-    };
-    let sqlite_path = home.join(".codex/state_5.sqlite");
-    if !sqlite_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let connection = Connection::open(sqlite_path).map_err(|error| Error::State(error.to_string()))?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title, cwd, updated_at
-             FROM threads
-             WHERE archived = 0
-             ORDER BY updated_at DESC",
-        )
-        .map_err(|error| Error::State(error.to_string()))?;
-
-    let rows = statement
-        .query_map([], |row| {
-            Ok(AgentSessionRecord {
-                kind: PanelKind::Codex,
-                session_id: row.get(0)?,
-                label: row.get::<_, String>(1).ok().filter(|title| !title.is_empty()),
-                cwd: normalize_cwd(row.get::<_, String>(2).ok().as_deref()),
-                updated_at: row.get::<_, i64>(3)?.saturating_mul(1000),
-            })
-        })
-        .map_err(|error| Error::State(error.to_string()))?;
-
-    let mut sessions = Vec::new();
-    for row in rows {
-        sessions.push(row.map_err(|error| Error::State(error.to_string()))?);
-    }
-    Ok(sessions)
 }
 
 fn load_opencode_sessions() -> Result<Vec<AgentSessionRecord>> {
@@ -598,13 +621,13 @@ fn non_empty_text(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::io::Cursor;
 
     use rusqlite::Connection;
     use uuid::Uuid;
 
-    use super::super::{PanelResume, PanelState, RuntimeState, WorkspaceState};
+    use super::super::{AgentSessionBinding, PanelResume, PanelState, RuntimeState, WorkspaceState};
     use super::{
         AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, PiSessionSummary,
         load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
@@ -679,6 +702,7 @@ mod tests {
                     updated_at: 1,
                 },
             ],
+            ..AgentSessionCatalog::default()
         };
 
         state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new());
@@ -730,6 +754,7 @@ mod tests {
                     updated_at: 1,
                 },
             ],
+            ..AgentSessionCatalog::default()
         };
         let busy = HashSet::from(["session-live".to_string()]);
 
@@ -740,6 +765,212 @@ mod tests {
             .as_ref()
             .map(|binding| binding.session_id.clone());
         assert_eq!(binding.as_deref(), Some("session-free"));
+    }
+
+    #[test]
+    fn bootstrap_repairs_persisted_codex_child_bindings() {
+        let root = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-root".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Root session".to_string()),
+            updated_at: 42,
+        };
+        let catalog = AgentSessionCatalog {
+            sessions: vec![root.clone()],
+            codex_root_aliases: HashMap::from([("session-child".to_string(), root)]),
+            codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
+        };
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Fresh,
+                    session_binding: Some(AgentSessionBinding::new(
+                        PanelKind::Codex,
+                        "session-child".to_string(),
+                        Some("/repo".to_string()),
+                        None,
+                        Some(50),
+                    )),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        let changed = state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new());
+
+        assert!(changed);
+        let panel = &state.workspaces[0].panels[0];
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-root")
+        );
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .and_then(|binding| binding.label.as_deref()),
+            Some("Root session")
+        );
+        assert!(matches!(&panel.resume, PanelResume::Fresh));
+    }
+
+    #[test]
+    fn bootstrap_repairs_an_explicit_codex_child_resume() {
+        let root = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-root".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Root session".to_string()),
+            updated_at: 42,
+        };
+        let catalog = AgentSessionCatalog {
+            sessions: vec![root.clone()],
+            codex_root_aliases: HashMap::from([("session-child".to_string(), root)]),
+            codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
+        };
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Session {
+                        session_id: "session-child".to_string(),
+                    },
+                    session_binding: None,
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
+
+        let panel = &state.workspaces[0].panels[0];
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-root")
+        );
+        assert!(matches!(
+            &panel.resume,
+            PanelResume::Session { session_id } if session_id == "session-root"
+        ));
+    }
+
+    #[test]
+    fn bootstrap_does_not_duplicate_a_root_resume() {
+        let root = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-root".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Root session".to_string()),
+            updated_at: 42,
+        };
+        let catalog = AgentSessionCatalog {
+            sessions: vec![root.clone()],
+            codex_root_aliases: HashMap::from([
+                ("session-child-a".to_string(), root.clone()),
+                ("session-child-b".to_string(), root),
+            ]),
+            codex_child_binding_ids: HashSet::from(["session-child-a".to_string(), "session-child-b".to_string()]),
+        };
+        let binding = |session_id: &str| {
+            AgentSessionBinding::new(
+                PanelKind::Codex,
+                session_id.to_string(),
+                Some("/repo".to_string()),
+                None,
+                Some(50),
+            )
+        };
+        let panel = |local_id: &str, session_id: &str| PanelState {
+            local_id: local_id.to_string(),
+            name: local_id.to_string(),
+            kind: PanelKind::Codex,
+            cwd: Some("/repo".to_string()),
+            resume: PanelResume::Last,
+            session_binding: Some(binding(session_id)),
+            ..PanelState::default()
+        };
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![
+                    panel("root", "session-root"),
+                    panel("child-a", "session-child-a"),
+                    panel("child-b", "session-child-b"),
+                ],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
+
+        assert_eq!(
+            state.workspaces[0].panels[0]
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-root")
+        );
+        for child in &state.workspaces[0].panels[1..] {
+            assert!(child.session_binding.is_none());
+            assert!(matches!(child.resume, PanelResume::Fresh));
+        }
+    }
+
+    #[test]
+    fn bootstrap_neutralizes_an_unresolved_codex_child_binding() {
+        let catalog = AgentSessionCatalog {
+            codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
+            ..AgentSessionCatalog::default()
+        };
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Session {
+                        session_id: "session-child".to_string(),
+                    },
+                    session_binding: None,
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
+
+        let panel = &state.workspaces[0].panels[0];
+        assert!(panel.session_binding.is_none());
+        assert!(matches!(panel.resume, PanelResume::Fresh));
     }
 
     #[test]
@@ -884,7 +1115,10 @@ INSERT INTO session (id, title, directory, parent_id, time_updated, time_archive
         .expect("write other pi session");
 
         let sessions = load_pi_sessions_from_dir(temp_dir.path()).expect("pi sessions");
-        let catalog = AgentSessionCatalog { sessions };
+        let catalog = AgentSessionCatalog {
+            sessions,
+            ..AgentSessionCatalog::default()
+        };
         let repo_sessions = catalog.recent_for(PanelKind::Pi, Some("/repo"));
 
         assert_eq!(repo_sessions.len(), 1);

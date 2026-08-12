@@ -251,8 +251,11 @@ impl HorizonApp {
         }
 
         if !self.poll_startup_bootstrap() {
-            super::session::render_loading_view(ctx);
-            ctx.request_repaint_after(Duration::from_millis(16));
+            self.refresh_active_session_lease();
+            super::session::render_loading_view(ctx, self.startup_bootstrap_failed);
+            if !self.startup_bootstrap_failed {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
             return false;
         }
 

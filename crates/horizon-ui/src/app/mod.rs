@@ -94,6 +94,7 @@ use self::updates::{AvailableUpdate, UpdateCheckMessage};
 struct StartupBootstrap {
     runtime_state: RuntimeState,
     session_catalog: AgentSessionCatalog,
+    runtime_state_changed: bool,
 }
 
 struct ActiveSession {
@@ -241,6 +242,8 @@ pub struct HorizonApp {
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
     startup_receiver: Option<Receiver<StartupBootstrap>>,
+    pending_startup_runtime_state: Option<RuntimeState>,
+    startup_bootstrap_failed: bool,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
     remote_hosts_catalog: RemoteHostCatalog,
@@ -415,6 +418,8 @@ impl HorizonApp {
             pending_detached_window_position_restore: BTreeSet::new(),
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
+            pending_startup_runtime_state: None,
+            startup_bootstrap_failed: false,
             session_catalog_refresh: None,
             remote_hosts_overlay: None,
             remote_hosts_catalog: RemoteHostCatalog::default(),
