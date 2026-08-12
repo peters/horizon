@@ -205,10 +205,9 @@ impl HorizonApp {
             .iter()
             .flat_map(|workspace| &workspace.panels)
             .any(|panel| {
-                (panel.kind.requires_exact_session_validation() && panel.stored_session_id().is_some())
-                    || (panel.kind.supports_session_binding()
-                        && panel.session_binding.is_none()
-                        && matches!(panel.resume, PanelResume::Last))
+                panel.kind.supports_session_binding()
+                    && (panel.stored_session_id().is_some()
+                        || (panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)))
             })
     }
 

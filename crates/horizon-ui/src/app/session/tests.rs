@@ -220,7 +220,7 @@ fn runtime_state_needs_bootstrap_for_an_explicit_codex_session() {
 }
 
 #[test]
-fn runtime_state_skips_bootstrap_for_a_bound_non_codex_panel() {
+fn runtime_state_needs_bootstrap_for_a_bound_non_codex_panel() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_string(),
@@ -244,7 +244,7 @@ fn runtime_state_skips_bootstrap_for_a_bound_non_codex_panel() {
         ..RuntimeState::default()
     };
 
-    assert!(!HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    assert!(HorizonApp::runtime_state_needs_session_bootstrap(&state));
 }
 
 #[test]

@@ -8,14 +8,15 @@ use super::{
 };
 
 impl RuntimeState {
-    /// Repairs exact bindings that reference parent-controlled threads, then
-    /// assigns catalog sessions to legacy `resume: last` panels that were
-    /// persisted without a session binding.
+    /// Repairs exact bindings that reference parent-controlled threads,
+    /// enforces provider-scoped binding uniqueness, then assigns catalog
+    /// sessions to legacy `resume: last` panels that were persisted without a
+    /// session binding.
     ///
     /// `busy_session_ids` lists sessions currently open in a running agent
     /// process (see [`super::live_claude_session_ids`]); those are never
-    /// assigned so a restored panel cannot attach to a conversation that is
-    /// already open elsewhere.
+    /// retained or assigned so a restored panel cannot attach to a
+    /// conversation that is already open elsewhere.
     pub fn bootstrap_missing_agent_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
@@ -57,7 +58,7 @@ impl RuntimeState {
                 changed |= panel.ensure_session_binding(&session_id);
             } else {
                 tracing::warn!(session_id, "discarding a duplicate exact session binding");
-                changed |= neutralize_exact_session(panel);
+                changed |= neutralize_session_binding(panel);
             }
         }
         changed
@@ -88,11 +89,11 @@ impl RuntimeState {
                         canonical_session_id = canonical_binding.session_id,
                         "discarding a parent-controlled binding because its root is already in use"
                     );
-                    changed |= neutralize_exact_session(panel);
+                    changed |= neutralize_session_binding(panel);
                 }
                 agent_sessions::ExactSessionResolution::Stale => {
                     tracing::info!(session_id, "discarding a stale exact session binding");
-                    changed |= neutralize_exact_session(panel);
+                    changed |= neutralize_session_binding(panel);
                 }
                 // Leave unverified ids intact. The caller must block startup
                 // until the operator retries validation or explicitly chooses
@@ -137,9 +138,22 @@ impl RuntimeState {
                 ));
                 changed = true;
             }
-            if let Some(binding) = &panel.session_binding {
-                used_session_keys.insert(AgentSessionKey::new(binding.kind, &binding.session_id));
+            let Some(session_key) = panel
+                .session_binding
+                .as_ref()
+                .map(|binding| AgentSessionKey::new(panel.kind, &binding.session_id))
+            else {
+                continue;
+            };
+            if panel.kind.requires_exact_session_validation() || used_session_keys.insert(session_key) {
+                continue;
             }
+            tracing::warn!(
+                provider = panel.kind.display_name(),
+                session_id = panel.stored_session_id(),
+                "discarding a duplicate session binding"
+            );
+            changed |= neutralize_session_binding(panel);
         }
         changed
     }
@@ -198,7 +212,7 @@ impl RuntimeState {
             {
                 continue;
             }
-            changed |= neutralize_exact_session(panel);
+            changed |= neutralize_session_binding(panel);
         }
         changed
     }
@@ -218,7 +232,7 @@ impl RuntimeState {
     }
 }
 
-fn neutralize_exact_session(panel: &mut PanelState) -> bool {
+fn neutralize_session_binding(panel: &mut PanelState) -> bool {
     let mut changed = panel.session_binding.take().is_some();
     if matches!(panel.resume, PanelResume::Session { .. }) {
         panel.resume = PanelResume::Fresh;
