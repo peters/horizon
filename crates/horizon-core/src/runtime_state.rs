@@ -158,8 +158,8 @@ impl RuntimeState {
 
         let mut used_session_ids = busy_session_ids.clone();
         let mut changed = self.validate_verified_bindings(catalog, &mut used_session_ids);
-        changed |= self.repair_or_retain_exact_bindings(catalog, &mut used_session_ids);
-        changed |= self.materialize_explicit_bindings(&mut used_session_ids);
+        changed |= self.repair_parent_controlled_exact_bindings(catalog, &mut used_session_ids);
+        changed |= self.materialize_explicit_bindings(catalog, &mut used_session_ids);
         changed |= self.assign_last_bindings(catalog, &mut used_session_ids);
         changed
     }
@@ -186,14 +186,14 @@ impl RuntimeState {
             if used_session_ids.insert(session_id.clone()) {
                 changed |= panel.set_resumable_session_id(session_id);
             } else {
-                tracing::warn!(session_id, "retaining a duplicate exact session id without resuming it");
-                changed |= panel.retain_unresumable_session_id(session_id);
+                tracing::warn!(session_id, "discarding a duplicate exact session binding");
+                changed |= neutralize_exact_session(panel);
             }
         }
         changed
     }
 
-    fn repair_or_retain_exact_bindings(
+    fn repair_parent_controlled_exact_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
         used_session_ids: &mut HashSet<String>,
@@ -207,7 +207,6 @@ impl RuntimeState {
                 continue;
             };
             match catalog.exact_resolution(panel.kind, &session_id) {
-                agent_sessions::ExactSessionResolution::Verified => {}
                 agent_sessions::ExactSessionResolution::Rebind(canonical_binding)
                     if used_session_ids.insert(canonical_binding.session_id.clone()) =>
                 {
@@ -217,26 +216,38 @@ impl RuntimeState {
                     tracing::warn!(
                         child_session_id = session_id,
                         canonical_session_id = canonical_binding.session_id,
-                        "retaining a parent-controlled binding because its root is already in use"
+                        "discarding a parent-controlled binding because its root is already in use"
                     );
-                    changed |= panel.retain_unresumable_session_id(session_id);
+                    changed |= neutralize_exact_session(panel);
                 }
-                agent_sessions::ExactSessionResolution::Unavailable => {
-                    tracing::warn!(
-                        session_id,
-                        "retaining an unverified session id without passing it to the agent process"
-                    );
-                    changed |= panel.retain_unresumable_session_id(session_id);
-                }
+                // Leave unverified ids intact. The caller must block startup
+                // until the operator retries validation or explicitly chooses
+                // the scoped safe-open recovery path.
+                agent_sessions::ExactSessionResolution::Verified
+                | agent_sessions::ExactSessionResolution::Unavailable => {}
             }
         }
         changed
     }
 
-    fn materialize_explicit_bindings(&mut self, used_session_ids: &mut HashSet<String>) -> bool {
+    fn materialize_explicit_bindings(
+        &mut self,
+        catalog: &AgentSessionBootstrapCatalog,
+        used_session_ids: &mut HashSet<String>,
+    ) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
             if !panel.kind.supports_session_binding() {
+                continue;
+            }
+            if panel.kind.requires_exact_session_validation()
+                && panel.stored_session_id().is_some_and(|session_id| {
+                    matches!(
+                        catalog.exact_resolution(panel.kind, session_id),
+                        agent_sessions::ExactSessionResolution::Unavailable
+                    )
+                })
+            {
                 continue;
             }
             if panel.session_binding.is_none()
@@ -289,23 +300,38 @@ impl RuntimeState {
         changed
     }
 
-    /// Keep exact ids that could not be validated while preventing them from
-    /// reaching an agent process.
+    /// Remove only exact resumes that could not be validated.
     ///
     /// This is the explicit recovery path offered after startup validation
-    /// fails. Exact session requests become fresh launches so an unverified
-    /// parent-controlled id is never passed to the agent process.
-    pub fn retain_unverified_session_bindings(&mut self) -> bool {
+    /// fails. Explicit session requests become fresh launches; `resume: last`
+    /// remains configured but loses the unsafe captured binding.
+    pub fn neutralize_unverified_session_bindings(&mut self, unavailable_session_ids: &HashSet<String>) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
-            if !panel.kind.requires_exact_session_validation() {
+            if !panel.kind.requires_exact_session_validation()
+                || !panel
+                    .stored_session_id()
+                    .is_some_and(|session_id| unavailable_session_ids.contains(session_id))
+            {
                 continue;
             }
-            if let Some(session_id) = panel.stored_session_id().map(str::to_owned) {
-                changed |= panel.retain_unresumable_session_id(session_id);
-            }
+            changed |= neutralize_exact_session(panel);
         }
         changed
+    }
+
+    /// All persisted exact ids whose provider requires validation before
+    /// launch. This is the conservative recovery scope when validation stops
+    /// before it can report per-id results.
+    #[must_use]
+    pub fn exact_session_ids_requiring_validation(&self) -> HashSet<String> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| panel.kind.requires_exact_session_validation())
+            .filter_map(PanelState::stored_session_id)
+            .map(str::to_owned)
+            .collect()
     }
 
     #[must_use]
@@ -395,6 +421,15 @@ impl RuntimeState {
             workspaces,
         }
     }
+}
+
+fn neutralize_exact_session(panel: &mut PanelState) -> bool {
+    let mut changed = panel.session_binding.take().is_some();
+    if matches!(panel.resume, PanelResume::Session { .. }) {
+        panel.resume = PanelResume::Fresh;
+        changed = true;
+    }
+    changed
 }
 
 impl Default for RuntimeState {
@@ -584,33 +619,6 @@ impl PanelState {
         let changed = self.resume != resume || self.session_binding.as_ref() != Some(&binding);
         self.resume = resume;
         self.session_binding = Some(binding);
-        changed
-    }
-
-    fn retain_unresumable_session_id(&mut self, session_id: String) -> bool {
-        let mut changed = false;
-        let binding = self.session_binding.get_or_insert_with(|| {
-            changed = true;
-            AgentSessionBinding::new(
-                self.kind,
-                session_id.clone(),
-                self.cwd.clone(),
-                Some(self.name.clone()),
-                None,
-            )
-        });
-        if binding.session_id != session_id {
-            binding.session_id = session_id;
-            changed = true;
-        }
-        if binding.resumable {
-            binding.resumable = false;
-            changed = true;
-        }
-        if matches!(self.resume, PanelResume::Session { .. }) {
-            self.resume = PanelResume::Fresh;
-            changed = true;
-        }
         changed
     }
 

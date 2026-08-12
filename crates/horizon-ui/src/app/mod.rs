@@ -27,7 +27,7 @@ mod view;
 mod workspace;
 mod yaml_highlight;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -97,13 +97,28 @@ struct StartupBootstrap {
     runtime_state_changed: bool,
 }
 
+struct StartupBootstrapValidationFailure {
+    runtime_state: RuntimeState,
+    message: String,
+    unavailable_exact_session_ids: HashSet<String>,
+    runtime_state_changed: bool,
+}
+
 enum StartupBootstrapOutcome {
     Ready(Box<StartupBootstrap>),
+    ExactValidationFailed(Box<StartupBootstrapValidationFailure>),
 }
 
 enum StartupBootstrapFailure {
+    ExactValidationFailed {
+        message: String,
+        unavailable_exact_session_ids: HashSet<String>,
+    },
     WorkerDisconnected,
-    RecoverySaveFailed(String),
+    RecoverySaveFailed {
+        message: String,
+        unavailable_exact_session_ids: HashSet<String>,
+    },
 }
 
 struct ActiveSession {
@@ -252,6 +267,7 @@ pub struct HorizonApp {
     session_catalog: AgentSessionCatalog,
     startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
     pending_startup_runtime_state: Option<RuntimeState>,
+    pending_startup_runtime_state_changed: bool,
     startup_bootstrap_failure: Option<StartupBootstrapFailure>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
@@ -428,6 +444,7 @@ impl HorizonApp {
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
             pending_startup_runtime_state: None,
+            pending_startup_runtime_state_changed: false,
             startup_bootstrap_failure: None,
             session_catalog_refresh: None,
             remote_hosts_overlay: None,

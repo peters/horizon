@@ -963,7 +963,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use egui::Context;
-    use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
+    use horizon_core::{
+        Config, HorizonHome, PanelId, RuntimeState, SessionLease, SessionOpenDisposition, SessionStore, StartupDecision,
+    };
     use tempfile::TempDir;
 
     use super::{
@@ -993,6 +995,29 @@ mod tests {
         (temp, app)
     }
 
+    fn persistent_test_app() -> (TempDir, HorizonApp, std::path::PathBuf) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let session_store = SessionStore::new(home.clone(), config_path.clone());
+        let session = session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .expect("create persistent session");
+        let lease_path = home.session_lease_path(&session.session_id);
+        let app = HorizonApp::new_with_egui_context(
+            &Context::default(),
+            &Config::default(),
+            config_path,
+            session_store,
+            StartupDecision::Open {
+                disposition: SessionOpenDisposition::New,
+                session: Box::new(session),
+            },
+            input::ObservedKeyboardInputs::default(),
+        );
+        (temp, app, lease_path)
+    }
+
     #[test]
     fn finalize_frame_requests_repaint_when_theme_application_is_deferred() {
         let ctx = Context::default();
@@ -1010,19 +1035,9 @@ mod tests {
     }
 
     #[test]
-    fn failed_startup_bootstrap_keeps_a_slow_lease_heartbeat() {
+    fn failed_startup_bootstrap_keeps_a_slow_repaint() {
         let ctx = Context::default();
         let (_temp, mut app) = test_app();
-        let session = app
-            .session_store
-            .create_session_from_runtime(RuntimeState::default())
-            .expect("create persistent session");
-        app.activate_persistent_session(&session);
-        let now = Instant::now();
-        let stale_refresh = now.checked_sub(Duration::from_secs(3)).unwrap_or(now);
-        let active_session = app.active_session.as_mut().expect("active persistent session");
-        assert!(active_session.lease.is_some());
-        active_session.last_lease_refresh = Some(stale_refresh);
         app.startup_bootstrap_failure = Some(super::super::StartupBootstrapFailure::WorkerDisconnected);
 
         let mut repaint_delay = Duration::ZERO;
@@ -1042,11 +1057,35 @@ mod tests {
 
         assert!(!repaint_delay.is_zero());
         assert!(repaint_delay <= STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL);
+    }
+
+    #[test]
+    fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
+        let ctx = Context::default();
+        let (_temp, mut app, lease_path) = persistent_test_app();
+        let before: SessionLease =
+            serde_yaml::from_str(&std::fs::read_to_string(&lease_path).expect("read acquired lease"))
+                .expect("parse acquired lease");
+        std::thread::sleep(Duration::from_millis(2));
+        app.active_session
+            .as_mut()
+            .expect("active persistent session")
+            .last_lease_refresh = None;
+        app.startup_bootstrap_failure = Some(super::super::StartupBootstrapFailure::WorkerDisconnected);
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(!app.prepare_frame(ctx));
+        });
+
+        let after: SessionLease =
+            serde_yaml::from_str(&std::fs::read_to_string(lease_path).expect("read refreshed lease"))
+                .expect("parse refreshed lease");
+        assert!(after.last_heartbeat_at > before.last_heartbeat_at);
         assert!(
             app.active_session
                 .as_ref()
                 .and_then(|session| session.last_lease_refresh)
-                .is_some_and(|last_refresh| last_refresh > stale_refresh)
+                .is_some()
         );
     }
 

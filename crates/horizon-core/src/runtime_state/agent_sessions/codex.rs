@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, Row, params};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -12,7 +12,7 @@ use crate::local_store::{codex_db_path, open_read_only_sqlite};
 use super::{AgentSessionRecord, PanelKind, normalize_cwd};
 
 const MAX_PARENT_CANDIDATE_STEPS: usize = 64;
-const MAX_TOTAL_PARENT_TRAVERSAL_STEPS: usize = MAX_PARENT_CANDIDATE_STEPS * 2;
+const MAX_PARENT_TRAVERSAL_STEPS_PER_BINDING: usize = MAX_PARENT_CANDIDATE_STEPS * 2;
 const MAX_MALFORMED_ROW_WARNINGS: usize = 3;
 const MAX_ROLLOUT_METADATA_BYTES: u64 = 1024 * 1024;
 
@@ -52,15 +52,6 @@ pub(super) struct CodexSessions {
     pub(super) unavailable_binding_ids: HashSet<String>,
 }
 
-impl CodexSessions {
-    pub(super) fn unavailable(binding_ids: &HashSet<String>) -> Self {
-        Self {
-            unavailable_binding_ids: binding_ids.clone(),
-            ..Self::default()
-        }
-    }
-}
-
 #[derive(Clone)]
 struct CodexThread {
     rollout_path: Option<PathBuf>,
@@ -96,33 +87,36 @@ impl CodexStore {
         }
     }
 
-    fn thread(&mut self, thread_id: &str) -> std::result::Result<Option<CodexThread>, String> {
+    fn thread(&mut self, thread_id: &str) -> Result<CachedThread> {
         if let Some(cached) = self.threads.get(thread_id) {
-            return match cached {
-                CachedThread::Found(thread) => Ok(Some(thread.clone())),
-                CachedThread::Missing => Ok(None),
-                CachedThread::Unavailable(error) => Err(error.clone()),
-            };
+            return Ok(cached.clone());
         }
 
-        let loaded = self
-            .connection
-            .query_row(
-                "SELECT id, rollout_path, source, title, cwd, updated_at, archived
+        let cached = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT id, rollout_path, source, substr(title, 1, 256), cwd, updated_at, archived
                  FROM threads
                  WHERE id = ?1",
-                params![thread_id],
-                decode_thread,
-            )
-            .optional()
-            .map_err(|error| error.to_string());
-        let cached = match loaded {
-            Ok(Some(thread)) => CachedThread::Found(thread),
-            Ok(None) => CachedThread::Missing,
-            Err(error) => CachedThread::Unavailable(error),
+                )
+                .map_err(|error| Error::State(format!("failed preparing Codex thread lookup: {error}")))?;
+            let mut rows = statement
+                .query(params![thread_id])
+                .map_err(|error| Error::State(format!("failed querying Codex thread metadata: {error}")))?;
+            match rows
+                .next()
+                .map_err(|error| Error::State(format!("failed reading Codex thread metadata: {error}")))?
+            {
+                Some(row) => match decode_thread(row) {
+                    Ok(thread) => CachedThread::Found(thread),
+                    Err(error) => CachedThread::Unavailable(error.to_string()),
+                },
+                None => CachedThread::Missing,
+            }
         };
-        self.threads.insert(thread_id.to_string(), cached);
-        self.thread(thread_id)
+        self.threads.insert(thread_id.to_string(), cached.clone());
+        Ok(cached)
     }
 }
 
@@ -130,7 +124,7 @@ struct RootTraversal<'a> {
     store: &'a mut CodexStore,
     rollout_metadata: RolloutMetadataCache,
     memoized: HashMap<(String, String), RootResolution>,
-    remaining_total_steps: usize,
+    remaining_binding_steps: usize,
 }
 
 impl<'a> RootTraversal<'a> {
@@ -139,45 +133,46 @@ impl<'a> RootTraversal<'a> {
             store,
             rollout_metadata: RolloutMetadataCache::default(),
             memoized: HashMap::new(),
-            remaining_total_steps: MAX_TOTAL_PARENT_TRAVERSAL_STEPS,
+            remaining_binding_steps: MAX_PARENT_TRAVERSAL_STEPS_PER_BINDING,
         }
     }
 
-    fn binding(&mut self, binding_id: &str) -> BindingResolution {
-        let loaded = self.store.thread(binding_id);
-        let thread = match loaded {
-            Ok(thread) => thread,
-            Err(error) => {
+    fn binding(&mut self, binding_id: &str) -> Result<BindingResolution> {
+        self.remaining_binding_steps = MAX_PARENT_TRAVERSAL_STEPS_PER_BINDING;
+        let thread = match self.store.thread(binding_id)? {
+            CachedThread::Found(thread) => thread,
+            CachedThread::Missing => return Ok(BindingResolution::Unavailable),
+            CachedThread::Unavailable(error) => {
                 tracing::warn!(thread_id = binding_id, %error, "failed decoding saved Codex thread metadata");
-                return BindingResolution::Unavailable;
+                return Ok(BindingResolution::Unavailable);
             }
         };
-        let Some(thread) = thread else {
-            return BindingResolution::Unavailable;
-        };
         if !thread.source.is_parent_controlled {
-            return BindingResolution::VerifiedRoot;
+            return Ok(if thread.archived {
+                BindingResolution::Unavailable
+            } else {
+                BindingResolution::VerifiedRoot
+            });
         }
 
         let Some(expected_cwd) = thread.record.cwd.as_deref() else {
-            return BindingResolution::Unavailable;
+            return Ok(BindingResolution::Unavailable);
         };
         let metadata_parent = thread
             .rollout_path
             .as_deref()
             .and_then(|path| self.rollout_metadata.parent_id(path, binding_id));
         let source_parent = thread.source.parent_thread_id.as_deref();
-        let metadata_resolution = metadata_parent
-            .as_deref()
-            .map_or(RootResolution::Rejected, |parent_id| {
-                self.resolve_candidate(parent_id, expected_cwd)
-            });
+        let metadata_resolution = match metadata_parent.as_deref() {
+            Some(parent_id) => self.resolve_candidate(parent_id, expected_cwd)?,
+            None => RootResolution::Rejected,
+        };
         let resolution = match metadata_resolution {
             RootResolution::Resolved(root) => RootResolution::Resolved(root),
             metadata_resolution => {
                 let source_resolution = match source_parent {
                     Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution.clone(),
-                    Some(parent_id) => self.resolve_candidate(parent_id, expected_cwd),
+                    Some(parent_id) => self.resolve_candidate(parent_id, expected_cwd)?,
                     None => RootResolution::Rejected,
                 };
                 match source_resolution {
@@ -186,18 +181,18 @@ impl<'a> RootTraversal<'a> {
                 }
             }
         };
-        match resolution {
+        Ok(match resolution {
             RootResolution::Resolved(root) => BindingResolution::Rebind(root),
             RootResolution::Rejected
             | RootResolution::CycleDetected
             | RootResolution::BudgetExhausted
             | RootResolution::Unavailable => BindingResolution::Unavailable,
-        }
+        })
     }
 
-    fn resolve_candidate(&mut self, parent_id: &str, expected_cwd: &str) -> RootResolution {
+    fn resolve_candidate(&mut self, parent_id: &str, expected_cwd: &str) -> Result<RootResolution> {
         let mut active = HashSet::new();
-        let remaining_candidate_steps = MAX_PARENT_CANDIDATE_STEPS.min(self.remaining_total_steps);
+        let remaining_candidate_steps = MAX_PARENT_CANDIDATE_STEPS.min(self.remaining_binding_steps);
         self.resolve_parent(parent_id, expected_cwd, remaining_candidate_steps, &mut active)
     }
 
@@ -207,23 +202,23 @@ impl<'a> RootTraversal<'a> {
         expected_cwd: &str,
         remaining_candidate_steps: usize,
         active: &mut HashSet<String>,
-    ) -> RootResolution {
-        let thread = match self.store.thread(parent_id) {
-            Ok(Some(thread)) => thread,
-            Ok(None) => return RootResolution::Rejected,
-            Err(_) => return RootResolution::Unavailable,
-        };
-        let key = (thread.record.session_id.clone(), expected_cwd.to_string());
+    ) -> Result<RootResolution> {
+        let key = (parent_id.to_string(), expected_cwd.to_string());
         if let Some(resolution) = self.memoized.get(&key) {
-            return resolution.clone();
+            return Ok(resolution.clone());
         }
-        if active.contains(&thread.record.session_id) {
-            return RootResolution::CycleDetected;
+        if active.contains(parent_id) {
+            return Ok(RootResolution::CycleDetected);
         }
-        if remaining_candidate_steps == 0 || self.remaining_total_steps == 0 {
-            return RootResolution::BudgetExhausted;
+        if remaining_candidate_steps == 0 || self.remaining_binding_steps == 0 {
+            return Ok(RootResolution::BudgetExhausted);
         }
-        self.remaining_total_steps -= 1;
+        let thread = match self.store.thread(parent_id)? {
+            CachedThread::Found(thread) => thread,
+            CachedThread::Missing => return Ok(RootResolution::Rejected),
+            CachedThread::Unavailable(_) => return Ok(RootResolution::Unavailable),
+        };
+        self.remaining_binding_steps -= 1;
         let next_candidate_steps = remaining_candidate_steps - 1;
 
         if !thread.source.is_parent_controlled {
@@ -233,7 +228,11 @@ impl<'a> RootTraversal<'a> {
                 RootResolution::Rejected
             };
             self.memoized.insert(key, resolution.clone());
-            return resolution;
+            return Ok(resolution);
+        }
+
+        if next_candidate_steps == 0 || self.remaining_binding_steps == 0 {
+            return Ok(RootResolution::BudgetExhausted);
         }
 
         active.insert(thread.record.session_id.clone());
@@ -241,17 +240,16 @@ impl<'a> RootTraversal<'a> {
             .rollout_path
             .as_deref()
             .and_then(|path| self.rollout_metadata.parent_id(path, &thread.record.session_id));
-        let metadata_resolution = metadata_parent
-            .as_deref()
-            .map_or(RootResolution::Rejected, |parent_id| {
-                self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active)
-            });
+        let metadata_resolution = match metadata_parent.as_deref() {
+            Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active)?,
+            None => RootResolution::Rejected,
+        };
         let resolution = match metadata_resolution {
             RootResolution::Resolved(root) => RootResolution::Resolved(root),
             metadata_resolution => {
                 let source_resolution = match thread.source.parent_thread_id.as_deref() {
                     Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution.clone(),
-                    Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active),
+                    Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active)?,
                     None => RootResolution::Rejected,
                 };
                 match source_resolution {
@@ -264,7 +262,7 @@ impl<'a> RootTraversal<'a> {
         if resolution.is_memoizable() {
             self.memoized.insert(key, resolution.clone());
         }
-        resolution
+        Ok(resolution)
     }
 }
 
@@ -275,11 +273,27 @@ enum BindingResolution {
 }
 
 pub(super) fn load_sessions(binding_ids: &HashSet<String>, include_session_catalog: bool) -> Result<CodexSessions> {
+    if binding_ids.is_empty() && !include_session_catalog {
+        return Ok(CodexSessions::default());
+    }
     let Some(sqlite_path) = codex_db_path() else {
-        return Ok(CodexSessions::unavailable(binding_ids));
+        return if binding_ids.is_empty() {
+            Ok(CodexSessions::default())
+        } else {
+            Err(Error::State(
+                "cannot validate saved Codex sessions without a Codex state directory".to_string(),
+            ))
+        };
     };
     if !sqlite_path.exists() {
-        return Ok(CodexSessions::unavailable(binding_ids));
+        return if binding_ids.is_empty() {
+            Ok(CodexSessions::default())
+        } else {
+            Err(Error::State(format!(
+                "cannot validate saved Codex sessions because {} is missing",
+                sqlite_path.display()
+            )))
+        };
     }
     load_sessions_from_path_with_catalog(&sqlite_path, binding_ids, include_session_catalog)
 }
@@ -289,6 +303,9 @@ fn load_sessions_from_path_with_catalog(
     binding_ids: &HashSet<String>,
     include_session_catalog: bool,
 ) -> Result<CodexSessions> {
+    if binding_ids.is_empty() && !include_session_catalog {
+        return Ok(CodexSessions::default());
+    }
     let connection = open_read_only_sqlite(sqlite_path)?;
     let sessions = if include_session_catalog {
         load_active_sessions(&connection)?
@@ -305,7 +322,7 @@ fn load_sessions_from_path_with_catalog(
     let mut sorted_binding_ids: Vec<_> = binding_ids.iter().collect();
     sorted_binding_ids.sort_unstable();
     for binding_id in sorted_binding_ids {
-        match traversal.binding(binding_id) {
+        match traversal.binding(binding_id)? {
             BindingResolution::VerifiedRoot => {
                 loaded.verified_binding_ids.insert(binding_id.clone());
             }
@@ -326,14 +343,11 @@ fn load_sessions_from_path_with_catalog(
 fn load_active_sessions(connection: &Connection) -> Result<Vec<AgentSessionRecord>> {
     let mut statement = connection
         .prepare(
-            "SELECT id, title, cwd, updated_at
+            "SELECT id, substr(title, 1, 256), cwd, updated_at
              FROM threads
              WHERE archived = 0
                AND typeof(source) = 'text'
-               AND (
-                   substr(ltrim(source), 1, 1) != '{'
-                   OR (json_valid(source) = 1 AND json_type(source, '$.subagent') IS NULL)
-               )
+               AND trim(source) IN ('cli', 'vscode', 'exec')
              ORDER BY updated_at DESC",
         )
         .map_err(|error| Error::State(error.to_string()))?;
@@ -460,6 +474,9 @@ impl RolloutMetadataCache {
 }
 
 fn read_rollout_metadata(path: &Path) -> Option<RolloutMetadata> {
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
@@ -481,14 +498,23 @@ fn read_rollout_metadata(path: &Path) -> Option<RolloutMetadata> {
 }
 
 fn parse_thread_source(source: &str) -> CodexThreadSource {
-    let Ok(Value::Object(source)) = serde_json::from_str(source) else {
+    let source = match serde_json::from_str(source) {
+        Ok(Value::Object(source)) => source,
+        Err(_) if matches!(source.trim(), "cli" | "vscode" | "exec") => {
+            return CodexThreadSource::default();
+        }
+        Ok(_) | Err(_) => {
+            return CodexThreadSource {
+                malformed: true,
+                ..CodexThreadSource::default()
+            };
+        }
+    };
+    let Some(subagent) = source.get("subagent").filter(|subagent| !subagent.is_null()) else {
         return CodexThreadSource {
-            malformed: source.trim_start().starts_with('{'),
+            malformed: true,
             ..CodexThreadSource::default()
         };
-    };
-    let Some(subagent) = source.get("subagent") else {
-        return CodexThreadSource::default();
     };
     CodexThreadSource {
         is_parent_controlled: true,

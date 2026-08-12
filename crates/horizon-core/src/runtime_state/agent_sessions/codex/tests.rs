@@ -4,7 +4,10 @@ use rusqlite::{Connection, params};
 
 use super::{CodexSessions, load_sessions_from_path_with_catalog};
 
+mod labels;
+mod limits;
 mod rollout;
+mod store;
 
 fn load_sessions_from_path(
     sqlite_path: &std::path::Path,
@@ -166,34 +169,6 @@ fn catalog_reports_a_decode_error_when_no_active_row_is_usable() {
 }
 
 #[test]
-fn exact_validation_skips_the_active_catalog_query() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let sqlite_path = temp.path().join("state_5.sqlite");
-    let connection = create_threads_db(&sqlite_path);
-    connection
-        .execute(
-            "INSERT INTO threads (id, rollout_path, source, title, cwd, updated_at, archived)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params!["root", "/tmp/root.jsonl", "cli", "Root", "/repo", 1_i64, false],
-        )
-        .expect("insert root");
-    connection
-        .execute(
-            "INSERT INTO threads (id, rollout_path, source, title, cwd, updated_at, archived)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params!["bad", "/tmp/bad.jsonl", "cli", "Bad", "/repo", vec![1_u8], false],
-        )
-        .expect("insert malformed timestamp");
-    drop(connection);
-
-    let loaded = load_sessions_from_path_with_catalog(&sqlite_path, &HashSet::from(["root".to_string()]), false)
-        .expect("targeted exact validation");
-
-    assert!(loaded.sessions.is_empty());
-    assert!(loaded.verified_binding_ids.contains("root"));
-}
-
-#[test]
 fn exact_binding_validation_rejects_a_malformed_row() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
@@ -223,7 +198,7 @@ fn exact_binding_validation_rejects_a_malformed_row() {
 }
 
 #[test]
-fn malformed_json_sources_do_not_become_interactive_roots() {
+fn malformed_structured_sources_do_not_become_interactive_roots() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     let connection = create_threads_db(&sqlite_path);
@@ -238,12 +213,45 @@ fn malformed_json_sources_do_not_become_interactive_roots() {
         200,
         false,
     );
+    for (id, source) in malformed_structured_sources() {
+        insert_thread(&connection, id, &unused_rollout, source, "/repo", 200, false);
+    }
     drop(connection);
 
     let loaded = load_sessions_from_path(&sqlite_path, &HashSet::new()).expect("load Codex sessions");
 
     assert_eq!(loaded.sessions.len(), 1);
     assert_eq!(loaded.sessions[0].session_id, "root");
+}
+
+#[test]
+fn malformed_structured_sources_are_unavailable_for_exact_validation() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    let unused_rollout = temp.path().join("unused.jsonl");
+    let binding_ids = malformed_structured_sources()
+        .into_iter()
+        .map(|(id, source)| {
+            insert_thread(&connection, id, &unused_rollout, source, "/repo", 200, false);
+            id.to_string()
+        })
+        .collect();
+    drop(connection);
+
+    let loaded = load_sessions_from_path(&sqlite_path, &binding_ids).expect("load Codex sessions");
+
+    assert_eq!(loaded.unavailable_binding_ids, binding_ids);
+    assert!(loaded.verified_binding_ids.is_empty());
+    assert!(loaded.root_aliases.is_empty());
+}
+
+fn malformed_structured_sources() -> [(&'static str, &'static str); 3] {
+    [
+        ("empty-object", "{}"),
+        ("array", "[]"),
+        ("null-subagent", r#"{"subagent":null}"#),
+    ]
 }
 
 #[test]
@@ -911,4 +919,27 @@ fn missing_binding_does_not_invalidate_a_verified_root() {
 
     assert!(loaded.verified_binding_ids.contains("root"));
     assert!(loaded.unavailable_binding_ids.contains("missing"));
+}
+
+#[test]
+fn archived_direct_binding_is_unavailable_for_exact_validation() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    insert_thread(
+        &connection,
+        "archived-root",
+        &temp.path().join("root.jsonl"),
+        "cli",
+        "/repo",
+        1,
+        true,
+    );
+    drop(connection);
+
+    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::from(["archived-root".to_string()]))
+        .expect("validate archived binding");
+
+    assert!(loaded.unavailable_binding_ids.contains("archived-root"));
+    assert!(!loaded.verified_binding_ids.contains("archived-root"));
 }
