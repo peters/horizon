@@ -54,9 +54,10 @@ impl AgentSessionCatalog {
     /// # Errors
     ///
     /// Returns an error when a provider declares exact-session validation but
-    /// has no validator implementation. Missing or unreadable local stores
-    /// are treated as stale bindings so startup can safely fall back to fresh
-    /// launches. Optional provider discovery remains best-effort.
+    /// has no validator implementation, or when an existing Codex store cannot
+    /// validate saved exact IDs. A missing supported Codex store classifies
+    /// those IDs as stale so startup can safely fall back to fresh launches;
+    /// optional provider discovery remains best-effort.
     pub fn load_for_runtime_state(runtime_state: &RuntimeState) -> Result<AgentSessionBootstrapCatalog> {
         let exact_binding_ids: HashMap<PanelKind, HashSet<String>> = runtime_state
             .workspaces
@@ -107,20 +108,6 @@ impl AgentSessionCatalog {
             Self::from_provider_sessions(sessions, &codex),
             codex,
         ))
-    }
-
-    #[must_use]
-    pub fn needs_recent_for_runtime_state(runtime_state: &RuntimeState, kind: PanelKind) -> bool {
-        runtime_state
-            .workspaces
-            .iter()
-            .flat_map(|workspace| &workspace.panels)
-            .any(|panel| {
-                panel.kind == kind
-                    && panel.kind.supports_session_binding()
-                    && panel.session_binding.is_none()
-                    && matches!(panel.resume, super::PanelResume::Last)
-            })
     }
 
     fn has_provider_panel(runtime_state: &RuntimeState, kind: PanelKind) -> bool {

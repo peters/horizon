@@ -75,7 +75,7 @@ fn bootstrap_catalog(
 }
 
 #[test]
-fn only_unbound_last_panels_need_recent_provider_sessions() {
+fn exact_or_unbound_last_panels_need_binding_bootstrap() {
     let runtime_state = RuntimeState {
         workspaces: vec![WorkspaceState {
             panels: vec![
@@ -107,15 +107,11 @@ fn only_unbound_last_panels_need_recent_provider_sessions() {
         ..RuntimeState::default()
     };
 
-    assert!(AgentSessionCatalog::needs_recent_for_runtime_state(
-        &runtime_state,
-        PanelKind::Claude
-    ));
-    for kind in [PanelKind::Codex, PanelKind::OpenCode, PanelKind::Pi] {
-        assert!(!AgentSessionCatalog::needs_recent_for_runtime_state(
-            &runtime_state,
-            kind
-        ));
+    assert!(runtime_state.needs_agent_binding_bootstrap());
+    assert!(runtime_state.needs_agent_binding_bootstrap_for(PanelKind::Claude));
+    assert!(runtime_state.needs_agent_binding_bootstrap_for(PanelKind::Codex));
+    for kind in [PanelKind::OpenCode, PanelKind::Pi] {
+        assert!(!runtime_state.needs_agent_binding_bootstrap_for(kind));
     }
 }
 
@@ -287,6 +283,13 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
                 kind: PanelKind::Claude,
                 cwd: Some("/repo".to_string()),
                 resume: PanelResume::Last,
+                session_binding: Some(AgentSessionBinding::new(
+                    PanelKind::Claude,
+                    "session-live".to_string(),
+                    Some("/repo".to_string()),
+                    None,
+                    None,
+                )),
                 ..PanelState::default()
             }],
         }],

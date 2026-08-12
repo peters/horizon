@@ -200,15 +200,7 @@ impl HorizonApp {
     }
 
     pub(super) fn runtime_state_needs_session_bootstrap(runtime_state: &horizon_core::RuntimeState) -> bool {
-        runtime_state
-            .workspaces
-            .iter()
-            .flat_map(|workspace| &workspace.panels)
-            .any(|panel| {
-                panel.kind.supports_session_binding()
-                    && (panel.stored_session_id().is_some()
-                        || (panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)))
-            })
+        runtime_state.needs_agent_binding_bootstrap()
     }
 
     pub(super) fn spawn_startup_bootstrap(
@@ -217,8 +209,7 @@ impl HorizonApp {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let exact_session_ids = runtime_state.exact_session_ids_requiring_validation();
-            let needs_live_claude_sessions =
-                AgentSessionCatalog::needs_recent_for_runtime_state(&runtime_state, PanelKind::Claude);
+            let needs_live_claude_sessions = runtime_state.needs_agent_binding_bootstrap_for(PanelKind::Claude);
             let bootstrap_catalog = match AgentSessionCatalog::load_for_runtime_state(&runtime_state) {
                 Ok(catalog) => catalog,
                 Err(error) => {

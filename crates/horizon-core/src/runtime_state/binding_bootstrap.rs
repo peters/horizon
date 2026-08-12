@@ -8,6 +8,22 @@ use super::{
 };
 
 impl RuntimeState {
+    #[must_use]
+    pub fn needs_agent_binding_bootstrap(&self) -> bool {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(panel_needs_agent_binding_bootstrap)
+    }
+
+    #[must_use]
+    pub fn needs_agent_binding_bootstrap_for(&self, kind: PanelKind) -> bool {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(|panel| panel.kind == kind && panel_needs_agent_binding_bootstrap(panel))
+    }
+
     /// Repairs exact bindings that reference parent-controlled threads,
     /// enforces provider-scoped binding uniqueness, then assigns catalog
     /// sessions to legacy `resume: last` panels that were persisted without a
@@ -239,6 +255,12 @@ fn neutralize_session_binding(panel: &mut PanelState) -> bool {
         changed = true;
     }
     changed
+}
+
+fn panel_needs_agent_binding_bootstrap(panel: &PanelState) -> bool {
+    panel.kind.supports_session_binding()
+        && (panel.stored_session_id().is_some()
+            || (panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)))
 }
 
 fn empty_to_none(value: &str) -> Option<&str> {
