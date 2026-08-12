@@ -75,7 +75,11 @@ impl AgentSessionCatalog {
             extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
         }
         let codex_binding_ids = exact_binding_ids.get(&PanelKind::Codex).cloned().unwrap_or_default();
-        let codex = match codex::load_sessions(&codex_binding_ids, needs_discovery) {
+        // Exact Codex validation also seeds the root-only rebind menu. Keep
+        // other providers out of this startup path, but retain Codex's narrow
+        // active-session query so verified alternatives remain available.
+        let include_active_codex_sessions = needs_discovery || !codex_binding_ids.is_empty();
+        let codex = match codex::load_sessions(&codex_binding_ids, include_active_codex_sessions) {
             Ok(codex) => codex,
             Err(error) => {
                 tracing::warn!("failed loading Codex sessions: {error}");
