@@ -7,8 +7,9 @@ use uuid::Uuid;
 use super::super::{AgentSessionBinding, PanelResume, PanelState, RuntimeState, WorkspaceState};
 use super::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary,
-    ExactSessionResolution, PanelKind, PiSessionSummary, codex::CodexSessions, load_claude_project_session_summary,
-    load_opencode_sessions_from_path, load_pi_sessions_from_dir, scan_claude_session_reader, scan_pi_session_reader,
+    ExactSessionResolution, PanelKind, PiSessionSummary, codex::CodexSessions, finish_codex_load,
+    load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
+    scan_claude_session_reader, scan_pi_session_reader,
 };
 use crate::error::Error;
 
@@ -24,6 +25,22 @@ fn strict_catalog_load_propagates_provider_errors() {
     );
 
     assert!(matches!(loaded, Err(Error::State(message)) if message == "OpenCode store unavailable"));
+}
+
+#[test]
+fn exact_codex_load_errors_are_not_reclassified_as_stale() {
+    let optional = finish_codex_load(
+        Err(Error::State("optional catalog failed".to_string())),
+        &HashSet::new(),
+    )
+    .expect("optional catalog failure is best effort");
+    assert!(optional.stale_binding_ids.is_empty());
+
+    let exact = finish_codex_load(
+        Err(Error::State("exact validation failed".to_string())),
+        &HashSet::from(["saved-id".to_string()]),
+    );
+    assert!(matches!(exact, Err(Error::State(message)) if message == "exact validation failed"));
 }
 
 fn parse_claude_project_session<R: std::io::BufRead>(

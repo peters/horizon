@@ -99,13 +99,10 @@ impl AgentSessionCatalog {
         // the active catalog whenever the board has a Codex panel so pinned
         // panels still have manual alternatives.
         let include_active_codex_sessions = has_codex_panels || !codex_binding_ids.is_empty();
-        let codex = match codex::load_sessions(&codex_binding_ids, include_active_codex_sessions) {
-            Ok(codex) => codex,
-            Err(error) => {
-                tracing::warn!("failed loading Codex sessions: {error}");
-                codex::CodexSessions::with_stale_bindings(codex_binding_ids)
-            }
-        };
+        let codex = finish_codex_load(
+            codex::load_sessions(&codex_binding_ids, include_active_codex_sessions),
+            &codex_binding_ids,
+        )?;
         Ok(AgentSessionBootstrapCatalog::new(
             Self::from_provider_sessions(sessions, &codex),
             codex,
@@ -227,6 +224,20 @@ impl AgentSessionBootstrapCatalog {
     #[must_use]
     pub fn into_catalog(self) -> AgentSessionCatalog {
         self.catalog
+    }
+}
+
+fn finish_codex_load(
+    loaded: Result<codex::CodexSessions>,
+    exact_binding_ids: &HashSet<String>,
+) -> Result<codex::CodexSessions> {
+    match loaded {
+        Ok(codex) => Ok(codex),
+        Err(error) if exact_binding_ids.is_empty() => {
+            tracing::warn!("failed loading optional Codex sessions: {error}");
+            Ok(codex::CodexSessions::default())
+        }
+        Err(error) => Err(error),
     }
 }
 
