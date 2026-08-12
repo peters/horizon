@@ -20,8 +20,6 @@ const MAX_ROLLOUT_METADATA_BYTES: u64 = 1024 * 1024;
 enum RootResolution {
     Resolved(AgentSessionRecord),
     Rejected,
-    CycleDetected,
-    BudgetExhausted,
     Unavailable,
 }
 
@@ -29,10 +27,6 @@ impl RootResolution {
     fn unresolved(metadata: &Self, source: &Self) -> Self {
         if matches!(metadata, Self::Unavailable) || matches!(source, Self::Unavailable) {
             Self::Unavailable
-        } else if matches!(metadata, Self::BudgetExhausted) || matches!(source, Self::BudgetExhausted) {
-            Self::BudgetExhausted
-        } else if matches!(metadata, Self::CycleDetected) || matches!(source, Self::CycleDetected) {
-            Self::CycleDetected
         } else {
             Self::Rejected
         }
@@ -47,9 +41,18 @@ impl RootResolution {
 pub(super) struct CodexSessions {
     pub(super) sessions: Vec<AgentSessionRecord>,
     pub(super) root_aliases: HashMap<String, AgentSessionRecord>,
-    pub(super) child_binding_ids: HashSet<String>,
     pub(super) verified_binding_ids: HashSet<String>,
+    pub(super) stale_binding_ids: HashSet<String>,
     pub(super) unavailable_binding_ids: HashSet<String>,
+}
+
+impl CodexSessions {
+    pub(super) fn with_stale_bindings(stale_binding_ids: HashSet<String>) -> Self {
+        Self {
+            stale_binding_ids,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -141,7 +144,7 @@ impl<'a> RootTraversal<'a> {
         self.remaining_binding_steps = MAX_PARENT_TRAVERSAL_STEPS_PER_BINDING;
         let thread = match self.store.thread(binding_id)? {
             CachedThread::Found(thread) => thread,
-            CachedThread::Missing => return Ok(BindingResolution::Unavailable),
+            CachedThread::Missing => return Ok(BindingResolution::Stale),
             CachedThread::Unavailable(error) => {
                 tracing::warn!(thread_id = binding_id, %error, "failed decoding saved Codex thread metadata");
                 return Ok(BindingResolution::Unavailable);
@@ -149,7 +152,7 @@ impl<'a> RootTraversal<'a> {
         };
         if !thread.source.is_parent_controlled {
             return Ok(if thread.archived {
-                BindingResolution::Unavailable
+                BindingResolution::Stale
             } else {
                 BindingResolution::VerifiedRoot
             });
@@ -158,38 +161,15 @@ impl<'a> RootTraversal<'a> {
         let Some(expected_cwd) = thread.record.cwd.as_deref() else {
             return Ok(BindingResolution::Unavailable);
         };
-        let metadata_parent = thread
-            .rollout_path
-            .as_deref()
-            .and_then(|path| self.rollout_metadata.parent_id(path, binding_id));
-        let source_parent = thread.source.parent_thread_id.as_deref();
-        let metadata_resolution = match metadata_parent.as_deref() {
-            Some(parent_id) => self.resolve_candidate(parent_id, expected_cwd)?,
-            None => RootResolution::Rejected,
-        };
-        let resolution = match metadata_resolution {
-            RootResolution::Resolved(root) => RootResolution::Resolved(root),
-            metadata_resolution => {
-                let source_resolution = match source_parent {
-                    Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution.clone(),
-                    Some(parent_id) => self.resolve_candidate(parent_id, expected_cwd)?,
-                    None => RootResolution::Rejected,
-                };
-                match source_resolution {
-                    RootResolution::Resolved(root) => RootResolution::Resolved(root),
-                    source_resolution => RootResolution::unresolved(&metadata_resolution, &source_resolution),
-                }
-            }
-        };
+        let mut active = HashSet::from([binding_id.to_string()]);
+        let resolution = self.resolve_thread_parents(&thread, expected_cwd, MAX_PARENT_CANDIDATE_STEPS, &mut active)?;
         Ok(match resolution {
             RootResolution::Resolved(root) => BindingResolution::Rebind(root),
-            RootResolution::Rejected
-            | RootResolution::CycleDetected
-            | RootResolution::BudgetExhausted
-            | RootResolution::Unavailable => BindingResolution::Unavailable,
+            RootResolution::Rejected | RootResolution::Unavailable => BindingResolution::Unavailable,
         })
     }
 
+    #[cfg(test)]
     fn resolve_candidate(&mut self, parent_id: &str, expected_cwd: &str) -> Result<RootResolution> {
         let mut active = HashSet::new();
         let remaining_candidate_steps = MAX_PARENT_CANDIDATE_STEPS.min(self.remaining_binding_steps);
@@ -207,11 +187,8 @@ impl<'a> RootTraversal<'a> {
         if let Some(resolution) = self.memoized.get(&key) {
             return Ok(resolution.clone());
         }
-        if active.contains(parent_id) {
-            return Ok(RootResolution::CycleDetected);
-        }
-        if remaining_candidate_steps == 0 || self.remaining_binding_steps == 0 {
-            return Ok(RootResolution::BudgetExhausted);
+        if active.contains(parent_id) || remaining_candidate_steps == 0 || self.remaining_binding_steps == 0 {
+            return Ok(RootResolution::Unavailable);
         }
         let thread = match self.store.thread(parent_id)? {
             CachedThread::Found(thread) => thread,
@@ -232,16 +209,31 @@ impl<'a> RootTraversal<'a> {
         }
 
         if next_candidate_steps == 0 || self.remaining_binding_steps == 0 {
-            return Ok(RootResolution::BudgetExhausted);
+            return Ok(RootResolution::Unavailable);
         }
 
         active.insert(thread.record.session_id.clone());
+        let resolution = self.resolve_thread_parents(&thread, expected_cwd, next_candidate_steps, active)?;
+        active.remove(&thread.record.session_id);
+        if resolution.is_memoizable() {
+            self.memoized.insert(key, resolution.clone());
+        }
+        Ok(resolution)
+    }
+
+    fn resolve_thread_parents(
+        &mut self,
+        thread: &CodexThread,
+        expected_cwd: &str,
+        remaining_candidate_steps: usize,
+        active: &mut HashSet<String>,
+    ) -> Result<RootResolution> {
         let metadata_parent = thread
             .rollout_path
             .as_deref()
             .and_then(|path| self.rollout_metadata.parent_id(path, &thread.record.session_id));
         let metadata_resolution = match metadata_parent.as_deref() {
-            Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active)?,
+            Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, remaining_candidate_steps, active)?,
             None => RootResolution::Rejected,
         };
         let resolution = match metadata_resolution {
@@ -249,7 +241,9 @@ impl<'a> RootTraversal<'a> {
             metadata_resolution => {
                 let source_resolution = match thread.source.parent_thread_id.as_deref() {
                     Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution.clone(),
-                    Some(parent_id) => self.resolve_parent(parent_id, expected_cwd, next_candidate_steps, active)?,
+                    Some(parent_id) => {
+                        self.resolve_parent(parent_id, expected_cwd, remaining_candidate_steps, active)?
+                    }
                     None => RootResolution::Rejected,
                 };
                 match source_resolution {
@@ -258,10 +252,6 @@ impl<'a> RootTraversal<'a> {
                 }
             }
         };
-        active.remove(&thread.record.session_id);
-        if resolution.is_memoizable() {
-            self.memoized.insert(key, resolution.clone());
-        }
         Ok(resolution)
     }
 }
@@ -269,6 +259,7 @@ impl<'a> RootTraversal<'a> {
 enum BindingResolution {
     VerifiedRoot,
     Rebind(AgentSessionRecord),
+    Stale,
     Unavailable,
 }
 
@@ -277,24 +268,8 @@ pub(super) fn load_sessions(binding_ids: &HashSet<String>, include_session_catal
         return Ok(CodexSessions::default());
     }
     let Some(sqlite_path) = codex_db_path() else {
-        return if binding_ids.is_empty() {
-            Ok(CodexSessions::default())
-        } else {
-            Err(Error::State(
-                "cannot validate saved Codex sessions without a Codex state directory".to_string(),
-            ))
-        };
+        return Ok(CodexSessions::with_stale_bindings(binding_ids.clone()));
     };
-    if !sqlite_path.exists() {
-        return if binding_ids.is_empty() {
-            Ok(CodexSessions::default())
-        } else {
-            Err(Error::State(format!(
-                "cannot validate saved Codex sessions because {} is missing",
-                sqlite_path.display()
-            )))
-        };
-    }
     load_sessions_from_path_with_catalog(&sqlite_path, binding_ids, include_session_catalog)
 }
 
@@ -308,7 +283,7 @@ fn load_sessions_from_path_with_catalog(
     }
     let connection = open_read_only_sqlite(sqlite_path)?;
     let sessions = if include_session_catalog {
-        load_active_sessions(&connection)?
+        load_active_sessions(&connection)
     } else {
         Vec::new()
     };
@@ -327,11 +302,12 @@ fn load_sessions_from_path_with_catalog(
                 loaded.verified_binding_ids.insert(binding_id.clone());
             }
             BindingResolution::Rebind(root) => {
-                loaded.child_binding_ids.insert(binding_id.clone());
                 loaded.root_aliases.insert(binding_id.clone(), root);
             }
+            BindingResolution::Stale => {
+                loaded.stale_binding_ids.insert(binding_id.clone());
+            }
             BindingResolution::Unavailable => {
-                loaded.child_binding_ids.insert(binding_id.clone());
                 loaded.unavailable_binding_ids.insert(binding_id.clone());
             }
         }
@@ -340,27 +316,42 @@ fn load_sessions_from_path_with_catalog(
     Ok(loaded)
 }
 
-fn load_active_sessions(connection: &Connection) -> Result<Vec<AgentSessionRecord>> {
-    let mut statement = connection
-        .prepare(
-            "SELECT id, substr(title, 1, 256), cwd, updated_at
-             FROM threads
-             WHERE archived = 0
-               AND typeof(source) = 'text'
-               AND trim(source) IN ('cli', 'vscode', 'exec')
-             ORDER BY updated_at DESC",
-        )
-        .map_err(|error| Error::State(error.to_string()))?;
-    let mut rows = statement.query([]).map_err(|error| Error::State(error.to_string()))?;
+fn load_active_sessions(connection: &Connection) -> Vec<AgentSessionRecord> {
+    let mut statement = match connection.prepare(
+        "SELECT id, rollout_path, source, substr(title, 1, 256), cwd, updated_at, archived
+         FROM threads
+         WHERE archived = 0
+         ORDER BY updated_at DESC",
+    ) {
+        Ok(statement) => statement,
+        Err(error) => {
+            tracing::warn!(%error, "failed preparing optional Codex session catalog");
+            return Vec::new();
+        }
+    };
+    let mut rows = match statement.query([]) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "failed querying optional Codex session catalog");
+            return Vec::new();
+        }
+    };
     let mut sessions = Vec::new();
     let mut malformed_rows = 0usize;
-    let mut first_error = None;
-    while let Some(row) = rows.next().map_err(|error| Error::State(error.to_string()))? {
-        match decode_active_session(row) {
-            Ok(session) => sessions.push(session),
+    loop {
+        let row = match rows.next() {
+            Ok(Some(row)) => row,
+            Ok(None) => break,
+            Err(error) => {
+                tracing::warn!(%error, "stopped reading optional Codex session catalog");
+                break;
+            }
+        };
+        match decode_thread(row) {
+            Ok(thread) if !thread.archived && !thread.source.is_parent_controlled => sessions.push(thread.record),
+            Ok(_) => {}
             Err(error) => {
                 malformed_rows += 1;
-                first_error.get_or_insert_with(|| error.to_string());
                 if malformed_rows <= MAX_MALFORMED_ROW_WARNINGS {
                     tracing::warn!(row_number = sessions.len() + malformed_rows, %error, "skipping malformed Codex thread metadata");
                 }
@@ -374,35 +365,15 @@ fn load_active_sessions(connection: &Connection) -> Result<Vec<AgentSessionRecor
             "suppressed additional malformed Codex thread warnings"
         );
     }
-    if sessions.is_empty()
-        && let Some(error) = first_error
-    {
-        return Err(Error::State(format!("failed decoding Codex thread metadata: {error}")));
-    }
-    Ok(sessions)
-}
-
-fn decode_active_session(row: &Row<'_>) -> rusqlite::Result<AgentSessionRecord> {
-    let id: String = row.get(0)?;
-    let title: String = row.get(1)?;
-    let cwd: String = row.get(2)?;
-    let updated_at: i64 = row.get(3)?;
-    Ok(AgentSessionRecord {
-        kind: PanelKind::Codex,
-        session_id: id,
-        label: (!title.is_empty()).then_some(title),
-        cwd: normalize_cwd((!cwd.is_empty()).then_some(cwd.as_str())),
-        updated_at: updated_at.saturating_mul(1000),
-        interactive: true,
-    })
+    sessions
 }
 
 fn decode_thread(row: &Row<'_>) -> rusqlite::Result<CodexThread> {
     let id: String = row.get(0)?;
-    let rollout_path: String = row.get(1)?;
+    let rollout_path = row.get::<_, String>(1).ok().filter(|path| !path.is_empty());
     let source: String = row.get(2)?;
-    let title: String = row.get(3)?;
-    let cwd: String = row.get(4)?;
+    let title = row.get::<_, String>(3).ok().filter(|title| !title.is_empty());
+    let cwd = row.get::<_, String>(4).ok().filter(|cwd| !cwd.is_empty());
     let updated_at: i64 = row.get(5)?;
     let archived: bool = row.get(6)?;
     let source = parse_thread_source(&source);
@@ -414,14 +385,14 @@ fn decode_thread(row: &Row<'_>) -> rusqlite::Result<CodexThread> {
         ));
     }
     Ok(CodexThread {
-        rollout_path: (!rollout_path.is_empty()).then(|| PathBuf::from(rollout_path)),
+        rollout_path: rollout_path.map(PathBuf::from),
         source: source.clone(),
         archived,
         record: AgentSessionRecord {
             kind: PanelKind::Codex,
             session_id: id,
-            label: (!archived && !source.is_parent_controlled && !title.is_empty()).then_some(title),
-            cwd: normalize_cwd((!cwd.is_empty()).then_some(cwd.as_str())),
+            label: (!archived && !source.is_parent_controlled).then_some(title).flatten(),
+            cwd: normalize_cwd(cwd.as_deref()),
             updated_at: updated_at.saturating_mul(1000),
             interactive: !source.is_parent_controlled,
         },
@@ -498,12 +469,20 @@ fn read_rollout_metadata(path: &Path) -> Option<RolloutMetadata> {
 }
 
 fn parse_thread_source(source: &str) -> CodexThreadSource {
-    let source = match serde_json::from_str(source) {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return CodexThreadSource {
+            malformed: true,
+            ..CodexThreadSource::default()
+        };
+    }
+    let source = match serde_json::from_str(trimmed) {
         Ok(Value::Object(source)) => source,
-        Err(_) if matches!(source.trim(), "cli" | "vscode" | "exec") => {
+        Ok(Value::String(value)) if !value.trim().is_empty() => return CodexThreadSource::default(),
+        Err(_) if !matches!(trimmed.as_bytes().first(), Some(b'{' | b'[')) => {
             return CodexThreadSource::default();
         }
-        Ok(_) | Err(_) => {
+        Err(_) | Ok(_) => {
             return CodexThreadSource {
                 malformed: true,
                 ..CodexThreadSource::default()
@@ -511,10 +490,7 @@ fn parse_thread_source(source: &str) -> CodexThreadSource {
         }
     };
     let Some(subagent) = source.get("subagent").filter(|subagent| !subagent.is_null()) else {
-        return CodexThreadSource {
-            malformed: true,
-            ..CodexThreadSource::default()
-        };
+        return CodexThreadSource::default();
     };
     CodexThreadSource {
         is_parent_controlled: true,

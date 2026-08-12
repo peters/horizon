@@ -23,6 +23,7 @@ pub struct AgentSessionCatalog {
 pub(super) enum ExactSessionResolution {
     Verified,
     Rebind(AgentSessionBinding),
+    Stale,
     Unavailable,
 }
 
@@ -51,9 +52,10 @@ impl AgentSessionCatalog {
     ///
     /// # Errors
     ///
-    /// Returns an error when the store needed to validate an exact saved
-    /// binding cannot be queried. Optional provider discovery remains
-    /// best-effort.
+    /// Returns an error when a provider declares exact-session validation but
+    /// has no validator implementation. Missing or unreadable local stores
+    /// are treated as stale bindings so startup can safely fall back to fresh
+    /// launches. Optional provider discovery remains best-effort.
     pub fn load_for_runtime_state(runtime_state: &RuntimeState) -> Result<AgentSessionBootstrapCatalog> {
         let exact_binding_ids: HashMap<PanelKind, HashSet<String>> = runtime_state
             .workspaces
@@ -80,18 +82,28 @@ impl AgentSessionCatalog {
         if needs_pi_sessions {
             extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
         }
-        let codex_binding_ids = exact_binding_ids.get(&PanelKind::Codex).cloned().unwrap_or_default();
+        let mut codex_binding_ids = HashSet::new();
+        for (kind, binding_ids) in exact_binding_ids {
+            match kind {
+                PanelKind::Codex => codex_binding_ids = binding_ids,
+                unsupported => {
+                    return Err(Error::State(format!(
+                        "no exact-session validator is implemented for {}",
+                        unsupported.display_name()
+                    )));
+                }
+            }
+        }
         // Exact Codex validation also seeds the root-only rebind menu. Keep
         // other providers out of this startup path, but retain Codex's narrow
         // active-session query so verified alternatives remain available.
         let include_active_codex_sessions = needs_codex_sessions || !codex_binding_ids.is_empty();
         let codex = match codex::load_sessions(&codex_binding_ids, include_active_codex_sessions) {
             Ok(codex) => codex,
-            Err(error) if codex_binding_ids.is_empty() => {
-                tracing::warn!("failed loading optional Codex sessions: {error}");
-                codex::CodexSessions::default()
+            Err(error) => {
+                tracing::warn!("failed loading Codex sessions: {error}");
+                codex::CodexSessions::with_stale_bindings(codex_binding_ids)
             }
-            Err(error) => return Err(error),
         };
         Ok(AgentSessionBootstrapCatalog::new(
             Self::from_provider_sessions(sessions, &codex),
@@ -173,6 +185,12 @@ impl AgentSessionBootstrapCatalog {
                 .unavailable_binding_ids
                 .into_iter()
                 .map(|session_id| ((PanelKind::Codex, session_id), ExactSessionResolution::Unavailable)),
+        );
+        exact_resolutions.extend(
+            codex
+                .stale_binding_ids
+                .into_iter()
+                .map(|session_id| ((PanelKind::Codex, session_id), ExactSessionResolution::Stale)),
         );
         Self {
             catalog,
@@ -318,7 +336,7 @@ struct ClaudeSessionSummary {
     cwd: Option<String>,
     slug: Option<String>,
     last_prompt: Option<String>,
-    parent_controlled: bool,
+    parent_controlled: Option<bool>,
 }
 
 impl ClaudeSessionSummary {
@@ -331,7 +349,9 @@ impl ClaudeSessionSummary {
             return;
         };
 
-        self.parent_controlled |= value.get("isSidechain").and_then(Value::as_bool) == Some(true);
+        if self.parent_controlled.is_none() {
+            self.parent_controlled = Some(value.get("isSidechain").and_then(Value::as_bool) == Some(true));
+        }
 
         if let Some(found_session_id) = value.get("sessionId").and_then(Value::as_str)
             && !found_session_id.is_empty()
@@ -376,7 +396,7 @@ impl ClaudeSessionSummary {
             cwd: self.cwd,
             label: self.last_prompt.or(self.slug).or(Some("Claude session".to_string())),
             updated_at: fallback_updated_at,
-            interactive: !self.parent_controlled,
+            interactive: !self.parent_controlled.unwrap_or(false),
         })
     }
 }

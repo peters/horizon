@@ -284,10 +284,7 @@ fn bootstrap_repairs_persisted_codex_child_bindings() {
             .and_then(|binding| binding.label.as_deref()),
         Some("Root session")
     );
-    assert!(matches!(
-        &panel.resume,
-        PanelResume::Session { session_id } if session_id == "session-root"
-    ));
+    assert!(matches!(panel.resume, PanelResume::Fresh));
 }
 
 #[test]
@@ -427,6 +424,7 @@ fn bootstrap_does_not_duplicate_a_root_resume() {
             .map(|binding| binding.session_id.as_str()),
         Some("session-root")
     );
+    assert!(matches!(state.workspaces[0].panels[0].resume, PanelResume::Last));
     let children = &state.workspaces[0].panels[1..];
     assert_eq!(
         children[0]
@@ -473,12 +471,7 @@ fn bootstrap_retains_the_later_duplicate_direct_root_without_resuming_it() {
     assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
 
     let panels = &state.workspaces[0].panels;
-    assert!(
-        panels[0]
-            .session_binding
-            .as_ref()
-            .is_some_and(|binding| binding.resumable)
-    );
+    assert!(panels[0].session_binding.is_some());
     assert!(panels[1].session_binding.is_none());
     assert_eq!(panels[1].stored_session_id(), None);
     assert!(matches!(panels[1].resume, PanelResume::Last));
@@ -575,7 +568,42 @@ fn bootstrap_preserves_last_for_an_unresolved_codex_child_binding() {
             .map(|binding| binding.session_id.as_str()),
         Some("session-child")
     );
-    assert!(panel.session_binding.as_ref().is_some_and(|binding| binding.resumable));
+    assert!(panel.session_binding.is_some());
+    assert!(matches!(panel.resume, PanelResume::Last));
+}
+
+#[test]
+fn bootstrap_discards_a_stale_exact_binding_without_pinning_last() {
+    let catalog = bootstrap_catalog(
+        Vec::new(),
+        [(
+            (PanelKind::Codex, "archived-session".to_string()),
+            ExactSessionResolution::Stale,
+        )],
+    );
+    let mut state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![PanelState {
+                kind: PanelKind::Codex,
+                resume: PanelResume::Last,
+                session_binding: Some(AgentSessionBinding::new(
+                    PanelKind::Codex,
+                    "archived-session".to_string(),
+                    Some("/repo".to_string()),
+                    None,
+                    None,
+                )),
+                ..PanelState::default()
+            }],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+
+    assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
+
+    let panel = &state.workspaces[0].panels[0];
+    assert!(panel.session_binding.is_none());
     assert!(matches!(panel.resume, PanelResume::Last));
 }
 
@@ -637,7 +665,7 @@ fn explicit_recovery_neutralizes_only_scoped_unverified_ids() {
     assert_eq!(panels[1].stored_session_id(), None);
     assert!(panels[1].session_binding.is_none());
     assert!(matches!(panels[1].resume, PanelResume::Fresh));
-    assert_eq!(panels[2].exact_session_id(), Some("other-session"));
+    assert_eq!(panels[2].stored_session_id(), Some("other-session"));
 }
 
 #[test]
@@ -696,6 +724,18 @@ fn parse_claude_project_session_marks_sidechains_noninteractive() {
     let session = parse_claude_project_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
 
     assert!(!session.interactive);
+}
+
+#[test]
+fn parse_claude_project_session_uses_only_the_header_sidechain_flag() {
+    let jsonl = concat!(
+        "{\"type\":\"user\",\"sessionId\":\"session-123\",\"isSidechain\":false}\n",
+        "{\"type\":\"assistant\",\"sessionId\":\"session-123\",\"isSidechain\":true}\n",
+    );
+
+    let session = parse_claude_project_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
+
+    assert!(session.interactive);
 }
 
 #[test]

@@ -184,7 +184,7 @@ impl RuntimeState {
                 continue;
             }
             if used_session_ids.insert(session_id.clone()) {
-                changed |= panel.set_resumable_session_id(session_id);
+                changed |= panel.ensure_session_binding(&session_id);
             } else {
                 tracing::warn!(session_id, "discarding a duplicate exact session binding");
                 changed |= neutralize_exact_session(panel);
@@ -220,6 +220,10 @@ impl RuntimeState {
                     );
                     changed |= neutralize_exact_session(panel);
                 }
+                agent_sessions::ExactSessionResolution::Stale => {
+                    tracing::info!(session_id, "discarding a stale exact session binding");
+                    changed |= neutralize_exact_session(panel);
+                }
                 // Leave unverified ids intact. The caller must block startup
                 // until the operator retries validation or explicitly chooses
                 // the scoped safe-open recovery path.
@@ -245,6 +249,7 @@ impl RuntimeState {
                     matches!(
                         catalog.exact_resolution(panel.kind, session_id),
                         agent_sessions::ExactSessionResolution::Unavailable
+                            | agent_sessions::ExactSessionResolution::Stale
                     )
                 })
             {
@@ -262,9 +267,7 @@ impl RuntimeState {
                 ));
                 changed = true;
             }
-            if let Some(binding) = &panel.session_binding
-                && binding.resumable
-            {
+            if let Some(binding) = &panel.session_binding {
                 used_session_ids.insert(binding.session_id.clone());
             }
         }
@@ -561,22 +564,8 @@ pub struct PanelState {
 }
 
 impl PanelState {
-    /// The exact session id this panel would resume, whether it came from a
-    /// captured binding or an explicit `resume: session` setting.
-    #[must_use]
-    pub fn exact_session_id(&self) -> Option<&str> {
-        self.session_binding
-            .as_ref()
-            .filter(|binding| binding.resumable)
-            .map(|binding| binding.session_id.as_str())
-            .or(match &self.resume {
-                PanelResume::Session { session_id } => Some(session_id.as_str()),
-                PanelResume::Fresh | PanelResume::Last => None,
-            })
-    }
-
-    /// The persisted session id, including ids retained for manual recovery
-    /// after Horizon determined they were unsafe to resume automatically.
+    /// The persisted session id, whether it came from a captured binding or
+    /// an explicit `resume: session` setting.
     #[must_use]
     pub fn stored_session_id(&self) -> Option<&str> {
         self.session_binding
@@ -588,36 +577,33 @@ impl PanelState {
             })
     }
 
-    fn set_resumable_session_id(&mut self, session_id: String) -> bool {
+    fn ensure_session_binding(&mut self, session_id: &str) -> bool {
         let mut changed = false;
-        let binding = self.session_binding.get_or_insert_with(|| {
+        self.session_binding.get_or_insert_with(|| {
             changed = true;
             AgentSessionBinding::new(
                 self.kind,
-                session_id.clone(),
+                session_id.to_string(),
                 self.cwd.clone(),
                 Some(self.name.clone()),
                 None,
             )
         });
-        if !binding.resumable {
-            binding.resumable = true;
-            changed = true;
-        }
-        let resume = PanelResume::Session { session_id };
-        if self.resume != resume {
-            self.resume = resume;
-            changed = true;
-        }
         changed
     }
 
     fn replace_session_binding(&mut self, binding: AgentSessionBinding) -> bool {
-        let resume = PanelResume::Session {
-            session_id: binding.session_id.clone(),
+        let resume_changed = if matches!(self.resume, PanelResume::Session { .. }) {
+            let resume = PanelResume::Session {
+                session_id: binding.session_id.clone(),
+            };
+            let changed = self.resume != resume;
+            self.resume = resume;
+            changed
+        } else {
+            false
         };
-        let changed = self.resume != resume || self.session_binding.as_ref() != Some(&binding);
-        self.resume = resume;
+        let changed = resume_changed || self.session_binding.as_ref() != Some(&binding);
         self.session_binding = Some(binding);
         changed
     }
@@ -743,8 +729,6 @@ pub struct AgentSessionBinding {
     pub cwd: Option<String>,
     pub label: Option<String>,
     pub updated_at: Option<i64>,
-    #[serde(default = "default_true")]
-    pub resumable: bool,
 }
 
 impl AgentSessionBinding {
@@ -762,19 +746,8 @@ impl AgentSessionBinding {
             cwd,
             label,
             updated_at,
-            resumable: true,
         }
     }
-
-    #[must_use]
-    pub fn retained_unresumable(mut self) -> Self {
-        self.resumable = false;
-        self
-    }
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[must_use]

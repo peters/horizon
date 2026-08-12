@@ -20,11 +20,26 @@ pub(in crate::app) fn render_loading_view(
             });
             if let Some(failure) = failure {
                 let (failure_heading, failure_detail, recovery_explanation) = match failure {
-                    StartupBootstrapFailure::ExactValidationFailed { message, .. } => (
+                    StartupBootstrapFailure::ExactValidationFailed {
+                        message,
+                        all_exact_session_ids: false,
+                        ..
+                    } => (
                         "Some saved exact resumes could not be verified.",
                         Some(message.as_str()),
                         Some(
                             "Opening without them removes only those bindings from this Horizon session. Provider conversations are not deleted.",
+                        ),
+                    ),
+                    StartupBootstrapFailure::ExactValidationFailed {
+                        message,
+                        all_exact_session_ids: true,
+                        ..
+                    } => (
+                        "Saved-session validation could not determine a safe scope.",
+                        Some(message.as_str()),
+                        Some(
+                            "Opening without saved resumes removes all exact bindings from this Horizon session. Provider conversations are not deleted.",
                         ),
                     ),
                     StartupBootstrapFailure::WorkerDisconnected => {
@@ -39,7 +54,9 @@ pub(in crate::app) fn render_loading_view(
                     StartupBootstrapFailure::RecoverySaveFailed { message, .. } => (
                         "The repaired session could not be saved.",
                         Some(message.as_str()),
-                        None,
+                        Some(
+                            "Retry the save now, or open the repaired state without waiting. Normal autosave may persist it later.",
+                        ),
                     ),
                 };
                 ui.label(egui::RichText::new(failure_heading).color(theme::PALETTE_RED()));
@@ -51,12 +68,7 @@ pub(in crate::app) fn render_loading_view(
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if matches!(
-                        failure,
-                        StartupBootstrapFailure::ExactValidationFailed { .. }
-                            | StartupBootstrapFailure::WorkerDisconnected
-                    ) && ui.button("Retry").clicked()
-                    {
+                    if ui.button("Retry").clicked() {
                         action = Some(StartupBootstrapFailureAction::Retry);
                     }
                     let recovery_label = match failure {
@@ -64,10 +76,14 @@ pub(in crate::app) fn render_loading_view(
                             Some("Open without unverified resumes")
                         }
                         StartupBootstrapFailure::WorkerDisconnected => Some("Open without saved exact resumes"),
-                        StartupBootstrapFailure::RecoverySaveFailed { .. } => Some("Retry repaired save and open"),
+                        StartupBootstrapFailure::RecoverySaveFailed { .. } => Some("Open repaired session"),
                     };
                     if recovery_label.is_some_and(|label| ui.button(label).clicked()) {
-                        action = Some(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
+                        action = Some(if matches!(failure, StartupBootstrapFailure::RecoverySaveFailed { .. }) {
+                            StartupBootstrapFailureAction::OpenWithoutSaving
+                        } else {
+                            StartupBootstrapFailureAction::ContinueWithoutExactResumes
+                        });
                     }
                 });
             } else {

@@ -7,6 +7,7 @@ use super::{CodexSessions, load_sessions_from_path_with_catalog};
 mod labels;
 mod limits;
 mod rollout;
+mod sources;
 mod store;
 
 fn load_sessions_from_path(
@@ -116,7 +117,6 @@ fn catalog_excludes_parent_controlled_threads() {
 
     assert_eq!(ids, ["root-cli", "root-vscode", "root-exec"]);
     assert!(loaded.root_aliases.is_empty());
-    assert!(loaded.child_binding_ids.is_empty());
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn malformed_rows_do_not_hide_other_sessions() {
 }
 
 #[test]
-fn catalog_reports_a_decode_error_when_no_active_row_is_usable() {
+fn catalog_skips_a_decode_error_when_no_active_row_is_usable() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     let connection = create_threads_db(&sqlite_path);
@@ -163,9 +163,9 @@ fn catalog_reports_a_decode_error_when_no_active_row_is_usable() {
         .expect("insert malformed timestamp");
     drop(connection);
 
-    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::new());
+    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::new()).expect("load Codex sessions");
 
-    assert!(matches!(loaded, Err(error) if error.to_string().contains("failed decoding Codex thread metadata")));
+    assert!(loaded.sessions.is_empty());
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn exact_binding_validation_rejects_a_malformed_row() {
 }
 
 #[test]
-fn malformed_structured_sources_do_not_become_interactive_roots() {
+fn only_positive_subagent_sources_are_excluded_from_interactive_roots() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     let connection = create_threads_db(&sqlite_path);
@@ -220,12 +220,16 @@ fn malformed_structured_sources_do_not_become_interactive_roots() {
 
     let loaded = load_sessions_from_path(&sqlite_path, &HashSet::new()).expect("load Codex sessions");
 
-    assert_eq!(loaded.sessions.len(), 1);
-    assert_eq!(loaded.sessions[0].session_id, "root");
+    let ids: HashSet<_> = loaded
+        .sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(ids, HashSet::from(["root", "empty-object", "null-subagent"]));
 }
 
 #[test]
-fn malformed_structured_sources_are_unavailable_for_exact_validation() {
+fn only_malformed_structured_sources_are_unavailable_for_exact_validation() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     let connection = create_threads_db(&sqlite_path);
@@ -241,8 +245,11 @@ fn malformed_structured_sources_are_unavailable_for_exact_validation() {
 
     let loaded = load_sessions_from_path(&sqlite_path, &binding_ids).expect("load Codex sessions");
 
-    assert_eq!(loaded.unavailable_binding_ids, binding_ids);
-    assert!(loaded.verified_binding_ids.is_empty());
+    assert_eq!(loaded.unavailable_binding_ids, HashSet::from(["array".to_string()]));
+    assert_eq!(
+        loaded.verified_binding_ids,
+        HashSet::from(["empty-object".to_string(), "null-subagent".to_string()])
+    );
     assert!(loaded.root_aliases.is_empty());
 }
 
@@ -330,7 +337,6 @@ fn persisted_child_bindings_resolve_to_verified_root_sessions() {
 
     for child_id in ["child", "guardian", "source-fallback", "review"] {
         assert_eq!(loaded.root_aliases[child_id].session_id, "root");
-        assert!(loaded.child_binding_ids.contains(child_id));
     }
 }
 
@@ -362,7 +368,7 @@ fn child_alias_rejects_a_root_from_another_directory() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child"));
-    assert!(loaded.child_binding_ids.contains("child"));
+    assert!(loaded.unavailable_binding_ids.contains("child"));
 }
 
 #[test]
@@ -393,7 +399,7 @@ fn child_alias_requires_a_known_shared_directory() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child"));
-    assert!(loaded.child_binding_ids.contains("child"));
+    assert!(loaded.unavailable_binding_ids.contains("child"));
 }
 
 #[test]
@@ -432,7 +438,7 @@ fn child_alias_rejects_mismatched_rollout_metadata() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child"));
-    assert!(loaded.child_binding_ids.contains("child"));
+    assert!(loaded.unavailable_binding_ids.contains("child"));
 }
 
 #[test]
@@ -700,7 +706,7 @@ fn archived_child_bindings_remain_classified_but_archived_roots_are_not_aliases(
 
     assert!(loaded.sessions.is_empty());
     assert!(!loaded.root_aliases.contains_key("child"));
-    assert!(loaded.child_binding_ids.contains("child"));
+    assert!(loaded.unavailable_binding_ids.contains("child"));
 }
 
 #[test]
@@ -733,7 +739,7 @@ fn source_chain_cycles_do_not_produce_aliases() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child-a".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child-a"));
-    assert!(loaded.child_binding_ids.contains("child-a"));
+    assert!(loaded.unavailable_binding_ids.contains("child-a"));
 }
 
 #[test]
@@ -821,7 +827,7 @@ fn source_chain_stops_after_the_parent_traversal_limit() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child-0".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child-0"));
-    assert!(loaded.child_binding_ids.contains("child-0"));
+    assert!(loaded.unavailable_binding_ids.contains("child-0"));
 }
 
 #[test]
@@ -881,7 +887,7 @@ fn rejected_same_parent_fallbacks_read_each_rollout_once() {
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child-0".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child-0"));
-    assert!(loaded.child_binding_ids.contains("child-0"));
+    assert!(loaded.unavailable_binding_ids.contains("child-0"));
 }
 
 #[test]
@@ -892,7 +898,7 @@ fn exact_binding_validation_degrades_missing_rows_independently() {
 
     let loaded = load_sessions_from_path(&sqlite_path, &HashSet::from(["missing".to_string()])).expect("load sessions");
 
-    assert!(loaded.unavailable_binding_ids.contains("missing"));
+    assert!(loaded.stale_binding_ids.contains("missing"));
 }
 
 #[test]
@@ -918,11 +924,11 @@ fn missing_binding_does_not_invalidate_a_verified_root() {
     .expect("load sessions");
 
     assert!(loaded.verified_binding_ids.contains("root"));
-    assert!(loaded.unavailable_binding_ids.contains("missing"));
+    assert!(loaded.stale_binding_ids.contains("missing"));
 }
 
 #[test]
-fn archived_direct_binding_is_unavailable_for_exact_validation() {
+fn archived_direct_binding_is_stale_for_exact_validation() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     let connection = create_threads_db(&sqlite_path);
@@ -940,6 +946,6 @@ fn archived_direct_binding_is_unavailable_for_exact_validation() {
     let loaded = load_sessions_from_path(&sqlite_path, &HashSet::from(["archived-root".to_string()]))
         .expect("validate archived binding");
 
-    assert!(loaded.unavailable_binding_ids.contains("archived-root"));
+    assert!(loaded.stale_binding_ids.contains("archived-root"));
     assert!(!loaded.verified_binding_ids.contains("archived-root"));
 }

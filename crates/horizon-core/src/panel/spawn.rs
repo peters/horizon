@@ -661,8 +661,6 @@ fn resolve_agent_launch_command(
         AgentIntegrationKind::None => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
-    let exact_resume_allowed = launch.session_binding.is_none_or(|binding| binding.resumable);
-
     match definition.resume_mode {
         AgentResumeMode::ExactSubcommand { subcommand } => {
             launch_args.extend(args);
@@ -670,7 +668,7 @@ fn resolve_agent_launch_command(
                 if let Some(binding) = launch.session_binding {
                     launch_args.extend([subcommand.to_string(), binding.session_id.clone()]);
                 }
-            } else if exact_resume_allowed && let PanelResume::Session { session_id } = launch.resume {
+            } else if let PanelResume::Session { session_id } = launch.resume {
                 launch_args.extend([subcommand.to_string(), session_id.clone()]);
             }
         }
@@ -682,13 +680,11 @@ fn resolve_agent_launch_command(
                 if let Some(binding) = launch.session_binding {
                     launch_args.extend([flag.to_string(), binding.session_id.clone()]);
                 }
-            } else if exact_resume_allowed
-                && let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, launch.session_binding)
-            {
+            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, launch.session_binding) {
                 // Fresh launch under the panel's pre-assigned session id so
                 // the binding matches the session the CLI will create.
                 launch_args.extend([fresh_session_flag.to_string(), binding.session_id.clone()]);
-            } else if exact_resume_allowed && let PanelResume::Session { session_id } = launch.resume {
+            } else if let PanelResume::Session { session_id } = launch.resume {
                 launch_args.extend([flag.to_string(), session_id.clone()]);
             } else if let Some(fresh_session_flag) = fresh_session_flag {
                 launch_args.extend([fresh_session_flag.to_string(), Uuid::new_v4().to_string()]);
@@ -787,8 +783,6 @@ fn resolve_session_binding(
     } else {
         session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
     };
-    should_resume_binding &= session_binding.as_ref().is_none_or(|binding| binding.resumable);
-
     // Claude refuses `--resume` for ids without an on-disk transcript (a
     // bound panel that never received a message) and `--session-id` for ids
     // that already have one, so the launch mode follows the store: resume

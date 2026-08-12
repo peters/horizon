@@ -1,9 +1,6 @@
 use std::collections::HashSet;
 
-use super::{
-    DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates,
-    panel_uses_dynamic_binding,
-};
+use super::{DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates};
 use egui::Context;
 use horizon_core::{
     AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState, RuntimeState,
@@ -336,6 +333,7 @@ fn partial_validation_failure_keeps_repaired_and_unverified_pending_ids() {
             runtime_state: repaired_runtime_state,
             message: "one resume could not be verified".to_string(),
             unavailable_exact_session_ids: HashSet::from(["session-missing".to_string()]),
+            all_exact_session_ids: false,
             runtime_state_changed: true,
         },
     )))
@@ -349,9 +347,12 @@ fn partial_validation_failure_keeps_repaired_and_unverified_pending_ids() {
         .pending_startup_runtime_state
         .as_ref()
         .expect("pending repaired state");
-    assert_eq!(pending.workspaces[0].panels[0].exact_session_id(), Some("session-root"));
     assert_eq!(
-        pending.workspaces[0].panels[1].exact_session_id(),
+        pending.workspaces[0].panels[0].stored_session_id(),
+        Some("session-root")
+    );
+    assert_eq!(
+        pending.workspaces[0].panels[1].stored_session_id(),
         Some("session-missing")
     );
     assert!(app.pending_startup_runtime_state_changed);
@@ -408,6 +409,7 @@ fn persistent_recovery_is_saved_before_the_board_opens() {
     app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
         message: "missing".to_string(),
         unavailable_exact_session_ids: HashSet::from(["session-child".to_string()]),
+        all_exact_session_ids: false,
     });
 
     app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
@@ -415,8 +417,8 @@ fn persistent_recovery_is_saved_before_the_board_opens() {
     let saved = RuntimeState::load(&runtime_path)
         .expect("load repaired runtime")
         .expect("repaired runtime exists");
-    assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
-    assert_eq!(saved.workspaces[0].panels[1].exact_session_id(), Some("session-root"));
+    assert!(saved.workspaces[0].panels[0].stored_session_id().is_none());
+    assert_eq!(saved.workspaces[0].panels[1].stored_session_id(), Some("session-root"));
     assert!(app.pending_startup_runtime_state.is_none());
     assert!(app.startup_bootstrap_failure.is_none());
     assert!(app.board.panels[0].session_binding.is_none());
@@ -452,6 +454,7 @@ fn failed_recovery_save_keeps_pending_state_until_retry_succeeds() {
     app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
         message: "missing".to_string(),
         unavailable_exact_session_ids: HashSet::from(["session-child".to_string()]),
+        all_exact_session_ids: false,
     });
 
     app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
@@ -477,16 +480,63 @@ fn failed_recovery_save_keeps_pending_state_until_retry_succeeds() {
         HorizonHome::from_root(temp.path().join(".horizon")),
         temp.path().join("config.yaml"),
     );
-    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
+    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::Retry);
 
     let saved = RuntimeState::load(&runtime_path)
         .expect("load repaired runtime")
         .expect("repaired runtime exists");
-    assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
+    assert!(saved.workspaces[0].panels[0].stored_session_id().is_none());
     assert!(matches!(saved.workspaces[0].panels[0].resume, PanelResume::Fresh));
     assert!(app.pending_startup_runtime_state.is_none());
     assert!(app.startup_bootstrap_failure.is_none());
     assert!(app.board.panels[0].session_binding.is_none());
+}
+
+#[test]
+fn failed_recovery_save_can_open_the_repaired_state_without_persisting() {
+    let (command, args) = exiting_command();
+    let runtime_state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "workspace".to_string(),
+            name: "alpha".to_string(),
+            panels: vec![PanelState {
+                local_id: "panel".to_string(),
+                name: "Codex".to_string(),
+                kind: PanelKind::Codex,
+                command: Some(command),
+                args,
+                resume: PanelResume::Session {
+                    session_id: "session-child".to_string(),
+                },
+                ..PanelState::default()
+            }],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let (temp, mut app, _runtime_path) = test_persistent_recovery_app(runtime_state);
+    let blocked_home = temp.path().join("blocked-open-home");
+    std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
+    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
+    app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
+        message: "missing".to_string(),
+        unavailable_exact_session_ids: HashSet::from(["session-child".to_string()]),
+        all_exact_session_ids: false,
+    });
+
+    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
+    assert!(matches!(
+        app.startup_bootstrap_failure,
+        Some(StartupBootstrapFailure::RecoverySaveFailed { .. })
+    ));
+
+    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::OpenWithoutSaving);
+
+    assert!(app.startup_bootstrap_failure.is_none());
+    assert!(app.pending_startup_runtime_state.is_none());
+    assert_eq!(app.board.panels.len(), 1);
+    assert!(app.board.panels[0].session_binding.is_none());
+    assert!(matches!(app.board.panels[0].resume, PanelResume::Fresh));
 }
 
 #[test]
@@ -559,7 +609,7 @@ fn automatic_repair_is_saved_before_the_board_opens() {
     assert_eq!(
         app.pending_startup_runtime_state
             .as_ref()
-            .and_then(|state| state.workspaces[0].panels[0].exact_session_id()),
+            .and_then(|state| state.workspaces[0].panels[0].stored_session_id()),
         Some("session-root")
     );
 
@@ -567,12 +617,12 @@ fn automatic_repair_is_saved_before_the_board_opens() {
         HorizonHome::from_root(temp.path().join(".horizon")),
         temp.path().join("config.yaml"),
     );
-    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
+    app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::Retry);
 
     let saved = RuntimeState::load(&runtime_path)
         .expect("load repaired runtime")
         .expect("repaired runtime exists");
-    assert_eq!(saved.workspaces[0].panels[0].exact_session_id(), Some("session-root"));
+    assert_eq!(saved.workspaces[0].panels[0].stored_session_id(), Some("session-root"));
     assert_eq!(
         app.board.panels[0]
             .session_binding
@@ -770,34 +820,6 @@ fn collect_dynamic_binding_updates_does_not_reassign_claude_bindings() {
 }
 
 #[test]
-fn retained_session_ids_are_not_replaced_by_dynamic_catalog_matching() {
-    let (_temp, mut app) = test_app();
-    let workspace_id = app.board.create_workspace("test");
-    let (command, args) = exiting_command();
-    let panel_id = app
-        .board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Codex,
-                command: Some(command),
-                args,
-                resume: PanelResume::Last,
-                session_binding: Some(
-                    AgentSessionBinding::new(PanelKind::Codex, "saved-child".to_string(), None, None, None)
-                        .retained_unresumable(),
-                ),
-                ..PanelOptions::default()
-            },
-            workspace_id,
-        )
-        .expect("create retained panel");
-
-    assert!(!panel_uses_dynamic_binding(
-        app.board.panel(panel_id).expect("retained panel")
-    ));
-}
-
-#[test]
 fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
     let (_temp, mut app) = test_app();
     let workspace_id = app.board.create_workspace("test");
@@ -834,4 +856,51 @@ fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
     );
     assert_eq!(panel.session_binding.as_ref(), Some(&binding));
     assert_eq!(app.panels_to_restart, vec![panel_id]);
+}
+
+#[test]
+fn rebind_rejects_a_session_used_by_another_panel() {
+    let (_temp, mut app) = test_app();
+    let workspace_id = app.board.create_workspace("test");
+    let (command, args) = exiting_command();
+    let occupied = AgentSessionBinding::new(
+        PanelKind::Codex,
+        "session-2".to_string(),
+        Some("/repo".to_string()),
+        None,
+        Some(42),
+    );
+    app.board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Codex,
+                command: Some(command.clone()),
+                args: args.clone(),
+                resume: PanelResume::Last,
+                session_binding: Some(occupied.clone()),
+                ..PanelOptions::default()
+            },
+            workspace_id,
+        )
+        .expect("create occupied panel");
+    let target_id = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Codex,
+                command: Some(command),
+                args,
+                ..PanelOptions::default()
+            },
+            workspace_id,
+        )
+        .expect("create target panel");
+
+    assert!(!app.rebind_and_restart_panel_session(target_id, occupied));
+    assert!(
+        app.board
+            .panel(target_id)
+            .is_some_and(|panel| panel.session_binding.is_none())
+    );
+    assert!(app.panels_to_restart.is_empty());
 }

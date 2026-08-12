@@ -101,6 +101,7 @@ struct StartupBootstrapValidationFailure {
     runtime_state: RuntimeState,
     message: String,
     unavailable_exact_session_ids: HashSet<String>,
+    all_exact_session_ids: bool,
     runtime_state_changed: bool,
 }
 
@@ -113,11 +114,11 @@ enum StartupBootstrapFailure {
     ExactValidationFailed {
         message: String,
         unavailable_exact_session_ids: HashSet<String>,
+        all_exact_session_ids: bool,
     },
     WorkerDisconnected,
     RecoverySaveFailed {
         message: String,
-        unavailable_exact_session_ids: HashSet<String>,
     },
 }
 

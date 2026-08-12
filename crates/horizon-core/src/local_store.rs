@@ -31,24 +31,8 @@ pub(crate) fn codex_db_path() -> Option<PathBuf> {
 }
 
 fn codex_db_path_in(codex_home: &Path) -> Option<PathBuf> {
-    let current = codex_home.join("state_5.sqlite");
-    let newest = std::fs::read_dir(codex_home)
-        .ok()?
-        .filter_map(std::result::Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            let version = name
-                .strip_prefix("state_")?
-                .strip_suffix(".sqlite")?
-                .parse::<u32>()
-                .ok()?;
-            Some((version, path))
-        })
-        .max_by_key(|(version, _)| *version)
-        .map(|(_, path)| path);
-
-    newest.or(Some(current))
+    let supported = codex_home.join("state_5.sqlite");
+    supported.is_file().then_some(supported)
 }
 
 pub(crate) fn open_read_only_sqlite(path: &Path) -> Result<Connection> {
@@ -63,21 +47,29 @@ mod tests {
     use super::{codex_db_path_in, codex_home_dir_from_env, user_home_dir_from_env};
 
     #[test]
-    fn codex_store_uses_the_newest_state_database() {
+    fn codex_store_uses_the_supported_state_database() {
         let temp = TempDir::new().expect("temp dir");
         std::fs::write(temp.path().join("state_5.sqlite"), []).expect("create current db");
         std::fs::write(temp.path().join("state_6.sqlite"), []).expect("create future db");
 
-        assert_eq!(codex_db_path_in(temp.path()), Some(temp.path().join("state_6.sqlite")));
+        assert_eq!(codex_db_path_in(temp.path()), Some(temp.path().join("state_5.sqlite")));
     }
 
     #[test]
-    fn codex_store_falls_forward_when_the_current_database_is_absent() {
+    fn codex_store_does_not_open_an_unknown_schema() {
         let temp = TempDir::new().expect("temp dir");
         std::fs::write(temp.path().join("state_6.sqlite"), []).expect("create db");
         std::fs::write(temp.path().join("state_7.sqlite"), []).expect("create newer db");
 
-        assert_eq!(codex_db_path_in(temp.path()), Some(temp.path().join("state_7.sqlite")));
+        assert_eq!(codex_db_path_in(temp.path()), None);
+    }
+
+    #[test]
+    fn codex_store_ignores_a_directory_with_the_supported_name() {
+        let temp = TempDir::new().expect("temp dir");
+        std::fs::create_dir(temp.path().join("state_5.sqlite")).expect("create misleading directory");
+
+        assert_eq!(codex_db_path_in(temp.path()), None);
     }
 
     #[test]

@@ -103,7 +103,7 @@ fn exhausted_candidate_skips_thread_lookup() {
         .resolve_candidate("child", "/repo")
         .expect("resolve candidate");
 
-    assert!(matches!(resolution, RootResolution::BudgetExhausted));
+    assert!(matches!(resolution, RootResolution::Unavailable));
     assert!(!traversal.store.threads.contains_key("child"));
 }
 
@@ -137,7 +137,7 @@ fn last_step_skips_rollout_and_parent_reads() {
         .resolve_candidate("child", "/repo")
         .expect("resolve candidate");
 
-    assert!(matches!(resolution, RootResolution::BudgetExhausted));
+    assert!(matches!(resolution, RootResolution::Unavailable));
     assert!(!traversal.rollout_metadata.entries.contains_key(&child_rollout));
     assert!(!traversal.store.threads.contains_key("root"));
 }

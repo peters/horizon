@@ -32,6 +32,7 @@ struct DynamicPanelBindingState {
 pub(super) enum StartupBootstrapFailureAction {
     Retry,
     ContinueWithoutExactResumes,
+    OpenWithoutSaving,
 }
 
 fn collect_dynamic_binding_updates(
@@ -114,9 +115,18 @@ fn collect_dynamic_binding_updates(
 }
 
 fn panel_uses_dynamic_binding(panel: &horizon_core::Panel) -> bool {
-    panel.kind.supports_session_binding()
-        && !matches!(panel.resume, PanelResume::Session { .. })
-        && panel.session_binding.as_ref().is_none_or(|binding| binding.resumable)
+    panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
+}
+
+fn panel_session_id(panel: &horizon_core::Panel) -> Option<&str> {
+    panel
+        .session_binding
+        .as_ref()
+        .map(|binding| binding.session_id.as_str())
+        .or(match &panel.resume {
+            PanelResume::Session { session_id } => Some(session_id.as_str()),
+            PanelResume::Fresh | PanelResume::Last => None,
+        })
 }
 
 impl HorizonApp {
@@ -215,6 +225,7 @@ impl HorizonApp {
                             runtime_state,
                             message: error.to_string(),
                             unavailable_exact_session_ids: exact_session_ids,
+                            all_exact_session_ids: true,
                             runtime_state_changed: false,
                         },
                     )));
@@ -240,6 +251,7 @@ impl HorizonApp {
                         runtime_state,
                         message,
                         unavailable_exact_session_ids,
+                        all_exact_session_ids: false,
                         runtime_state_changed,
                     },
                 )));
@@ -281,10 +293,8 @@ impl HorizonApp {
                 {
                     self.pending_startup_runtime_state = Some(bootstrap.runtime_state);
                     self.pending_startup_runtime_state_changed = true;
-                    self.startup_bootstrap_failure = Some(StartupBootstrapFailure::RecoverySaveFailed {
-                        message: error,
-                        unavailable_exact_session_ids: HashSet::new(),
-                    });
+                    self.startup_bootstrap_failure =
+                        Some(StartupBootstrapFailure::RecoverySaveFailed { message: error });
                     return false;
                 }
                 self.restore_startup_runtime_state(&bootstrap.runtime_state);
@@ -298,6 +308,7 @@ impl HorizonApp {
                 self.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
                     message: failure.message,
                     unavailable_exact_session_ids: failure.unavailable_exact_session_ids,
+                    all_exact_session_ids: failure.all_exact_session_ids,
                 });
                 false
             }
@@ -316,56 +327,73 @@ impl HorizonApp {
     pub(super) fn handle_startup_bootstrap_failure(&mut self, action: StartupBootstrapFailureAction) {
         match action {
             StartupBootstrapFailureAction::Retry => {
-                if !matches!(
-                    self.startup_bootstrap_failure,
-                    Some(
-                        StartupBootstrapFailure::ExactValidationFailed { .. }
-                            | StartupBootstrapFailure::WorkerDisconnected
-                    )
-                ) {
-                    return;
-                }
                 let Some(runtime_state) = self.pending_startup_runtime_state.clone() else {
                     return;
                 };
-                self.startup_bootstrap_failure = None;
-                self.startup_receiver = Some(Self::spawn_startup_bootstrap(runtime_state));
+                match self.startup_bootstrap_failure.as_ref() {
+                    Some(
+                        StartupBootstrapFailure::ExactValidationFailed { .. }
+                        | StartupBootstrapFailure::WorkerDisconnected,
+                    ) => {
+                        self.startup_bootstrap_failure = None;
+                        self.startup_receiver = Some(Self::spawn_startup_bootstrap(runtime_state));
+                    }
+                    Some(StartupBootstrapFailure::RecoverySaveFailed { .. }) => {
+                        if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {
+                            self.startup_bootstrap_failure =
+                                Some(StartupBootstrapFailure::RecoverySaveFailed { message: error });
+                            return;
+                        }
+                        self.finish_startup_recovery(&runtime_state);
+                    }
+                    None => {}
+                }
             }
             StartupBootstrapFailureAction::ContinueWithoutExactResumes => {
                 let Some(mut runtime_state) = self.pending_startup_runtime_state.clone() else {
                     return;
                 };
                 let unavailable_exact_session_ids = match self.startup_bootstrap_failure.as_ref() {
-                    Some(
-                        StartupBootstrapFailure::ExactValidationFailed {
-                            unavailable_exact_session_ids,
-                            ..
-                        }
-                        | StartupBootstrapFailure::RecoverySaveFailed {
-                            unavailable_exact_session_ids,
-                            ..
-                        },
-                    ) => unavailable_exact_session_ids.clone(),
+                    Some(StartupBootstrapFailure::ExactValidationFailed {
+                        unavailable_exact_session_ids,
+                        ..
+                    }) => unavailable_exact_session_ids.clone(),
                     Some(StartupBootstrapFailure::WorkerDisconnected) => {
                         runtime_state.exact_session_ids_requiring_validation()
                     }
-                    None => return,
+                    Some(StartupBootstrapFailure::RecoverySaveFailed { .. }) | None => return,
                 };
                 runtime_state.neutralize_unverified_session_bindings(&unavailable_exact_session_ids);
+                self.pending_startup_runtime_state = Some(runtime_state.clone());
+                self.pending_startup_runtime_state_changed = true;
                 if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {
-                    self.startup_bootstrap_failure = Some(StartupBootstrapFailure::RecoverySaveFailed {
-                        message: error,
-                        unavailable_exact_session_ids,
-                    });
+                    self.startup_bootstrap_failure =
+                        Some(StartupBootstrapFailure::RecoverySaveFailed { message: error });
                     return;
                 }
-                self.restore_startup_runtime_state(&runtime_state);
-                self.pending_startup_runtime_state = None;
-                self.pending_startup_runtime_state_changed = false;
-                self.startup_bootstrap_failure = None;
-                self.startup_receiver = None;
+                self.finish_startup_recovery(&runtime_state);
+            }
+            StartupBootstrapFailureAction::OpenWithoutSaving => {
+                if !matches!(
+                    self.startup_bootstrap_failure,
+                    Some(StartupBootstrapFailure::RecoverySaveFailed { .. })
+                ) {
+                    return;
+                }
+                let Some(runtime_state) = self.pending_startup_runtime_state.clone() else {
+                    return;
+                };
+                self.finish_startup_recovery(&runtime_state);
             }
         }
+    }
+
+    fn finish_startup_recovery(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.restore_startup_runtime_state(runtime_state);
+        self.pending_startup_runtime_state = None;
+        self.pending_startup_runtime_state_changed = false;
+        self.startup_bootstrap_failure = None;
+        self.startup_receiver = None;
     }
 
     fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
@@ -523,10 +551,20 @@ impl HorizonApp {
             .session_binding
             .as_ref()
             .map(|binding| binding.session_id.as_str());
+        let reserved_session_ids: HashSet<_> = self
+            .board
+            .panels
+            .iter()
+            .filter(|candidate| candidate.id != panel_id)
+            .filter_map(panel_session_id)
+            .collect();
         self.session_catalog
             .recent_for(panel.kind, cwd.as_deref())
             .into_iter()
-            .filter(|session| Some(session.session_id.as_str()) != current_session_id)
+            .filter(|session| {
+                Some(session.session_id.as_str()) != current_session_id
+                    && !reserved_session_ids.contains(session.session_id.as_str())
+            })
             .take(8)
             .map(|session| {
                 let short_id = short_session_id(&session.session_id);
@@ -542,6 +580,16 @@ impl HorizonApp {
     }
 
     pub(super) fn rebind_and_restart_panel_session(&mut self, panel_id: PanelId, binding: AgentSessionBinding) -> bool {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return false;
+        };
+        if panel.kind != binding.kind
+            || self.board.panels.iter().any(|candidate| {
+                candidate.id != panel_id && panel_session_id(candidate) == Some(binding.session_id.as_str())
+            })
+        {
+            return false;
+        }
         let Some(panel) = self.board.panel_mut(panel_id) else {
             return false;
         };
