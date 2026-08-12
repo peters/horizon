@@ -571,10 +571,10 @@ impl PiSessionSummary {
             return;
         };
 
-        self.parent_controlled |= string_field(&value, &["parent_id", "parentId", "parent_session_id"])
-            .or_else(|| nested_string_field(&value, "session", &["parent_id", "parentId", "parent_session_id"]))
-            .or_else(|| nested_string_field(&value, "metadata", &["parent_id", "parentId", "parent_session_id"]))
-            .is_some_and(|parent| !parent.is_empty());
+        if value.get("type").and_then(Value::as_str) == Some("session") {
+            self.parent_controlled |=
+                string_field(&value, &["parentSession", "parent_session"]).is_some_and(|parent| !parent.is_empty());
+        }
 
         if self.session_id.is_none()
             && let Some(found_session_id) = extract_pi_session_id(&value)

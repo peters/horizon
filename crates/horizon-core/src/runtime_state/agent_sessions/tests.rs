@@ -789,11 +789,24 @@ fn parse_pi_session_falls_back_to_filename_id_and_default_label() {
 
 #[test]
 fn parse_pi_session_marks_parent_sessions_noninteractive() {
-    let jsonl = "{\"type\":\"session\",\"id\":\"child\",\"parent_id\":\"root\"}\n";
+    let jsonl = "{\"type\":\"session\",\"id\":\"child\",\"parentSession\":\"/sessions/root.jsonl\"}\n";
 
     let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
 
     assert!(!session.interactive);
+}
+
+#[test]
+fn parse_pi_session_keeps_message_tree_parent_ids_interactive() {
+    let jsonl = concat!(
+        "{\"type\":\"session\",\"id\":\"root\",\"cwd\":\"/repo\"}\n",
+        "{\"type\":\"message\",\"id\":\"entry-1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
+        "{\"type\":\"message\",\"id\":\"entry-2\",\"parentId\":\"entry-1\",\"message\":{\"role\":\"assistant\",\"content\":\"done\"}}\n",
+    );
+
+    let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
+
+    assert!(session.interactive);
 }
 
 #[test]
