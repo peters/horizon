@@ -405,6 +405,171 @@ fn source_chain_is_used_when_the_rollout_root_is_rejected() {
 }
 
 #[test]
+fn rollout_metadata_root_takes_precedence_over_the_source_parent() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    let child_rollout = temp.path().join("child.jsonl");
+    std::fs::write(
+        &child_rollout,
+        r#"{"type":"session_meta","payload":{"id":"child","session_id":"metadata-root"}}
+"#,
+    )
+    .expect("write child rollout");
+    insert_thread(&connection, "metadata-root", &child_rollout, "cli", "/repo", 100, false);
+    insert_thread(&connection, "source-root", &child_rollout, "cli", "/repo", 90, false);
+    insert_thread(
+        &connection,
+        "child",
+        &child_rollout,
+        r#"{"subagent":{"thread_spawn":{"parent_thread_id":"source-root"}}}"#,
+        "/repo",
+        200,
+        false,
+    );
+    drop(connection);
+
+    let loaded =
+        load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
+
+    assert_eq!(loaded.root_aliases["child"].session_id, "metadata-root");
+}
+
+#[test]
+fn source_parent_resolves_after_a_long_rejected_metadata_chain() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    let child_rollout = temp.path().join("child.jsonl");
+    std::fs::write(
+        &child_rollout,
+        r#"{"type":"session_meta","payload":{"id":"child","session_id":"metadata-0"}}
+"#,
+    )
+    .expect("write child rollout");
+    insert_thread(&connection, "source-root", &child_rollout, "cli", "/repo", 1, false);
+    insert_thread(&connection, "archived-root", &child_rollout, "cli", "/repo", 2, true);
+    for index in (0_i64..64).rev() {
+        let id = format!("metadata-{index}");
+        let parent_id = if index == 63 {
+            "archived-root".to_string()
+        } else {
+            format!("metadata-{}", index + 1)
+        };
+        let rollout = temp.path().join(format!("{id}.jsonl"));
+        std::fs::write(
+            &rollout,
+            format!(
+                r#"{{"type":"session_meta","payload":{{"id":"{id}","session_id":"{parent_id}"}}}}
+"#
+            ),
+        )
+        .expect("write metadata rollout");
+        insert_thread(
+            &connection,
+            &id,
+            &rollout,
+            r#"{"subagent":{"other":"guardian"}}"#,
+            "/repo",
+            index + 3,
+            false,
+        );
+    }
+    insert_thread(
+        &connection,
+        "child",
+        &child_rollout,
+        r#"{"subagent":{"thread_spawn":{"parent_thread_id":"source-root"}}}"#,
+        "/repo",
+        100,
+        false,
+    );
+    drop(connection);
+    reset_rollout_metadata_read_count();
+
+    let loaded =
+        load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
+
+    assert_eq!(loaded.root_aliases["child"].session_id, "source-root");
+    assert_eq!(rollout_metadata_read_count(), 65);
+}
+
+#[test]
+fn intermediate_source_parent_resolves_after_a_long_rejected_metadata_branch() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    let child_rollout = temp.path().join("child.jsonl");
+    let intermediate_rollout = temp.path().join("intermediate.jsonl");
+    std::fs::write(
+        &child_rollout,
+        r#"{"type":"session_meta","payload":{"id":"child","session_id":"intermediate"}}
+"#,
+    )
+    .expect("write child rollout");
+    std::fs::write(
+        &intermediate_rollout,
+        r#"{"type":"session_meta","payload":{"id":"intermediate","session_id":"metadata-0"}}
+"#,
+    )
+    .expect("write intermediate rollout");
+    insert_thread(&connection, "source-root", &child_rollout, "cli", "/repo", 1, false);
+    insert_thread(&connection, "archived-root", &child_rollout, "cli", "/repo", 2, true);
+    for index in (0_i64..62).rev() {
+        let id = format!("metadata-{index}");
+        let parent_id = if index == 61 {
+            "archived-root".to_string()
+        } else {
+            format!("metadata-{}", index + 1)
+        };
+        let rollout = temp.path().join(format!("{id}.jsonl"));
+        std::fs::write(
+            &rollout,
+            format!(
+                r#"{{"type":"session_meta","payload":{{"id":"{id}","session_id":"{parent_id}"}}}}
+"#
+            ),
+        )
+        .expect("write metadata rollout");
+        insert_thread(
+            &connection,
+            &id,
+            &rollout,
+            r#"{"subagent":{"other":"guardian"}}"#,
+            "/repo",
+            index + 3,
+            false,
+        );
+    }
+    insert_thread(
+        &connection,
+        "intermediate",
+        &intermediate_rollout,
+        r#"{"subagent":{"thread_spawn":{"parent_thread_id":"source-root"}}}"#,
+        "/repo",
+        100,
+        false,
+    );
+    insert_thread(
+        &connection,
+        "child",
+        &child_rollout,
+        r#"{"subagent":{"other":"guardian"}}"#,
+        "/repo",
+        101,
+        false,
+    );
+    drop(connection);
+    reset_rollout_metadata_read_count();
+
+    let loaded =
+        load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
+
+    assert_eq!(loaded.root_aliases["child"].session_id, "source-root");
+    assert_eq!(rollout_metadata_read_count(), 64);
+}
+
+#[test]
 fn metadata_parent_chains_can_cross_an_intermediate_child() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
@@ -513,6 +678,68 @@ fn source_chain_cycles_do_not_produce_aliases() {
 
     assert!(!loaded.root_aliases.contains_key("child-a"));
     assert!(loaded.child_binding_ids.contains("child-a"));
+}
+
+#[test]
+fn metadata_cycles_do_not_block_a_valid_source_parent() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    let child_rollout = temp.path().join("child.jsonl");
+    let first_cycle_rollout = temp.path().join("cycle-a.jsonl");
+    let second_cycle_rollout = temp.path().join("cycle-b.jsonl");
+    std::fs::write(
+        &child_rollout,
+        r#"{"type":"session_meta","payload":{"id":"child","session_id":"cycle-a"}}
+"#,
+    )
+    .expect("write child rollout");
+    std::fs::write(
+        &first_cycle_rollout,
+        r#"{"type":"session_meta","payload":{"id":"cycle-a","session_id":"cycle-b"}}
+"#,
+    )
+    .expect("write first cycle rollout");
+    std::fs::write(
+        &second_cycle_rollout,
+        r#"{"type":"session_meta","payload":{"id":"cycle-b","session_id":"cycle-a"}}
+"#,
+    )
+    .expect("write second cycle rollout");
+    insert_thread(&connection, "root", &child_rollout, "cli", "/repo", 1, false);
+    insert_thread(
+        &connection,
+        "cycle-a",
+        &first_cycle_rollout,
+        r#"{"subagent":{"other":"guardian"}}"#,
+        "/repo",
+        2,
+        false,
+    );
+    insert_thread(
+        &connection,
+        "cycle-b",
+        &second_cycle_rollout,
+        r#"{"subagent":{"other":"guardian"}}"#,
+        "/repo",
+        3,
+        false,
+    );
+    insert_thread(
+        &connection,
+        "child",
+        &child_rollout,
+        r#"{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}"#,
+        "/repo",
+        4,
+        false,
+    );
+    drop(connection);
+
+    let loaded =
+        load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
+
+    assert_eq!(loaded.root_aliases["child"].session_id, "root");
 }
 
 #[test]

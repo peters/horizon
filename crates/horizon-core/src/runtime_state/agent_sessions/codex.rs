@@ -9,31 +9,132 @@ use crate::error::{Error, Result};
 
 use super::{AgentSessionRecord, PanelKind, normalize_cwd};
 
-const MAX_PARENT_TRAVERSAL_STEPS: usize = 64;
+const MAX_PARENT_CANDIDATE_STEPS: usize = 64;
+const MAX_TOTAL_PARENT_TRAVERSAL_STEPS: usize = MAX_PARENT_CANDIDATE_STEPS * 2;
+
+#[derive(Clone)]
+enum RootResolution {
+    Resolved(AgentSessionRecord),
+    Rejected,
+    CycleDetected,
+    BudgetExhausted,
+}
+
+impl RootResolution {
+    fn unresolved(metadata: &Self, source: &Self) -> Self {
+        if matches!(metadata, Self::BudgetExhausted) || matches!(source, Self::BudgetExhausted) {
+            Self::BudgetExhausted
+        } else if matches!(metadata, Self::CycleDetected) || matches!(source, Self::CycleDetected) {
+            Self::CycleDetected
+        } else {
+            Self::Rejected
+        }
+    }
+
+    fn is_memoizable(&self) -> bool {
+        matches!(self, Self::Resolved(_) | Self::Rejected)
+    }
+}
 
 struct RootTraversal {
-    visited: HashSet<String>,
-    remaining_parent_traversals: usize,
+    active: HashSet<String>,
+    memoized: HashMap<String, RootResolution>,
+    remaining_total_steps: usize,
 }
 
 impl RootTraversal {
     fn new() -> Self {
         Self {
-            visited: HashSet::new(),
-            remaining_parent_traversals: MAX_PARENT_TRAVERSAL_STEPS,
+            active: HashSet::new(),
+            memoized: HashMap::new(),
+            remaining_total_steps: MAX_TOTAL_PARENT_TRAVERSAL_STEPS,
         }
     }
 
-    fn visit(&mut self, thread: &CodexThread) -> bool {
-        self.visited.insert(thread.record.session_id.clone())
+    fn resolve_candidate(
+        &mut self,
+        parent_id: &str,
+        expected_cwd: &str,
+        threads_by_id: &HashMap<&str, &CodexThread>,
+    ) -> RootResolution {
+        let remaining_candidate_steps = MAX_PARENT_CANDIDATE_STEPS.min(self.remaining_total_steps);
+        self.resolve_parent(parent_id, expected_cwd, threads_by_id, remaining_candidate_steps)
     }
 
-    fn descend_to_parent(&mut self) -> bool {
-        if self.remaining_parent_traversals == 0 {
-            return false;
+    fn resolve_parent(
+        &mut self,
+        parent_id: &str,
+        expected_cwd: &str,
+        threads_by_id: &HashMap<&str, &CodexThread>,
+        remaining_candidate_steps: usize,
+    ) -> RootResolution {
+        let Some(thread) = threads_by_id.get(parent_id) else {
+            return RootResolution::Rejected;
+        };
+        self.resolve_record(thread, expected_cwd, threads_by_id, remaining_candidate_steps)
+    }
+
+    fn resolve_record(
+        &mut self,
+        thread: &CodexThread,
+        expected_cwd: &str,
+        threads_by_id: &HashMap<&str, &CodexThread>,
+        remaining_candidate_steps: usize,
+    ) -> RootResolution {
+        let thread_id = &thread.record.session_id;
+        if let Some(resolution) = self.memoized.get(thread_id) {
+            return resolution.clone();
         }
-        self.remaining_parent_traversals -= 1;
-        true
+        if self.active.contains(thread_id) {
+            return RootResolution::CycleDetected;
+        }
+        if remaining_candidate_steps == 0 || self.remaining_total_steps == 0 {
+            return RootResolution::BudgetExhausted;
+        }
+        self.remaining_total_steps -= 1;
+        let next_candidate_steps = remaining_candidate_steps - 1;
+
+        if !thread.source.is_parent_controlled {
+            let resolution = if !thread.archived && thread.record.cwd.as_deref() == Some(expected_cwd) {
+                RootResolution::Resolved(thread.record.clone())
+            } else {
+                RootResolution::Rejected
+            };
+            self.memoized.insert(thread_id.clone(), resolution.clone());
+            return resolution;
+        }
+
+        self.active.insert(thread_id.clone());
+        let metadata_parent = thread
+            .rollout_path
+            .as_deref()
+            .and_then(|path| rollout_root_session_id(path, thread_id));
+        let metadata_resolution = metadata_parent
+            .as_deref()
+            .map_or(RootResolution::Rejected, |parent_id| {
+                self.resolve_parent(parent_id, expected_cwd, threads_by_id, next_candidate_steps)
+            });
+        let resolution = match metadata_resolution {
+            RootResolution::Resolved(root) => RootResolution::Resolved(root),
+            metadata_resolution => {
+                let source_resolution = match thread.source.parent_thread_id.as_deref() {
+                    Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution.clone(),
+                    Some(parent_id) => {
+                        self.resolve_parent(parent_id, expected_cwd, threads_by_id, next_candidate_steps)
+                    }
+                    None => RootResolution::Rejected,
+                };
+                match source_resolution {
+                    RootResolution::Resolved(root) => RootResolution::Resolved(root),
+                    source_resolution => RootResolution::unresolved(&metadata_resolution, &source_resolution),
+                }
+            }
+        };
+        self.active.remove(thread_id);
+        if resolution.is_memoizable() {
+            self.memoized.insert(thread_id.clone(), resolution.clone());
+        }
+        resolution
     }
 }
 
@@ -190,44 +291,33 @@ fn resolve_root_alias(
     }
 
     let expected_cwd = child.record.cwd.as_deref()?;
-    let root = resolve_root_record(child, expected_cwd, threads_by_id, &mut RootTraversal::new())?;
-
-    Some((binding_id.to_string(), root))
-}
-
-fn resolve_root_record(
-    thread: &CodexThread,
-    expected_cwd: &str,
-    threads_by_id: &HashMap<&str, &CodexThread>,
-    traversal: &mut RootTraversal,
-) -> Option<AgentSessionRecord> {
-    if !traversal.visit(thread) {
-        return None;
-    }
-    if !thread.source.is_parent_controlled {
-        return (!thread.archived && thread.record.cwd.as_deref() == Some(expected_cwd)).then(|| thread.record.clone());
-    }
-    if !traversal.descend_to_parent() {
-        return None;
-    }
-
-    let metadata_parent = thread
+    let metadata_parent = child
         .rollout_path
         .as_deref()
-        .and_then(|path| rollout_root_session_id(path, &thread.record.session_id));
-    if let Some(parent) = metadata_parent
+        .and_then(|path| rollout_root_session_id(path, binding_id));
+    let source_parent = child.source.parent_thread_id.as_deref();
+    let mut traversal = RootTraversal::new();
+    let metadata_resolution = metadata_parent
         .as_deref()
-        .and_then(|parent_id| threads_by_id.get(parent_id))
-        .and_then(|parent| resolve_root_record(parent, expected_cwd, threads_by_id, traversal))
-    {
-        return Some(parent);
-    }
-    thread
-        .source
-        .parent_thread_id
-        .as_deref()
-        .and_then(|parent_id| threads_by_id.get(parent_id))
-        .and_then(|parent| resolve_root_record(parent, expected_cwd, threads_by_id, traversal))
+        .map_or(RootResolution::Rejected, |parent_id| {
+            traversal.resolve_candidate(parent_id, expected_cwd, threads_by_id)
+        });
+    let root = match metadata_resolution {
+        RootResolution::Resolved(root) => root,
+        metadata_resolution => {
+            let source_resolution = match source_parent {
+                Some(parent_id) if Some(parent_id) == metadata_parent.as_deref() => metadata_resolution,
+                Some(parent_id) => traversal.resolve_candidate(parent_id, expected_cwd, threads_by_id),
+                None => RootResolution::Rejected,
+            };
+            let RootResolution::Resolved(root) = source_resolution else {
+                return None;
+            };
+            root
+        }
+    };
+
+    Some((binding_id.to_string(), root))
 }
 
 fn rollout_root_session_id(path: &Path, expected_child_id: &str) -> Option<String> {
