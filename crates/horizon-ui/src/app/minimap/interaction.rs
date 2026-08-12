@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use egui::{Context, CursorIcon, Id, Order, PopupAnchor, Pos2, Rect, Sense, Tooltip, Ui, Vec2};
+use egui::{Context, CursorIcon, Id, Label, Order, PopupAnchor, Pos2, Rect, Sense, TextWrapMode, Tooltip, Ui, Vec2};
 use horizon_core::{Board, Panel, PanelId, WorkspaceId};
 
 use super::{
@@ -43,7 +43,7 @@ pub(super) fn render_scoped_minimap(
             if hovered.is_some() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
-            show_minimap_hover_tooltip(app, ui, overlay_id, hovered);
+            show_minimap_hover_tooltip(ui, overlay_id, hovered_label.as_deref());
             (response, hovered)
         });
 
@@ -111,8 +111,8 @@ fn restore_minimap_panel_focus(board: &mut Board, target: MinimapHitTarget, fitt
 }
 
 /// Human-readable name for a hovered minimap target, shared by the tooltip
-/// and the accessibility label so assistive tech announces what a sighted
-/// user sees.
+/// and the accessibility label. The tooltip elides it visually to its width
+/// budget; assistive tech gets the full text.
 fn minimap_target_label(app: &HorizonApp, target: MinimapHitTarget) -> Option<String> {
     match target {
         MinimapHitTarget::Panel { panel_id, .. } => app
@@ -145,14 +145,18 @@ pub(super) fn minimap_widget_info(target_label: Option<&str>) -> egui::WidgetInf
     )
 }
 
-fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered: Option<MinimapHitTarget>) {
-    let Some(target) = hovered else {
-        return;
-    };
-    let Some(text) = minimap_target_label(app, target) else {
+fn show_minimap_hover_tooltip(ui: &Ui, overlay_id: Id, hovered_label: Option<&str>) {
+    let Some(text) = hovered_label else {
         return;
     };
 
+    // egui lays an always-open tooltip out inside the size it measured last
+    // frame, so a wrapping label narrows a little every frame until the
+    // tooltip collapses into a glyph-wide strip. A single-line truncating
+    // label bounded by a width that does not depend on last frame's size
+    // breaks that feedback loop while keeping long titles elided, and the
+    // stable id keeps the tooltip continuously visible across target changes
+    // instead of restarting its fade-in (and leaking per-target area state).
     Tooltip::always_open(
         ui.ctx().clone(),
         ui.layer_id(),
@@ -161,7 +165,9 @@ fn show_minimap_hover_tooltip(app: &HorizonApp, ui: &Ui, overlay_id: Id, hovered
     )
     .gap(12.0)
     .show(|ui| {
-        ui.label(text);
+        let max_width = (ui.ctx().content_rect().width() - 24.0).clamp(80.0, ui.spacing().tooltip_width);
+        ui.set_max_width(max_width);
+        ui.add(Label::new(text).wrap_mode(TextWrapMode::Truncate));
     });
 }
 
