@@ -604,19 +604,23 @@ mod tests {
         (temp, app)
     }
 
-    fn test_persistent_app(runtime_state: RuntimeState) -> (TempDir, HorizonApp, std::path::PathBuf) {
+    fn test_persistent_recovery_app(runtime_state: RuntimeState) -> (TempDir, HorizonApp, std::path::PathBuf) {
         let temp = tempfile::tempdir().expect("temp dir");
         let config_path = temp.path().join("config.yaml");
         let session_store = SessionStore::new(
             HorizonHome::from_root(temp.path().join(".horizon")),
             config_path.clone(),
         );
-        let session = session_store
+        let pending_runtime_state = runtime_state.clone();
+        let mut session = session_store
             .create_session_from_runtime(runtime_state)
             .expect("create persistent session");
         let runtime_path = session.runtime_state_path.clone();
+        // Construct the app without starting the real provider-catalog worker;
+        // these tests inject the failed pre-open state below.
+        session.runtime_state = RuntimeState::default();
         let ctx = Context::default();
-        let app = HorizonApp::new_with_egui_context(
+        let mut app = HorizonApp::new_with_egui_context(
             &ctx,
             &Config::default(),
             config_path,
@@ -627,6 +631,8 @@ mod tests {
             },
             input::ObservedKeyboardInputs::default(),
         );
+        assert!(app.startup_receiver.is_none());
+        app.pending_startup_runtime_state = Some(pending_runtime_state);
         (temp, app, runtime_path)
     }
 
@@ -881,7 +887,7 @@ mod tests {
             }],
             ..RuntimeState::default()
         };
-        let (_temp, mut app, runtime_path) = test_persistent_app(runtime_state);
+        let (_temp, mut app, runtime_path) = test_persistent_recovery_app(runtime_state);
         app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
 
         app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
@@ -917,7 +923,7 @@ mod tests {
             }],
             ..RuntimeState::default()
         };
-        let (temp, mut app, runtime_path) = test_persistent_app(runtime_state);
+        let (temp, mut app, runtime_path) = test_persistent_recovery_app(runtime_state);
         let blocked_home = temp.path().join("blocked-home");
         std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
         app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
