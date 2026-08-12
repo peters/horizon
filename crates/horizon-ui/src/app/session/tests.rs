@@ -15,7 +15,9 @@ use tempfile::TempDir;
 
 use crate::input;
 
+mod dynamic_assignment;
 mod provider_scoping;
+mod recovery_deduplication;
 
 fn test_app() -> (TempDir, HorizonApp) {
     let temp = tempfile::tempdir().expect("temp dir");

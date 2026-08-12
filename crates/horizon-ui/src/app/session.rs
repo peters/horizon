@@ -59,8 +59,17 @@ fn collect_dynamic_binding_updates(
             .push(panel);
     }
 
+    let mut ordered_groups: Vec<_> = grouped_panels.into_iter().collect();
+    ordered_groups.sort_by(|((left_kind, left_cwd), _), ((right_kind, right_cwd), _)| {
+        left_cwd
+            .is_empty()
+            .cmp(&right_cwd.is_empty())
+            .then_with(|| left_kind.display_name().cmp(right_kind.display_name()))
+            .then_with(|| left_cwd.cmp(right_cwd))
+    });
+
     let mut assignments = Vec::new();
-    for ((kind, cwd), panels) in grouped_panels {
+    for ((kind, cwd), panels) in ordered_groups {
         if kind == PanelKind::Claude {
             continue;
         }
@@ -378,6 +387,8 @@ impl HorizonApp {
                     Some(StartupBootstrapFailure::RecoverySaveFailed { .. }) | None => return,
                 };
                 runtime_state.neutralize_unverified_session_bindings(&unavailable_exact_session_ids);
+                let busy_claude_session_ids = live_claude_session_ids();
+                runtime_state.normalize_agent_bindings(&busy_claude_session_ids);
                 self.pending_startup_runtime_state = Some(runtime_state.clone());
                 self.pending_startup_runtime_state_changed = true;
                 if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {

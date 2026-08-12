@@ -40,15 +40,34 @@ impl RuntimeState {
     ) -> bool {
         self.ensure_local_ids();
 
+        let mut exact_session_keys: HashSet<_> = busy_session_ids
+            .iter()
+            .map(|session_id| AgentSessionKey::new(PanelKind::Claude, session_id))
+            .collect();
+        let mut changed = self.validate_verified_bindings(catalog, &mut exact_session_keys);
+        changed |= self.repair_parent_controlled_exact_bindings(catalog, &mut exact_session_keys);
+
         let mut used_session_keys: HashSet<_> = busy_session_ids
             .iter()
             .map(|session_id| AgentSessionKey::new(PanelKind::Claude, session_id))
             .collect();
-        let mut changed = self.validate_verified_bindings(catalog, &mut used_session_keys);
-        changed |= self.repair_parent_controlled_exact_bindings(catalog, &mut used_session_keys);
-        changed |= self.materialize_explicit_bindings(catalog, &mut used_session_keys);
+        changed |= self.normalize_agent_bindings_with_used(&mut used_session_keys, Some(catalog));
         changed |= self.assign_last_bindings(catalog, &mut used_session_keys);
         changed
+    }
+
+    /// Materialize configured exact resumes and enforce provider-scoped
+    /// uniqueness without consulting external provider catalogs.
+    ///
+    /// Callers handling a catalog failure must first neutralize any exact IDs
+    /// that could not be validated.
+    pub fn normalize_agent_bindings(&mut self, busy_session_ids: &HashSet<String>) -> bool {
+        self.ensure_local_ids();
+        let mut used_session_keys = busy_session_ids
+            .iter()
+            .map(|session_id| AgentSessionKey::new(PanelKind::Claude, session_id))
+            .collect();
+        self.normalize_agent_bindings_with_used(&mut used_session_keys, None)
     }
 
     fn validate_verified_bindings(
@@ -121,25 +140,26 @@ impl RuntimeState {
         changed
     }
 
-    fn materialize_explicit_bindings(
+    fn normalize_agent_bindings_with_used(
         &mut self,
-        catalog: &AgentSessionBootstrapCatalog,
         used_session_keys: &mut HashSet<AgentSessionKey>,
+        catalog: Option<&AgentSessionBootstrapCatalog>,
     ) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
             if !panel.kind.supports_session_binding() {
                 continue;
             }
-            if panel.kind.requires_exact_session_validation()
-                && panel.stored_session_id().is_some_and(|session_id| {
-                    matches!(
-                        catalog.exact_resolution(panel.kind, session_id),
-                        agent_sessions::ExactSessionResolution::Unavailable
-                            | agent_sessions::ExactSessionResolution::Stale
-                    )
-                })
-            {
+            if catalog.is_some_and(|catalog| {
+                panel.kind.requires_exact_session_validation()
+                    && panel.stored_session_id().is_some_and(|session_id| {
+                        matches!(
+                            catalog.exact_resolution(panel.kind, session_id),
+                            agent_sessions::ExactSessionResolution::Unavailable
+                                | agent_sessions::ExactSessionResolution::Stale
+                        )
+                    })
+            }) {
                 continue;
             }
             if panel.session_binding.is_none()
@@ -161,7 +181,7 @@ impl RuntimeState {
             else {
                 continue;
             };
-            if panel.kind.requires_exact_session_validation() || used_session_keys.insert(session_key) {
+            if used_session_keys.insert(session_key) {
                 continue;
             }
             tracing::warn!(
