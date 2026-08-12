@@ -1,7 +1,7 @@
 mod agent_sessions;
+mod binding_bootstrap;
 mod claude_live_sessions;
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -16,7 +16,7 @@ use crate::ssh::SshConnection;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
-pub use agent_sessions::{AgentSessionCatalog, AgentSessionRecord};
+pub use agent_sessions::{AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord};
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 
 const RUNTIME_STATE_VERSION: u32 = 2;
@@ -139,67 +139,6 @@ impl RuntimeState {
     pub fn migrate_canvas_view(&mut self) {
         self.canvas_view = Some(self.canvas_view_or_default());
         self.pan_offset = None;
-    }
-
-    /// Assigns catalog sessions to legacy `resume: last` panels that were
-    /// persisted without a session binding.
-    ///
-    /// `busy_session_ids` lists sessions currently open in a running agent
-    /// process (see [`live_claude_session_ids`]); those are never assigned so
-    /// a restored panel cannot attach to a conversation that is already open
-    /// elsewhere.
-    pub fn bootstrap_missing_agent_bindings(
-        &mut self,
-        catalog: &AgentSessionCatalog,
-        busy_session_ids: &HashSet<String>,
-    ) {
-        self.ensure_local_ids();
-
-        let mut used_session_ids = busy_session_ids.clone();
-
-        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
-            if !panel.kind.supports_session_binding() {
-                continue;
-            }
-
-            if panel.session_binding.is_none()
-                && let PanelResume::Session { session_id } = &panel.resume
-            {
-                panel.session_binding = Some(AgentSessionBinding::new(
-                    panel.kind,
-                    session_id.clone(),
-                    panel.cwd.clone(),
-                    Some(panel.name.clone()),
-                    None,
-                ));
-            }
-
-            if let Some(binding) = &panel.session_binding {
-                used_session_ids.insert(binding.session_id.clone());
-            }
-        }
-
-        let mut pending_by_group: HashMap<(PanelKind, String), Vec<&mut PanelState>> = HashMap::new();
-        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
-            if !panel.kind.supports_session_binding()
-                || panel.session_binding.is_some()
-                || !matches!(panel.resume, PanelResume::Last)
-            {
-                continue;
-            }
-            let cwd = normalize_cwd(panel.cwd.as_deref()).unwrap_or_default();
-            pending_by_group.entry((panel.kind, cwd)).or_default().push(panel);
-        }
-
-        for ((kind, cwd), panels) in pending_by_group {
-            let mut candidates = catalog.recent_for(kind, empty_to_none(&cwd));
-            candidates.retain(|candidate| !used_session_ids.contains(&candidate.session_id));
-
-            for (panel, candidate) in panels.into_iter().zip(candidates) {
-                used_session_ids.insert(candidate.session_id.clone());
-                panel.session_binding = Some(candidate.into_binding());
-            }
-        }
     }
 
     #[must_use]
@@ -420,6 +359,50 @@ pub struct PanelState {
 }
 
 impl PanelState {
+    /// The persisted session id, whether it came from a captured binding or
+    /// an explicit `resume: session` setting.
+    #[must_use]
+    pub fn stored_session_id(&self) -> Option<&str> {
+        self.session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.as_str())
+            .or(match &self.resume {
+                PanelResume::Session { session_id } => Some(session_id.as_str()),
+                PanelResume::Fresh | PanelResume::Last => None,
+            })
+    }
+
+    fn ensure_session_binding(&mut self, session_id: &str) -> bool {
+        let mut changed = false;
+        self.session_binding.get_or_insert_with(|| {
+            changed = true;
+            AgentSessionBinding::new(
+                self.kind,
+                session_id.to_string(),
+                self.cwd.clone(),
+                Some(self.name.clone()),
+                None,
+            )
+        });
+        changed
+    }
+
+    fn replace_session_binding(&mut self, binding: AgentSessionBinding) -> bool {
+        let resume_changed = if matches!(self.resume, PanelResume::Session { .. }) {
+            let resume = PanelResume::Session {
+                session_id: binding.session_id.clone(),
+            };
+            let changed = self.resume != resume;
+            self.resume = resume;
+            changed
+        } else {
+            false
+        };
+        let changed = resume_changed || self.session_binding.as_ref() != Some(&binding);
+        self.session_binding = Some(binding);
+        changed
+    }
+
     #[must_use]
     pub fn from_config(
         workspace_index: usize,
@@ -543,6 +526,22 @@ pub struct AgentSessionBinding {
     pub updated_at: Option<i64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AgentSessionKey {
+    kind: PanelKind,
+    session_id: String,
+}
+
+impl AgentSessionKey {
+    #[must_use]
+    pub fn new(kind: PanelKind, session_id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            session_id: session_id.into(),
+        }
+    }
+}
+
 impl AgentSessionBinding {
     #[must_use]
     pub fn new(
@@ -569,10 +568,6 @@ pub fn new_local_id() -> String {
 
 fn normalize_cwd(cwd: Option<&str>) -> Option<String> {
     cwd.map(Config::expand_tilde).map(|path| path.display().to_string())
-}
-
-fn empty_to_none(value: &str) -> Option<&str> {
-    if value.is_empty() { None } else { Some(value) }
 }
 
 #[cfg(test)]

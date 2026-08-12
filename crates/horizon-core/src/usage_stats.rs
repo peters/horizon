@@ -343,7 +343,7 @@ struct CodexDayRow {
 }
 
 fn load_codex_stats() -> Vec<CodexDayRow> {
-    let Some(path) = home_dir().map(|h| h.join(".codex/state_5.sqlite")) else {
+    let Some(path) = crate::local_store::codex_db_path() else {
         return Vec::new();
     };
     if !path.exists() {
@@ -353,8 +353,7 @@ fn load_codex_stats() -> Vec<CodexDayRow> {
 }
 
 fn load_codex_stats_from_path(path: &std::path::Path) -> Option<Vec<CodexDayRow>> {
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = rusqlite::Connection::open_with_flags(path, flags).ok()?;
+    let conn = crate::local_store::open_read_only_sqlite(path).ok()?;
     let mut stmt = conn
         .prepare(
             "SELECT date(created_at, 'unixepoch') AS day, \
@@ -431,8 +430,7 @@ fn load_opencode_stats_from_path(path: &std::path::Path) -> Option<Vec<OpenCodeD
         tokens: OpenCodeTokens,
     }
 
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = rusqlite::Connection::open_with_flags(path, flags).ok()?;
+    let conn = crate::local_store::open_read_only_sqlite(path).ok()?;
     let mut days: std::collections::BTreeMap<String, OpenCodeDayRow> = std::collections::BTreeMap::new();
 
     let mut sessions_stmt = conn
@@ -562,7 +560,7 @@ fn civil_from_days(days: u64) -> (i64, u64, u64) {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    crate::local_store::user_home_dir()
 }
 
 #[cfg(test)]

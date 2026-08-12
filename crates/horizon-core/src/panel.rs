@@ -64,6 +64,11 @@ impl PanelKind {
     }
 
     #[must_use]
+    pub fn requires_exact_session_validation(self) -> bool {
+        agent_definition(self).is_some_and(crate::AgentDefinition::requires_exact_session_validation)
+    }
+
+    #[must_use]
     pub fn display_name(self) -> &'static str {
         if let Some(definition) = agent_definition(self) {
             return definition.display_name;

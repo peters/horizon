@@ -87,14 +87,10 @@ enum CanvasPanSpaceKeyState {
 }
 
 use self::frame_stats::FrameStats;
+use self::session::{StartupBootstrapFailure, StartupBootstrapOutcome};
 use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
 use self::updates::{AvailableUpdate, UpdateCheckMessage};
-
-struct StartupBootstrap {
-    runtime_state: RuntimeState,
-    session_catalog: AgentSessionCatalog,
-}
 
 struct ActiveSession {
     session_id: String,
@@ -240,7 +236,10 @@ pub struct HorizonApp {
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
-    startup_receiver: Option<Receiver<StartupBootstrap>>,
+    startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
+    pending_startup_runtime_state: Option<RuntimeState>,
+    pending_startup_runtime_state_changed: bool,
+    startup_bootstrap_failure: Option<StartupBootstrapFailure>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
     remote_hosts_catalog: RemoteHostCatalog,
@@ -415,6 +414,9 @@ impl HorizonApp {
             pending_detached_window_position_restore: BTreeSet::new(),
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
+            pending_startup_runtime_state: None,
+            pending_startup_runtime_state_changed: false,
+            startup_bootstrap_failure: None,
             session_catalog_refresh: None,
             remote_hosts_overlay: None,
             remote_hosts_catalog: RemoteHostCatalog::default(),

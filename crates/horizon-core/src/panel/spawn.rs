@@ -661,7 +661,6 @@ fn resolve_agent_launch_command(
         AgentIntegrationKind::None => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
-
     match definition.resume_mode {
         AgentResumeMode::ExactSubcommand { subcommand } => {
             launch_args.extend(args);
@@ -784,7 +783,6 @@ fn resolve_session_binding(
     } else {
         session_binding.is_some() || matches!(resume, PanelResume::Session { .. })
     };
-
     // Claude refuses `--resume` for ids without an on-disk transcript (a
     // bound panel that never received a message) and `--session-id` for ids
     // that already have one, so the launch mode follows the store: resume

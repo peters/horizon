@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::local_store::env_path;
+
 pub(crate) fn opencode_db_path() -> Option<PathBuf> {
     opencode_db_path_with_env(
         std::env::consts::OS,
@@ -8,12 +10,6 @@ pub(crate) fn opencode_db_path() -> Option<PathBuf> {
         env_path("XDG_DATA_HOME"),
         env_path("APPDATA"),
     )
-}
-
-fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }
 
 fn opencode_db_path_with_env(

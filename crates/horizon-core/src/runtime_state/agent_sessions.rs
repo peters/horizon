@@ -1,20 +1,36 @@
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use rusqlite::Connection;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::local_store::open_read_only_sqlite;
 use crate::opencode_paths::opencode_db_path;
 
-use super::{AgentSessionBinding, PanelKind, normalize_cwd};
+use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
+
+mod codex;
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentSessionCatalog {
     sessions: Vec<AgentSessionRecord>,
+}
+
+#[derive(Clone)]
+pub(super) enum ExactSessionResolution {
+    Verified,
+    Rebind(AgentSessionBinding),
+    Stale,
+    Unavailable,
+}
+
+pub struct AgentSessionBootstrapCatalog {
+    catalog: AgentSessionCatalog,
+    exact_resolutions: HashMap<(PanelKind, String), ExactSessionResolution>,
+    unavailable_exact_session_ids: HashSet<String>,
 }
 
 impl AgentSessionCatalog {
@@ -24,12 +40,102 @@ impl AgentSessionCatalog {
     ///
     /// Returns an error if one of the underlying local session stores cannot be opened.
     pub fn load() -> Result<Self> {
-        let mut sessions = load_claude_sessions()?;
-        sessions.extend(load_codex_sessions()?);
-        sessions.extend(load_opencode_sessions()?);
-        sessions.extend(load_pi_sessions()?);
+        Self::load_strict(
+            load_claude_sessions,
+            || codex::load_sessions(&HashSet::new(), true),
+            load_opencode_sessions,
+            load_pi_sessions,
+        )
+    }
+
+    /// Load provider catalogs needed to repair, assign, or manually rebind the
+    /// panels present at startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a provider declares exact-session validation but
+    /// has no validator implementation, or when an existing Codex store cannot
+    /// validate saved exact IDs. A missing supported Codex store classifies
+    /// those IDs as stale so startup can safely fall back to fresh launches;
+    /// optional provider discovery remains best-effort.
+    pub fn load_for_runtime_state(runtime_state: &RuntimeState) -> Result<AgentSessionBootstrapCatalog> {
+        let exact_binding_ids: HashMap<PanelKind, HashSet<String>> = runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| panel.kind.requires_exact_session_validation())
+            .filter_map(|panel| panel.stored_session_id().map(|id| (panel.kind, id.to_string())))
+            .fold(HashMap::new(), |mut grouped, (kind, session_id)| {
+                grouped.entry(kind).or_insert_with(HashSet::new).insert(session_id);
+                grouped
+            });
+        let has_claude_panels = Self::has_provider_panel(runtime_state, PanelKind::Claude);
+        let has_codex_panels = Self::has_provider_panel(runtime_state, PanelKind::Codex);
+        let has_opencode_panels = Self::has_provider_panel(runtime_state, PanelKind::OpenCode);
+        let has_pi_panels = Self::has_provider_panel(runtime_state, PanelKind::Pi);
+
+        let mut sessions = Vec::new();
+        if has_claude_panels {
+            extend_best_effort(&mut sessions, "Claude", load_claude_sessions());
+        }
+        if has_opencode_panels {
+            extend_best_effort(&mut sessions, "OpenCode", load_opencode_sessions());
+        }
+        if has_pi_panels {
+            extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
+        }
+        let mut codex_binding_ids = HashSet::new();
+        for (kind, binding_ids) in exact_binding_ids {
+            match kind {
+                PanelKind::Codex => codex_binding_ids = binding_ids,
+                unsupported => {
+                    return Err(Error::State(format!(
+                        "no exact-session validator is implemented for {}",
+                        unsupported.display_name()
+                    )));
+                }
+            }
+        }
+        // Exact Codex validation also seeds the root-only rebind menu. Include
+        // the active catalog whenever the board has a Codex panel so pinned
+        // panels still have manual alternatives.
+        let include_active_codex_sessions = has_codex_panels || !codex_binding_ids.is_empty();
+        let codex = finish_codex_load(
+            codex::load_sessions(&codex_binding_ids, include_active_codex_sessions),
+            &codex_binding_ids,
+        )?;
+        Ok(AgentSessionBootstrapCatalog::new(
+            Self::from_provider_sessions(sessions, &codex),
+            codex,
+        ))
+    }
+
+    fn has_provider_panel(runtime_state: &RuntimeState, kind: PanelKind) -> bool {
+        runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(|panel| panel.kind == kind)
+    }
+
+    fn load_strict(
+        claude: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+        codex: impl FnOnce() -> Result<codex::CodexSessions>,
+        opencode: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+        pi: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+    ) -> Result<Self> {
+        let mut sessions = claude()?;
+        let codex = codex()?;
+        sessions.extend(opencode()?);
+        sessions.extend(pi()?);
+        Ok(Self::from_provider_sessions(sessions, &codex))
+    }
+
+    fn from_provider_sessions(mut sessions: Vec<AgentSessionRecord>, codex: &codex::CodexSessions) -> Self {
+        sessions.extend(codex.sessions.iter().cloned());
+        sessions.retain(|session| session.interactive);
         sessions.sort_by_key(|session| Reverse(session.updated_at));
-        Ok(Self { sessions })
+        Self { sessions }
     }
 
     #[must_use]
@@ -38,7 +144,8 @@ impl AgentSessionCatalog {
         self.sessions
             .iter()
             .filter(|session| {
-                session.kind == kind
+                session.interactive
+                    && session.kind == kind
                     && match (&normalized_cwd, &session.cwd) {
                         (Some(expected), Some(actual)) => expected == actual,
                         (None, _) => true,
@@ -50,6 +157,84 @@ impl AgentSessionCatalog {
     }
 }
 
+impl AgentSessionBootstrapCatalog {
+    fn new(catalog: AgentSessionCatalog, codex: codex::CodexSessions) -> Self {
+        let unavailable_exact_session_ids = codex.unavailable_binding_ids.clone();
+        let mut exact_resolutions = HashMap::new();
+        exact_resolutions.extend(
+            codex
+                .verified_binding_ids
+                .into_iter()
+                .map(|session_id| ((PanelKind::Codex, session_id), ExactSessionResolution::Verified)),
+        );
+        exact_resolutions.extend(codex.root_aliases.into_iter().map(|(session_id, root)| {
+            (
+                (PanelKind::Codex, session_id),
+                ExactSessionResolution::Rebind(root.into_binding()),
+            )
+        }));
+        exact_resolutions.extend(
+            codex
+                .unavailable_binding_ids
+                .into_iter()
+                .map(|session_id| ((PanelKind::Codex, session_id), ExactSessionResolution::Unavailable)),
+        );
+        exact_resolutions.extend(
+            codex
+                .stale_binding_ids
+                .into_iter()
+                .map(|session_id| ((PanelKind::Codex, session_id), ExactSessionResolution::Stale)),
+        );
+        Self {
+            catalog,
+            exact_resolutions,
+            unavailable_exact_session_ids,
+        }
+    }
+
+    #[must_use]
+    pub fn unavailable_exact_session_ids(&self) -> &HashSet<String> {
+        &self.unavailable_exact_session_ids
+    }
+
+    pub(super) fn exact_resolution(&self, kind: PanelKind, session_id: &str) -> ExactSessionResolution {
+        self.exact_resolutions
+            .get(&(kind, session_id.to_string()))
+            .cloned()
+            .unwrap_or(ExactSessionResolution::Unavailable)
+    }
+
+    pub(super) fn recent_for(&self, kind: PanelKind, cwd: Option<&str>) -> Vec<AgentSessionRecord> {
+        self.catalog.recent_for(kind, cwd)
+    }
+
+    #[must_use]
+    pub fn into_catalog(self) -> AgentSessionCatalog {
+        self.catalog
+    }
+}
+
+fn finish_codex_load(
+    loaded: Result<codex::CodexSessions>,
+    exact_binding_ids: &HashSet<String>,
+) -> Result<codex::CodexSessions> {
+    match loaded {
+        Ok(codex) => Ok(codex),
+        Err(error) if exact_binding_ids.is_empty() => {
+            tracing::warn!("failed loading optional Codex sessions: {error}");
+            Ok(codex::CodexSessions::default())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn extend_best_effort(sessions: &mut Vec<AgentSessionRecord>, provider: &str, loaded: Result<Vec<AgentSessionRecord>>) {
+    match loaded {
+        Ok(loaded) => sessions.extend(loaded),
+        Err(error) => tracing::warn!("failed loading {provider} sessions: {error}"),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AgentSessionRecord {
     pub kind: PanelKind,
@@ -57,6 +242,7 @@ pub struct AgentSessionRecord {
     pub cwd: Option<String>,
     pub label: Option<String>,
     pub updated_at: i64,
+    pub interactive: bool,
 }
 
 impl AgentSessionRecord {
@@ -157,6 +343,7 @@ struct ClaudeSessionSummary {
     cwd: Option<String>,
     slug: Option<String>,
     last_prompt: Option<String>,
+    parent_controlled: Option<bool>,
 }
 
 impl ClaudeSessionSummary {
@@ -168,6 +355,10 @@ impl ClaudeSessionSummary {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return;
         };
+
+        if self.parent_controlled.is_none() {
+            self.parent_controlled = Some(value.get("isSidechain").and_then(Value::as_bool) == Some(true));
+        }
 
         if let Some(found_session_id) = value.get("sessionId").and_then(Value::as_str)
             && !found_session_id.is_empty()
@@ -212,6 +403,7 @@ impl ClaudeSessionSummary {
             cwd: self.cwd,
             label: self.last_prompt.or(self.slug).or(Some("Claude session".to_string())),
             updated_at: fallback_updated_at,
+            interactive: !self.parent_controlled.unwrap_or(false),
         })
     }
 }
@@ -275,44 +467,6 @@ fn file_updated_at_millis(path: &Path) -> Result<i64> {
     i64::try_from(elapsed.as_millis()).map_err(|error| Error::State(error.to_string()))
 }
 
-fn load_codex_sessions() -> Result<Vec<AgentSessionRecord>> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return Ok(Vec::new());
-    };
-    let sqlite_path = home.join(".codex/state_5.sqlite");
-    if !sqlite_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let connection = Connection::open(sqlite_path).map_err(|error| Error::State(error.to_string()))?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title, cwd, updated_at
-             FROM threads
-             WHERE archived = 0
-             ORDER BY updated_at DESC",
-        )
-        .map_err(|error| Error::State(error.to_string()))?;
-
-    let rows = statement
-        .query_map([], |row| {
-            Ok(AgentSessionRecord {
-                kind: PanelKind::Codex,
-                session_id: row.get(0)?,
-                label: row.get::<_, String>(1).ok().filter(|title| !title.is_empty()),
-                cwd: normalize_cwd(row.get::<_, String>(2).ok().as_deref()),
-                updated_at: row.get::<_, i64>(3)?.saturating_mul(1000),
-            })
-        })
-        .map_err(|error| Error::State(error.to_string()))?;
-
-    let mut sessions = Vec::new();
-    for row in rows {
-        sessions.push(row.map_err(|error| Error::State(error.to_string()))?);
-    }
-    Ok(sessions)
-}
-
 fn load_opencode_sessions() -> Result<Vec<AgentSessionRecord>> {
     let Some(sqlite_path) = opencode_db_path() else {
         return Ok(Vec::new());
@@ -324,9 +478,7 @@ fn load_opencode_sessions() -> Result<Vec<AgentSessionRecord>> {
 }
 
 fn load_opencode_sessions_from_path(sqlite_path: &Path) -> Result<Vec<AgentSessionRecord>> {
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let connection =
-        Connection::open_with_flags(sqlite_path, flags).map_err(|error| Error::State(error.to_string()))?;
+    let connection = open_read_only_sqlite(sqlite_path)?;
     let mut statement = connection
         .prepare(
             "SELECT id, title, directory, time_updated
@@ -345,6 +497,7 @@ fn load_opencode_sessions_from_path(sqlite_path: &Path) -> Result<Vec<AgentSessi
                 label: row.get::<_, String>(1).ok().filter(|title| !title.is_empty()),
                 cwd: normalize_cwd(row.get::<_, String>(2).ok().as_deref()),
                 updated_at: row.get::<_, i64>(3)?,
+                interactive: true,
             })
         })
         .map_err(|error| Error::State(error.to_string()))?;
@@ -432,6 +585,7 @@ struct PiSessionSummary {
     session_id: Option<String>,
     cwd: Option<String>,
     last_user_message: Option<String>,
+    parent_controlled: bool,
 }
 
 impl PiSessionSummary {
@@ -443,6 +597,11 @@ impl PiSessionSummary {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return;
         };
+
+        if value.get("type").and_then(Value::as_str) == Some("session") {
+            self.parent_controlled |=
+                string_field(&value, &["parentSession", "parent_session"]).is_some_and(|parent| !parent.is_empty());
+        }
 
         if self.session_id.is_none()
             && let Some(found_session_id) = extract_pi_session_id(&value)
@@ -478,6 +637,7 @@ impl PiSessionSummary {
             cwd: self.cwd,
             label: self.last_user_message.or_else(|| Some("Pi session".to_string())),
             updated_at: fallback_updated_at,
+            interactive: !self.parent_controlled,
         })
     }
 }
@@ -597,300 +757,4 @@ fn non_empty_text(text: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-    use std::io::Cursor;
-
-    use rusqlite::Connection;
-    use uuid::Uuid;
-
-    use super::super::{PanelResume, PanelState, RuntimeState, WorkspaceState};
-    use super::{
-        AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, PiSessionSummary,
-        load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
-        scan_claude_session_reader, scan_pi_session_reader,
-    };
-
-    fn parse_claude_project_session<R: std::io::BufRead>(
-        reader: R,
-        fallback_session_id: &str,
-        fallback_updated_at: i64,
-    ) -> Option<AgentSessionRecord> {
-        let mut summary = ClaudeSessionSummary::default();
-        scan_claude_session_reader(reader, None, &mut summary);
-        summary.into_record(fallback_session_id, fallback_updated_at)
-    }
-
-    fn parse_pi_session<R: std::io::BufRead>(
-        reader: R,
-        fallback_session_id: &str,
-        fallback_updated_at: i64,
-    ) -> Option<AgentSessionRecord> {
-        let mut summary = PiSessionSummary::default();
-        scan_pi_session_reader(reader, None, &mut summary);
-        summary.into_record(fallback_session_id, fallback_updated_at)
-    }
-
-    #[test]
-    fn bootstrap_assigns_distinct_sessions_per_group() {
-        let mut state = RuntimeState {
-            workspaces: vec![WorkspaceState {
-                local_id: "workspace".to_string(),
-                name: "termgalore".to_string(),
-                cwd: Some("/repo".to_string()),
-                position: None,
-                template: None,
-                layout: None,
-                panels: vec![
-                    PanelState {
-                        local_id: "a".to_string(),
-                        name: "Claude A".to_string(),
-                        kind: PanelKind::Claude,
-                        cwd: Some("/repo".to_string()),
-                        resume: PanelResume::Last,
-                        ..PanelState::default()
-                    },
-                    PanelState {
-                        local_id: "b".to_string(),
-                        name: "Claude B".to_string(),
-                        kind: PanelKind::Claude,
-                        cwd: Some("/repo".to_string()),
-                        resume: PanelResume::Last,
-                        ..PanelState::default()
-                    },
-                ],
-            }],
-            ..RuntimeState::default()
-        };
-        let catalog = AgentSessionCatalog {
-            sessions: vec![
-                AgentSessionRecord {
-                    kind: PanelKind::Claude,
-                    session_id: "session-1".to_string(),
-                    cwd: Some("/repo".to_string()),
-                    label: None,
-                    updated_at: 2,
-                },
-                AgentSessionRecord {
-                    kind: PanelKind::Claude,
-                    session_id: "session-2".to_string(),
-                    cwd: Some("/repo".to_string()),
-                    label: None,
-                    updated_at: 1,
-                },
-            ],
-        };
-
-        state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new());
-
-        let bindings: Vec<_> = state.workspaces[0]
-            .panels
-            .iter()
-            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
-            .collect();
-        assert_eq!(bindings.len(), 2);
-        assert_ne!(bindings[0], bindings[1]);
-    }
-
-    #[test]
-    fn bootstrap_never_assigns_sessions_open_in_other_processes() {
-        let mut state = RuntimeState {
-            workspaces: vec![WorkspaceState {
-                local_id: "workspace".to_string(),
-                name: "termgalore".to_string(),
-                cwd: Some("/repo".to_string()),
-                position: None,
-                template: None,
-                layout: None,
-                panels: vec![PanelState {
-                    local_id: "a".to_string(),
-                    name: "Claude A".to_string(),
-                    kind: PanelKind::Claude,
-                    cwd: Some("/repo".to_string()),
-                    resume: PanelResume::Last,
-                    ..PanelState::default()
-                }],
-            }],
-            ..RuntimeState::default()
-        };
-        let catalog = AgentSessionCatalog {
-            sessions: vec![
-                AgentSessionRecord {
-                    kind: PanelKind::Claude,
-                    session_id: "session-live".to_string(),
-                    cwd: Some("/repo".to_string()),
-                    label: None,
-                    updated_at: 2,
-                },
-                AgentSessionRecord {
-                    kind: PanelKind::Claude,
-                    session_id: "session-free".to_string(),
-                    cwd: Some("/repo".to_string()),
-                    label: None,
-                    updated_at: 1,
-                },
-            ],
-        };
-        let busy = HashSet::from(["session-live".to_string()]);
-
-        state.bootstrap_missing_agent_bindings(&catalog, &busy);
-
-        let binding = state.workspaces[0].panels[0]
-            .session_binding
-            .as_ref()
-            .map(|binding| binding.session_id.clone());
-        assert_eq!(binding.as_deref(), Some("session-free"));
-    }
-
-    #[test]
-    fn parse_claude_project_session_uses_resumable_jsonl_session_id() {
-        let jsonl = concat!(
-            "{\"type\":\"user\",\"cwd\":\"/repo\",\"sessionId\":\"session-123\",\"slug\":\"quiet-river\"}\n",
-            "{\"type\":\"last-prompt\",\"lastPrompt\":\"reply with ok only\",\"sessionId\":\"session-123\"}\n",
-        );
-
-        let session = parse_claude_project_session(Cursor::new(jsonl), "fallback-id", 42).expect("session");
-
-        assert_eq!(session.kind, PanelKind::Claude);
-        assert_eq!(session.session_id, "session-123");
-        assert_eq!(session.cwd.as_deref(), Some("/repo"));
-        assert_eq!(session.label.as_deref(), Some("reply with ok only"));
-        assert_eq!(session.updated_at, 42);
-    }
-
-    #[test]
-    fn parse_claude_project_session_falls_back_to_filename_id() {
-        let jsonl = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\"}}\n";
-
-        let session = parse_claude_project_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
-
-        assert_eq!(session.session_id, "fallback-id");
-        assert_eq!(session.cwd, None);
-        assert_eq!(session.label.as_deref(), Some("Claude session"));
-        assert_eq!(session.updated_at, 7);
-    }
-
-    #[test]
-    fn load_claude_project_session_summary_reads_head_and_tail_metadata() {
-        let path = std::env::temp_dir().join(format!("horizon-claude-session-{}.jsonl", Uuid::new_v4()));
-        let mut content = String::from(
-            "{\"type\":\"user\",\"cwd\":\"/repo\",\"sessionId\":\"session-123\",\"slug\":\"quiet-river\"}\n",
-        );
-        for _ in 0..80 {
-            content.push_str("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\"}}\n");
-        }
-        content.push_str(
-            "{\"type\":\"last-prompt\",\"lastPrompt\":\"reply with ok only\",\"sessionId\":\"session-123\"}\n",
-        );
-        std::fs::write(&path, content).expect("write temp session file");
-
-        let session = load_claude_project_session_summary(&path, 9)
-            .expect("load")
-            .expect("session");
-        std::fs::remove_file(&path).ok();
-
-        assert_eq!(session.kind, PanelKind::Claude);
-        assert_eq!(session.session_id, "session-123");
-        assert_eq!(session.cwd.as_deref(), Some("/repo"));
-        assert_eq!(session.label.as_deref(), Some("reply with ok only"));
-        assert_eq!(session.updated_at, 9);
-    }
-
-    #[test]
-    fn load_opencode_sessions_reads_root_sessions_from_sqlite() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let sqlite_path = temp_dir.path().join("opencode.db");
-        let conn = Connection::open(&sqlite_path).expect("sqlite");
-        conn.execute_batch(
-            "\
-CREATE TABLE session (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    directory TEXT NOT NULL,
-    parent_id TEXT,
-    time_updated INTEGER NOT NULL,
-    time_archived INTEGER
-);
-INSERT INTO session (id, title, directory, parent_id, time_updated, time_archived) VALUES
-    ('session-root', 'Fix auth flow', '/repo', NULL, 1000, NULL),
-    ('session-child', 'Child', '/repo', 'session-root', 2000, NULL),
-    ('session-archived', 'Archived', '/repo', NULL, 3000, 1),
-    ('session-other', 'Other repo', '/other', NULL, 4000, NULL);
-",
-        )
-        .expect("seed");
-
-        let sessions = load_opencode_sessions_from_path(&sqlite_path).expect("opencode sessions");
-
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].kind, PanelKind::OpenCode);
-        assert_eq!(sessions[0].session_id, "session-other");
-        assert_eq!(sessions[0].cwd.as_deref(), Some("/other"));
-        assert_eq!(sessions[1].session_id, "session-root");
-        assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
-    }
-
-    #[test]
-    fn parse_pi_session_uses_header_metadata_and_latest_user_message() {
-        let jsonl = concat!(
-            "{\"type\":\"session\",\"id\":\"pi-session-123\",\"cwd\":\"/repo\"}\n",
-            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first prompt\"}]}}\n",
-            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"working\"}}\n",
-            "{\"type\":\"user_message\",\"text\":\"latest prompt\"}\n",
-        );
-
-        let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 42).expect("session");
-
-        assert_eq!(session.kind, PanelKind::Pi);
-        assert_eq!(session.session_id, "pi-session-123");
-        assert_eq!(session.cwd.as_deref(), Some("/repo"));
-        assert_eq!(session.label.as_deref(), Some("latest prompt"));
-        assert_eq!(session.updated_at, 42);
-    }
-
-    #[test]
-    fn parse_pi_session_falls_back_to_filename_id_and_default_label() {
-        let jsonl = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}\n";
-
-        let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
-
-        assert_eq!(session.kind, PanelKind::Pi);
-        assert_eq!(session.session_id, "fallback-id");
-        assert_eq!(session.cwd, None);
-        assert_eq!(session.label.as_deref(), Some("Pi session"));
-        assert_eq!(session.updated_at, 7);
-    }
-
-    #[test]
-    fn load_pi_sessions_recurses_and_filters_by_cwd() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let nested = temp_dir.path().join("project/subdir");
-        std::fs::create_dir_all(&nested).expect("create nested session dir");
-        std::fs::write(
-            nested.join("pi-session-123.jsonl"),
-            concat!(
-                "{\"session_id\":\"pi-session-123\",\"metadata\":{\"cwd\":\"/repo\"}}\n",
-                "{\"role\":\"user\",\"content\":\"Fix the build\"}\n",
-            ),
-        )
-        .expect("write pi session");
-        std::fs::write(
-            temp_dir.path().join("pi-session-other.jsonl"),
-            concat!(
-                "{\"session_id\":\"pi-session-other\",\"cwd\":\"/other\"}\n",
-                "{\"role\":\"user\",\"content\":\"Other repo\"}\n",
-            ),
-        )
-        .expect("write other pi session");
-
-        let sessions = load_pi_sessions_from_dir(temp_dir.path()).expect("pi sessions");
-        let catalog = AgentSessionCatalog { sessions };
-        let repo_sessions = catalog.recent_for(PanelKind::Pi, Some("/repo"));
-
-        assert_eq!(repo_sessions.len(), 1);
-        assert_eq!(repo_sessions[0].session_id, "pi-session-123");
-        assert_eq!(repo_sessions[0].label.as_deref(), Some("Fix the build"));
-        assert!(catalog.recent_for(PanelKind::Pi, Some("/missing")).is_empty());
-        assert!(catalog.recent_for(PanelKind::Claude, Some("/repo")).is_empty());
-    }
-}
+mod tests;

@@ -5,6 +5,15 @@ use horizon_core::{DetachedWorkspaceState, RuntimeState};
 use super::HorizonApp;
 
 impl HorizonApp {
+    pub(super) fn save_recovered_startup_runtime_state(&self, runtime_state: &RuntimeState) -> Result<(), String> {
+        let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
+            return Ok(());
+        };
+        self.session_store
+            .save_runtime_state(&active_session.session_id, runtime_state)
+            .map_err(|error| error.to_string())
+    }
+
     pub(super) fn mark_runtime_dirty(&mut self) {
         self.runtime_dirty_since.get_or_insert_with(Instant::now);
     }
@@ -23,6 +32,10 @@ impl HorizonApp {
         let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
             return;
         };
+
+        if self.pending_startup_runtime_state.is_some() {
+            return;
+        }
 
         let detached_workspaces = self
             .detached_workspaces
