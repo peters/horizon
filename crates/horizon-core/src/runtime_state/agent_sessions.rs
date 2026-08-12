@@ -48,7 +48,8 @@ impl AgentSessionCatalog {
         )
     }
 
-    /// Load only the provider catalogs needed to repair or assign bindings at startup.
+    /// Load provider catalogs needed to repair, assign, or manually rebind the
+    /// panels present at startup.
     ///
     /// # Errors
     ///
@@ -67,19 +68,19 @@ impl AgentSessionCatalog {
                 grouped.entry(kind).or_insert_with(HashSet::new).insert(session_id);
                 grouped
             });
-        let needs_claude_sessions = Self::needs_recent_for_runtime_state(runtime_state, PanelKind::Claude);
-        let needs_codex_sessions = Self::needs_recent_for_runtime_state(runtime_state, PanelKind::Codex);
-        let needs_opencode_sessions = Self::needs_recent_for_runtime_state(runtime_state, PanelKind::OpenCode);
-        let needs_pi_sessions = Self::needs_recent_for_runtime_state(runtime_state, PanelKind::Pi);
+        let has_claude_panels = Self::has_provider_panel(runtime_state, PanelKind::Claude);
+        let has_codex_panels = Self::has_provider_panel(runtime_state, PanelKind::Codex);
+        let has_opencode_panels = Self::has_provider_panel(runtime_state, PanelKind::OpenCode);
+        let has_pi_panels = Self::has_provider_panel(runtime_state, PanelKind::Pi);
 
         let mut sessions = Vec::new();
-        if needs_claude_sessions {
+        if has_claude_panels {
             extend_best_effort(&mut sessions, "Claude", load_claude_sessions());
         }
-        if needs_opencode_sessions {
+        if has_opencode_panels {
             extend_best_effort(&mut sessions, "OpenCode", load_opencode_sessions());
         }
-        if needs_pi_sessions {
+        if has_pi_panels {
             extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
         }
         let mut codex_binding_ids = HashSet::new();
@@ -94,10 +95,10 @@ impl AgentSessionCatalog {
                 }
             }
         }
-        // Exact Codex validation also seeds the root-only rebind menu. Keep
-        // other providers out of this startup path, but retain Codex's narrow
-        // active-session query so verified alternatives remain available.
-        let include_active_codex_sessions = needs_codex_sessions || !codex_binding_ids.is_empty();
+        // Exact Codex validation also seeds the root-only rebind menu. Include
+        // the active catalog whenever the board has a Codex panel so pinned
+        // panels still have manual alternatives.
+        let include_active_codex_sessions = has_codex_panels || !codex_binding_ids.is_empty();
         let codex = match codex::load_sessions(&codex_binding_ids, include_active_codex_sessions) {
             Ok(codex) => codex,
             Err(error) => {
@@ -123,6 +124,14 @@ impl AgentSessionCatalog {
                     && panel.session_binding.is_none()
                     && matches!(panel.resume, super::PanelResume::Last)
             })
+    }
+
+    fn has_provider_panel(runtime_state: &RuntimeState, kind: PanelKind) -> bool {
+        runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .any(|panel| panel.kind == kind)
     }
 
     fn load_strict(

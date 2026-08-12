@@ -1,9 +1,8 @@
 use egui::Context;
 
-use crate::app::StartupBootstrapFailure;
 use crate::{loading_spinner, theme};
 
-use super::StartupBootstrapFailureAction;
+use super::{StartupBootstrapFailure, StartupBootstrapFailureAction};
 
 pub(in crate::app) fn render_loading_view(
     ctx: &Context,

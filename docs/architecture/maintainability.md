@@ -18,9 +18,10 @@ back into large multi-purpose modules.
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
-  session discovery and external-store parsing belong in `runtime_state/`
-  helper modules. Provider-specific session-store parsing belongs in focused
-  leaves such as `runtime_state/agent_sessions/codex.rs`.
+  binding orchestration, discovery, and external-store parsing belong in
+  `runtime_state/` helper modules. Binding validation and assignment live in
+  `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
+  belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
@@ -44,8 +45,9 @@ back into large multi-purpose modules.
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
-  - `session`: startup bootstrap and session catalog/rebind flows, with loading
-    and recovery rendering in `session/loading.rs`
+  - `session`: startup bootstrap and session catalog/rebind flows, with startup
+    result types in `session/types.rs` and loading/recovery rendering in
+    `session/loading.rs`
   - `persistence`: runtime/config save glue
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
   - `workspace`: workspace frame orchestration and rename/drag UI, with

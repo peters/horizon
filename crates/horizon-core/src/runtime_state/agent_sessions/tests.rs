@@ -101,6 +101,40 @@ fn only_unbound_last_panels_need_recent_provider_sessions() {
 }
 
 #[test]
+fn provider_catalog_presence_includes_bound_and_fresh_panels() {
+    let runtime_state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![
+                PanelState {
+                    kind: PanelKind::OpenCode,
+                    resume: PanelResume::Session {
+                        session_id: "open-pinned".to_string(),
+                    },
+                    ..PanelState::default()
+                },
+                PanelState {
+                    kind: PanelKind::Pi,
+                    resume: PanelResume::Fresh,
+                    ..PanelState::default()
+                },
+            ],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+
+    assert!(AgentSessionCatalog::has_provider_panel(
+        &runtime_state,
+        PanelKind::OpenCode
+    ));
+    assert!(AgentSessionCatalog::has_provider_panel(&runtime_state, PanelKind::Pi));
+    assert!(!AgentSessionCatalog::has_provider_panel(
+        &runtime_state,
+        PanelKind::Claude
+    ));
+}
+
+#[test]
 fn bootstrap_assigns_distinct_sessions_per_group() {
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {
@@ -162,6 +196,60 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
         .collect();
     assert_eq!(bindings.len(), 2);
     assert_ne!(bindings[0], bindings[1]);
+}
+
+#[test]
+fn bootstrap_assigns_scoped_groups_before_cwd_less_groups() {
+    let mut state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![
+                PanelState {
+                    local_id: "unscoped".to_string(),
+                    name: "Unscoped Claude".to_string(),
+                    kind: PanelKind::Claude,
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                },
+                PanelState {
+                    local_id: "scoped".to_string(),
+                    name: "Scoped Claude".to_string(),
+                    kind: PanelKind::Claude,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Last,
+                    ..PanelState::default()
+                },
+            ],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let catalog = bootstrap_catalog(
+        vec![
+            AgentSessionRecord {
+                kind: PanelKind::Claude,
+                session_id: "repo-session".to_string(),
+                cwd: Some("/repo".to_string()),
+                label: None,
+                updated_at: 2,
+                interactive: true,
+            },
+            AgentSessionRecord {
+                kind: PanelKind::Claude,
+                session_id: "other-session".to_string(),
+                cwd: Some("/other".to_string()),
+                label: None,
+                updated_at: 1,
+                interactive: true,
+            },
+        ],
+        [],
+    );
+
+    state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new());
+
+    let panels = &state.workspaces[0].panels;
+    assert_eq!(panels[0].stored_session_id(), Some("other-session"));
+    assert_eq!(panels[1].stored_session_id(), Some("repo-session"));
 }
 
 #[test]

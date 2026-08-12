@@ -1,16 +1,18 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
-use super::{DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates};
+use super::{
+    DynamicPanelBindingState, HorizonApp, STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL, StartupBootstrap,
+    StartupBootstrapFailure, StartupBootstrapFailureAction, StartupBootstrapOutcome, StartupBootstrapValidationFailure,
+    collect_dynamic_binding_updates,
+};
 use egui::Context;
 use horizon_core::{
     AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState, RuntimeState,
-    SessionStore, StartupDecision, WorkspaceState,
+    SessionLease, SessionStore, StartupDecision, WorkspaceState,
 };
 use tempfile::TempDir;
 
-use crate::app::{
-    StartupBootstrap, StartupBootstrapFailure, StartupBootstrapOutcome, StartupBootstrapValidationFailure,
-};
 use crate::input;
 
 fn test_app() -> (TempDir, HorizonApp) {
@@ -259,6 +261,67 @@ fn disconnected_bootstrap_enters_a_stable_failed_state() {
     assert!(app.startup_receiver.is_none());
     assert!(app.pending_startup_runtime_state.is_some());
     assert!(!app.poll_startup_bootstrap());
+}
+
+#[test]
+fn failed_startup_bootstrap_keeps_a_slow_repaint() {
+    let ctx = Context::default();
+    let (_temp, mut app) = test_app();
+    app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
+
+    let mut repaint_delay = Duration::ZERO;
+    for _ in 0..8 {
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(!app.prepare_startup_bootstrap(ctx));
+        });
+        repaint_delay = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output")
+            .repaint_delay;
+        if !repaint_delay.is_zero() {
+            break;
+        }
+    }
+
+    assert!(!repaint_delay.is_zero());
+    assert!(repaint_delay <= STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL);
+}
+
+#[test]
+fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
+    let ctx = Context::default();
+    let (temp, mut app, _runtime_path) = test_persistent_recovery_app(RuntimeState::default());
+    let session_id = app
+        .active_session
+        .as_ref()
+        .expect("active persistent session")
+        .session_id
+        .clone();
+    let lease_path = HorizonHome::from_root(temp.path().join(".horizon")).session_lease_path(&session_id);
+    let before: SessionLease =
+        serde_yaml::from_str(&std::fs::read_to_string(&lease_path).expect("read acquired lease"))
+            .expect("parse acquired lease");
+    std::thread::sleep(Duration::from_millis(2));
+    app.active_session
+        .as_mut()
+        .expect("active persistent session")
+        .last_lease_refresh = None;
+    app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
+
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        assert!(!app.prepare_startup_bootstrap(ctx));
+    });
+
+    let after: SessionLease = serde_yaml::from_str(&std::fs::read_to_string(lease_path).expect("read refreshed lease"))
+        .expect("parse refreshed lease");
+    assert!(after.last_heartbeat_at > before.last_heartbeat_at);
+    assert!(
+        app.active_session
+            .as_ref()
+            .and_then(|session| session.last_lease_refresh)
+            .is_some()
+    );
 }
 
 #[test]
@@ -537,6 +600,8 @@ fn failed_recovery_save_can_open_the_repaired_state_without_persisting() {
     assert_eq!(app.board.panels.len(), 1);
     assert!(app.board.panels[0].session_binding.is_none());
     assert!(matches!(app.board.panels[0].resume, PanelResume::Fresh));
+    assert!(app.last_session_catalog_refresh.is_none());
+    assert!(app.session_catalog_refresh.is_some());
 }
 
 #[test]

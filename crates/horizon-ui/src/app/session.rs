@@ -7,16 +7,18 @@ use horizon_core::{
 };
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
-use super::{
-    ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap,
-    StartupBootstrapFailure, StartupBootstrapOutcome, StartupBootstrapValidationFailure,
-};
+use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
+const STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
 mod loading;
+mod types;
 
 pub(super) use loading::render_loading_view;
+pub(super) use types::{
+    StartupBootstrap, StartupBootstrapFailure, StartupBootstrapOutcome, StartupBootstrapValidationFailure,
+};
 
 #[derive(Clone)]
 struct DynamicPanelBindingState {
@@ -324,6 +326,26 @@ impl HorizonApp {
         }
     }
 
+    pub(super) fn prepare_startup_bootstrap(&mut self, ctx: &egui::Context) -> bool {
+        if self.poll_startup_bootstrap() {
+            return true;
+        }
+
+        self.refresh_active_session_lease();
+        if let Some(action) = render_loading_view(ctx, self.startup_bootstrap_failure.as_ref()) {
+            self.handle_startup_bootstrap_failure(action);
+            ctx.request_repaint();
+            return false;
+        }
+        let repaint_after = if self.startup_bootstrap_failure.is_some() {
+            STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL
+        } else {
+            Duration::from_millis(16)
+        };
+        ctx.request_repaint_after(repaint_after);
+        false
+    }
+
     pub(super) fn handle_startup_bootstrap_failure(&mut self, action: StartupBootstrapFailureAction) {
         match action {
             StartupBootstrapFailureAction::Retry => {
@@ -390,6 +412,10 @@ impl HorizonApp {
 
     fn finish_startup_recovery(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.restore_startup_runtime_state(runtime_state);
+        self.last_session_catalog_refresh = None;
+        if self.session_catalog_refresh.is_none() {
+            self.session_catalog_refresh = Some(Self::spawn_session_catalog_refresh());
+        }
         self.pending_startup_runtime_state = None;
         self.pending_startup_runtime_state_changed = false;
         self.startup_bootstrap_failure = None;

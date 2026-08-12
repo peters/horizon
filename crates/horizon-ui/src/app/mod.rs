@@ -27,7 +27,7 @@ mod view;
 mod workspace;
 mod yaml_highlight;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -87,40 +87,10 @@ enum CanvasPanSpaceKeyState {
 }
 
 use self::frame_stats::FrameStats;
+use self::session::{StartupBootstrapFailure, StartupBootstrapOutcome};
 use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
 use self::updates::{AvailableUpdate, UpdateCheckMessage};
-
-struct StartupBootstrap {
-    runtime_state: RuntimeState,
-    session_catalog: AgentSessionCatalog,
-    runtime_state_changed: bool,
-}
-
-struct StartupBootstrapValidationFailure {
-    runtime_state: RuntimeState,
-    message: String,
-    unavailable_exact_session_ids: HashSet<String>,
-    all_exact_session_ids: bool,
-    runtime_state_changed: bool,
-}
-
-enum StartupBootstrapOutcome {
-    Ready(Box<StartupBootstrap>),
-    ExactValidationFailed(Box<StartupBootstrapValidationFailure>),
-}
-
-enum StartupBootstrapFailure {
-    ExactValidationFailed {
-        message: String,
-        unavailable_exact_session_ids: HashSet<String>,
-        all_exact_session_ids: bool,
-    },
-    WorkerDisconnected,
-    RecoverySaveFailed {
-        message: String,
-    },
-}
 
 struct ActiveSession {
     session_id: String,
