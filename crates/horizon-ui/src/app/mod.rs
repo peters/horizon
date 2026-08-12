@@ -99,11 +99,9 @@ struct StartupBootstrap {
 
 enum StartupBootstrapOutcome {
     Ready(Box<StartupBootstrap>),
-    ExactValidationFailed(String),
 }
 
 enum StartupBootstrapFailure {
-    ExactValidationFailed(String),
     WorkerDisconnected,
     RecoverySaveFailed(String),
 }

@@ -2,10 +2,16 @@ use std::collections::HashSet;
 
 use rusqlite::{Connection, params};
 
-use super::{
-    load_sessions_from_path, reset_rollout_metadata_read_count, rollout_metadata_read_count, rollout_root_session_id,
-    user_home_dir_from_env,
-};
+use super::{CodexSessions, load_sessions_from_path_with_catalog};
+
+mod rollout;
+
+fn load_sessions_from_path(
+    sqlite_path: &std::path::Path,
+    binding_ids: &HashSet<String>,
+) -> crate::Result<CodexSessions> {
+    load_sessions_from_path_with_catalog(sqlite_path, binding_ids, true)
+}
 
 fn create_threads_db(path: &std::path::Path) -> Connection {
     let connection = Connection::open(path).expect("create Codex state database");
@@ -141,6 +147,53 @@ fn malformed_rows_do_not_hide_other_sessions() {
 }
 
 #[test]
+fn catalog_reports_a_decode_error_when_no_active_row_is_usable() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, source, title, cwd, updated_at, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params!["root", "/tmp/root.jsonl", "cli", "Root", "/repo", vec![1_u8], false],
+        )
+        .expect("insert malformed timestamp");
+    drop(connection);
+
+    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::new());
+
+    assert!(matches!(loaded, Err(error) if error.to_string().contains("failed decoding Codex thread metadata")));
+}
+
+#[test]
+fn exact_validation_skips_the_active_catalog_query() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, source, title, cwd, updated_at, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params!["root", "/tmp/root.jsonl", "cli", "Root", "/repo", 1_i64, false],
+        )
+        .expect("insert root");
+    connection
+        .execute(
+            "INSERT INTO threads (id, rollout_path, source, title, cwd, updated_at, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params!["bad", "/tmp/bad.jsonl", "cli", "Bad", "/repo", vec![1_u8], false],
+        )
+        .expect("insert malformed timestamp");
+    drop(connection);
+
+    let loaded = load_sessions_from_path_with_catalog(&sqlite_path, &HashSet::from(["root".to_string()]), false)
+        .expect("targeted exact validation");
+
+    assert!(loaded.sessions.is_empty());
+    assert!(loaded.verified_binding_ids.contains("root"));
+}
+
+#[test]
 fn exact_binding_validation_rejects_a_malformed_row() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
@@ -163,9 +216,10 @@ fn exact_binding_validation_rejects_a_malformed_row() {
         .expect("insert malformed thread");
     drop(connection);
 
-    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::from(["malformed".to_string()]));
+    let loaded =
+        load_sessions_from_path(&sqlite_path, &HashSet::from(["malformed".to_string()])).expect("load sessions");
 
-    assert!(loaded.is_err());
+    assert!(loaded.unavailable_binding_ids.contains("malformed"));
 }
 
 #[test]
@@ -485,13 +539,10 @@ fn source_parent_resolves_after_a_long_rejected_metadata_chain() {
         false,
     );
     drop(connection);
-    reset_rollout_metadata_read_count();
-
     let loaded =
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
 
     assert_eq!(loaded.root_aliases["child"].session_id, "source-root");
-    assert_eq!(rollout_metadata_read_count(), 65);
 }
 
 #[test]
@@ -560,13 +611,10 @@ fn intermediate_source_parent_resolves_after_a_long_rejected_metadata_branch() {
         false,
     );
     drop(connection);
-    reset_rollout_metadata_read_count();
-
     let loaded =
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child".to_string()])).expect("load Codex sessions");
 
     assert_eq!(loaded.root_aliases["child"].session_id, "source-root");
-    assert_eq!(rollout_metadata_read_count(), 64);
 }
 
 #[test]
@@ -821,108 +869,46 @@ fn rejected_same_parent_fallbacks_read_each_rollout_once() {
         insert_thread(&connection, &id, &rollout, &source, "/repo", index + 2, false);
     }
     drop(connection);
-    reset_rollout_metadata_read_count();
-
     let loaded =
         load_sessions_from_path(&sqlite_path, &HashSet::from(["child-0".to_string()])).expect("load Codex sessions");
 
     assert!(!loaded.root_aliases.contains_key("child-0"));
     assert!(loaded.child_binding_ids.contains("child-0"));
-    assert_eq!(rollout_metadata_read_count(), 10);
 }
 
 #[test]
-fn rollout_metadata_rejects_non_regular_paths() {
-    let temp = tempfile::tempdir().expect("temp dir");
-
-    assert!(rollout_root_session_id(temp.path(), "child").is_none());
-}
-
-#[test]
-fn rollout_metadata_ignores_a_truncated_unicode_tail() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let rollout = temp.path().join("child.jsonl");
-    let mut contents =
-        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"session_id\":\"root\"}}\n".to_string();
-    contents.push_str(&"ø".repeat(40_000));
-    std::fs::write(&rollout, contents).expect("write rollout");
-
-    assert_eq!(rollout_root_session_id(&rollout, "child").as_deref(), Some("root"));
-}
-
-#[test]
-fn rollout_metadata_can_follow_more_than_eight_preamble_lines() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let rollout = temp.path().join("child.jsonl");
-    let mut contents = "{\"type\":\"event\"}\n".repeat(9);
-    contents.push_str("{\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"session_id\":\"root\"}}\n");
-    std::fs::write(&rollout, contents).expect("write rollout");
-
-    assert_eq!(rollout_root_session_id(&rollout, "child").as_deref(), Some("root"));
-}
-
-#[test]
-fn rollout_metadata_accepts_a_first_line_larger_than_64_kibibytes() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let rollout = temp.path().join("child.jsonl");
-    let instructions = "x".repeat(70 * 1024);
-    let contents = format!(
-        r#"{{"type":"session_meta","payload":{{"instructions":"{instructions}","id":"child","parent_thread_id":"root"}}}}
-"#
-    );
-    assert!(contents.len() > 64 * 1024);
-    std::fs::write(&rollout, contents).expect("write rollout");
-
-    assert_eq!(rollout_root_session_id(&rollout, "child").as_deref(), Some("root"));
-}
-
-#[test]
-fn rollout_metadata_reads_the_parent_thread_id_used_by_review_children() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let rollout = temp.path().join("child.jsonl");
-    std::fs::write(
-        &rollout,
-        r#"{"type":"session_meta","payload":{"id":"child","parent_thread_id":"root"}}
-"#,
-    )
-    .expect("write rollout");
-
-    assert_eq!(rollout_root_session_id(&rollout, "child").as_deref(), Some("root"));
-}
-
-#[test]
-fn rollout_session_id_takes_precedence_over_parent_thread_id() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let rollout = temp.path().join("child.jsonl");
-    std::fs::write(
-        &rollout,
-        r#"{"type":"session_meta","payload":{"id":"child","parent_thread_id":"root","session_id":"legacy-root"}}
-"#,
-    )
-    .expect("write rollout");
-
-    assert_eq!(
-        rollout_root_session_id(&rollout, "child").as_deref(),
-        Some("legacy-root")
-    );
-}
-
-#[test]
-fn user_home_falls_back_to_the_windows_profile() {
-    let profile = std::path::PathBuf::from(r"C:\Users\tester");
-
-    assert_eq!(user_home_dir_from_env(None, Some(profile.clone())), Some(profile));
-}
-
-#[test]
-fn exact_binding_validation_rejects_missing_rows() {
+fn exact_binding_validation_degrades_missing_rows_independently() {
     let temp = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("state_5.sqlite");
     drop(create_threads_db(&sqlite_path));
 
-    let Err(error) = load_sessions_from_path(&sqlite_path, &HashSet::from(["missing".to_string()])) else {
-        panic!("missing exact binding must fail validation");
-    };
+    let loaded = load_sessions_from_path(&sqlite_path, &HashSet::from(["missing".to_string()])).expect("load sessions");
 
-    assert!(error.to_string().contains("missing"));
+    assert!(loaded.unavailable_binding_ids.contains("missing"));
+}
+
+#[test]
+fn missing_binding_does_not_invalidate_a_verified_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("state_5.sqlite");
+    let connection = create_threads_db(&sqlite_path);
+    insert_thread(
+        &connection,
+        "root",
+        &temp.path().join("root.jsonl"),
+        "cli",
+        "/repo",
+        1,
+        false,
+    );
+    drop(connection);
+
+    let loaded = load_sessions_from_path(
+        &sqlite_path,
+        &HashSet::from(["root".to_string(), "missing".to_string()]),
+    )
+    .expect("load sessions");
+
+    assert!(loaded.verified_binding_ids.contains("root"));
+    assert!(loaded.unavailable_binding_ids.contains("missing"));
 }

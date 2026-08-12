@@ -64,6 +64,11 @@ impl PanelKind {
     }
 
     #[must_use]
+    pub fn requires_exact_session_validation(self) -> bool {
+        agent_definition(self).is_some_and(crate::AgentDefinition::requires_exact_session_validation)
+    }
+
+    #[must_use]
     pub fn display_name(self) -> &'static str {
         if let Some(definition) = agent_definition(self) {
             return definition.display_name;
@@ -452,7 +457,8 @@ impl Panel {
         // fresh under the same session id instead.
         let should_resume = self.kind.supports_session_binding()
             && self.session_binding.as_ref().is_some_and(|binding| {
-                self.kind != PanelKind::Claude || claude_session_transcript_exists(&binding.session_id)
+                binding.resumable
+                    && (self.kind != PanelKind::Claude || claude_session_transcript_exists(&binding.session_id))
             });
         let (program, launch_args) = resolve_launch_command(
             self.launch_command.clone(),
@@ -818,6 +824,28 @@ mod tests {
             flag_pos < resume_pos,
             "global flags must precede resume subcommand: {cmd}"
         );
+    }
+
+    #[test]
+    fn retained_codex_binding_never_reaches_the_resume_command() {
+        let binding =
+            AgentSessionBinding::new(PanelKind::Codex, "child-7".to_string(), None, None, None).retained_unresumable();
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["--no-alt-screen".to_string()],
+            None,
+            PanelKind::Codex,
+            AgentLaunchContext {
+                resume: &PanelResume::Session {
+                    session_id: "child-7".to_string(),
+                },
+                session_binding: Some(&binding),
+                should_resume_binding: false,
+                is_restore: true,
+            },
+        );
+
+        assert!(!args[1].contains("resume child-7"));
     }
 
     #[test]

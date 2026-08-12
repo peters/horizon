@@ -1013,6 +1013,16 @@ mod tests {
     fn failed_startup_bootstrap_keeps_a_slow_lease_heartbeat() {
         let ctx = Context::default();
         let (_temp, mut app) = test_app();
+        let session = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .expect("create persistent session");
+        app.activate_persistent_session(&session);
+        let now = Instant::now();
+        let stale_refresh = now.checked_sub(Duration::from_secs(3)).unwrap_or(now);
+        let active_session = app.active_session.as_mut().expect("active persistent session");
+        assert!(active_session.lease.is_some());
+        active_session.last_lease_refresh = Some(stale_refresh);
         app.startup_bootstrap_failure = Some(super::super::StartupBootstrapFailure::WorkerDisconnected);
 
         let mut repaint_delay = Duration::ZERO;
@@ -1032,6 +1042,12 @@ mod tests {
 
         assert!(!repaint_delay.is_zero());
         assert!(repaint_delay <= STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL);
+        assert!(
+            app.active_session
+                .as_ref()
+                .and_then(|session| session.last_lease_refresh)
+                .is_some_and(|last_refresh| last_refresh > stale_refresh)
+        );
     }
 
     #[cfg(feature = "speech")]

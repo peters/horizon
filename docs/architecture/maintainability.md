@@ -21,6 +21,8 @@ back into large multi-purpose modules.
   session discovery and external-store parsing belong in `runtime_state/`
   helper modules. Provider-specific session-store parsing belongs in focused
   leaves such as `runtime_state/agent_sessions/codex.rs`.
+- `local_store.rs` centralizes agent-store environment paths and read-only
+  SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
@@ -42,7 +44,8 @@ back into large multi-purpose modules.
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
-  - `session`: startup bootstrap and session catalog/rebind flows
+  - `session`: startup bootstrap and session catalog/rebind flows, with loading
+    and recovery rendering in `session/loading.rs`
   - `persistence`: runtime/config save glue
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
   - `workspace`: workspace frame orchestration and rename/drag UI, with

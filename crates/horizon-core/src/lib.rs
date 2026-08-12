@@ -13,6 +13,7 @@ pub mod git_status;
 pub mod git_watcher;
 mod horizon_home;
 mod layout;
+mod local_store;
 mod managed_install;
 mod opencode_paths;
 mod panel;
@@ -32,7 +33,10 @@ mod usage_stats;
 mod view;
 mod workspace;
 
-pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
+pub use agents::{
+    AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, agent_definition,
+    all_agent_kinds,
+};
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
@@ -55,8 +59,9 @@ pub use remote_hosts::{
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
 };
 pub use runtime_state::{
-    AgentSessionBinding, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState, PanelState, PanelTemplateRef,
-    RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids, new_local_id,
+    AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState,
+    PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids,
+    new_local_id,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

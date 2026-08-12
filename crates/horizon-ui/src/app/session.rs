@@ -2,12 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use egui::Context;
 use horizon_core::{
     AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelResume, live_claude_session_ids,
 };
-
-use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
 use super::{
@@ -16,6 +13,10 @@ use super::{
 };
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
+
+mod loading;
+
+pub(super) use loading::render_loading_view;
 
 #[derive(Clone)]
 struct DynamicPanelBindingState {
@@ -30,7 +31,7 @@ struct DynamicPanelBindingState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StartupBootstrapFailureAction {
     Retry,
-    ContinueWithoutSavedCodexResumes,
+    ContinueWithoutExactResumes,
 }
 
 fn collect_dynamic_binding_updates(
@@ -112,6 +113,12 @@ fn collect_dynamic_binding_updates(
     assignments
 }
 
+fn panel_uses_dynamic_binding(panel: &horizon_core::Panel) -> bool {
+    panel.kind.supports_session_binding()
+        && !matches!(panel.resume, PanelResume::Session { .. })
+        && panel.session_binding.as_ref().is_none_or(|binding| binding.resumable)
+}
+
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
         self.release_active_session_lease();
@@ -169,17 +176,12 @@ impl HorizonApp {
         self.startup_bootstrap_failure = None;
         self.pending_startup_runtime_state = needs_bootstrap.then(|| runtime_state.clone());
         self.startup_receiver = needs_bootstrap.then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
-        self.board = if self.startup_receiver.is_some() {
-            Board::new()
+        if self.startup_receiver.is_some() {
+            self.board = Board::new();
+            self.board.attention_enabled = self.template_config.features.attention_feed;
         } else {
-            Board::from_runtime_state_with_transcripts(runtime_state, self.transcript_root.as_deref()).unwrap_or_else(
-                |error| {
-                    tracing::error!("failed to restore runtime state: {error}");
-                    Board::new()
-                },
-            )
-        };
-        self.board.attention_enabled = self.template_config.features.attention_feed;
+            self.restore_startup_runtime_state(runtime_state);
+        }
     }
 
     pub(super) fn runtime_state_needs_session_bootstrap(runtime_state: &horizon_core::RuntimeState) -> bool {
@@ -188,7 +190,7 @@ impl HorizonApp {
             .iter()
             .flat_map(|workspace| &workspace.panels)
             .any(|panel| {
-                (panel.kind == PanelKind::Codex && panel.exact_session_id().is_some())
+                (panel.kind.requires_exact_session_validation() && panel.stored_session_id().is_some())
                     || (panel.kind.supports_session_binding()
                         && panel.session_binding.is_none()
                         && matches!(panel.resume, PanelResume::Last))
@@ -200,20 +202,13 @@ impl HorizonApp {
     ) -> Receiver<StartupBootstrapOutcome> {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let session_catalog = match AgentSessionCatalog::load_for_runtime_state(&runtime_state) {
-                Ok(session_catalog) => session_catalog,
-                Err(error) => {
-                    tracing::warn!("failed to validate saved agent sessions: {error}");
-                    let _ = tx.send(StartupBootstrapOutcome::ExactValidationFailed(error.to_string()));
-                    return;
-                }
-            };
+            let bootstrap_catalog = AgentSessionCatalog::load_for_runtime_state(&runtime_state);
             let busy_session_ids = live_claude_session_ids();
             let runtime_state_changed =
-                runtime_state.bootstrap_missing_agent_bindings(&session_catalog, &busy_session_ids);
+                runtime_state.bootstrap_missing_agent_bindings(&bootstrap_catalog, &busy_session_ids);
             let _ = tx.send(StartupBootstrapOutcome::Ready(Box::new(StartupBootstrap {
                 runtime_state,
-                session_catalog,
+                session_catalog: bootstrap_catalog.into_catalog(),
                 runtime_state_changed,
             })));
         });
@@ -247,10 +242,6 @@ impl HorizonApp {
                 }
                 true
             }
-            Ok(StartupBootstrapOutcome::ExactValidationFailed(error)) => {
-                self.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed(error));
-                false
-            }
             Err(TryRecvError::Empty) => {
                 self.startup_receiver = Some(receiver);
                 false
@@ -268,9 +259,7 @@ impl HorizonApp {
             StartupBootstrapFailureAction::Retry => {
                 if !matches!(
                     self.startup_bootstrap_failure,
-                    Some(
-                        StartupBootstrapFailure::ExactValidationFailed(_) | StartupBootstrapFailure::WorkerDisconnected
-                    )
+                    Some(StartupBootstrapFailure::WorkerDisconnected)
                 ) {
                     return;
                 }
@@ -280,20 +269,17 @@ impl HorizonApp {
                 self.startup_bootstrap_failure = None;
                 self.startup_receiver = Some(Self::spawn_startup_bootstrap(runtime_state));
             }
-            StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes => {
+            StartupBootstrapFailureAction::ContinueWithoutExactResumes => {
                 if !matches!(
                     self.startup_bootstrap_failure,
-                    Some(
-                        StartupBootstrapFailure::ExactValidationFailed(_)
-                            | StartupBootstrapFailure::RecoverySaveFailed(_)
-                    )
+                    Some(StartupBootstrapFailure::WorkerDisconnected | StartupBootstrapFailure::RecoverySaveFailed(_))
                 ) {
                     return;
                 }
                 let Some(mut runtime_state) = self.pending_startup_runtime_state.clone() else {
                     return;
                 };
-                runtime_state.neutralize_unverified_codex_bindings();
+                runtime_state.retain_unverified_session_bindings();
                 if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {
                     self.startup_bootstrap_failure = Some(StartupBootstrapFailure::RecoverySaveFailed(error));
                     return;
@@ -304,15 +290,6 @@ impl HorizonApp {
                 self.startup_receiver = None;
             }
         }
-    }
-
-    fn save_recovered_startup_runtime_state(&self, runtime_state: &horizon_core::RuntimeState) -> Result<(), String> {
-        let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
-            return Ok(());
-        };
-        self.session_store
-            .save_runtime_state(&active_session.session_id, runtime_state)
-            .map_err(|error| error.to_string())
     }
 
     fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
@@ -389,23 +366,18 @@ impl HorizonApp {
             }
         }
 
-        let has_dynamic_agent =
-            self.board.panels.iter().any(|panel| {
-                panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
-            });
+        let has_dynamic_agent = self.board.panels.iter().any(panel_uses_dynamic_binding);
         if !has_dynamic_agent {
             return;
         }
 
-        let has_unbound_agent = self.board.panels.iter().any(|panel| {
-            panel.kind.supports_session_binding()
-                && !matches!(panel.resume, PanelResume::Session { .. })
-                && panel.session_binding.is_none()
-        });
+        let has_unbound_agent = self
+            .board
+            .panels
+            .iter()
+            .any(|panel| panel_uses_dynamic_binding(panel) && panel.session_binding.is_none());
         let has_recent_dynamic_output = self.board.panels.iter().any(|panel| {
-            panel.kind.supports_session_binding()
-                && !matches!(panel.resume, PanelResume::Session { .. })
-                && panel.had_recent_output_within(SESSION_BINDING_ACTIVITY_WINDOW)
+            panel_uses_dynamic_binding(panel) && panel.had_recent_output_within(SESSION_BINDING_ACTIVITY_WINDOW)
         });
         if !has_unbound_agent && !has_recent_dynamic_output {
             return;
@@ -432,9 +404,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
-            .filter(|panel| {
-                panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
-            })
+            .filter(|panel| panel_uses_dynamic_binding(panel))
             .map(|panel| DynamicPanelBindingState {
                 panel_id: panel.id,
                 kind: panel.kind,
@@ -509,69 +479,14 @@ impl HorizonApp {
     }
 }
 
-pub(super) fn render_loading_view(
-    ctx: &Context,
-    failure: Option<&StartupBootstrapFailure>,
-) -> Option<StartupBootstrapFailureAction> {
-    let mut action = None;
-    egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(theme::BG()))
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() * 0.28);
-                ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG()));
-                ui.add_space(16.0);
-            });
-            if let Some(failure) = failure {
-                let (failure_heading, failure_detail) = match failure {
-                    StartupBootstrapFailure::ExactValidationFailed(error) => {
-                        ("Saved sessions could not be resolved safely.", Some(error.as_str()))
-                    }
-                    StartupBootstrapFailure::WorkerDisconnected => {
-                        ("Saved-session validation stopped unexpectedly.", None)
-                    }
-                    StartupBootstrapFailure::RecoverySaveFailed(error) => {
-                        ("The repaired session could not be saved.", Some(error.as_str()))
-                    }
-                };
-                ui.label(egui::RichText::new(failure_heading).color(theme::PALETTE_RED()));
-                if let Some(failure_detail) = failure_detail {
-                    ui.label(egui::RichText::new(failure_detail).small().color(theme::FG_DIM()));
-                }
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if matches!(
-                        failure,
-                        StartupBootstrapFailure::ExactValidationFailed(_) | StartupBootstrapFailure::WorkerDisconnected
-                    ) && ui.button("Retry").clicked()
-                    {
-                        action = Some(StartupBootstrapFailureAction::Retry);
-                    }
-                    let recovery_label = match failure {
-                        StartupBootstrapFailure::ExactValidationFailed(_) => Some("Remove saved resumes and open"),
-                        StartupBootstrapFailure::RecoverySaveFailed(_) => Some("Retry repaired save and open"),
-                        StartupBootstrapFailure::WorkerDisconnected => None,
-                    };
-                    if recovery_label.is_some_and(|label| ui.button(label).clicked()) {
-                        action = Some(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
-                    }
-                });
-            } else {
-                loading_spinner::show(
-                    ui,
-                    egui::Id::new("startup_loading_spinner"),
-                    Some("Resolving saved sessions\u{2026}"),
-                );
-            }
-        });
-    action
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates};
+    use super::{
+        DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates,
+        panel_uses_dynamic_binding,
+    };
     use egui::Context;
     use horizon_core::{
         AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
@@ -853,15 +768,22 @@ mod tests {
             }],
             ..RuntimeState::default()
         });
-        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
 
-        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
 
         assert!(app.startup_bootstrap_failure.is_none());
         assert!(app.startup_receiver.is_none());
         assert!(app.pending_startup_runtime_state.is_none());
         let panel = &app.board.panels[0];
-        assert!(panel.session_binding.is_none());
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-child")
+        );
+        assert!(panel.session_binding.as_ref().is_some_and(|binding| !binding.resumable));
         assert!(matches!(panel.resume, PanelResume::Fresh));
     }
 
@@ -888,17 +810,23 @@ mod tests {
             ..RuntimeState::default()
         };
         let (_temp, mut app, runtime_path) = test_persistent_recovery_app(runtime_state);
-        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
 
-        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
 
         let saved = RuntimeState::load(&runtime_path)
             .expect("load repaired runtime")
             .expect("repaired runtime exists");
         assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
+        assert_eq!(saved.workspaces[0].panels[0].stored_session_id(), Some("session-child"));
         assert!(app.pending_startup_runtime_state.is_none());
         assert!(app.startup_bootstrap_failure.is_none());
-        assert!(app.board.panels[0].session_binding.is_none());
+        assert!(
+            app.board.panels[0]
+                .session_binding
+                .as_ref()
+                .is_some_and(|binding| !binding.resumable)
+        );
     }
 
     #[test]
@@ -928,9 +856,9 @@ mod tests {
         std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
         app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
         app.startup_receiver = None;
-        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
 
-        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
 
         assert!(matches!(
             app.startup_bootstrap_failure,
@@ -953,16 +881,22 @@ mod tests {
             HorizonHome::from_root(temp.path().join(".horizon")),
             temp.path().join("config.yaml"),
         );
-        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
 
         let saved = RuntimeState::load(&runtime_path)
             .expect("load repaired runtime")
             .expect("repaired runtime exists");
         assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
+        assert_eq!(saved.workspaces[0].panels[0].stored_session_id(), Some("session-child"));
         assert!(matches!(saved.workspaces[0].panels[0].resume, PanelResume::Fresh));
         assert!(app.pending_startup_runtime_state.is_none());
         assert!(app.startup_bootstrap_failure.is_none());
-        assert!(app.board.panels[0].session_binding.is_none());
+        assert!(
+            app.board.panels[0]
+                .session_binding
+                .as_ref()
+                .is_some_and(|binding| !binding.resumable)
+        );
     }
 
     #[test]
@@ -1017,6 +951,7 @@ mod tests {
                 cwd: Some("/repo".to_string()),
                 label: None,
                 updated_at: 12,
+                interactive: true,
             }]
         });
 
@@ -1051,6 +986,7 @@ mod tests {
                     cwd: Some("/repo".to_string()),
                     label: None,
                     updated_at: 20,
+                    interactive: true,
                 },
                 horizon_core::AgentSessionRecord {
                     kind: PanelKind::Codex,
@@ -1058,6 +994,7 @@ mod tests {
                     cwd: Some("/repo".to_string()),
                     label: None,
                     updated_at: 12,
+                    interactive: true,
                 },
             ]
         });
@@ -1108,6 +1045,7 @@ mod tests {
                 cwd: Some("/repo".to_string()),
                 label: None,
                 updated_at: 20,
+                interactive: true,
             }]
         });
 
@@ -1139,10 +1077,39 @@ mod tests {
                 cwd: Some("/repo".to_string()),
                 label: None,
                 updated_at: 20,
+                interactive: true,
             }]
         });
 
         assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn retained_session_ids_are_not_replaced_by_dynamic_catalog_matching() {
+        let (_temp, mut app) = test_app();
+        let workspace_id = app.board.create_workspace("test");
+        let (command, args) = exiting_command();
+        let panel_id = app
+            .board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Codex,
+                    command: Some(command),
+                    args,
+                    resume: PanelResume::Last,
+                    session_binding: Some(
+                        AgentSessionBinding::new(PanelKind::Codex, "saved-child".to_string(), None, None, None)
+                            .retained_unresumable(),
+                    ),
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("create retained panel");
+
+        assert!(!panel_uses_dynamic_binding(
+            app.board.panel(panel_id).expect("retained panel")
+        ));
     }
 
     #[test]

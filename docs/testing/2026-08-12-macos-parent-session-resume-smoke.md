@@ -57,9 +57,10 @@ do not overwrite the shell's own `HOME` variable.
 ```zsh
 export HORIZON_SMOKE_ROOT="$(mktemp -d /tmp/horizon-codex-parent-smoke.XXXXXX)"
 export HORIZON_SMOKE_USER_HOME="$HORIZON_SMOKE_ROOT/home"
+export HORIZON_SMOKE_CODEX_HOME="$HORIZON_SMOKE_ROOT/codex-home"
 export HORIZON_SMOKE_WORKSPACE="$HORIZON_SMOKE_ROOT/workspace"
 export HORIZON_SMOKE_ARGV="$HORIZON_SMOKE_ROOT/fake-codex-argv.log"
-mkdir -p "$HORIZON_SMOKE_USER_HOME/.codex" "$HORIZON_SMOKE_USER_HOME/.horizon" "$HORIZON_SMOKE_WORKSPACE"
+mkdir -p "$HORIZON_SMOKE_CODEX_HOME" "$HORIZON_SMOKE_USER_HOME/.horizon" "$HORIZON_SMOKE_WORKSPACE"
 ```
 
 Create a deterministic fake Codex executable. It records every launch, prints
@@ -89,7 +90,7 @@ cat > "$HORIZON_SMOKE_ROOT/root-b.jsonl" <<'JSONL'
 {"type":"session_meta","payload":{"id":"root-b","session_id":"root-b"}}
 JSONL
 cat > "$HORIZON_SMOKE_ROOT/child-a.jsonl" <<'JSONL'
-{"type":"session_meta","payload":{"id":"child-a","session_id":"root-a","parent_thread_id":"root-a"}}
+{"type":"session_meta","payload":{"id":"child-a","session_id":"child-a","parent_thread_id":"root-a"}}
 JSONL
 cat > "$HORIZON_SMOKE_ROOT/guardian-a.jsonl" <<'JSONL'
 {"type":"session_meta","payload":{"id":"guardian-a","session_id":"root-a","parent_thread_id":"root-a"}}
@@ -104,7 +105,7 @@ unfiltered recency match would choose a child. The database intentionally omits
 newer optional Codex columns to cover the legacy-compatible query surface.
 
 ```zsh
-/usr/bin/sqlite3 "$HORIZON_SMOKE_USER_HOME/.codex/state_5.sqlite" <<SQL
+/usr/bin/sqlite3 "$HORIZON_SMOKE_CODEX_HOME/state_5.sqlite" <<SQL
 CREATE TABLE threads (
   id TEXT PRIMARY KEY,
   rollout_path TEXT NOT NULL,
@@ -163,6 +164,7 @@ horizon_smoke_launch_primary() {
     return 1
   fi
   env HOME="$HORIZON_SMOKE_USER_HOME" \
+    CODEX_HOME="$HORIZON_SMOKE_CODEX_HOME" \
     HORIZON_SMOKE_ARGV="$HORIZON_SMOKE_ARGV" \
     RUST_LOG=horizon=info,horizon_core=info \
     "$HORIZON_SMOKE_BIN" \
@@ -273,114 +275,44 @@ kill -0 "$HORIZON_SMOKE_PID"
 This is the decisive regression lane for users whose existing saved panel is
 already bound to a parent-controlled child.
 
-### Validation-Failure Recovery Controls
+### Store-Unavailable Safe Degradation
 
 Quit and reap the current primary. Move the isolated database aside, record the
-current fake launch count, and relaunch. The count assertions prove validation
-does not start the saved process before the operator chooses a recovery action:
+current fake launch count, and relaunch. Horizon must open automatically rather
+than blocking on a full-screen validation error. The panel starts exactly once
+without a `resume` subcommand, while the saved id remains recoverable with an
+explicit non-resumable marker:
 
 ```zsh
 wait "$HORIZON_SMOKE_PID"
-mv "$HORIZON_SMOKE_USER_HOME/.codex/state_5.sqlite" "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved"
-export HORIZON_SMOKE_FAILURE_ARGV_LINES="$(wc -l < "$HORIZON_SMOKE_ARGV")"
-horizon_smoke_launch_primary horizon-validation-failure.log
-sleep 2
-kill -0 "$HORIZON_SMOKE_PID"
-test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$HORIZON_SMOKE_FAILURE_ARGV_LINES"
-```
-
-Verify the safe failure screen appears, no panel or fake process starts, and
-the launch count remains `$HORIZON_SMOKE_FAILURE_ARGV_LINES`. Leave that exact
-primary screen open for at least 20 seconds, then start a separately tracked
-second binary from the same control terminal:
-
-```zsh
-sleep 20
-kill -0 "$HORIZON_SMOKE_PID"
-test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$HORIZON_SMOKE_FAILURE_ARGV_LINES"
-
-env HOME="$HORIZON_SMOKE_USER_HOME" \
-  HORIZON_SMOKE_ARGV="$HORIZON_SMOKE_ARGV" \
-  RUST_LOG=horizon=info,horizon_core=info \
-  "$HORIZON_SMOKE_BIN" \
-  --config "$HORIZON_SMOKE_USER_HOME/.horizon/config.yaml" \
-  > "$HORIZON_SMOKE_ROOT/horizon-validation-conflict.log" 2>&1 &
-export HORIZON_SMOKE_CONFLICT_PID=$!
-test "$HORIZON_SMOKE_CONFLICT_PID" != "$HORIZON_SMOKE_PID"
-kill -0 "$HORIZON_SMOKE_PID"
-kill -0 "$HORIZON_SMOKE_CONFLICT_PID"
-ps -p "$HORIZON_SMOKE_PID,$HORIZON_SMOKE_CONFLICT_PID" -o pid=,ppid=,command=
-```
-
-Verify the second exact process reports a Live Conflict rather than offering
-stale takeover, and that the fake launch count is still unchanged. Activate
-that second window, quit it with Cmd-Q without opening a copy, and reap only its
-PID. The failed primary must remain live:
-
-```zsh
-wait "$HORIZON_SMOKE_CONFLICT_PID"
-kill -0 "$HORIZON_SMOKE_PID"
-test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$HORIZON_SMOKE_FAILURE_ARGV_LINES"
-```
-
-Restore the database and select **Retry**:
-
-```zsh
-mv "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved" "$HORIZON_SMOKE_USER_HOME/.codex/state_5.sqlite"
-```
-
-After the panel appears, verify it starts exactly once with `resume root-a` and
-accepts `hello retry`. Pin both facts from the control terminal:
-
-```zsh
-test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$((HORIZON_SMOKE_FAILURE_ARGV_LINES + 1))"
-test "$(tail -n 1 "$HORIZON_SMOKE_ARGV")" = '--no-alt-screen resume root-a'
-kill -0 "$HORIZON_SMOKE_PID"
-```
-
-Now exercise the safe-open branch against the persisted review-child shape,
-not an already-valid root. Quit and reap the current primary, rewrite only the
-isolated runtime binding back to `review-a`, move the database aside again, and
-launch a new exact primary:
-
-```zsh
-wait "$HORIZON_SMOKE_PID"
-perl -pi -e 's/session_id: root-a/session_id: review-a/' "$HORIZON_SMOKE_RUNTIME"
-rg -q 'session_id: review-a' "$HORIZON_SMOKE_RUNTIME"
-mv "$HORIZON_SMOKE_USER_HOME/.codex/state_5.sqlite" "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved"
+mv "$HORIZON_SMOKE_CODEX_HOME/state_5.sqlite" "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved"
 export HORIZON_SMOKE_SAFE_ARGV_LINES="$(wc -l < "$HORIZON_SMOKE_ARGV")"
-horizon_smoke_launch_primary horizon-validation-safe-open.log
-sleep 2
-kill -0 "$HORIZON_SMOKE_PID"
-test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$HORIZON_SMOKE_SAFE_ARGV_LINES"
+horizon_smoke_launch_primary horizon-store-unavailable.log
 ```
 
-Select **Remove saved resumes and open**. Verify Horizon opens the board and
-the fake panel accepts `hello safe`. With the store unavailable, the saved
-`review-a` binding must be removed before launch: exactly one fresh invocation
-is added, with no `resume` subcommand, and the repaired runtime retains the
-configured `resume: last` behavior without either exact ID:
+Verify the board and fake panel appear without operator intervention, the panel
+accepts `hello safe`, and pin the safe launch and retained-id evidence:
 
 ```zsh
 test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$((HORIZON_SMOKE_SAFE_ARGV_LINES + 1))"
 test "$(tail -n 1 "$HORIZON_SMOKE_ARGV")" = '--no-alt-screen'
-rg -q 'resume: last' "$HORIZON_SMOKE_RUNTIME"
-! rg -q 'session_id: (review-a|root-a)' "$HORIZON_SMOKE_RUNTIME"
+rg -q 'session_id: root-a' "$HORIZON_SMOKE_RUNTIME"
+rg -q 'resumable: false' "$HORIZON_SMOKE_RUNTIME"
 kill -0 "$HORIZON_SMOKE_PID"
 ```
 
-Finally quit and reap that exact primary, restore the database, and relaunch the
-sanitized runtime. It must not return to the failure screen; generic `last`
-matching may safely bind the panel to the available interactive `root-a`:
+Quit and reap that exact primary, restore the database, and relaunch. Exact
+validation must recover the retained binding and resume `root-a` without any
+manual state edit:
 
 ```zsh
 wait "$HORIZON_SMOKE_PID"
-mv "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved" "$HORIZON_SMOKE_USER_HOME/.codex/state_5.sqlite"
-horizon_smoke_launch_primary horizon-validation-safe-relaunch.log
+mv "$HORIZON_SMOKE_ROOT/state_5.sqlite.saved" "$HORIZON_SMOKE_CODEX_HOME/state_5.sqlite"
+horizon_smoke_launch_primary horizon-store-restored.log
 ```
 
-After the panel appears and accepts `hello safe relaunch`, pin the clean
-relaunch and leave this primary running for Test 3:
+After the panel appears and accepts `hello restored store`, pin the recovery
+and leave this primary running for Test 3:
 
 ```zsh
 test "$(wc -l < "$HORIZON_SMOKE_ARGV")" -eq "$((HORIZON_SMOKE_SAFE_ARGV_LINES + 2))"
@@ -441,6 +373,7 @@ case "$HORIZON_SMOKE_PRIMARY_COMMAND" in
 esac
 
 env HOME="$HORIZON_SMOKE_USER_HOME" \
+  CODEX_HOME="$HORIZON_SMOKE_CODEX_HOME" \
   HORIZON_SMOKE_ARGV="$HORIZON_SMOKE_ARGV" \
   RUST_LOG=horizon=info,horizon_core=info \
   "$HORIZON_SMOKE_BIN" \
@@ -467,6 +400,7 @@ export HORIZON_SMOKE_FRESH_ARGV_LINE="$(($(wc -l < "$HORIZON_SMOKE_ARGV") + 1))"
 perl -pi -e 's/resume: last/resume: fresh/' "$HORIZON_SMOKE_USER_HOME/.horizon/config.yaml"
 
 env HOME="$HORIZON_SMOKE_USER_HOME" \
+  CODEX_HOME="$HORIZON_SMOKE_CODEX_HOME" \
   HORIZON_SMOKE_ARGV="$HORIZON_SMOKE_ARGV" \
   RUST_LOG=horizon=info,horizon_core=info \
   "$HORIZON_SMOKE_BIN" \

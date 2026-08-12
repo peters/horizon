@@ -22,6 +22,12 @@ pub enum AgentIntegrationKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentSessionValidationMode {
+    None,
+    ParentThreadRoots,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AgentDefinition {
     pub id: &'static str,
     pub display_name: &'static str,
@@ -29,6 +35,7 @@ pub struct AgentDefinition {
     pub accent_rgb: [u8; 3],
     pub default_command: &'static str,
     pub resume_mode: AgentResumeMode,
+    pub session_validation: AgentSessionValidationMode,
     pub integration: AgentIntegrationKind,
     pub kitty_keyboard: bool,
 }
@@ -41,6 +48,11 @@ impl AgentDefinition {
             AgentResumeMode::ExactSubcommand { .. } | AgentResumeMode::ExactFlag { .. }
         )
     }
+
+    #[must_use]
+    pub const fn requires_exact_session_validation(self) -> bool {
+        matches!(self.session_validation, AgentSessionValidationMode::ParentThreadRoots)
+    }
 }
 
 const CODEX: AgentDefinition = AgentDefinition {
@@ -50,6 +62,7 @@ const CODEX: AgentDefinition = AgentDefinition {
     accent_rgb: [116, 162, 247],
     default_command: "codex",
     resume_mode: AgentResumeMode::ExactSubcommand { subcommand: "resume" },
+    session_validation: AgentSessionValidationMode::ParentThreadRoots,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: false,
 };
@@ -64,6 +77,7 @@ const CLAUDE: AgentDefinition = AgentDefinition {
         flag: "--resume",
         fresh_session_flag: Some("--session-id"),
     },
+    session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::ClaudePluginDir,
     kitty_keyboard: true,
 };
@@ -78,6 +92,7 @@ const OPENCODE: AgentDefinition = AgentDefinition {
         flag: "--session",
         fresh_session_flag: None,
     },
+    session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
 };
@@ -89,6 +104,7 @@ const GEMINI: AgentDefinition = AgentDefinition {
     accent_rgb: [137, 220, 235],
     default_command: "gemini",
     resume_mode: AgentResumeMode::None,
+    session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: false,
 };
@@ -100,6 +116,7 @@ const KILO_CODE: AgentDefinition = AgentDefinition {
     accent_rgb: [235, 160, 172],
     default_command: "kilo",
     resume_mode: AgentResumeMode::ContinueFlag { flag: "--continue" },
+    session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
 };
@@ -114,6 +131,7 @@ const PI: AgentDefinition = AgentDefinition {
         flag: "--session",
         fresh_session_flag: None,
     },
+    session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
 };
@@ -194,6 +212,22 @@ mod tests {
             agent_definition(PanelKind::KiloCode).expect("kilo agent").resume_mode,
             AgentResumeMode::ContinueFlag { flag: "--continue" }
         );
+    }
+
+    #[test]
+    fn exact_parent_thread_validation_is_an_explicit_provider_capability() {
+        assert!(
+            agent_definition(PanelKind::Codex)
+                .expect("codex agent")
+                .requires_exact_session_validation()
+        );
+        for kind in [PanelKind::Claude, PanelKind::OpenCode, PanelKind::Pi] {
+            assert!(
+                !agent_definition(kind)
+                    .expect("catalog-backed agent")
+                    .requires_exact_session_validation()
+            );
+        }
     }
 
     #[test]
