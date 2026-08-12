@@ -9,6 +9,39 @@ use crate::error::{Error, Result};
 
 use super::{AgentSessionRecord, PanelKind, normalize_cwd};
 
+const MAX_PARENT_TRAVERSAL_STEPS: usize = 64;
+
+struct RootTraversal {
+    visited: HashSet<String>,
+    remaining_parent_traversals: usize,
+}
+
+impl RootTraversal {
+    fn new() -> Self {
+        Self {
+            visited: HashSet::new(),
+            remaining_parent_traversals: MAX_PARENT_TRAVERSAL_STEPS,
+        }
+    }
+
+    fn visit(&mut self, thread: &CodexThread) -> bool {
+        self.visited.insert(thread.record.session_id.clone())
+    }
+
+    fn descend_to_parent(&mut self) -> bool {
+        if self.remaining_parent_traversals == 0 {
+            return false;
+        }
+        self.remaining_parent_traversals -= 1;
+        true
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static ROLLOUT_METADATA_READ_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Default)]
 pub(super) struct CodexSessions {
     pub(super) sessions: Vec<AgentSessionRecord>,
@@ -17,18 +50,24 @@ pub(super) struct CodexSessions {
 }
 
 struct CodexThread {
-    id: String,
-    rollout_path: PathBuf,
-    source: String,
+    rollout_path: Option<PathBuf>,
+    source: CodexThreadSource,
     archived: bool,
     record: AgentSessionRecord,
 }
 
+#[derive(Default)]
+struct CodexThreadSource {
+    is_parent_controlled: bool,
+    parent_thread_id: Option<String>,
+    malformed: bool,
+}
+
 pub(super) fn load_sessions(binding_ids: &HashSet<String>) -> Result<CodexSessions> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(home) = user_home_dir() else {
         if !binding_ids.is_empty() {
             return Err(Error::State(
-                "cannot validate saved Codex sessions without HOME".to_string(),
+                "cannot validate saved Codex sessions without a user home directory".to_string(),
             ));
         }
         return Ok(CodexSessions::default());
@@ -58,37 +97,54 @@ fn load_sessions_from_path(sqlite_path: &Path, binding_ids: &HashSet<String>) ->
         )
         .map_err(|error| Error::State(error.to_string()))?;
 
-    let rows = statement
-        .query_map([], |row| {
-            let id: String = row.get(0)?;
-            let source: String = row.get(2)?;
-            let archived: bool = row.get(6)?;
-            let label = (!archived && !is_subagent_source(&source))
-                .then(|| row.get::<_, String>(3).ok())
-                .flatten()
-                .filter(|title| !title.is_empty());
-            Ok(CodexThread {
-                record: AgentSessionRecord {
-                    kind: PanelKind::Codex,
-                    session_id: id.clone(),
-                    label,
-                    cwd: normalize_cwd(row.get::<_, String>(4).ok().as_deref()),
-                    updated_at: row.get::<_, i64>(5)?.saturating_mul(1000),
-                },
-                id,
-                rollout_path: PathBuf::from(row.get::<_, String>(1)?),
-                source,
-                archived,
-            })
-        })
-        .map_err(|error| Error::State(error.to_string()))?;
-
     let mut threads = Vec::new();
-    for row in rows {
-        threads.push(row.map_err(|error| Error::State(error.to_string()))?);
+    let mut rows = statement.query([]).map_err(|error| Error::State(error.to_string()))?;
+    let mut row_number = 0_u64;
+    while let Some(row) = rows.next().map_err(|error| Error::State(error.to_string()))? {
+        row_number += 1;
+        let id = row.get::<_, String>(0).ok().filter(|id| !id.is_empty());
+        let source = row.get::<_, String>(2).ok();
+        let archived = row.get::<_, bool>(6).ok();
+        let updated_at = row.get::<_, i64>(5).ok();
+        let (Some(id), Some(source), Some(archived), Some(updated_at)) = (id, source, archived, updated_at) else {
+            tracing::warn!(row_number, "skipping malformed Codex thread metadata");
+            continue;
+        };
+        let source = parse_thread_source(&source);
+        if source.malformed {
+            tracing::warn!(
+                row_number,
+                thread_id = id,
+                "skipping malformed Codex thread source metadata"
+            );
+            continue;
+        }
+        let label = (!archived && !source.is_parent_controlled)
+            .then(|| row.get::<_, String>(3).ok())
+            .flatten()
+            .filter(|title| !title.is_empty());
+        threads.push(CodexThread {
+            rollout_path: row
+                .get::<_, String>(1)
+                .ok()
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+            source,
+            archived,
+            record: AgentSessionRecord {
+                kind: PanelKind::Codex,
+                session_id: id,
+                label,
+                cwd: normalize_cwd(row.get::<_, String>(4).ok().filter(|cwd| !cwd.is_empty()).as_deref()),
+                updated_at: updated_at.saturating_mul(1000),
+            },
+        });
     }
 
-    let threads_by_id: HashMap<_, _> = threads.iter().map(|thread| (thread.id.as_str(), thread)).collect();
+    let threads_by_id: HashMap<_, _> = threads
+        .iter()
+        .map(|thread| (thread.record.session_id.as_str(), thread))
+        .collect();
     if let Some(missing_id) = binding_ids
         .iter()
         .find(|binding_id| !threads_by_id.contains_key(binding_id.as_str()))
@@ -100,7 +156,7 @@ fn load_sessions_from_path(sqlite_path: &Path, binding_ids: &HashSet<String>) ->
     }
     let sessions = threads
         .iter()
-        .filter(|thread| !thread.archived && !is_subagent_source(&thread.source))
+        .filter(|thread| !thread.archived && !thread.source.is_parent_controlled)
         .map(|thread| thread.record.clone())
         .collect();
     let root_aliases = binding_ids
@@ -112,7 +168,7 @@ fn load_sessions_from_path(sqlite_path: &Path, binding_ids: &HashSet<String>) ->
         .filter(|binding_id| {
             threads_by_id
                 .get(binding_id.as_str())
-                .is_some_and(|thread| is_subagent_source(&thread.source))
+                .is_some_and(|thread| thread.source.is_parent_controlled)
         })
         .cloned()
         .collect();
@@ -129,23 +185,56 @@ fn resolve_root_alias(
     threads_by_id: &HashMap<&str, &CodexThread>,
 ) -> Option<(String, AgentSessionRecord)> {
     let child = threads_by_id.get(binding_id)?;
-    if !is_subagent_source(&child.source) {
+    if !child.source.is_parent_controlled {
         return None;
     }
 
-    let root_id = rollout_root_session_id(&child.rollout_path, binding_id)
-        .filter(|root_id| root_id != binding_id)
-        .or_else(|| root_session_id_from_source_chain(child, threads_by_id))?;
-    let root = threads_by_id.get(root_id.as_str())?;
-    if root.archived || is_subagent_source(&root.source) || child.record.cwd != root.record.cwd {
+    let expected_cwd = child.record.cwd.as_deref()?;
+    let root = resolve_root_record(child, expected_cwd, threads_by_id, &mut RootTraversal::new())?;
+
+    Some((binding_id.to_string(), root))
+}
+
+fn resolve_root_record(
+    thread: &CodexThread,
+    expected_cwd: &str,
+    threads_by_id: &HashMap<&str, &CodexThread>,
+    traversal: &mut RootTraversal,
+) -> Option<AgentSessionRecord> {
+    if !traversal.visit(thread) {
+        return None;
+    }
+    if !thread.source.is_parent_controlled {
+        return (!thread.archived && thread.record.cwd.as_deref() == Some(expected_cwd)).then(|| thread.record.clone());
+    }
+    if !traversal.descend_to_parent() {
         return None;
     }
 
-    Some((binding_id.to_string(), root.record.clone()))
+    let metadata_parent = thread
+        .rollout_path
+        .as_deref()
+        .and_then(|path| rollout_root_session_id(path, &thread.record.session_id));
+    if let Some(parent) = metadata_parent
+        .as_deref()
+        .and_then(|parent_id| threads_by_id.get(parent_id))
+        .and_then(|parent| resolve_root_record(parent, expected_cwd, threads_by_id, traversal))
+    {
+        return Some(parent);
+    }
+    thread
+        .source
+        .parent_thread_id
+        .as_deref()
+        .and_then(|parent_id| threads_by_id.get(parent_id))
+        .and_then(|parent| resolve_root_record(parent, expected_cwd, threads_by_id, traversal))
 }
 
 fn rollout_root_session_id(path: &Path, expected_child_id: &str) -> Option<String> {
-    const MAX_METADATA_BYTES: u64 = 64 * 1024;
+    const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+
+    #[cfg(test)]
+    ROLLOUT_METADATA_READ_COUNT.with(|count| count.set(count.get() + 1));
 
     if !std::fs::metadata(path).ok()?.is_file() {
         return None;
@@ -157,7 +246,7 @@ fn rollout_root_session_id(path: &Path, expected_child_id: &str) -> Option<Strin
     let mut bytes = Vec::new();
     file.take(MAX_METADATA_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes);
-    for line in text.lines().take(8) {
+    for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -170,7 +259,11 @@ fn rollout_root_session_id(path: &Path, expected_child_id: &str) -> Option<Strin
         if payload.get("id").and_then(Value::as_str) != Some(expected_child_id) {
             continue;
         }
-        let Some(session_id) = payload.get("session_id").and_then(Value::as_str) else {
+        let Some(session_id) = payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("parent_thread_id").and_then(Value::as_str))
+        else {
             continue;
         };
         if !session_id.is_empty() {
@@ -180,31 +273,49 @@ fn rollout_root_session_id(path: &Path, expected_child_id: &str) -> Option<Strin
     None
 }
 
-fn root_session_id_from_source_chain(
-    child: &CodexThread,
-    threads_by_id: &HashMap<&str, &CodexThread>,
-) -> Option<String> {
-    let mut current = child;
-    let mut visited = HashSet::new();
-    while is_subagent_source(&current.source) {
-        if !visited.insert(current.id.as_str()) {
-            return None;
-        }
-        let source = serde_json::from_str::<Value>(&current.source).ok()?;
-        let parent_id = source
-            .pointer("/subagent/thread_spawn/parent_thread_id")?
-            .as_str()?
-            .to_string();
-        current = threads_by_id.get(parent_id.as_str())?;
-    }
-    Some(current.id.clone())
+#[cfg(test)]
+fn reset_rollout_metadata_read_count() {
+    ROLLOUT_METADATA_READ_COUNT.with(|count| count.set(0));
 }
 
-fn is_subagent_source(source: &str) -> bool {
+#[cfg(test)]
+fn rollout_metadata_read_count() -> usize {
+    ROLLOUT_METADATA_READ_COUNT.with(std::cell::Cell::get)
+}
+
+fn parse_thread_source(source: &str) -> CodexThreadSource {
     let Ok(Value::Object(source)) = serde_json::from_str(source) else {
-        return false;
+        return CodexThreadSource {
+            malformed: source.trim_start().starts_with('{'),
+            ..CodexThreadSource::default()
+        };
     };
-    source.contains_key("subagent")
+    let Some(subagent) = source.get("subagent") else {
+        return CodexThreadSource::default();
+    };
+    CodexThreadSource {
+        is_parent_controlled: true,
+        parent_thread_id: subagent
+            .pointer("/thread_spawn/parent_thread_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        malformed: false,
+    }
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    user_home_dir_from_env(
+        std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+        std::env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+    )
+}
+
+fn user_home_dir_from_env(home: Option<PathBuf>, user_profile: Option<PathBuf>) -> Option<PathBuf> {
+    home.or(user_profile)
 }
 
 #[cfg(test)]

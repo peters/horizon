@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::opencode_paths::opencode_db_path;
 
-use super::{AgentSessionBinding, PanelKind, PanelResume, RuntimeState, normalize_cwd};
+use super::{AgentSessionBinding, PanelKind, PanelState, RuntimeState, normalize_cwd};
 
 mod codex;
 
@@ -28,7 +28,12 @@ impl AgentSessionCatalog {
     ///
     /// Returns an error if one of the underlying local session stores cannot be opened.
     pub fn load() -> Result<Self> {
-        Self::load_with_codex_binding_ids(&HashSet::new())
+        Self::load_strict(
+            load_claude_sessions,
+            || codex::load_sessions(&HashSet::new()),
+            load_opencode_sessions,
+            load_pi_sessions,
+        )
     }
 
     /// Load sessions and resolve any persisted Codex bindings that reference
@@ -36,24 +41,21 @@ impl AgentSessionCatalog {
     ///
     /// # Errors
     ///
-    /// Returns an error if one of the underlying local session stores cannot be opened.
+    /// Returns an error if an exact persisted Codex binding cannot be validated.
+    /// Failures from unrelated providers are logged and omitted during startup.
     pub fn load_for_runtime_state(runtime_state: &RuntimeState) -> Result<Self> {
         let codex_binding_ids = runtime_state
             .workspaces
             .iter()
             .flat_map(|workspace| &workspace.panels)
             .filter(|panel| panel.kind == PanelKind::Codex)
-            .filter_map(|panel| match (&panel.session_binding, &panel.resume) {
-                (Some(binding), _) => Some(binding.session_id.as_str()),
-                (None, PanelResume::Session { session_id }) => Some(session_id.as_str()),
-                (None, PanelResume::Fresh | PanelResume::Last) => None,
-            })
+            .filter_map(PanelState::exact_session_id)
             .map(str::to_owned)
             .collect();
-        Self::load_with_codex_binding_ids(&codex_binding_ids)
+        Self::load_for_bootstrap(&codex_binding_ids)
     }
 
-    fn load_with_codex_binding_ids(codex_binding_ids: &HashSet<String>) -> Result<Self> {
+    fn load_for_bootstrap(codex_binding_ids: &HashSet<String>) -> Result<Self> {
         let mut sessions = Vec::new();
         extend_best_effort(&mut sessions, "Claude", load_claude_sessions());
         let codex = if codex_binding_ids.is_empty() {
@@ -64,15 +66,32 @@ impl AgentSessionCatalog {
         } else {
             codex::load_sessions(codex_binding_ids)?
         };
-        sessions.extend(codex.sessions);
         extend_best_effort(&mut sessions, "OpenCode", load_opencode_sessions());
         extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
+        Ok(Self::from_provider_sessions(sessions, codex))
+    }
+
+    fn load_strict(
+        claude: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+        codex: impl FnOnce() -> Result<codex::CodexSessions>,
+        opencode: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+        pi: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+    ) -> Result<Self> {
+        let mut sessions = claude()?;
+        let codex = codex()?;
+        sessions.extend(opencode()?);
+        sessions.extend(pi()?);
+        Ok(Self::from_provider_sessions(sessions, codex))
+    }
+
+    fn from_provider_sessions(mut sessions: Vec<AgentSessionRecord>, codex: codex::CodexSessions) -> Self {
+        sessions.extend(codex.sessions);
         sessions.sort_by_key(|session| Reverse(session.updated_at));
-        Ok(Self {
+        Self {
             sessions,
             codex_root_aliases: codex.root_aliases,
             codex_child_binding_ids: codex.child_binding_ids,
-        })
+        }
     }
 
     #[must_use]
@@ -630,9 +649,22 @@ mod tests {
     use super::super::{AgentSessionBinding, PanelResume, PanelState, RuntimeState, WorkspaceState};
     use super::{
         AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary, PanelKind, PiSessionSummary,
-        load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
-        scan_claude_session_reader, scan_pi_session_reader,
+        codex::CodexSessions, load_claude_project_session_summary, load_opencode_sessions_from_path,
+        load_pi_sessions_from_dir, scan_claude_session_reader, scan_pi_session_reader,
     };
+    use crate::error::Error;
+
+    #[test]
+    fn strict_catalog_load_propagates_provider_errors() {
+        let loaded = AgentSessionCatalog::load_strict(
+            || Ok(Vec::new()),
+            || Ok(CodexSessions::default()),
+            || Err(Error::State("OpenCode store unavailable".to_string())),
+            || Ok(Vec::new()),
+        );
+
+        assert!(matches!(loaded, Err(Error::State(message)) if message == "OpenCode store unavailable"));
+    }
 
     fn parse_claude_project_session<R: std::io::BufRead>(
         reader: R,
@@ -776,8 +808,15 @@ mod tests {
             label: Some("Root session".to_string()),
             updated_at: 42,
         };
+        let fallback = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-fallback".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Fallback session".to_string()),
+            updated_at: 41,
+        };
         let catalog = AgentSessionCatalog {
-            sessions: vec![root.clone()],
+            sessions: vec![root.clone(), fallback],
             codex_root_aliases: HashMap::from([("session-child".to_string(), root)]),
             codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
         };
@@ -835,8 +874,15 @@ mod tests {
             label: Some("Root session".to_string()),
             updated_at: 42,
         };
+        let fallback = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-fallback".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Fallback session".to_string()),
+            updated_at: 41,
+        };
         let catalog = AgentSessionCatalog {
-            sessions: vec![root.clone()],
+            sessions: vec![root.clone(), fallback],
             codex_root_aliases: HashMap::from([("session-child".to_string(), root)]),
             codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
         };
@@ -885,8 +931,15 @@ mod tests {
             label: Some("Root session".to_string()),
             updated_at: 42,
         };
+        let fallback = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-fallback".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Fallback session".to_string()),
+            updated_at: 41,
+        };
         let catalog = AgentSessionCatalog {
-            sessions: vec![root.clone()],
+            sessions: vec![root.clone(), fallback],
             codex_root_aliases: HashMap::from([
                 ("session-child-a".to_string(), root.clone()),
                 ("session-child-b".to_string(), root),
@@ -934,9 +987,18 @@ mod tests {
                 .map(|binding| binding.session_id.as_str()),
             Some("session-root")
         );
+        let child_bindings: Vec<_> = state.workspaces[0].panels[1..]
+            .iter()
+            .filter_map(|panel| {
+                panel
+                    .session_binding
+                    .as_ref()
+                    .map(|binding| binding.session_id.as_str())
+            })
+            .collect();
+        assert_eq!(child_bindings, ["session-fallback"]);
         for child in &state.workspaces[0].panels[1..] {
-            assert!(child.session_binding.is_none());
-            assert!(matches!(child.resume, PanelResume::Fresh));
+            assert!(matches!(child.resume, PanelResume::Last));
         }
     }
 
@@ -971,6 +1033,113 @@ mod tests {
         let panel = &state.workspaces[0].panels[0];
         assert!(panel.session_binding.is_none());
         assert!(matches!(panel.resume, PanelResume::Fresh));
+    }
+
+    #[test]
+    fn bootstrap_preserves_last_for_an_unresolved_codex_child_binding() {
+        let fallback = AgentSessionRecord {
+            kind: PanelKind::Codex,
+            session_id: "session-fallback".to_string(),
+            cwd: Some("/repo".to_string()),
+            label: Some("Fallback session".to_string()),
+            updated_at: 41,
+        };
+        let catalog = AgentSessionCatalog {
+            sessions: vec![fallback],
+            codex_child_binding_ids: HashSet::from(["session-child".to_string()]),
+            ..AgentSessionCatalog::default()
+        };
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    cwd: Some("/repo".to_string()),
+                    resume: PanelResume::Last,
+                    session_binding: Some(AgentSessionBinding::new(
+                        PanelKind::Codex,
+                        "session-child".to_string(),
+                        Some("/repo".to_string()),
+                        None,
+                        None,
+                    )),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(state.bootstrap_missing_agent_bindings(&catalog, &HashSet::new()));
+
+        let panel = &state.workspaces[0].panels[0];
+        assert_eq!(
+            panel
+                .session_binding
+                .as_ref()
+                .map(|binding| binding.session_id.as_str()),
+            Some("session-fallback")
+        );
+        assert!(matches!(panel.resume, PanelResume::Last));
+    }
+
+    #[test]
+    fn explicit_recovery_clears_only_unverified_codex_resumes() {
+        let binding = AgentSessionBinding::new(
+            PanelKind::Codex,
+            "session-child".to_string(),
+            Some("/repo".to_string()),
+            None,
+            None,
+        );
+        let mut state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "horizon".to_string(),
+                panels: vec![
+                    PanelState {
+                        local_id: "last".to_string(),
+                        name: "Last".to_string(),
+                        kind: PanelKind::Codex,
+                        resume: PanelResume::Last,
+                        session_binding: Some(binding),
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "explicit".to_string(),
+                        name: "Explicit".to_string(),
+                        kind: PanelKind::Codex,
+                        resume: PanelResume::Session {
+                            session_id: "session-missing".to_string(),
+                        },
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "other".to_string(),
+                        name: "Other".to_string(),
+                        kind: PanelKind::OpenCode,
+                        resume: PanelResume::Session {
+                            session_id: "other-session".to_string(),
+                        },
+                        ..PanelState::default()
+                    },
+                ],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(state.neutralize_unverified_codex_bindings());
+
+        let panels = &state.workspaces[0].panels;
+        assert!(panels[0].session_binding.is_none());
+        assert!(matches!(panels[0].resume, PanelResume::Last));
+        assert!(panels[1].session_binding.is_none());
+        assert!(matches!(panels[1].resume, PanelResume::Fresh));
+        assert_eq!(panels[2].exact_session_id(), Some("other-session"));
     }
 
     #[test]

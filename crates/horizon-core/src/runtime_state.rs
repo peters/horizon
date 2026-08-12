@@ -162,15 +162,7 @@ impl RuntimeState {
             if panel.kind != PanelKind::Codex {
                 continue;
             }
-            let session_id = panel
-                .session_binding
-                .as_ref()
-                .map(|binding| binding.session_id.as_str())
-                .or(match &panel.resume {
-                    PanelResume::Session { session_id } => Some(session_id.as_str()),
-                    PanelResume::Fresh | PanelResume::Last => None,
-                });
-            if let Some(session_id) = session_id
+            if let Some(session_id) = panel.exact_session_id()
                 && !catalog.is_parent_controlled_codex_binding(session_id)
             {
                 used_session_ids.insert(session_id.to_string());
@@ -181,30 +173,33 @@ impl RuntimeState {
             if panel.kind != PanelKind::Codex {
                 continue;
             }
-            let session_id = match (&panel.session_binding, &panel.resume) {
-                (Some(binding), _) => Some(binding.session_id.clone()),
-                (None, PanelResume::Session { session_id }) => Some(session_id.clone()),
-                (None, PanelResume::Fresh | PanelResume::Last) => None,
-            };
+            let session_id = panel.exact_session_id().map(str::to_owned);
             let Some(session_id) = session_id else {
                 continue;
             };
             if !catalog.is_parent_controlled_codex_binding(&session_id) {
                 continue;
             }
-            let canonical_binding = catalog
-                .canonical_codex_binding(&session_id)
-                .filter(|binding| used_session_ids.insert(binding.session_id.clone()));
-            if let Some(canonical_binding) = canonical_binding {
-                if matches!(panel.resume, PanelResume::Session { .. }) {
-                    panel.resume = PanelResume::Session {
-                        session_id: canonical_binding.session_id.clone(),
-                    };
+            match catalog.canonical_codex_binding(&session_id) {
+                Some(canonical_binding) if used_session_ids.insert(canonical_binding.session_id.clone()) => {
+                    if matches!(panel.resume, PanelResume::Session { .. }) {
+                        panel.resume = PanelResume::Session {
+                            session_id: canonical_binding.session_id.clone(),
+                        };
+                    }
+                    panel.session_binding = Some(canonical_binding);
                 }
-                panel.session_binding = Some(canonical_binding);
-            } else {
-                panel.resume = PanelResume::Fresh;
-                panel.session_binding = None;
+                canonical_binding => {
+                    tracing::warn!(
+                        child_session_id = session_id,
+                        canonical_session_id = canonical_binding.as_ref().map(|binding| binding.session_id.as_str()),
+                        "discarding a parent-controlled session binding that cannot be resumed safely"
+                    );
+                    if matches!(panel.resume, PanelResume::Session { .. }) {
+                        panel.resume = PanelResume::Fresh;
+                    }
+                    panel.session_binding = None;
+                }
             }
             changed = true;
         }
@@ -255,6 +250,27 @@ impl RuntimeState {
             }
         }
 
+        changed
+    }
+
+    /// Remove exact Codex resumes that could not be validated, without
+    /// changing the configured `resume: last` behavior.
+    ///
+    /// This is the explicit recovery path offered after startup validation
+    /// fails. Exact session requests become fresh launches so an unverified
+    /// parent-controlled id is never passed to the agent process.
+    pub fn neutralize_unverified_codex_bindings(&mut self) -> bool {
+        let mut changed = false;
+        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
+            if panel.kind != PanelKind::Codex || panel.exact_session_id().is_none() {
+                continue;
+            }
+            changed |= panel.session_binding.take().is_some();
+            if matches!(panel.resume, PanelResume::Session { .. }) {
+                panel.resume = PanelResume::Fresh;
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -476,6 +492,19 @@ pub struct PanelState {
 }
 
 impl PanelState {
+    /// The exact session id this panel would resume, whether it came from a
+    /// captured binding or an explicit `resume: session` setting.
+    #[must_use]
+    pub fn exact_session_id(&self) -> Option<&str> {
+        self.session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.as_str())
+            .or(match &self.resume {
+                PanelResume::Session { session_id } => Some(session_id.as_str()),
+                PanelResume::Fresh | PanelResume::Last => None,
+            })
+    }
+
     #[must_use]
     pub fn from_config(
         workspace_index: usize,

@@ -10,7 +10,10 @@ use horizon_core::{
 use crate::{loading_spinner, theme};
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
-use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap};
+use super::{
+    ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession, StartupBootstrap,
+    StartupBootstrapFailure, StartupBootstrapOutcome,
+};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
 
@@ -22,6 +25,12 @@ struct DynamicPanelBindingState {
     launched_at_millis: i64,
     session_binding: Option<AgentSessionBinding>,
     recent_output: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StartupBootstrapFailureAction {
+    Retry,
+    ContinueWithoutSavedCodexResumes,
 }
 
 fn collect_dynamic_binding_updates(
@@ -157,7 +166,7 @@ impl HorizonApp {
         self.runtime_dirty_since = None;
         self.git_watchers.clear();
         let needs_bootstrap = Self::runtime_state_needs_session_bootstrap(runtime_state);
-        self.startup_bootstrap_failed = false;
+        self.startup_bootstrap_failure = None;
         self.pending_startup_runtime_state = needs_bootstrap.then(|| runtime_state.clone());
         self.startup_receiver = needs_bootstrap.then(|| Self::spawn_startup_bootstrap(runtime_state.clone()));
         self.board = if self.startup_receiver.is_some() {
@@ -179,32 +188,34 @@ impl HorizonApp {
             .iter()
             .flat_map(|workspace| &workspace.panels)
             .any(|panel| {
-                (panel.kind == PanelKind::Codex
-                    && (panel.session_binding.is_some() || matches!(panel.resume, PanelResume::Session { .. })))
+                (panel.kind == PanelKind::Codex && panel.exact_session_id().is_some())
                     || (panel.kind.supports_session_binding()
                         && panel.session_binding.is_none()
                         && matches!(panel.resume, PanelResume::Last))
             })
     }
 
-    pub(super) fn spawn_startup_bootstrap(mut runtime_state: horizon_core::RuntimeState) -> Receiver<StartupBootstrap> {
+    pub(super) fn spawn_startup_bootstrap(
+        mut runtime_state: horizon_core::RuntimeState,
+    ) -> Receiver<StartupBootstrapOutcome> {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let session_catalog = match AgentSessionCatalog::load_for_runtime_state(&runtime_state) {
                 Ok(session_catalog) => session_catalog,
                 Err(error) => {
                     tracing::warn!("failed to validate saved agent sessions: {error}");
+                    let _ = tx.send(StartupBootstrapOutcome::ExactValidationFailed(error.to_string()));
                     return;
                 }
             };
             let busy_session_ids = live_claude_session_ids();
             let runtime_state_changed =
                 runtime_state.bootstrap_missing_agent_bindings(&session_catalog, &busy_session_ids);
-            let _ = tx.send(StartupBootstrap {
+            let _ = tx.send(StartupBootstrapOutcome::Ready(Box::new(StartupBootstrap {
                 runtime_state,
                 session_catalog,
                 runtime_state_changed,
-            });
+            })));
         });
         rx
     }
@@ -218,7 +229,7 @@ impl HorizonApp {
     }
 
     pub(super) fn poll_startup_bootstrap(&mut self) -> bool {
-        if self.startup_bootstrap_failed {
+        if self.startup_bootstrap_failure.is_some() {
             return false;
         }
         let Some(receiver) = self.startup_receiver.take() else {
@@ -226,23 +237,19 @@ impl HorizonApp {
         };
 
         match receiver.try_recv() {
-            Ok(bootstrap) => {
+            Ok(StartupBootstrapOutcome::Ready(bootstrap)) => {
                 self.pending_startup_runtime_state = None;
                 self.session_catalog = bootstrap.session_catalog;
                 self.last_session_catalog_refresh = Some(Instant::now());
-                self.board = Board::from_runtime_state_with_transcripts(
-                    &bootstrap.runtime_state,
-                    self.transcript_root.as_deref(),
-                )
-                .unwrap_or_else(|error| {
-                    tracing::error!("failed to restore runtime state: {error}");
-                    Board::new()
-                });
-                self.board.attention_enabled = self.template_config.features.attention_feed;
+                self.restore_startup_runtime_state(&bootstrap.runtime_state);
                 if bootstrap.runtime_state_changed {
                     self.mark_runtime_dirty();
                 }
                 true
+            }
+            Ok(StartupBootstrapOutcome::ExactValidationFailed(error)) => {
+                self.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed(error));
+                false
             }
             Err(TryRecvError::Empty) => {
                 self.startup_receiver = Some(receiver);
@@ -250,10 +257,71 @@ impl HorizonApp {
             }
             Err(TryRecvError::Disconnected) => {
                 tracing::warn!("startup bootstrap worker disconnected before sending runtime state");
-                self.startup_bootstrap_failed = true;
+                self.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
                 false
             }
         }
+    }
+
+    pub(super) fn handle_startup_bootstrap_failure(&mut self, action: StartupBootstrapFailureAction) {
+        match action {
+            StartupBootstrapFailureAction::Retry => {
+                if !matches!(
+                    self.startup_bootstrap_failure,
+                    Some(
+                        StartupBootstrapFailure::ExactValidationFailed(_) | StartupBootstrapFailure::WorkerDisconnected
+                    )
+                ) {
+                    return;
+                }
+                let Some(runtime_state) = self.pending_startup_runtime_state.clone() else {
+                    return;
+                };
+                self.startup_bootstrap_failure = None;
+                self.startup_receiver = Some(Self::spawn_startup_bootstrap(runtime_state));
+            }
+            StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes => {
+                if !matches!(
+                    self.startup_bootstrap_failure,
+                    Some(
+                        StartupBootstrapFailure::ExactValidationFailed(_)
+                            | StartupBootstrapFailure::RecoverySaveFailed(_)
+                    )
+                ) {
+                    return;
+                }
+                let Some(mut runtime_state) = self.pending_startup_runtime_state.clone() else {
+                    return;
+                };
+                runtime_state.neutralize_unverified_codex_bindings();
+                if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {
+                    self.startup_bootstrap_failure = Some(StartupBootstrapFailure::RecoverySaveFailed(error));
+                    return;
+                }
+                self.restore_startup_runtime_state(&runtime_state);
+                self.pending_startup_runtime_state = None;
+                self.startup_bootstrap_failure = None;
+                self.startup_receiver = None;
+            }
+        }
+    }
+
+    fn save_recovered_startup_runtime_state(&self, runtime_state: &horizon_core::RuntimeState) -> Result<(), String> {
+        let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
+            return Ok(());
+        };
+        self.session_store
+            .save_runtime_state(&active_session.session_id, runtime_state)
+            .map_err(|error| error.to_string())
+    }
+
+    fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        self.board = Board::from_runtime_state_with_transcripts(runtime_state, self.transcript_root.as_deref())
+            .unwrap_or_else(|error| {
+                tracing::error!("failed to restore runtime state: {error}");
+                Board::new()
+            });
+        self.board.attention_enabled = self.template_config.features.attention_feed;
     }
 
     pub(super) fn refresh_active_session_lease(&mut self) {
@@ -441,7 +509,11 @@ impl HorizonApp {
     }
 }
 
-pub(super) fn render_loading_view(ctx: &Context, failed: bool) {
+pub(super) fn render_loading_view(
+    ctx: &Context,
+    failure: Option<&StartupBootstrapFailure>,
+) -> Option<StartupBootstrapFailureAction> {
+    let mut action = None;
     egui::CentralPanel::default()
         .frame(egui::Frame::default().fill(theme::BG()))
         .show(ctx, |ui| {
@@ -450,11 +522,40 @@ pub(super) fn render_loading_view(ctx: &Context, failed: bool) {
                 ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG()));
                 ui.add_space(16.0);
             });
-            if failed {
-                ui.label(
-                    egui::RichText::new("Saved sessions could not be resolved. Quit and relaunch Horizon to retry.")
-                        .color(theme::PALETTE_RED()),
-                );
+            if let Some(failure) = failure {
+                let (failure_heading, failure_detail) = match failure {
+                    StartupBootstrapFailure::ExactValidationFailed(error) => {
+                        ("Saved sessions could not be resolved safely.", Some(error.as_str()))
+                    }
+                    StartupBootstrapFailure::WorkerDisconnected => {
+                        ("Saved-session validation stopped unexpectedly.", None)
+                    }
+                    StartupBootstrapFailure::RecoverySaveFailed(error) => {
+                        ("The repaired session could not be saved.", Some(error.as_str()))
+                    }
+                };
+                ui.label(egui::RichText::new(failure_heading).color(theme::PALETTE_RED()));
+                if let Some(failure_detail) = failure_detail {
+                    ui.label(egui::RichText::new(failure_detail).small().color(theme::FG_DIM()));
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if matches!(
+                        failure,
+                        StartupBootstrapFailure::ExactValidationFailed(_) | StartupBootstrapFailure::WorkerDisconnected
+                    ) && ui.button("Retry").clicked()
+                    {
+                        action = Some(StartupBootstrapFailureAction::Retry);
+                    }
+                    let recovery_label = match failure {
+                        StartupBootstrapFailure::ExactValidationFailed(_) => Some("Remove saved resumes and open"),
+                        StartupBootstrapFailure::RecoverySaveFailed(_) => Some("Retry repaired save and open"),
+                        StartupBootstrapFailure::WorkerDisconnected => None,
+                    };
+                    if recovery_label.is_some_and(|label| ui.button(label).clicked()) {
+                        action = Some(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+                    }
+                });
             } else {
                 loading_spinner::show(
                     ui,
@@ -463,13 +564,14 @@ pub(super) fn render_loading_view(ctx: &Context, failed: bool) {
                 );
             }
         });
+    action
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{DynamicPanelBindingState, HorizonApp, collect_dynamic_binding_updates};
+    use super::{DynamicPanelBindingState, HorizonApp, StartupBootstrapFailureAction, collect_dynamic_binding_updates};
     use egui::Context;
     use horizon_core::{
         AgentSessionBinding, Config, HorizonHome, PanelId, PanelKind, PanelOptions, PanelResume, PanelState,
@@ -477,6 +579,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    use crate::app::StartupBootstrapFailure;
     use crate::input;
 
     fn test_app() -> (TempDir, HorizonApp) {
@@ -499,6 +602,32 @@ mod tests {
             input::ObservedKeyboardInputs::default(),
         );
         (temp, app)
+    }
+
+    fn test_persistent_app(runtime_state: RuntimeState) -> (TempDir, HorizonApp, std::path::PathBuf) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.yaml");
+        let session_store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join(".horizon")),
+            config_path.clone(),
+        );
+        let session = session_store
+            .create_session_from_runtime(runtime_state)
+            .expect("create persistent session");
+        let runtime_path = session.runtime_state_path.clone();
+        let ctx = Context::default();
+        let app = HorizonApp::new_with_egui_context(
+            &ctx,
+            &Config::default(),
+            config_path,
+            session_store,
+            StartupDecision::Open {
+                disposition: horizon_core::SessionOpenDisposition::Resume,
+                session: Box::new(session),
+            },
+            input::ObservedKeyboardInputs::default(),
+        );
+        (temp, app, runtime_path)
     }
 
     #[cfg(windows)]
@@ -650,6 +779,34 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_skips_bootstrap_for_a_bound_non_codex_panel() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "OpenCode".to_string(),
+                    kind: PanelKind::OpenCode,
+                    resume: PanelResume::Last,
+                    session_binding: Some(AgentSessionBinding::new(
+                        PanelKind::OpenCode,
+                        "session-9".to_string(),
+                        None,
+                        None,
+                        None,
+                    )),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        assert!(!HorizonApp::runtime_state_needs_session_bootstrap(&state));
+    }
+
+    #[test]
     fn disconnected_bootstrap_enters_a_stable_failed_state() {
         let (_temp, mut app) = test_app();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -658,10 +815,148 @@ mod tests {
         drop(tx);
 
         assert!(!app.poll_startup_bootstrap());
-        assert!(app.startup_bootstrap_failed);
+        assert!(matches!(
+            app.startup_bootstrap_failure,
+            Some(StartupBootstrapFailure::WorkerDisconnected)
+        ));
         assert!(app.startup_receiver.is_none());
         assert!(app.pending_startup_runtime_state.is_some());
         assert!(!app.poll_startup_bootstrap());
+    }
+
+    #[test]
+    fn failed_bootstrap_can_continue_without_saved_codex_resumes() {
+        let (_temp, mut app) = test_app();
+        let (command, args) = exiting_command();
+        app.pending_startup_runtime_state = Some(RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    command: Some(command),
+                    args,
+                    resume: PanelResume::Session {
+                        session_id: "session-child".to_string(),
+                    },
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        });
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+
+        assert!(app.startup_bootstrap_failure.is_none());
+        assert!(app.startup_receiver.is_none());
+        assert!(app.pending_startup_runtime_state.is_none());
+        let panel = &app.board.panels[0];
+        assert!(panel.session_binding.is_none());
+        assert!(matches!(panel.resume, PanelResume::Fresh));
+    }
+
+    #[test]
+    fn persistent_recovery_is_saved_before_the_board_opens() {
+        let (command, args) = exiting_command();
+        let runtime_state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    command: Some(command),
+                    args,
+                    resume: PanelResume::Session {
+                        session_id: "session-child".to_string(),
+                    },
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+        let (_temp, mut app, runtime_path) = test_persistent_app(runtime_state);
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+
+        let saved = RuntimeState::load(&runtime_path)
+            .expect("load repaired runtime")
+            .expect("repaired runtime exists");
+        assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
+        assert!(app.pending_startup_runtime_state.is_none());
+        assert!(app.startup_bootstrap_failure.is_none());
+        assert!(app.board.panels[0].session_binding.is_none());
+    }
+
+    #[test]
+    fn failed_recovery_save_keeps_pending_state_until_retry_succeeds() {
+        let (command, args) = exiting_command();
+        let runtime_state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                name: "alpha".to_string(),
+                panels: vec![PanelState {
+                    local_id: "panel".to_string(),
+                    name: "Codex".to_string(),
+                    kind: PanelKind::Codex,
+                    command: Some(command),
+                    args,
+                    resume: PanelResume::Session {
+                        session_id: "session-child".to_string(),
+                    },
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+        let (temp, mut app, runtime_path) = test_persistent_app(runtime_state);
+        let blocked_home = temp.path().join("blocked-home");
+        std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
+        app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
+        app.startup_receiver = None;
+        app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed("missing".to_string()));
+
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+
+        assert!(matches!(
+            app.startup_bootstrap_failure,
+            Some(StartupBootstrapFailure::RecoverySaveFailed(_))
+        ));
+        assert!(app.pending_startup_runtime_state.is_some());
+        assert!(app.board.panels.is_empty());
+
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::Retry);
+
+        assert!(matches!(
+            app.startup_bootstrap_failure,
+            Some(StartupBootstrapFailure::RecoverySaveFailed(_))
+        ));
+        assert!(app.startup_receiver.is_none());
+        assert!(app.pending_startup_runtime_state.is_some());
+        assert!(app.board.panels.is_empty());
+
+        app.session_store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join(".horizon")),
+            temp.path().join("config.yaml"),
+        );
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutSavedCodexResumes);
+
+        let saved = RuntimeState::load(&runtime_path)
+            .expect("load repaired runtime")
+            .expect("repaired runtime exists");
+        assert!(saved.workspaces[0].panels[0].exact_session_id().is_none());
+        assert!(matches!(saved.workspaces[0].panels[0].resume, PanelResume::Fresh));
+        assert!(app.pending_startup_runtime_state.is_none());
+        assert!(app.startup_bootstrap_failure.is_none());
+        assert!(app.board.panels[0].session_binding.is_none());
     }
 
     #[test]

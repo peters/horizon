@@ -97,6 +97,17 @@ struct StartupBootstrap {
     runtime_state_changed: bool,
 }
 
+enum StartupBootstrapOutcome {
+    Ready(Box<StartupBootstrap>),
+    ExactValidationFailed(String),
+}
+
+enum StartupBootstrapFailure {
+    ExactValidationFailed(String),
+    WorkerDisconnected,
+    RecoverySaveFailed(String),
+}
+
 struct ActiveSession {
     session_id: String,
     lease: Option<SessionLease>,
@@ -241,9 +252,9 @@ pub struct HorizonApp {
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
-    startup_receiver: Option<Receiver<StartupBootstrap>>,
+    startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
     pending_startup_runtime_state: Option<RuntimeState>,
-    startup_bootstrap_failed: bool,
+    startup_bootstrap_failure: Option<StartupBootstrapFailure>,
     session_catalog_refresh: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
     remote_hosts_catalog: RemoteHostCatalog,
@@ -419,7 +430,7 @@ impl HorizonApp {
             session_catalog: AgentSessionCatalog::default(),
             startup_receiver: None,
             pending_startup_runtime_state: None,
-            startup_bootstrap_failed: false,
+            startup_bootstrap_failure: None,
             session_catalog_refresh: None,
             remote_hosts_overlay: None,
             remote_hosts_catalog: RemoteHostCatalog::default(),
