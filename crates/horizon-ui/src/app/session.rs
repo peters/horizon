@@ -3,7 +3,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use horizon_core::{
-    AgentSessionBinding, AgentSessionCatalog, Board, PanelId, PanelKind, PanelResume, live_claude_session_ids,
+    AgentSessionBinding, AgentSessionCatalog, AgentSessionKey, Board, PanelId, PanelKind, PanelResume,
+    live_claude_session_ids,
 };
 
 use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
@@ -39,15 +40,16 @@ pub(super) enum StartupBootstrapFailureAction {
 
 fn collect_dynamic_binding_updates(
     dynamic_panels: &[DynamicPanelBindingState],
-    reserved_session_ids: &HashSet<String>,
+    reserved_session_keys: &HashSet<AgentSessionKey>,
     recent_for: impl Fn(PanelKind, Option<&str>) -> Vec<horizon_core::AgentSessionRecord>,
 ) -> Vec<(PanelId, AgentSessionBinding)> {
-    let mut used_session_ids = reserved_session_ids.clone();
-    used_session_ids.extend(
-        dynamic_panels
-            .iter()
-            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone())),
-    );
+    let mut used_session_keys = reserved_session_keys.clone();
+    used_session_keys.extend(dynamic_panels.iter().filter_map(|panel| {
+        panel
+            .session_binding
+            .as_ref()
+            .map(|binding| AgentSessionKey::new(panel.kind, &binding.session_id))
+    }));
 
     let mut grouped_panels: HashMap<(PanelKind, String), Vec<&DynamicPanelBindingState>> = HashMap::new();
     for panel in dynamic_panels {
@@ -78,9 +80,9 @@ fn collect_dynamic_binding_updates(
             if let Some(candidate) = candidates.iter().find(|candidate| {
                 candidate.session_id != current_binding.session_id
                     && candidate.updated_at > current_binding.updated_at.unwrap_or(0)
-                    && !used_session_ids.contains(&candidate.session_id)
+                    && !used_session_keys.contains(&AgentSessionKey::new(kind, &candidate.session_id))
             }) {
-                used_session_ids.insert(candidate.session_id.clone());
+                used_session_keys.insert(AgentSessionKey::new(kind, &candidate.session_id));
                 assignments.push((panel.panel_id, candidate.clone().into_binding()));
             }
         }
@@ -103,12 +105,12 @@ fn collect_dynamic_binding_updates(
         let candidates: Vec<_> = candidates
             .into_iter()
             .filter(|candidate| {
-                !used_session_ids.contains(&candidate.session_id)
+                !used_session_keys.contains(&AgentSessionKey::new(kind, &candidate.session_id))
                     && candidate.updated_at >= oldest_launch.saturating_sub(300_000)
             })
             .collect();
         for (panel, candidate) in unbound_panels.into_iter().zip(candidates) {
-            used_session_ids.insert(candidate.session_id.clone());
+            used_session_keys.insert(AgentSessionKey::new(kind, &candidate.session_id));
             assignments.push((panel.panel_id, candidate.into_binding()));
         }
     }
@@ -523,12 +525,17 @@ impl HorizonApp {
     }
 
     fn capture_new_agent_bindings(&mut self) {
-        let reserved_session_ids: HashSet<String> = self
+        let reserved_session_keys: HashSet<AgentSessionKey> = self
             .board
             .panels
             .iter()
             .filter(|panel| matches!(panel.resume, PanelResume::Session { .. }))
-            .filter_map(|panel| panel.session_binding.as_ref().map(|binding| binding.session_id.clone()))
+            .filter_map(|panel| {
+                panel
+                    .session_binding
+                    .as_ref()
+                    .map(|binding| AgentSessionKey::new(panel.kind, &binding.session_id))
+            })
             .collect();
         let dynamic_panels: Vec<_> = self
             .board
@@ -548,7 +555,7 @@ impl HorizonApp {
                 recent_output: panel.had_recent_output_within(SESSION_BINDING_ACTIVITY_WINDOW),
             })
             .collect();
-        let assignments = collect_dynamic_binding_updates(&dynamic_panels, &reserved_session_ids, |kind, cwd| {
+        let assignments = collect_dynamic_binding_updates(&dynamic_panels, &reserved_session_keys, |kind, cwd| {
             self.session_catalog.recent_for(kind, cwd)
         });
 
@@ -581,7 +588,7 @@ impl HorizonApp {
             .board
             .panels
             .iter()
-            .filter(|candidate| candidate.id != panel_id)
+            .filter(|candidate| candidate.id != panel_id && candidate.kind == panel.kind)
             .filter_map(panel_session_id)
             .collect();
         self.session_catalog
@@ -611,7 +618,9 @@ impl HorizonApp {
         };
         if panel.kind != binding.kind
             || self.board.panels.iter().any(|candidate| {
-                candidate.id != panel_id && panel_session_id(candidate) == Some(binding.session_id.as_str())
+                candidate.id != panel_id
+                    && candidate.kind == binding.kind
+                    && panel_session_id(candidate) == Some(binding.session_id.as_str())
             })
         {
             return false;

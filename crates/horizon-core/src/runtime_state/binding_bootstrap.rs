@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::panel::{PanelKind, PanelResume};
 
 use super::{
-    AgentSessionBinding, AgentSessionBootstrapCatalog, PanelState, RuntimeState, agent_sessions, normalize_cwd,
+    AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionKey, PanelState, RuntimeState, agent_sessions,
+    normalize_cwd,
 };
 
 impl RuntimeState {
@@ -22,18 +23,21 @@ impl RuntimeState {
     ) -> bool {
         self.ensure_local_ids();
 
-        let mut used_session_ids = busy_session_ids.clone();
-        let mut changed = self.validate_verified_bindings(catalog, &mut used_session_ids);
-        changed |= self.repair_parent_controlled_exact_bindings(catalog, &mut used_session_ids);
-        changed |= self.materialize_explicit_bindings(catalog, &mut used_session_ids);
-        changed |= self.assign_last_bindings(catalog, &mut used_session_ids);
+        let mut used_session_keys: HashSet<_> = busy_session_ids
+            .iter()
+            .map(|session_id| AgentSessionKey::new(PanelKind::Claude, session_id))
+            .collect();
+        let mut changed = self.validate_verified_bindings(catalog, &mut used_session_keys);
+        changed |= self.repair_parent_controlled_exact_bindings(catalog, &mut used_session_keys);
+        changed |= self.materialize_explicit_bindings(catalog, &mut used_session_keys);
+        changed |= self.assign_last_bindings(catalog, &mut used_session_keys);
         changed
     }
 
     fn validate_verified_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
-        used_session_ids: &mut HashSet<String>,
+        used_session_keys: &mut HashSet<AgentSessionKey>,
     ) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
@@ -49,7 +53,7 @@ impl RuntimeState {
             ) {
                 continue;
             }
-            if used_session_ids.insert(session_id.clone()) {
+            if used_session_keys.insert(AgentSessionKey::new(panel.kind, &session_id)) {
                 changed |= panel.ensure_session_binding(&session_id);
             } else {
                 tracing::warn!(session_id, "discarding a duplicate exact session binding");
@@ -62,7 +66,7 @@ impl RuntimeState {
     fn repair_parent_controlled_exact_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
-        used_session_ids: &mut HashSet<String>,
+        used_session_keys: &mut HashSet<AgentSessionKey>,
     ) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
@@ -74,7 +78,7 @@ impl RuntimeState {
             };
             match catalog.exact_resolution(panel.kind, &session_id) {
                 agent_sessions::ExactSessionResolution::Rebind(canonical_binding)
-                    if used_session_ids.insert(canonical_binding.session_id.clone()) =>
+                    if used_session_keys.insert(AgentSessionKey::new(panel.kind, &canonical_binding.session_id)) =>
                 {
                     changed |= panel.replace_session_binding(canonical_binding);
                 }
@@ -103,7 +107,7 @@ impl RuntimeState {
     fn materialize_explicit_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
-        used_session_ids: &mut HashSet<String>,
+        used_session_keys: &mut HashSet<AgentSessionKey>,
     ) -> bool {
         let mut changed = false;
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
@@ -134,7 +138,7 @@ impl RuntimeState {
                 changed = true;
             }
             if let Some(binding) = &panel.session_binding {
-                used_session_ids.insert(binding.session_id.clone());
+                used_session_keys.insert(AgentSessionKey::new(binding.kind, &binding.session_id));
             }
         }
         changed
@@ -143,7 +147,7 @@ impl RuntimeState {
     fn assign_last_bindings(
         &mut self,
         catalog: &AgentSessionBootstrapCatalog,
-        used_session_ids: &mut HashSet<String>,
+        used_session_keys: &mut HashSet<AgentSessionKey>,
     ) -> bool {
         let mut pending_by_group: HashMap<(PanelKind, String), Vec<&mut PanelState>> = HashMap::new();
         for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
@@ -168,9 +172,10 @@ impl RuntimeState {
         let mut changed = false;
         for ((kind, cwd), panels) in pending_groups {
             let mut candidates = catalog.recent_for(kind, empty_to_none(&cwd));
-            candidates.retain(|candidate| !used_session_ids.contains(&candidate.session_id));
+            candidates
+                .retain(|candidate| !used_session_keys.contains(&AgentSessionKey::new(kind, &candidate.session_id)));
             for (panel, candidate) in panels.into_iter().zip(candidates) {
-                used_session_ids.insert(candidate.session_id.clone());
+                used_session_keys.insert(AgentSessionKey::new(kind, &candidate.session_id));
                 panel.session_binding = Some(candidate.into_binding());
                 changed = true;
             }

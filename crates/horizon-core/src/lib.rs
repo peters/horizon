@@ -59,9 +59,9 @@ pub use remote_hosts::{
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
 };
 pub use runtime_state::{
-    AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord, DetachedWorkspaceState,
-    PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids,
-    new_local_id,
+    AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionKey, AgentSessionRecord,
+    DetachedWorkspaceState, PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef,
+    live_claude_session_ids, new_local_id,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

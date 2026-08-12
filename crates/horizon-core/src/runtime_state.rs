@@ -526,6 +526,22 @@ pub struct AgentSessionBinding {
     pub updated_at: Option<i64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AgentSessionKey {
+    kind: PanelKind,
+    session_id: String,
+}
+
+impl AgentSessionKey {
+    #[must_use]
+    pub fn new(kind: PanelKind, session_id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            session_id: session_id.into(),
+        }
+    }
+}
+
 impl AgentSessionBinding {
     #[must_use]
     pub fn new(

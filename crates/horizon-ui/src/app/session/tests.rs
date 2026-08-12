@@ -15,6 +15,8 @@ use tempfile::TempDir;
 
 use crate::input;
 
+mod provider_scoping;
+
 fn test_app() -> (TempDir, HorizonApp) {
     let temp = tempfile::tempdir().expect("temp dir");
     let config_path = temp.path().join("config.yaml");

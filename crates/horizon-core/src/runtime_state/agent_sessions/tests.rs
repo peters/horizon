@@ -12,6 +12,8 @@ use super::{
 };
 use crate::error::Error;
 
+mod provider_scoping;
+
 #[test]
 fn strict_catalog_load_propagates_provider_errors() {
     let loaded = AgentSessionCatalog::load_strict(
