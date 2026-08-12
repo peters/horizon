@@ -96,22 +96,29 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
 }
 
 pub(super) fn truncate_session_label(label: &str) -> String {
-    truncate_chars(label, 40)
+    truncate_chars(label, 40).into_owned()
 }
 
 /// Caps `label` at `max_chars` characters, ending a truncated result with an
-/// ellipsis that counts toward the budget.
-pub(super) fn truncate_chars(label: &str, max_chars: usize) -> String {
-    if label.chars().count() <= max_chars {
-        return label.to_string();
-    }
+/// ellipsis that counts toward the budget. Borrows when nothing is cut.
+pub(super) fn truncate_chars(label: &str, max_chars: usize) -> std::borrow::Cow<'_, str> {
     if max_chars == 0 {
-        return String::new();
+        return std::borrow::Cow::Borrowed(if label.is_empty() { label } else { "" });
     }
 
-    let mut truncated = label.chars().take(max_chars - 1).collect::<String>();
-    truncated.push('…');
-    truncated
+    let mut ellipsis_at = 0;
+    for (char_index, (byte_index, _)) in label.char_indices().enumerate() {
+        if char_index + 1 == max_chars {
+            ellipsis_at = byte_index;
+        } else if char_index + 1 > max_chars {
+            let mut truncated = String::with_capacity(ellipsis_at + '…'.len_utf8());
+            truncated.push_str(&label[..ellipsis_at]);
+            truncated.push('…');
+            return std::borrow::Cow::Owned(truncated);
+        }
+    }
+
+    std::borrow::Cow::Borrowed(label)
 }
 
 pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {

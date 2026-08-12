@@ -19,7 +19,7 @@ enum MinimapScope {
     Workspace(WorkspaceId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MinimapHitTarget {
     Panel {
         panel_id: PanelId,

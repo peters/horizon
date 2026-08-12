@@ -1,4 +1,4 @@
-use egui::text::{LayoutJob, TextWrapping};
+use egui::text::LayoutJob;
 use egui::{
     Align, Color32, CornerRadius, FontId, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, TextFormat, Ui, Vec2,
 };
@@ -7,6 +7,7 @@ use horizon_core::{
 };
 
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
+use crate::text::single_line_job;
 use crate::theme;
 
 const COLUMN_GUTTER: f32 = 18.0;
@@ -391,19 +392,6 @@ fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
     painter.galley(text_pos, galley, Color32::TRANSPARENT);
 }
 
-fn single_line_job(max_width: f32) -> LayoutJob {
-    LayoutJob {
-        break_on_newline: false,
-        wrap: TextWrapping {
-            max_width: max_width.max(0.0),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('\u{2026}'),
-        },
-        ..Default::default()
-    }
-}
-
 fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob {
     let mut job = single_line_job(max_width);
 
@@ -567,17 +555,6 @@ mod tests {
         assert_eq!(job.sections[2].format.color, tag_color("tag:node"));
         assert!(!job.break_on_newline);
         assert!((job.wrap.max_width - 120.0).abs() < f32::EPSILON);
-        assert_eq!(job.wrap.max_rows, 1);
-        assert!(job.wrap.break_anywhere);
-        assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
-    }
-
-    #[test]
-    fn single_line_job_enables_ellipsis_wrapping() {
-        let job = single_line_job(96.0);
-
-        assert!(!job.break_on_newline);
-        assert!((job.wrap.max_width - 96.0).abs() < f32::EPSILON);
         assert_eq!(job.wrap.max_rows, 1);
         assert!(job.wrap.break_anywhere);
         assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
