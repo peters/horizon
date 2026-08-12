@@ -20,17 +20,17 @@ all smoke lanes report done.
    ```bash
    python3 - <<'EOF'
    names = [
-       "Privat", "github.com/peters", "youpark.no", "Youpark Blomsterpike",
-       "Bod", "Gulvvarme", "Horizon", "opera-omnia", "nativesdk-oe",
-       "youpay-v2", "Dnb", "anpr.classifier",
+       "scratch", "github.com/acme", "parkside.dev", "Parkside Storefront",
+       "storage", "heating-ctl", "horizon", "omnibus", "nativesdk",
+       "payments-v2", "ledger", "plate.classifier",
    ]
    lines = ["version: 8", "workspaces:"]
    for i, name in enumerate(names):
        lines.append(f"  - name: {name!r}")
        lines.append(f"    position: [{i * 260.0}, 40.0]")
        lines.append("    terminals:")
-       title = ("docker compose up — peters@peters:~/github/youpark.no"
-                if name == "youpark.no" else f"notes-{i}")
+       title = ("docker compose up — dev@buildbox:~/github/parkside.dev"
+                if name == "parkside.dev" else f"notes-{i}")
        lines.append(f"      - name: {title!r}")
        lines.append("        kind: editor")
        lines.append("        position: [0.0, 0.0]")
@@ -69,11 +69,11 @@ all smoke lanes report done.
 
 ### 3. Tooltip stability (regression for the collapse bug)
 
-- Hover a short-named target in the minimap (e.g. the `Dnb` column) for ~2 s;
+- Hover a short-named target in the minimap (e.g. the `ledger` column) for ~2 s;
   the tooltip shows compact text near the pointer.
-- Move directly onto the `youpark.no` column's first panel (long title) and keep
-  the pointer moving slightly within it for ~10 s.
-- PASS: the tooltip shows `docker compose up — peters@peters:~/github/youpark.no`
+- Move directly onto the `parkside.dev` column's first panel (long title) and
+  keep the pointer moving slightly within it for ~10 s.
+- PASS: the tooltip shows `docker compose up — dev@buildbox:~/github/parkside.dev`
   on a single line the entire time.
 - FAIL (old bug): the tooltip renders as a tall, ~2-characters-per-line vertical
   strip, or narrows progressively while hovered.
