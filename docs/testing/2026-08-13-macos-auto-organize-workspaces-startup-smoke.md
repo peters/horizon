@@ -3,9 +3,10 @@
 ## Scope
 
 Validate on macOS that Horizon automatically performs the same attached-workspace organization as
-`Cmd+Shift+A` exactly once after the initial session finishes loading when the opt-in setting is
-enabled. Also verify that a missing or disabled setting preserves the restored layout. Run every step
-from the exact pull-request head and use `target/debug/horizon`.
+`Cmd+Shift+A` exactly once after each session finishes loading when the opt-in setting is enabled,
+including initial startup, relaunch, and in-process session switches. Also verify that a missing or
+disabled setting preserves the restored layout. Run every step from the exact pull-request head and
+use `target/debug/horizon`.
 
 ## Environment and exact-head guard
 
