@@ -250,6 +250,36 @@ fn blocked_runtime_save_retains_the_dirty_marker() {
 }
 
 #[test]
+fn non_modal_stabilization_can_save_user_changes() {
+    let (temp, _ctx, mut app) = test_app_with_config_and_startup(
+        &Config::default(),
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(two_workspace_runtime(None)),
+        },
+    );
+    app.active_session = Some(crate::app::ActiveSession {
+        session_id: "persistent-feature-off-save".to_string(),
+        lease: None,
+        last_lease_refresh: None,
+        persistent: true,
+    });
+    app.canvas_view = CanvasViewState::new([42.0, -18.0], 1.25);
+
+    assert!(app.root_viewport_stabilizer.is_some());
+    assert!(!app.root_viewport_stabilization_blocks_interaction());
+    assert!(app.auto_save_runtime_state());
+
+    let saved = RuntimeState::load(
+        &temp
+            .path()
+            .join(".horizon/sessions/persistent-feature-off-save/runtime.yaml"),
+    )
+    .expect("load saved feature-off runtime")
+    .expect("feature-off runtime exists");
+    assert_eq!(saved.canvas_view, Some(app.canvas_view));
+}
+
+#[test]
 fn shutdown_during_viewport_stabilization_leaves_the_prior_snapshot_untouched() {
     let (temp, _ctx, mut app) = enabled_test_app(two_workspace_runtime(Some(CanvasViewState::default())));
     app.active_session = Some(crate::app::ActiveSession {

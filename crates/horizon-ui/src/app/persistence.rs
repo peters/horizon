@@ -37,7 +37,7 @@ impl HorizonApp {
             return true;
         };
 
-        if self.pending_startup_runtime_state.is_some() || self.root_viewport_stabilizer.is_some() {
+        if self.pending_startup_runtime_state.is_some() || self.root_viewport_stabilization_blocks_interaction() {
             tracing::debug!("preserving the prior runtime snapshot while session view initialization is pending");
             return false;
         }
