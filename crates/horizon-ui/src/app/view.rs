@@ -96,21 +96,20 @@ impl HorizonApp {
         ));
     }
 
-    pub(super) fn align_view_to_workspace_immediately(
-        &mut self,
-        ctx: &Context,
-        workspace_id: WorkspaceId,
-        left_align: bool,
-    ) -> bool {
+    pub(super) fn align_initial_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
         if self.workspace_is_detached(workspace_id) {
             return false;
         }
 
-        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+        let Some((pos, _size)) = self.workspace_focus_frame(workspace_id) else {
             return false;
         };
-        let pan_offset = aligned_pan_offset(self.canvas_rect(ctx), pos, size, self.canvas_view.zoom, left_align);
-        self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        let canvas_rect = self.canvas_rect(ctx);
+        self.canvas_view.align_canvas_point_to_screen(
+            [canvas_rect.min.x, canvas_rect.min.y],
+            [pos.x, pos.y],
+            [canvas_rect.min.x + 40.0, canvas_rect.center().y],
+        );
         self.pan_target = None;
         true
     }
@@ -167,7 +166,9 @@ impl HorizonApp {
         let screen_min = self.canvas_to_screen(canvas_rect, pos);
         let screen_size = self.canvas_size_to_screen(size);
         let screen_rect = Rect::from_min_size(screen_min, screen_size);
-        screen_rect.intersects(canvas_rect).then_some(screen_rect.center())
+        canvas_rect
+            .contains(screen_rect.center())
+            .then_some(screen_rect.center())
     }
 
     pub(super) fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {

@@ -13,6 +13,9 @@ use super::support::{
 
 impl HorizonApp {
     pub(in crate::app) fn open_command_palette(&mut self) {
+        if self.root_viewport_stabilizer.is_some() {
+            return;
+        }
         self.command_palette = Some(CommandPalette::new());
     }
 
@@ -133,6 +136,9 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn handle_shortcuts(&mut self, ctx: &Context) {
+        if self.root_viewport_stabilizer.is_some() {
+            return;
+        }
         // A chord being captured by the settings hotkey binder must not
         // trigger the shortcut it happens to match.
         if crate::app::shortcuts::hotkey_capture_active(ctx) {

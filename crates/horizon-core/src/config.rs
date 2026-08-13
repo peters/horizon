@@ -454,7 +454,8 @@ impl Default for OverlaysConfig {
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
-    pub organize_workspaces_on_startup: bool,
+    #[serde(alias = "organize_workspaces_on_startup")]
+    pub organize_workspaces_on_session_load: bool,
     pub speech: SpeechConfig,
 }
 
@@ -462,7 +463,7 @@ impl Default for FeaturesConfig {
     fn default() -> Self {
         Self {
             attention_feed: true,
-            organize_workspaces_on_startup: false,
+            organize_workspaces_on_session_load: false,
             speech: SpeechConfig::default(),
         }
     }
@@ -791,9 +792,9 @@ mod tests {
     }
 
     #[test]
-    fn startup_workspace_organization_defaults_disabled() {
-        assert!(!FeaturesConfig::default().organize_workspaces_on_startup);
-        assert!(!Config::default().features.organize_workspaces_on_startup);
+    fn session_load_workspace_organization_defaults_disabled() {
+        assert!(!FeaturesConfig::default().organize_workspaces_on_session_load);
+        assert!(!Config::default().features.organize_workspaces_on_session_load);
     }
 
     #[test]
@@ -821,21 +822,32 @@ mod tests {
     }
 
     #[test]
-    fn missing_startup_workspace_organization_setting_keeps_it_disabled() {
+    fn missing_session_load_workspace_organization_setting_keeps_it_disabled() {
         let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("config should deserialize");
 
-        assert!(!config.features.organize_workspaces_on_startup);
+        assert!(!config.features.organize_workspaces_on_session_load);
     }
 
     #[test]
-    fn explicit_startup_workspace_organization_true_is_preserved() {
-        let config = Config::from_yaml("features:\n  organize_workspaces_on_startup: true\n")
+    fn explicit_session_load_workspace_organization_true_is_preserved() {
+        let config = Config::from_yaml("features:\n  organize_workspaces_on_session_load: true\n")
             .expect("config should deserialize");
 
-        assert!(config.features.organize_workspaces_on_startup);
+        assert!(config.features.organize_workspaces_on_session_load);
         let yaml = config.to_yaml().expect("config should serialize");
         let round_tripped = Config::from_yaml(&yaml).expect("serialized config should deserialize");
-        assert!(round_tripped.features.organize_workspaces_on_startup);
+        assert!(round_tripped.features.organize_workspaces_on_session_load);
+    }
+
+    #[test]
+    fn startup_workspace_organization_key_is_accepted_as_an_alias() {
+        let config = Config::from_yaml("features:\n  organize_workspaces_on_startup: true\n")
+            .expect("legacy key should deserialize");
+
+        assert!(config.features.organize_workspaces_on_session_load);
+        let yaml = config.to_yaml().expect("config should serialize");
+        assert!(yaml.contains("organize_workspaces_on_session_load: true"));
+        assert!(!yaml.contains("organize_workspaces_on_startup:"));
     }
 
     #[test]

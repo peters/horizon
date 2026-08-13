@@ -12,6 +12,7 @@ mod panels;
 mod persistence;
 mod remote_hosts;
 mod root_chrome;
+mod root_viewport;
 mod session;
 mod session_manager;
 mod settings;
@@ -265,7 +266,7 @@ pub struct HorizonApp {
     runtime_dirty_since: Option<Instant>,
     startup_workspace_organization_pending: bool,
     initial_pan_done: bool,
-    pending_root_viewport_restore: Option<startup_session::PendingRootViewportRestore>,
+    root_viewport_stabilizer: Option<root_viewport::RootViewportStabilizer>,
     file_hover_positions: HashMap<ViewportId, Pos2>,
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
@@ -444,7 +445,7 @@ impl HorizonApp {
             runtime_dirty_since: None,
             startup_workspace_organization_pending: false,
             initial_pan_done: false,
-            pending_root_viewport_restore: None,
+            root_viewport_stabilizer: None,
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
             ssh_upload_flow: None,
@@ -573,11 +574,25 @@ impl eframe::App for HorizonApp {
         self.apply_pending_workspace_changes();
         // The restored board must be normalized and include queued changes
         // before its one-shot layout and initial viewport are finalized.
-        self.apply_startup_workspace_organization(ctx);
-        if !self.initial_pan_done {
-            self.seed_initial_pan(ctx);
+        let root_viewport_is_stable = self.poll_root_viewport_stabilizer(ctx);
+        if root_viewport_is_stable {
+            let organization_was_requested = self.startup_workspace_organization_pending;
+            let aligned_leftmost_workspace = self.apply_startup_workspace_organization(ctx);
+            if !self.initial_pan_done {
+                let focused_workspace = self
+                    .board
+                    .focused
+                    .and_then(|panel_id| self.board.panel_workspace_id(panel_id));
+                let preserve_restored_selection = organization_was_requested
+                    && focused_workspace.is_some()
+                    && focused_workspace == self.board.active_workspace;
+                self.seed_initial_pan(ctx, aligned_leftmost_workspace, preserve_restored_selection);
+            }
         }
         self.render_active_view(ctx);
+        if !root_viewport_is_stable {
+            Self::render_root_viewport_stabilizing_overlay(ctx);
+        }
         self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
     }

@@ -4,6 +4,7 @@ mod geometry;
 mod shutdown;
 mod workspaces;
 
+pub use arrangement::WorkspaceAlignment;
 pub use shutdown::ShutdownProgress;
 
 use std::collections::{HashMap, HashSet};

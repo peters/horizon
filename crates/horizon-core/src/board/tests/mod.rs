@@ -1,5 +1,6 @@
 use crate::panel::{PanelKind, PanelOptions};
 
+mod alignment;
 mod core;
 mod layout;
 mod workspace;

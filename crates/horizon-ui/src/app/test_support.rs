@@ -45,9 +45,9 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
     run_app_frame_with_input(ctx, app, RawInput::default());
 }
 
-pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) {
+pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
     let mut frame = eframe::Frame::_new_kittest();
-    let _ = ctx.run(input, |ctx| {
+    ctx.run(input, |ctx| {
         eframe::App::update(app, ctx, &mut frame);
-    });
+    })
 }

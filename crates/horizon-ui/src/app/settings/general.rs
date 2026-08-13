@@ -119,7 +119,7 @@ fn render_features_section(
         ui.add_space(10.0);
         changed |= ui
             .checkbox(
-                &mut config.features.organize_workspaces_on_startup,
+                &mut config.features.organize_workspaces_on_session_load,
                 egui::RichText::new("Organize Workspaces on Session Load")
                     .color(theme::FG())
                     .size(12.0),

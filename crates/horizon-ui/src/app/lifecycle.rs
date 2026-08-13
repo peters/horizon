@@ -11,6 +11,8 @@ use super::canvas::CanvasGridCache;
 use super::speech::SpeechEvent;
 use super::{HorizonApp, attention_feed};
 
+mod startup_workspace;
+
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -254,45 +256,7 @@ impl HorizonApp {
             return false;
         }
 
-        if !self.root_viewport_restore_ready(ctx) {
-            return false;
-        }
-
         true
-    }
-
-    #[profiling::function]
-    pub(super) fn apply_startup_workspace_organization(&mut self, ctx: &Context) {
-        if !std::mem::take(&mut self.startup_workspace_organization_pending) {
-            return;
-        }
-
-        let visible_anchor = self.startup_workspace_view_anchor(ctx);
-        let Some(alignment) = super::actions::align_attached_workspaces(&mut self.board, &self.detached_workspaces)
-        else {
-            tracing::debug!("startup workspace organization skipped: fewer than two attached workspaces");
-            return;
-        };
-
-        tracing::debug!(
-            leftmost_workspace_id = alignment.leftmost_workspace.0,
-            positions_changed = alignment.positions_changed,
-            "startup workspace organization applied"
-        );
-        if alignment.positions_changed {
-            if let Some((workspace_id, screen_anchor)) = visible_anchor {
-                self.restore_startup_workspace_view_anchor(ctx, workspace_id, screen_anchor);
-            }
-            self.mark_runtime_dirty();
-        }
-    }
-
-    #[profiling::function]
-    pub(super) fn seed_initial_pan(&mut self, ctx: &Context) {
-        self.initial_pan_done = true;
-        if let Some(workspace_id) = self.leftmost_workspace_id() {
-            let _ = self.align_view_to_workspace_immediately(ctx, workspace_id, true);
-        }
     }
 
     #[profiling::function]
@@ -916,8 +880,10 @@ impl HorizonApp {
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 
-        if self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before {
-            self.auto_save_runtime_state();
+        if (self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before)
+            && !self.auto_save_runtime_state()
+        {
+            self.mark_runtime_dirty();
         }
         self.flush_runtime_if_dirty();
 

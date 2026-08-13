@@ -38,7 +38,7 @@ appearance:
   theme: dark
 features:
   attention_feed: false
-  organize_workspaces_on_startup: true
+  organize_workspaces_on_session_load: true
 workspaces:
   - name: Alpha Smoke
     position: [100, 300]
@@ -63,7 +63,7 @@ workspaces:
         size: [320, 220]
 YAML
 
-awk '!/^[[:space:]]+organize_workspaces_on_startup:/' \
+awk '!/^[[:space:]]+organize_workspaces_on_session_load:/' \
   "$SMOKE_ROOT/.horizon/config.yaml" \
   > "$SMOKE_DEFAULT_ROOT/.horizon/config.yaml"
 ```
@@ -141,12 +141,12 @@ export HORIZON_DEFAULT_DISABLED_PID=$!
    the opt-in YAML.
 2. Drag `Beta Smoke` vertically away from the row and wait for the new position to persist.
 3. Uncheck **Organize Workspaces on Session Load**. Verify live preview leaves the board at its current
-   positions, save, and confirm the YAML contains `organize_workspaces_on_startup: false`.
+   positions, save, and confirm the YAML contains `organize_workspaces_on_session_load: false`.
 4. Use the Sessions UI to create or load a throwaway session, then load the smoke session again
    without restarting Horizon. Verify `Beta Smoke` remains vertically offset. This proves explicit
    `false` does not alter the restored layout when `apply_runtime_state` loads another session.
 5. Recheck the setting and save. Verify the live board remains offset and the YAML contains
-   `organize_workspaces_on_startup: true`; enabling the startup action must not rearrange a running
+   `organize_workspaces_on_session_load: true`; enabling the session-load action must not rearrange a running
    session.
 6. Switch to the throwaway session and back to the smoke session again. Verify the three attached
    workspaces now form one horizontal row as soon as the session finishes loading.
