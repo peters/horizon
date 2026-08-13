@@ -95,7 +95,7 @@ Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highli
 <td>
 
 ### Session Persistence
-Close Horizon, come back tomorrow. Your workspaces, panel positions, scroll positions, and terminal history are **restored exactly as you left them**.
+Close Horizon, come back tomorrow. Your sessions, panel layouts, scroll positions, and terminal history are restored, with attached workspaces automatically organized into a horizontal row at startup.
 
 </td>
 <td>

@@ -6,7 +6,6 @@ use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::search_overlay::SearchOverlay;
 
-use super::align_attached_workspaces;
 use super::support::{
     command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
     detached_workspace_ids,
@@ -99,12 +98,7 @@ impl HorizonApp {
                 let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
             }
             CommandId::AlignWorkspacesHorizontally => {
-                if let Some(workspace_id) = align_attached_workspaces(&mut self.board, &self.detached_workspaces)
-                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
-                {
-                    self.focus_workspace_bounds(ctx, min, max, true);
-                    self.mark_runtime_dirty();
-                }
+                let _ = self.align_attached_workspaces_horizontally(ctx);
             }
             CommandId::NewPanel => {
                 let workspace_id = self.ensure_workspace_visible(ctx);

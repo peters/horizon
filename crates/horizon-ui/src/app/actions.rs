@@ -4,6 +4,8 @@ mod layout;
 mod panels;
 mod pickers;
 mod search;
+#[cfg(test)]
+mod startup_tests;
 mod support;
 
 use std::collections::BTreeMap;
@@ -12,7 +14,7 @@ use std::path::PathBuf;
 use horizon_core::{PanelOptions, PresetConfig, WorkspaceId};
 
 use self::support::detached_workspace_ids;
-use super::DetachedWorkspaceViewportState;
+use super::{DetachedWorkspaceViewportState, HorizonApp};
 
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
@@ -85,6 +87,28 @@ fn align_attached_workspaces(
         .map(|workspace| workspace.id)
         .collect();
     board.align_workspaces_horizontally(&workspace_ids)
+}
+
+impl HorizonApp {
+    pub(in crate::app) fn align_attached_workspaces_horizontally(&mut self, ctx: &egui::Context) -> bool {
+        let Some(workspace_id) = align_attached_workspaces(&mut self.board, &self.detached_workspaces) else {
+            return false;
+        };
+
+        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+            self.focus_workspace_bounds(ctx, min, max, true);
+        }
+        self.mark_runtime_dirty();
+        true
+    }
+
+    pub(in crate::app) fn apply_startup_workspace_organization(&mut self, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.startup_workspace_organization_pending) {
+            return;
+        }
+
+        let _ = self.align_attached_workspaces_horizontally(ctx);
+    }
 }
 
 #[cfg(test)]

@@ -261,6 +261,7 @@ pub struct HorizonApp {
     search_overlay: Option<SearchOverlay>,
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
+    startup_workspace_organization_pending: bool,
     initial_pan_done: bool,
     file_hover_positions: HashMap<ViewportId, Pos2>,
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
@@ -438,6 +439,7 @@ impl HorizonApp {
             search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
+            startup_workspace_organization_pending: true,
             initial_pan_done: false,
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
@@ -565,6 +567,7 @@ impl eframe::App for HorizonApp {
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
+        self.apply_startup_workspace_organization(ctx);
         self.render_active_view(ctx);
         self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
