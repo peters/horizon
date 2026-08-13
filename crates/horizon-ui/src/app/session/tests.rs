@@ -13,33 +13,12 @@ use horizon_core::{
 };
 use tempfile::TempDir;
 
+use crate::app::test_support::test_app;
 use crate::input;
 
 mod dynamic_assignment;
 mod provider_scoping;
 mod recovery_deduplication;
-
-fn test_app() -> (TempDir, HorizonApp) {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let config_path = temp.path().join("config.yaml");
-    let session_store = SessionStore::new(
-        HorizonHome::from_root(temp.path().join(".horizon")),
-        config_path.clone(),
-    );
-    let config = Config::default();
-    let ctx = Context::default();
-    let app = HorizonApp::new_with_egui_context(
-        &ctx,
-        &config,
-        config_path,
-        session_store,
-        StartupDecision::Ephemeral {
-            runtime_state: Box::new(RuntimeState::default()),
-        },
-        input::ObservedKeyboardInputs::default(),
-    );
-    (temp, app)
-}
 
 fn test_persistent_recovery_app(runtime_state: RuntimeState) -> (TempDir, HorizonApp, std::path::PathBuf) {
     let temp = tempfile::tempdir().expect("temp dir");

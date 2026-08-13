@@ -95,7 +95,7 @@ Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highli
 <td>
 
 ### Session Persistence
-Close Horizon, come back tomorrow. Your sessions, panel layouts, scroll positions, and terminal history are restored, with attached workspaces automatically organized into a horizontal row at startup.
+Close Horizon, come back tomorrow. By default, your sessions, panel layouts, scroll positions, and terminal history are restored exactly as you left them. An opt-in setting can organize attached workspaces into a horizontal row after restore.
 
 </td>
 <td>
@@ -304,10 +304,14 @@ presets:
     alias: gc
     kind: git_changes
 
-# Optional: disable the default attention feed
 features:
+  # Optional: disable the default attention feed
   attention_feed: false
+  # Optional: align attached workspaces whenever a session loads, including startup
+  organize_workspaces_on_startup: true
 ```
+
+`features.organize_workspaces_on_startup` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as `Ctrl+Shift+A` whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. Changing the setting in the live editor takes effect when a session is next loaded.
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
 

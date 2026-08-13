@@ -9,7 +9,7 @@ use crate::{loading_spinner, theme};
 
 use super::canvas::CanvasGridCache;
 use super::speech::SpeechEvent;
-use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
+use super::{HorizonApp, attention_feed};
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -254,26 +254,44 @@ impl HorizonApp {
             return false;
         }
 
-        if self.startup_chooser.is_none() && !self.initial_pan_done {
-            self.seed_initial_pan(ctx);
+        if !self.root_viewport_restore_ready(ctx) {
+            return false;
         }
 
         true
     }
 
     #[profiling::function]
-    fn seed_initial_pan(&mut self, ctx: &Context) {
+    pub(super) fn apply_startup_workspace_organization(&mut self, ctx: &Context) {
+        if !std::mem::take(&mut self.startup_workspace_organization_pending) {
+            return;
+        }
+
+        let visible_anchor = self.startup_workspace_view_anchor(ctx);
+        let Some(alignment) = super::actions::align_attached_workspaces(&mut self.board, &self.detached_workspaces)
+        else {
+            tracing::debug!("startup workspace organization skipped: fewer than two attached workspaces");
+            return;
+        };
+
+        tracing::debug!(
+            leftmost_workspace_id = alignment.leftmost_workspace.0,
+            positions_changed = alignment.positions_changed,
+            "startup workspace organization applied"
+        );
+        if alignment.positions_changed {
+            if let Some((workspace_id, screen_anchor)) = visible_anchor {
+                self.restore_startup_workspace_view_anchor(ctx, workspace_id, screen_anchor);
+            }
+            self.mark_runtime_dirty();
+        }
+    }
+
+    #[profiling::function]
+    pub(super) fn seed_initial_pan(&mut self, ctx: &Context) {
         self.initial_pan_done = true;
         if let Some(workspace_id) = self.leftmost_workspace_id() {
-            self.board.focus_workspace(workspace_id);
-            if let Some((min, _max)) = self.board.workspace_bounds(workspace_id) {
-                let canvas_rect = self.canvas_rect(ctx);
-                self.canvas_view.align_canvas_point_to_screen(
-                    [canvas_rect.min.x, canvas_rect.min.y],
-                    [min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT],
-                    [canvas_rect.min.x + 40.0, canvas_rect.center().y],
-                );
-            }
+            let _ = self.align_view_to_workspace_immediately(ctx, workspace_id, true);
         }
     }
 
@@ -941,6 +959,10 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
+#[path = "lifecycle/startup_organization_tests.rs"]
+mod startup_organization_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
@@ -949,34 +971,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use egui::Context;
-    use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
-    use tempfile::TempDir;
+    use horizon_core::PanelId;
 
-    use super::{
-        HoldHotkeyTransition, HorizonApp, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
-    };
+    use super::{HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition};
     use crate::app::HeldSpeechBinding;
-    use crate::input;
-
-    fn test_app() -> (TempDir, HorizonApp) {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let config_path = temp.path().join("config.yaml");
-        let home = HorizonHome::from_root(temp.path().join(".horizon"));
-        let session_store = SessionStore::new(home, config_path.clone());
-        let config = Config::default();
-        let ctx = Context::default();
-        let app = HorizonApp::new_with_egui_context(
-            &ctx,
-            &config,
-            config_path,
-            session_store,
-            StartupDecision::Ephemeral {
-                runtime_state: Box::new(RuntimeState::default()),
-            },
-            input::ObservedKeyboardInputs::default(),
-        );
-        (temp, app)
-    }
+    use crate::app::test_support::test_app;
 
     #[test]
     fn finalize_frame_requests_repaint_when_theme_application_is_deferred() {

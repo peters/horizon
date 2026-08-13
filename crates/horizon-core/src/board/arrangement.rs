@@ -7,6 +7,8 @@ use crate::workspace::{Workspace, WorkspaceId};
 
 use super::{Board, WorkspaceLayout, vec2_eq};
 
+const ALIGNMENT_POSITION_TOLERANCE: f32 = 0.01;
+
 impl Board {
     /// After a panel is resized, push every overlapping sibling panel
     /// within the same workspace along the dominant resize-growth axis,
@@ -270,7 +272,13 @@ impl Board {
 
         for (ws_id, frame) in &entries {
             let frame_width = frame[2] - frame[0];
-            self.translate_workspace(*ws_id, [cursor_x - frame[0], anchor_y - frame[1]]);
+            let delta = [cursor_x - frame[0], anchor_y - frame[1]];
+            if delta
+                .iter()
+                .any(|component| component.abs() > ALIGNMENT_POSITION_TOLERANCE)
+            {
+                self.translate_workspace(*ws_id, delta);
+            }
             cursor_x += frame_width + WORKSPACE_GAP;
         }
 

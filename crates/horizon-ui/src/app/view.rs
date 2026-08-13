@@ -96,6 +96,80 @@ impl HorizonApp {
         ));
     }
 
+    pub(super) fn align_view_to_workspace_immediately(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        left_align: bool,
+    ) -> bool {
+        if self.workspace_is_detached(workspace_id) {
+            return false;
+        }
+
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return false;
+        };
+        let pan_offset = aligned_pan_offset(self.canvas_rect(ctx), pos, size, self.canvas_view.zoom, left_align);
+        self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
+        self.pan_target = None;
+        true
+    }
+
+    pub(super) fn startup_workspace_view_anchor(&self, ctx: &Context) -> Option<(WorkspaceId, Pos2)> {
+        let preferred_workspace = self
+            .board
+            .focused
+            .and_then(|panel_id| self.board.panel_workspace_id(panel_id))
+            .or(self.board.active_workspace);
+        preferred_workspace
+            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
+            .and_then(|workspace_id| {
+                self.visible_workspace_screen_center(ctx, workspace_id)
+                    .map(|screen_center| (workspace_id, screen_center))
+            })
+            .or_else(|| {
+                self.board
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| !self.workspace_is_detached(workspace.id))
+                    .find_map(|workspace| {
+                        self.visible_workspace_screen_center(ctx, workspace.id)
+                            .map(|screen_center| (workspace.id, screen_center))
+                    })
+            })
+    }
+
+    pub(super) fn restore_startup_workspace_view_anchor(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        screen_anchor: Pos2,
+    ) {
+        if self.visible_workspace_screen_center(ctx, workspace_id).is_some() {
+            return;
+        }
+
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return;
+        };
+        let current_center = self.canvas_to_screen(self.canvas_rect(ctx), pos + size * 0.5);
+        let delta = screen_anchor - current_center;
+        self.canvas_view.set_pan_offset([
+            self.canvas_view.pan_offset[0] + delta.x,
+            self.canvas_view.pan_offset[1] + delta.y,
+        ]);
+        self.pan_target = None;
+    }
+
+    fn visible_workspace_screen_center(&self, ctx: &Context, workspace_id: WorkspaceId) -> Option<Pos2> {
+        let (pos, size) = self.workspace_focus_frame(workspace_id)?;
+        let canvas_rect = self.canvas_rect(ctx);
+        let screen_min = self.canvas_to_screen(canvas_rect, pos);
+        let screen_size = self.canvas_size_to_screen(size);
+        let screen_rect = Rect::from_min_size(screen_min, screen_size);
+        screen_rect.intersects(canvas_rect).then_some(screen_rect.center())
+    }
+
     pub(super) fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {
         let screen = self
             .canvas_view

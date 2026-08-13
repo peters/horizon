@@ -4,8 +4,6 @@ mod layout;
 mod panels;
 mod pickers;
 mod search;
-#[cfg(test)]
-mod startup_tests;
 mod support;
 
 use std::collections::BTreeMap;
@@ -15,6 +13,13 @@ use horizon_core::{PanelOptions, PresetConfig, WorkspaceId};
 
 use self::support::detached_workspace_ids;
 use super::{DetachedWorkspaceViewportState, HorizonApp};
+
+const WORKSPACE_POSITION_TOLERANCE: f32 = 0.01;
+
+pub(super) struct AttachedWorkspaceAlignment {
+    pub(super) leftmost_workspace: WorkspaceId,
+    pub(super) positions_changed: bool,
+}
 
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
@@ -75,10 +80,10 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
-fn align_attached_workspaces(
+pub(super) fn align_attached_workspaces(
     board: &mut horizon_core::Board,
     detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
-) -> Option<WorkspaceId> {
+) -> Option<AttachedWorkspaceAlignment> {
     let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
     let workspace_ids: Vec<_> = board
         .workspaces
@@ -86,28 +91,42 @@ fn align_attached_workspaces(
         .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
         .map(|workspace| workspace.id)
         .collect();
-    board.align_workspaces_horizontally(&workspace_ids)
+    let positions_before: Vec<_> = workspace_ids
+        .iter()
+        .filter_map(|workspace_id| {
+            board
+                .workspace(*workspace_id)
+                .map(|workspace| (*workspace_id, workspace.position))
+        })
+        .collect();
+    let leftmost_workspace = board.align_workspaces_horizontally(&workspace_ids)?;
+    let positions_changed = positions_before.iter().any(|(workspace_id, position_before)| {
+        board.workspace(*workspace_id).is_some_and(|workspace| {
+            workspace
+                .position
+                .iter()
+                .zip(position_before)
+                .any(|(after, before)| (after - before).abs() > WORKSPACE_POSITION_TOLERANCE)
+        })
+    });
+    Some(AttachedWorkspaceAlignment {
+        leftmost_workspace,
+        positions_changed,
+    })
 }
 
 impl HorizonApp {
-    pub(in crate::app) fn align_attached_workspaces_horizontally(&mut self, ctx: &egui::Context) -> bool {
-        let Some(workspace_id) = align_attached_workspaces(&mut self.board, &self.detached_workspaces) else {
-            return false;
+    pub(in crate::app) fn align_attached_workspaces_horizontally(&mut self, ctx: &egui::Context) {
+        let Some(alignment) = align_attached_workspaces(&mut self.board, &self.detached_workspaces) else {
+            return;
         };
 
-        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+        if let Some((min, max)) = self.board.workspace_bounds(alignment.leftmost_workspace) {
             self.focus_workspace_bounds(ctx, min, max, true);
         }
-        self.mark_runtime_dirty();
-        true
-    }
-
-    pub(in crate::app) fn apply_startup_workspace_organization(&mut self, ctx: &egui::Context) {
-        if !std::mem::take(&mut self.startup_workspace_organization_pending) {
-            return;
+        if alignment.positions_changed {
+            self.mark_runtime_dirty();
         }
-
-        let _ = self.align_attached_workspaces_horizontally(ctx);
     }
 }
 
@@ -429,9 +448,10 @@ mod tests {
             DetachedWorkspaceViewportState::new(WindowConfig::default()),
         )]);
 
-        let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
+        let alignment = align_attached_workspaces(&mut board, &detached_workspaces).expect("attached workspaces");
 
-        assert_eq!(leftmost, Some(left));
+        assert_eq!(alignment.leftmost_workspace, left);
+        assert!(alignment.positions_changed);
         assert!(board.workspace(detached).is_some_and(|workspace| {
             workspace
                 .position

@@ -3,8 +3,9 @@
 ## Scope
 
 Validate on macOS that Horizon automatically performs the same attached-workspace organization as
-`Cmd+Shift+A` exactly once after the initial session finishes loading. Run every step from the exact
-pull-request head and use `target/debug/horizon`.
+`Cmd+Shift+A` exactly once after the initial session finishes loading when the opt-in setting is
+enabled. Also verify that a missing or disabled setting preserves the restored layout. Run every step
+from the exact pull-request head and use `target/debug/horizon`.
 
 ## Environment and exact-head guard
 
@@ -23,8 +24,10 @@ Create an isolated persistent home outside the repository. Keep it until the rep
 the original config and generated runtime files remain available as evidence:
 
 ```bash
-export SMOKE_ROOT="$(mktemp -d /tmp/horizon-auto-organize.XXXXXX)"
+export SMOKE_ROOT="$(mktemp -d /tmp/horizon-auto-organize-enabled.XXXXXX)"
+export SMOKE_DEFAULT_ROOT="$(mktemp -d /tmp/horizon-auto-organize-disabled.XXXXXX)"
 mkdir -p "$SMOKE_ROOT/.horizon" "$SMOKE_ROOT/config" "$SMOKE_ROOT/data" "$SMOKE_ROOT/cache"
+mkdir -p "$SMOKE_DEFAULT_ROOT/.horizon" "$SMOKE_DEFAULT_ROOT/config" "$SMOKE_DEFAULT_ROOT/data" "$SMOKE_DEFAULT_ROOT/cache"
 cat > "$SMOKE_ROOT/.horizon/config.yaml" <<'YAML'
 version: 8
 window:
@@ -34,6 +37,7 @@ appearance:
   theme: dark
 features:
   attention_feed: false
+  organize_workspaces_on_startup: true
 workspaces:
   - name: Alpha Smoke
     position: [100, 300]
@@ -57,34 +61,61 @@ workspaces:
         position: [20, 60]
         size: [320, 220]
 YAML
+
+awk '!/^[[:space:]]+organize_workspaces_on_startup:/' \
+  "$SMOKE_ROOT/.horizon/config.yaml" \
+  > "$SMOKE_DEFAULT_ROOT/.horizon/config.yaml"
 ```
 
-Use these same environment values for every launch in this plan:
+Use the matching root for every `HOME`, XDG directory, and config argument. Keep
+`RUST_LOG=horizon=debug,horizon_core=info` so the structured startup-organization outcome is present
+in captured logs. For relaunch steps, omit `--new-session` and select the saved session when
+prompted. Record the exact runtime path for each root rather than relying on a broad mixed-session
+search.
+
+## Default-disabled compatibility
+
+Run this lane first. The field was omitted from the isolated `$SMOKE_DEFAULT_ROOT` config above; this
+is the backward-compatibility case for existing config files and must behave the same as explicit
+`false`:
 
 ```bash
-HOME="$SMOKE_ROOT" \
-XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
-XDG_DATA_HOME="$SMOKE_ROOT/data" \
-XDG_CACHE_HOME="$SMOKE_ROOT/cache" \
-RUST_LOG=horizon=info,horizon_core=info \
-target/debug/horizon --config "$SMOKE_ROOT/.horizon/config.yaml" --new-session &
-export HORIZON_SMOKE_PID=$!
+HOME="$SMOKE_DEFAULT_ROOT" \
+XDG_CONFIG_HOME="$SMOKE_DEFAULT_ROOT/config" \
+XDG_DATA_HOME="$SMOKE_DEFAULT_ROOT/data" \
+XDG_CACHE_HOME="$SMOKE_DEFAULT_ROOT/cache" \
+RUST_LOG=horizon=debug,horizon_core=info \
+target/debug/horizon --config "$SMOKE_DEFAULT_ROOT/.horizon/config.yaml" --new-session &
+export HORIZON_DEFAULT_DISABLED_PID=$!
 ```
 
-For relaunch steps, omit `--new-session` and select the saved session when prompted. Resolve the
-runtime file without assuming a generated session ID:
-
-```bash
-find "$SMOKE_ROOT/.horizon/sessions" -name runtime.yaml -print
-```
+1. Resolve the root window by `$HORIZON_DEFAULT_DISABLED_PID` and do not invoke a layout command.
+2. Verify `Alpha Smoke`, `Beta Smoke`, and `Gamma Smoke` retain y coordinates `300`, `520`, and `80`
+   respectively after startup and after the runtime-state save debounce.
+3. Open Settings → General → Features and verify **Organize Workspaces on Session Load** is unchecked.
+4. Record exactly one path as `DEFAULT_RUNTIME_PATH` with
+   `find "$SMOKE_DEFAULT_ROOT/.horizon/sessions" -name runtime.yaml -print`, then close Horizon
+   normally and verify the exact PID exits. Keep this isolated root as evidence.
 
 ## Cold-start organization
 
-1. Launch the exact debug binary with the isolated config and a new persistent session.
+1. Only after the default-disabled PID has exited, launch the opt-in process:
+
+   ```bash
+   HOME="$SMOKE_ROOT" \
+   XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
+   XDG_DATA_HOME="$SMOKE_ROOT/data" \
+   XDG_CACHE_HOME="$SMOKE_ROOT/cache" \
+   RUST_LOG=horizon=debug,horizon_core=info \
+   target/debug/horizon --config "$SMOKE_ROOT/.horizon/config.yaml" --new-session &
+   export HORIZON_SMOKE_PID=$!
+   ```
+
 2. Do not press `Cmd+Shift+A` or use the command palette.
 3. Resolve the root window by `$HORIZON_SMOKE_PID`, not by application name, and verify that it is
    visible and responsive. Record the PID and native window inventory.
-4. Wait through the runtime-state save debounce, then inspect the active session's `runtime.yaml`.
+4. Wait through the runtime-state save debounce, record exactly one path as `RUNTIME_PATH` with
+   `find "$SMOKE_ROOT/.horizon/sessions" -name runtime.yaml -print`, then inspect that file.
 5. Verify all three attached workspace frames retain their original left-to-right order, share one y
    coordinate, and have non-overlapping x coordinates.
 6. Capture a screenshot of the live root window. Check workspace frames, panels, names, sidebar,
@@ -102,6 +133,25 @@ find "$SMOKE_ROOT/.horizon/sessions" -name runtime.yaml -print
    changing the focused panel or active workspace.
 5. If any snap-back, jitter, or oscillation is suspected, capture a short video with
    `screencapture -V` or a high-frequency native position trace scoped to the exact PID.
+
+## Settings toggle and next-session-load behavior
+
+1. Open Settings → General → Features and verify **Organize Workspaces on Session Load** is checked from
+   the opt-in YAML.
+2. Drag `Beta Smoke` vertically away from the row and wait for the new position to persist.
+3. Uncheck **Organize Workspaces on Session Load**. Verify live preview leaves the board at its current
+   positions, save, and confirm the YAML contains `organize_workspaces_on_startup: false`.
+4. Use the Sessions UI to create or load a throwaway session, then load the smoke session again
+   without restarting Horizon. Verify `Beta Smoke` remains vertically offset. This proves explicit
+   `false` does not alter the restored layout when `apply_runtime_state` loads another session.
+5. Recheck the setting and save. Verify the live board remains offset and the YAML contains
+   `organize_workspaces_on_startup: true`; enabling the startup action must not rearrange a running
+   session.
+6. Switch to the throwaway session and back to the smoke session again. Verify the three attached
+   workspaces now form one horizontal row as soon as the session finishes loading.
+7. Drag one workspace vertically, close Horizon normally, and relaunch the smoke session. Verify the
+   startup load also restores the horizontal row. Record before/after runtime positions and keep a
+   screenshot from both the disabled and enabled session loads.
 
 ## Persistence and relaunch
 
@@ -155,8 +205,10 @@ Use this report shape in the pull-request comment:
 SMOKE-TEST REPORT (macOS)
 - Exact head and environment: pass | fail — <SHA, macOS, arch, Rust, display>
 - Build and exact-PID launch: pass | fail — <PID and window inventory>
+- Default-disabled compatibility: pass | fail — <missing-field positions and Settings state>
 - Cold-start organization: pass | fail — <runtime positions and screenshot>
 - One-shot and Cmd+Shift+A parity: pass | fail — <evidence>
+- Settings next-session-load behavior: pass | fail — <false/true config and loaded positions>
 - Relaunch persistence: pass | fail — <runtime positions and screenshot>
 - Detached/startup edge cases: pass | fail — <evidence>
 - Resize and Metal/Retina visuals: pass | fail — <screenshot or motion trace>

@@ -21,6 +21,8 @@ mod sidebar;
 pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
+#[cfg(test)]
+mod test_support;
 mod updates;
 pub(crate) mod util;
 mod view;
@@ -263,6 +265,7 @@ pub struct HorizonApp {
     runtime_dirty_since: Option<Instant>,
     startup_workspace_organization_pending: bool,
     initial_pan_done: bool,
+    pending_root_viewport_restore: Option<startup_session::PendingRootViewportRestore>,
     file_hover_positions: HashMap<ViewportId, Pos2>,
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
@@ -439,8 +442,9 @@ impl HorizonApp {
             search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
-            startup_workspace_organization_pending: true,
+            startup_workspace_organization_pending: false,
             initial_pan_done: false,
+            pending_root_viewport_restore: None,
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
             ssh_upload_flow: None,
@@ -567,7 +571,12 @@ impl eframe::App for HorizonApp {
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
+        // The restored board must be normalized and include queued changes
+        // before its one-shot layout and initial viewport are finalized.
         self.apply_startup_workspace_organization(ctx);
+        if !self.initial_pan_done {
+            self.seed_initial_pan(ctx);
+        }
         self.render_active_view(ctx);
         self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);

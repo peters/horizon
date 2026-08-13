@@ -33,7 +33,7 @@ impl HorizonApp {
             return;
         };
 
-        if self.pending_startup_runtime_state.is_some() {
+        if self.pending_startup_runtime_state.is_some() || self.pending_root_viewport_restore.is_some() {
             return;
         }
 
@@ -62,6 +62,10 @@ impl HorizonApp {
     }
 
     pub(super) fn sync_window_config(&mut self, ctx: &egui::Context) {
+        if self.pending_root_viewport_restore.is_some() {
+            return;
+        }
+
         ctx.input(|input| {
             if let Some(rect) = input.viewport().inner_rect {
                 let new_w = rect.width();

@@ -454,6 +454,7 @@ impl Default for OverlaysConfig {
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
+    pub organize_workspaces_on_startup: bool,
     pub speech: SpeechConfig,
 }
 
@@ -461,6 +462,7 @@ impl Default for FeaturesConfig {
     fn default() -> Self {
         Self {
             attention_feed: true,
+            organize_workspaces_on_startup: false,
             speech: SpeechConfig::default(),
         }
     }
@@ -789,6 +791,12 @@ mod tests {
     }
 
     #[test]
+    fn startup_workspace_organization_defaults_disabled() {
+        assert!(!FeaturesConfig::default().organize_workspaces_on_startup);
+        assert!(!Config::default().features.organize_workspaces_on_startup);
+    }
+
+    #[test]
     fn default_config_includes_one_pi_preset() {
         let config = Config::default();
         let pi_presets: Vec<_> = config
@@ -810,6 +818,24 @@ mod tests {
         let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
 
         assert!(config.features.attention_feed);
+    }
+
+    #[test]
+    fn missing_startup_workspace_organization_setting_keeps_it_disabled() {
+        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("config should deserialize");
+
+        assert!(!config.features.organize_workspaces_on_startup);
+    }
+
+    #[test]
+    fn explicit_startup_workspace_organization_true_is_preserved() {
+        let config = Config::from_yaml("features:\n  organize_workspaces_on_startup: true\n")
+            .expect("config should deserialize");
+
+        assert!(config.features.organize_workspaces_on_startup);
+        let yaml = config.to_yaml().expect("config should serialize");
+        let round_tripped = Config::from_yaml(&yaml).expect("serialized config should deserialize");
+        assert!(round_tripped.features.organize_workspaces_on_startup);
     }
 
     #[test]

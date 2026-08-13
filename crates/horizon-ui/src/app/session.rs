@@ -193,6 +193,7 @@ impl HorizonApp {
         self.canvas_view = runtime_state.canvas_view_or_default();
         self.pan_target = None;
         self.initial_pan_done = runtime_state.has_persisted_canvas_view();
+        self.startup_workspace_organization_pending = self.template_config.features.organize_workspaces_on_startup;
         self.runtime_dirty_since = None;
         self.git_watchers.clear();
         let needs_bootstrap = Self::runtime_state_needs_session_bootstrap(runtime_state);

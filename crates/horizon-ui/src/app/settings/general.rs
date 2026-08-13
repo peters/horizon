@@ -117,6 +117,20 @@ fn render_features_section(
         super::dim_label(ui, "Show a notification feed for agent activity.");
 
         ui.add_space(10.0);
+        changed |= ui
+            .checkbox(
+                &mut config.features.organize_workspaces_on_startup,
+                egui::RichText::new("Organize Workspaces on Session Load")
+                    .color(theme::FG())
+                    .size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "Align attached workspaces horizontally whenever a session loads, including at startup. Detached workspaces are unchanged.",
+        );
+
+        ui.add_space(10.0);
         changed |= super::speech::render(ui, config, model_info_cache);
     });
     changed

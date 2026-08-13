@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use egui::{Align, Color32, Context, CursorIcon, Layout, Margin, RichText, Sense, Stroke};
 use horizon_core::StartupPromptReason;
 
@@ -5,6 +7,53 @@ use crate::theme;
 
 use super::util::{chrome_button, primary_button};
 use super::{HorizonApp, StartupChooserState};
+
+pub(super) const ROOT_VIEWPORT_RESTORE_MAX_WAIT_FRAMES: u8 = 12;
+const ROOT_VIEWPORT_RESTORE_TOLERANCE: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingRootViewportRestore {
+    requested_size: [f32; 2],
+    requested_position: Option<[f32; 2]>,
+    waited_frames: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RootViewportGeometry {
+    size: Option<[f32; 2]>,
+    position: Option<[f32; 2]>,
+}
+
+impl PendingRootViewportRestore {
+    fn new(requested_size: [f32; 2], requested_position: Option<[f32; 2]>) -> Self {
+        Self {
+            requested_size,
+            requested_position,
+            waited_frames: 0,
+        }
+    }
+
+    fn observed(self, geometry: RootViewportGeometry) -> bool {
+        geometry.size.is_some_and(|size| vector_near(size, self.requested_size))
+            && self.requested_position.is_none_or(|requested_position| {
+                geometry
+                    .position
+                    .is_some_and(|position| vector_near(position, requested_position))
+            })
+    }
+}
+
+fn root_viewport_geometry(ctx: &Context) -> RootViewportGeometry {
+    ctx.input(|input| RootViewportGeometry {
+        size: input.viewport().inner_rect.map(|rect| [rect.width(), rect.height()]),
+        position: input.viewport().outer_rect.map(|rect| [rect.min.x, rect.min.y]),
+    })
+}
+
+fn vector_near(left: [f32; 2], right: [f32; 2]) -> bool {
+    (left[0] - right[0]).abs() <= ROOT_VIEWPORT_RESTORE_TOLERANCE
+        && (left[1] - right[1]).abs() <= ROOT_VIEWPORT_RESTORE_TOLERANCE
+}
 
 enum StartupChooserAction {
     None,
@@ -57,13 +106,41 @@ impl HorizonApp {
         self.restore_window_viewport(ctx);
     }
 
-    pub(super) fn restore_window_viewport(&self, ctx: &Context) {
+    pub(super) fn restore_window_viewport(&mut self, ctx: &Context) {
         let width = self.window_config.width.clamp(800.0, 7680.0);
         let height = self.window_config.height.clamp(600.0, 4320.0);
+        let position = self.window_config.x.zip(self.window_config.y).map(|(x, y)| [x, y]);
+        self.pending_root_viewport_restore = Some(PendingRootViewportRestore::new([width, height], position));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
-        if let (Some(x), Some(y)) = (self.window_config.x, self.window_config.y) {
+        if let Some([x, y]) = position {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
         }
+        ctx.request_repaint();
+    }
+
+    #[profiling::function]
+    pub(super) fn root_viewport_restore_ready(&mut self, ctx: &Context) -> bool {
+        let Some(mut pending) = self.pending_root_viewport_restore.take() else {
+            return true;
+        };
+
+        if pending.observed(root_viewport_geometry(ctx)) {
+            return true;
+        }
+
+        if pending.waited_frames >= ROOT_VIEWPORT_RESTORE_MAX_WAIT_FRAMES {
+            tracing::warn!(
+                requested_width = pending.requested_size[0],
+                requested_height = pending.requested_size[1],
+                "continuing after root viewport restore was not observed"
+            );
+            return true;
+        }
+
+        pending.waited_frames += 1;
+        self.pending_root_viewport_restore = Some(pending);
+        ctx.request_repaint_after(Duration::from_millis(16));
+        false
     }
 }
 

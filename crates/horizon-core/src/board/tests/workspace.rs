@@ -288,6 +288,30 @@ fn align_workspaces_horizontally_only_moves_selected_workspaces() {
 }
 
 #[test]
+fn align_workspaces_horizontally_is_idempotent_for_fractional_positions() {
+    let mut board = Board::new();
+    let first_workspace = board.create_workspace_at("first", [2_000.0, 200.456]);
+    let second_workspace = board.create_workspace_at("second", [4_076.76, 500.987]);
+
+    board
+        .align_workspaces_horizontally(&[first_workspace, second_workspace])
+        .expect("aligned workspace");
+    let positions_after_first_alignment: Vec<_> = board.workspaces.iter().map(|workspace| workspace.position).collect();
+    board
+        .align_workspaces_horizontally(&[first_workspace, second_workspace])
+        .expect("aligned workspace");
+
+    assert_eq!(
+        board
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.position)
+            .collect::<Vec<_>>(),
+        positions_after_first_alignment
+    );
+}
+
+#[test]
 fn move_workspace_beside_places_workspace_tight_to_target() {
     let mut board = Board::new();
     let alpha = board.create_workspace("alpha");

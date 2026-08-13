@@ -98,7 +98,7 @@ impl HorizonApp {
                 let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
             }
             CommandId::AlignWorkspacesHorizontally => {
-                let _ = self.align_attached_workspaces_horizontally(ctx);
+                self.align_attached_workspaces_horizontally(ctx);
             }
             CommandId::NewPanel => {
                 let workspace_id = self.ensure_workspace_visible(ctx);

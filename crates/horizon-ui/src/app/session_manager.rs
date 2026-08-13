@@ -199,7 +199,7 @@ impl HorizonApp {
             .map(|session| session.session_id.as_str())
     }
 
-    fn activate_runtime_session(&mut self, ctx: &Context, session: &ResolvedSession) {
+    pub(super) fn activate_runtime_session(&mut self, ctx: &Context, session: &ResolvedSession) {
         self.prepare_session_switch();
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
