@@ -1,5 +1,7 @@
-use egui::{Context, RawInput};
-use horizon_core::{Config, HorizonHome, RuntimeState, SessionStore, StartupDecision};
+use egui::{Context, Pos2, RawInput, Rect, ViewportId};
+use horizon_core::{
+    Config, HorizonHome, PanelKind, PanelState, RuntimeState, SessionStore, StartupDecision, WorkspaceState,
+};
 use tempfile::TempDir;
 
 use super::HorizonApp;
@@ -50,4 +52,41 @@ pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, inpu
     ctx.run(input, |ctx| {
         eframe::App::update(app, ctx, &mut frame);
     })
+}
+
+pub(super) fn raw_input(size: [f32; 2], position: Option<[f32; 2]>) -> RawInput {
+    let inner_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(size[0], size[1]));
+    let mut input = RawInput {
+        screen_rect: Some(inner_rect),
+        ..RawInput::default()
+    };
+    let viewport = input.viewports.entry(ViewportId::ROOT).or_default();
+    viewport.inner_rect = Some(inner_rect);
+    viewport.outer_rect =
+        position.map(|position| Rect::from_min_size(Pos2::new(position[0], position[1]), egui::vec2(size[0], size[1])));
+    input
+}
+
+pub(super) fn editor_panel_state(local_id: &str, position: [f32; 2]) -> PanelState {
+    PanelState {
+        local_id: local_id.to_string(),
+        name: format!("{local_id} notes"),
+        kind: PanelKind::Editor,
+        position: Some(position),
+        size: Some([320.0, 220.0]),
+        ..PanelState::default()
+    }
+}
+
+pub(super) fn editor_workspace_state(local_id: &str, position: [f32; 2]) -> WorkspaceState {
+    WorkspaceState {
+        local_id: local_id.to_string(),
+        name: local_id.to_string(),
+        position: Some(position),
+        panels: vec![editor_panel_state(
+            &format!("{local_id}-panel"),
+            [position[0] + 20.0, position[1] + 60.0],
+        )],
+        ..WorkspaceState::default()
+    }
 }

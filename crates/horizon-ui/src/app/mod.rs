@@ -265,6 +265,7 @@ pub struct HorizonApp {
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
     startup_workspace_organization_pending: bool,
+    startup_selection_restored: bool,
     initial_pan_done: bool,
     root_viewport_stabilizer: Option<root_viewport::RootViewportStabilizer>,
     file_hover_positions: HashMap<ViewportId, Pos2>,
@@ -444,6 +445,7 @@ impl HorizonApp {
             action_commands_cache,
             runtime_dirty_since: None,
             startup_workspace_organization_pending: false,
+            startup_selection_restored: false,
             initial_pan_done: false,
             root_viewport_stabilizer: None,
             file_hover_positions: HashMap::new(),
@@ -567,6 +569,12 @@ impl eframe::App for HorizonApp {
             return;
         }
 
+        let block_root_interaction = self.root_viewport_stabilization_blocks_interaction();
+        let root_viewport_is_stable = self.poll_root_viewport_stabilizer(ctx);
+        if block_root_interaction {
+            self.suppress_root_viewport_interaction(ctx);
+        }
+
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
         let had_terminal_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
@@ -574,23 +582,16 @@ impl eframe::App for HorizonApp {
         self.apply_pending_workspace_changes();
         // The restored board must be normalized and include queued changes
         // before its one-shot layout and initial viewport are finalized.
-        let root_viewport_is_stable = self.poll_root_viewport_stabilizer(ctx);
         if root_viewport_is_stable {
             let organization_was_requested = self.startup_workspace_organization_pending;
             let aligned_leftmost_workspace = self.apply_startup_workspace_organization(ctx);
             if !self.initial_pan_done {
-                let focused_workspace = self
-                    .board
-                    .focused
-                    .and_then(|panel_id| self.board.panel_workspace_id(panel_id));
-                let preserve_restored_selection = organization_was_requested
-                    && focused_workspace.is_some()
-                    && focused_workspace == self.board.active_workspace;
+                let preserve_restored_selection = organization_was_requested && self.startup_selection_restored;
                 self.seed_initial_pan(ctx, aligned_leftmost_workspace, preserve_restored_selection);
             }
         }
-        self.render_active_view(ctx);
-        if !root_viewport_is_stable {
+        self.render_active_view(ctx, block_root_interaction);
+        if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
         self.render_speech_notice(ctx);

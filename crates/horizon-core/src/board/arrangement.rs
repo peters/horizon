@@ -1,91 +1,15 @@
 use crate::layout::{
-    TILE_GAP, WORKSPACE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD,
-    ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
+    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
+    tiled_panel_position, usize_to_f32, workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 use crate::workspace::{Workspace, WorkspaceId};
 
-use super::{Board, PANEL_CHROME_PAD, PANEL_CHROME_TITLEBAR, WorkspaceLayout, vec2_eq};
+use super::{Board, WorkspaceLayout, vec2_eq};
 
-const ALIGNMENT_POSITION_ABSOLUTE_TOLERANCE: f32 = 0.01;
-const ALIGNMENT_POSITION_RELATIVE_TOLERANCE: f32 = f32::EPSILON;
+mod alignment;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WorkspaceAlignment {
-    pub leftmost_workspace: WorkspaceId,
-    pub positions_changed: bool,
-}
-
-fn alignment_positions_match(left: f32, right: f32) -> bool {
-    if !left.is_finite() || !right.is_finite() {
-        return false;
-    }
-
-    let magnitude = left.abs().max(right.abs()).max(1.0);
-    let tolerance = ALIGNMENT_POSITION_ABSOLUTE_TOLERANCE.max(ALIGNMENT_POSITION_RELATIVE_TOLERANCE * magnitude);
-    (left - right).abs() <= tolerance
-}
-
-fn translated_position(position: [f32; 2], delta: [f32; 2]) -> Option<[f32; 2]> {
-    let translated = [position[0] + delta[0], position[1] + delta[1]];
-    translated
-        .iter()
-        .all(|component| component.is_finite())
-        .then_some(translated)
-}
-
-fn translated_workspace_frame_is_finite(board: &Board, workspace_id: WorkspaceId, delta: [f32; 2]) -> bool {
-    let Some(workspace) = board.workspace(workspace_id) else {
-        return false;
-    };
-    let Some(origin) = translated_position(workspace.position, delta) else {
-        return false;
-    };
-    let mut panels = board.panels.iter().filter(|panel| panel.workspace_id == workspace_id);
-    let Some(first_panel) = panels.next() else {
-        return [
-            origin[0],
-            origin[1],
-            origin[0] + WS_EMPTY_FRAME_SIZE[0],
-            origin[1] + WS_EMPTY_FRAME_SIZE[1],
-        ]
-        .iter()
-        .all(|component| component.is_finite());
-    };
-
-    let mut min = [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD];
-    let mut max = [f32::MIN, f32::MIN];
-    for panel in std::iter::once(first_panel).chain(panels) {
-        let Some(position) = translated_position(panel.layout.position, delta) else {
-            return false;
-        };
-        let chrome_size = [
-            panel.layout.size[0] + 2.0 * PANEL_CHROME_PAD,
-            panel.layout.size[1] + PANEL_CHROME_TITLEBAR + 2.0 * PANEL_CHROME_PAD,
-        ];
-        let panel_max = [position[0] + chrome_size[0], position[1] + chrome_size[1]];
-        if !chrome_size
-            .iter()
-            .chain(panel_max.iter())
-            .all(|component| component.is_finite())
-        {
-            return false;
-        }
-        min[0] = min[0].min(position[0]);
-        min[1] = min[1].min(position[1]);
-        max[0] = max[0].max(panel_max[0]);
-        max[1] = max[1].max(panel_max[1]);
-    }
-
-    [
-        min[0] - WS_FRAME_PAD,
-        min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
-        max[0] + WS_FRAME_PAD,
-        max[1] + WS_FRAME_PAD,
-    ]
-    .iter()
-    .all(|component| component.is_finite())
-}
+pub use alignment::WorkspaceAlignment;
 
 impl Board {
     /// After a panel is resized, push every overlapping sibling panel
@@ -306,105 +230,6 @@ impl Board {
 
         self.set_workspace_layout(id, None);
         true
-    }
-
-    /// Align the selected workspaces side by side in a horizontal row,
-    /// sorted by their current x position, with consistent vertical
-    /// alignment and [`WORKSPACE_GAP`] spacing between frames. Returns the
-    /// alignment anchor and whether any positions changed, or `None` when
-    /// fewer than two selected workspaces exist or their geometry is invalid.
-    pub fn align_workspaces_horizontally(&mut self, workspace_ids: &[WorkspaceId]) -> Option<WorkspaceAlignment> {
-        if workspace_ids.len() < 2 {
-            return None;
-        }
-
-        let bounds_map = self.workspace_bounds_map();
-        let mut entries: Vec<(WorkspaceId, [f32; 4])> = workspace_ids
-            .iter()
-            .filter_map(|workspace_id| {
-                let ws = self.workspace(*workspace_id)?;
-                let rect = if let Some((min, max)) = bounds_map.get(&ws.id) {
-                    [
-                        min[0] - WS_FRAME_PAD,
-                        min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
-                        max[0] + WS_FRAME_PAD,
-                        max[1] + WS_FRAME_PAD,
-                    ]
-                } else {
-                    let p = ws.position;
-                    [p[0], p[1], p[0] + WS_EMPTY_FRAME_SIZE[0], p[1] + WS_EMPTY_FRAME_SIZE[1]]
-                };
-                Some((ws.id, rect))
-            })
-            .collect();
-
-        if entries.len() < 2 {
-            return None;
-        }
-
-        let invalid_workspace = entries.iter().find_map(|(workspace_id, frame)| {
-            let workspace = self.workspace(*workspace_id)?;
-            let workspace_is_finite = workspace.position.iter().all(|component| component.is_finite());
-            let panels_are_finite = self
-                .panels
-                .iter()
-                .filter(|panel| panel.workspace_id == *workspace_id)
-                .all(|panel| {
-                    panel.layout.position.iter().all(|component| component.is_finite())
-                        && panel.layout.size.iter().all(|component| component.is_finite())
-                });
-            (!workspace_is_finite || !panels_are_finite || !frame.iter().all(|component| component.is_finite()))
-                .then_some(*workspace_id)
-        });
-        if let Some(workspace_id) = invalid_workspace {
-            tracing::warn!(
-                workspace_id = workspace_id.0,
-                "workspace alignment skipped because geometry is non-finite"
-            );
-            return None;
-        }
-
-        entries.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
-
-        let leftmost_id = entries[0].0;
-        let anchor_y = entries[0].1[1];
-        let mut cursor_x = entries[0].1[0];
-        let mut translations = Vec::with_capacity(entries.len());
-
-        for (ws_id, frame) in &entries {
-            let frame_width = frame[2] - frame[0];
-            let delta = [cursor_x - frame[0], anchor_y - frame[1]];
-            let next_cursor_x = cursor_x + (frame_width + WORKSPACE_GAP);
-            if !frame_width.is_finite()
-                || !delta.iter().all(|component| component.is_finite())
-                || !next_cursor_x.is_finite()
-            {
-                tracing::warn!("workspace alignment skipped because its translation plan is non-finite");
-                return None;
-            }
-
-            if !alignment_positions_match(cursor_x, frame[0]) || !alignment_positions_match(anchor_y, frame[1]) {
-                if !translated_workspace_frame_is_finite(self, *ws_id, delta) {
-                    tracing::warn!(
-                        workspace_id = ws_id.0,
-                        "workspace alignment skipped because translated geometry would be non-finite"
-                    );
-                    return None;
-                }
-                translations.push((*ws_id, delta));
-            }
-            cursor_x = next_cursor_x;
-        }
-
-        let mut positions_changed = false;
-        for (workspace_id, delta) in translations {
-            positions_changed |= self.translate_workspace(workspace_id, delta);
-        }
-
-        Some(WorkspaceAlignment {
-            leftmost_workspace: leftmost_id,
-            positions_changed,
-        })
     }
 
     /// Compute the canvas position for the next workspace so it doesn't

@@ -87,13 +87,9 @@ impl HorizonApp {
         left_align: bool,
     ) {
         let canvas_rect = self.canvas_rect(ctx);
-        self.pan_target = Some(aligned_pan_offset(
-            canvas_rect,
-            canvas_pos,
-            canvas_size,
-            self.canvas_view.zoom,
-            left_align,
-        ));
+        let target = aligned_pan_offset(canvas_rect, canvas_pos, canvas_size, self.canvas_view.zoom, left_align);
+        let current = Vec2::new(self.canvas_view.pan_offset[0], self.canvas_view.pan_offset[1]);
+        self.pan_target = ((target - current).length_sq() >= 1.0).then_some(target);
     }
 
     pub(super) fn align_initial_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) -> bool {

@@ -100,6 +100,29 @@ fn startup_frame_preserves_focused_panel_and_active_workspace() {
 }
 
 #[test]
+fn startup_frame_preserves_persisted_active_workspace_without_persisted_focus() {
+    let runtime_state = RuntimeState {
+        active_workspace_local_id: Some("right".to_string()),
+        focused_panel_local_id: None,
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            editor_workspace_state("right", [700.0, 500.0]),
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = enabled_test_app(runtime_state);
+    app.theme_applied = true;
+    assert_eq!(active_workspace_local_id(&app), Some("right"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
+
+    run_frame_at_configured_size(&ctx, &mut app);
+
+    assert_eq!(active_workspace_local_id(&app), Some("right"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
+    assert_horizontal_row(&app, "left", "right");
+}
+
+#[test]
 fn startup_frame_leaves_detached_workspace_geometry_unchanged() {
     let runtime_state = RuntimeState {
         canvas_view: Some(CanvasViewState::default()),
@@ -175,6 +198,32 @@ fn manual_alignment_still_runs_after_startup_one_shot() {
 
     assert_horizontal_row(&app, "left", "right");
     assert!(app.pan_target.is_some());
+}
+
+#[test]
+fn manual_alignment_is_a_clean_no_op_when_row_and_view_are_already_aligned() {
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(two_workspace_runtime(Some(CanvasViewState::default()))),
+    });
+    app.theme_applied = true;
+    let workspace_ids: Vec<_> = app.board.workspaces.iter().map(|workspace| workspace.id).collect();
+    let alignment = app
+        .board
+        .align_workspaces_horizontally(&workspace_ids)
+        .expect("two workspaces");
+    let (min, max) = app
+        .board
+        .workspace_bounds(alignment.leftmost_workspace)
+        .expect("leftmost bounds");
+    app.focus_workspace_bounds(&ctx, min, max, true);
+    let target = app.pan_target.take().expect("manual alignment target");
+    app.canvas_view.set_pan_offset([target.x, target.y]);
+    app.runtime_dirty_since = None;
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    assert!(app.pan_target.is_none());
+    assert!(app.runtime_dirty_since.is_none());
 }
 
 #[test]

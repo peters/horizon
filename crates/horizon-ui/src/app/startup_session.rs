@@ -60,7 +60,7 @@ impl HorizonApp {
     pub(super) fn restore_window_viewport(&mut self, ctx: &Context) {
         let width = self.window_config.width.clamp(800.0, 7680.0);
         let height = self.window_config.height.clamp(600.0, 4320.0);
-        self.arm_root_viewport_stabilizer(true);
+        self.arm_root_viewport_stabilizer(true, [width, height]);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
         if let (Some(x), Some(y)) = (self.window_config.x, self.window_config.y) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));

@@ -94,7 +94,8 @@ export HORIZON_DEFAULT_DISABLED_PID=$!
 2. Verify `Alpha Smoke`, `Beta Smoke`, and `Gamma Smoke` retain y coordinates `300`, `520`, and `80`
    respectively after startup and after the runtime-state save debounce.
 3. Open Settings → General → Features and verify **Organize Workspaces on Session Load** is unchecked.
-4. Record exactly one path as `DEFAULT_RUNTIME_PATH` with
+4. Verify no modal **Preparing session view…** overlay is shown on this default-disabled path.
+5. Record exactly one path as `DEFAULT_RUNTIME_PATH` with
    `find "$SMOKE_DEFAULT_ROOT/.horizon/sessions" -name runtime.yaml -print`, then close Horizon
    normally and verify the exact PID exits. Keep this isolated root as evidence.
 
@@ -115,13 +116,15 @@ export HORIZON_DEFAULT_DISABLED_PID=$!
 2. Do not press `Cmd+Shift+A` or use the command palette.
 3. Resolve the root window by `$HORIZON_SMOKE_PID`, not by application name, and verify that it is
    visible and responsive. Record the PID and native window inventory.
-4. Wait through the runtime-state save debounce, record exactly one path as `RUNTIME_PATH` with
+4. Verify the short **Preparing session view…** overlay blocks root-window keyboard, pointer, pan,
+   zoom, fullscreen, file-drop, and session actions until the restored geometry settles, then disappears.
+5. Wait through the runtime-state save debounce, record exactly one path as `RUNTIME_PATH` with
    `find "$SMOKE_ROOT/.horizon/sessions" -name runtime.yaml -print`, then inspect that file.
-5. Verify all three attached workspace frames retain their original left-to-right order, share one y
+6. Verify all three attached workspace frames retain their original left-to-right order, share one y
    coordinate, and have non-overlapping x coordinates.
-6. Capture a screenshot of the live root window. Check workspace frames, panels, names, sidebar,
+7. Capture a screenshot of the live root window. Check workspace frames, panels, names, sidebar,
    minimap, and canvas rendering on the Retina/Metal path.
-7. Focus `Gamma Notes` in the non-leftmost `Gamma Smoke` workspace and wait for persistence. Move
+8. Focus `Gamma Notes` in the non-leftmost `Gamma Smoke` workspace and wait for persistence. Move
    that workspace vertically, relaunch, and verify `Gamma Notes` and `Gamma Smoke` remain focused and
    active while startup alignment restores the row.
 

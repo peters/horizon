@@ -185,7 +185,7 @@ impl HorizonApp {
             return;
         }
 
-        self.auto_save_runtime_state();
+        let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
         self.shutdown_progress = Some(self.board.begin_async_shutdown());
     }
@@ -235,7 +235,7 @@ impl HorizonApp {
         }
 
         self.exit_cleanup_complete = true;
-        self.auto_save_runtime_state();
+        let _ = self.auto_save_runtime_state();
         self.board.shutdown_terminal_panels();
         self.git_watchers.clear();
         self.release_active_session_lease();
@@ -815,7 +815,7 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_active_view(&mut self, ctx: &Context) {
+    pub(super) fn render_active_view(&mut self, ctx: &Context, root_interaction_suppressed: bool) {
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
             // Detached windows are immediate viewports: egui closes any child
@@ -832,7 +832,9 @@ impl HorizonApp {
         }
 
         let workspace_bounds = self.board.workspace_bounds_map();
-        self.handle_canvas_pan(ctx);
+        if !root_interaction_suppressed {
+            self.handle_canvas_pan(ctx);
+        }
         self.render_toolbar(ctx);
         self.render_sidebar(ctx);
         self.render_canvas(ctx);
@@ -967,6 +969,9 @@ mod tests {
         let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
         app.speech = Some(speech);
         app.theme_applied = true;
+        // Viewport settling has its own wall-clock tests. Keep this test scoped
+        // to the speech preload deadline instead of coupling it to that timer.
+        app.root_viewport_stabilizer = None;
         assert!(app.board.panels.is_empty());
 
         let mut frame = eframe::Frame::_new_kittest();

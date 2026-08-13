@@ -1,12 +1,13 @@
-use egui::{Context, Pos2, RawInput, Rect, ViewportId};
+use egui::{Context, Pos2, RawInput, Rect};
 use horizon_core::{
-    AgentSessionCatalog, CanvasViewState, Config, DetachedWorkspaceState, PanelKind, PanelState, RuntimeState,
-    StartupChooser, StartupDecision, StartupPromptReason, WindowConfig, WorkspaceState,
+    AgentSessionCatalog, CanvasViewState, Config, DetachedWorkspaceState, PanelKind, RuntimeState, StartupChooser,
+    StartupDecision, StartupPromptReason, WindowConfig, WorkspaceState,
 };
 
 use crate::app::session::{StartupBootstrap, StartupBootstrapOutcome};
 use crate::app::test_support::{
-    run_app_frame, run_app_frame_with_input, test_app_with_config_and_startup, test_app_with_startup,
+    editor_panel_state, editor_workspace_state, raw_input, run_app_frame, run_app_frame_with_input,
+    test_app_with_config_and_startup, test_app_with_startup,
 };
 use crate::app::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT};
 use crate::command_registry::CommandId;
@@ -17,30 +18,6 @@ fn enabled_config() -> Config {
     let mut config = Config::default();
     config.features.organize_workspaces_on_session_load = true;
     config
-}
-
-fn editor_panel_state(local_id: &str, position: [f32; 2]) -> PanelState {
-    PanelState {
-        local_id: local_id.to_string(),
-        name: format!("{local_id} notes"),
-        kind: PanelKind::Editor,
-        position: Some(position),
-        size: Some([320.0, 220.0]),
-        ..PanelState::default()
-    }
-}
-
-fn editor_workspace_state(local_id: &str, position: [f32; 2]) -> WorkspaceState {
-    WorkspaceState {
-        local_id: local_id.to_string(),
-        name: local_id.to_string(),
-        position: Some(position),
-        panels: vec![editor_panel_state(
-            &format!("{local_id}-panel"),
-            [position[0] + 20.0, position[1] + 60.0],
-        )],
-        ..WorkspaceState::default()
-    }
 }
 
 fn two_workspace_runtime(canvas_view: Option<CanvasViewState>) -> RuntimeState {
@@ -63,19 +40,6 @@ fn enabled_test_app(runtime_state: RuntimeState) -> (tempfile::TempDir, Context,
             runtime_state: Box::new(runtime_state),
         },
     )
-}
-
-fn raw_input(size: [f32; 2], position: Option<[f32; 2]>) -> RawInput {
-    let inner_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(size[0], size[1]));
-    let mut input = RawInput {
-        screen_rect: Some(inner_rect),
-        ..RawInput::default()
-    };
-    let viewport = input.viewports.entry(ViewportId::ROOT).or_default();
-    viewport.inner_rect = Some(inner_rect);
-    viewport.outer_rect =
-        position.map(|position| Rect::from_min_size(Pos2::new(position[0], position[1]), egui::vec2(size[0], size[1])));
-    input
 }
 
 fn raw_input_without_native_rect(size: [f32; 2]) -> RawInput {

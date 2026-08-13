@@ -202,6 +202,24 @@ fn align_workspaces_horizontally_rejects_non_finite_geometry_without_mutation() 
 }
 
 #[test]
+fn align_workspaces_horizontally_rejects_non_positive_panel_sizes_without_mutation() {
+    for invalid_size in [0.0, -320.0] {
+        let mut board = Board::new();
+        let first_workspace = board.create_workspace_at("first", [100.0, 200.0]);
+        let invalid_workspace = board.create_workspace_at("invalid", [500.0, 300.0]);
+        board
+            .create_panel(editor_panel_options(), first_workspace)
+            .expect("first panel should spawn");
+        let invalid_panel = board
+            .create_panel(editor_panel_options(), invalid_workspace)
+            .expect("invalid panel should spawn");
+        board.panel_mut(invalid_panel).expect("invalid panel").layout.size[0] = invalid_size;
+
+        assert_alignment_is_rejected_atomically(board, [first_workspace, invalid_workspace]);
+    }
+}
+
+#[test]
 fn align_workspaces_horizontally_rejects_translation_overflow_without_mutation() {
     let mut workspace_overflow = Board::new();
     let first_workspace = workspace_overflow.create_workspace_at("first", [-2.0e38, 0.0]);

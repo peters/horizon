@@ -311,7 +311,7 @@ features:
   organize_workspaces_on_session_load: true
 ```
 
-`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as `Ctrl+Shift+A` whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. Changing the setting in the live editor takes effect when a session is next loaded.
+`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as `Ctrl+Shift+A` whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles, preventing an interaction from being overwritten by the one-shot layout. The default-disabled path does not show this modal overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
 

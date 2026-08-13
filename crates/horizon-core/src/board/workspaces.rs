@@ -383,18 +383,22 @@ impl Board {
             return false;
         };
 
+        let mut positions_changed = false;
         if let Some(workspace) = self.workspace_mut(id) {
-            workspace.position[0] += delta[0];
-            workspace.position[1] += delta[1];
+            let translated = [workspace.position[0] + delta[0], workspace.position[1] + delta[1]];
+            positions_changed |= translated.map(f32::to_bits) != workspace.position.map(f32::to_bits);
+            workspace.position = translated;
         }
 
         for panel_id in panel_ids {
             if let Some(panel) = self.panel_mut(panel_id) {
-                panel.move_to([panel.layout.position[0] + delta[0], panel.layout.position[1] + delta[1]]);
+                let translated = [panel.layout.position[0] + delta[0], panel.layout.position[1] + delta[1]];
+                positions_changed |= translated.map(f32::to_bits) != panel.layout.position.map(f32::to_bits);
+                panel.move_to(translated);
             }
         }
 
-        true
+        positions_changed
     }
 
     /// Translate a workspace and push any colliding workspaces further along

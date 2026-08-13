@@ -22,12 +22,16 @@ impl HorizonApp {
         const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
         if let Some(since) = self.runtime_dirty_since
             && since.elapsed() >= SAVE_DEBOUNCE
-            && self.auto_save_runtime_state()
         {
-            self.runtime_dirty_since = None;
+            if self.auto_save_runtime_state() {
+                self.runtime_dirty_since = None;
+            } else {
+                self.runtime_dirty_since = Some(Instant::now());
+            }
         }
     }
 
+    #[must_use]
     pub(super) fn auto_save_runtime_state(&self) -> bool {
         let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
             return true;

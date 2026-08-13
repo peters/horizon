@@ -80,6 +80,33 @@ fn translating_workspace_moves_workspace_origin_and_panels() {
 }
 
 #[test]
+fn translating_workspace_reports_when_delta_is_below_coordinate_precision() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace_at("far away", [1.0e30, 1.0e30]);
+    let panel_id = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("panel should spawn");
+    board.panel_mut(panel_id).expect("panel").layout.position = [1.0e30, 1.0e30];
+    let workspace_before = board.workspace(workspace_id).expect("workspace").position;
+    let panel_before = board.panel(panel_id).expect("panel").layout.position;
+
+    assert!(!board.translate_workspace(workspace_id, [1.0e10, 0.0]));
+
+    assert_eq!(
+        board
+            .workspace(workspace_id)
+            .expect("workspace")
+            .position
+            .map(f32::to_bits),
+        workspace_before.map(f32::to_bits)
+    );
+    assert_eq!(
+        board.panel(panel_id).expect("panel").layout.position.map(f32::to_bits),
+        panel_before.map(f32::to_bits)
+    );
+}
+
+#[test]
 fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
     let mut board = Board::new();
     let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
