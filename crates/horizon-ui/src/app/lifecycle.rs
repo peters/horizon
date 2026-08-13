@@ -9,7 +9,9 @@ use crate::{loading_spinner, theme};
 
 use super::canvas::CanvasGridCache;
 use super::speech::SpeechEvent;
-use super::{HorizonApp, WS_BG_PAD, WS_TITLE_HEIGHT, attention_feed};
+use super::{HorizonApp, attention_feed};
+
+mod startup_workspace;
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -183,7 +185,7 @@ impl HorizonApp {
             return;
         }
 
-        self.auto_save_runtime_state();
+        let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
         self.shutdown_progress = Some(self.board.begin_async_shutdown());
     }
@@ -233,7 +235,7 @@ impl HorizonApp {
         }
 
         self.exit_cleanup_complete = true;
-        self.auto_save_runtime_state();
+        let _ = self.auto_save_runtime_state();
         self.board.shutdown_terminal_panels();
         self.git_watchers.clear();
         self.release_active_session_lease();
@@ -254,27 +256,11 @@ impl HorizonApp {
             return false;
         }
 
-        if self.startup_chooser.is_none() && !self.initial_pan_done {
-            self.seed_initial_pan(ctx);
+        if self.startup_chooser.is_none() && !self.initial_pan_done && !self.startup_workspace_organization_pending {
+            self.seed_initial_pan(ctx, None, false);
         }
 
         true
-    }
-
-    #[profiling::function]
-    fn seed_initial_pan(&mut self, ctx: &Context) {
-        self.initial_pan_done = true;
-        if let Some(workspace_id) = self.leftmost_workspace_id() {
-            self.board.focus_workspace(workspace_id);
-            if let Some((min, _max)) = self.board.workspace_bounds(workspace_id) {
-                let canvas_rect = self.canvas_rect(ctx);
-                self.canvas_view.align_canvas_point_to_screen(
-                    [canvas_rect.min.x, canvas_rect.min.y],
-                    [min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT],
-                    [canvas_rect.min.x + 40.0, canvas_rect.center().y],
-                );
-            }
-        }
     }
 
     #[profiling::function]
@@ -833,7 +819,7 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_active_view(&mut self, ctx: &Context) {
+    pub(super) fn render_active_view(&mut self, ctx: &Context, root_interaction_suppressed: bool) {
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ctx);
             // Detached windows are immediate viewports: egui closes any child
@@ -850,7 +836,9 @@ impl HorizonApp {
         }
 
         let workspace_bounds = self.board.workspace_bounds_map();
-        self.handle_canvas_pan(ctx);
+        if !root_interaction_suppressed {
+            self.handle_canvas_pan(ctx);
+        }
         self.render_toolbar(ctx);
         self.render_sidebar(ctx);
         self.render_canvas(ctx);
@@ -898,8 +886,10 @@ impl HorizonApp {
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 
-        if self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before {
-            self.auto_save_runtime_state();
+        if (self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before)
+            && !self.auto_save_runtime_state()
+        {
+            self.mark_runtime_dirty();
         }
         self.flush_runtime_if_dirty();
 
@@ -941,6 +931,10 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
+#[path = "lifecycle/startup_organization_tests.rs"]
+mod startup_organization_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
@@ -949,34 +943,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use egui::Context;
-    use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision};
-    use tempfile::TempDir;
+    use horizon_core::PanelId;
 
-    use super::{
-        HoldHotkeyTransition, HorizonApp, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
-    };
+    use super::{HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition};
     use crate::app::HeldSpeechBinding;
-    use crate::input;
-
-    fn test_app() -> (TempDir, HorizonApp) {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let config_path = temp.path().join("config.yaml");
-        let home = HorizonHome::from_root(temp.path().join(".horizon"));
-        let session_store = SessionStore::new(home, config_path.clone());
-        let config = Config::default();
-        let ctx = Context::default();
-        let app = HorizonApp::new_with_egui_context(
-            &ctx,
-            &config,
-            config_path,
-            session_store,
-            StartupDecision::Ephemeral {
-                runtime_state: Box::new(RuntimeState::default()),
-            },
-            input::ObservedKeyboardInputs::default(),
-        );
-        (temp, app)
-    }
+    use crate::app::test_support::test_app;
 
     #[test]
     fn finalize_frame_requests_repaint_when_theme_application_is_deferred() {
@@ -1002,6 +973,9 @@ mod tests {
         let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
         app.speech = Some(speech);
         app.theme_applied = true;
+        // Viewport settling has its own wall-clock tests. Keep this test scoped
+        // to the speech preload deadline instead of coupling it to that timer.
+        app.root_viewport_stabilizer = None;
         assert!(app.board.panels.is_empty());
 
         let mut frame = eframe::Frame::_new_kittest();

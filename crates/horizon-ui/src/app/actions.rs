@@ -9,10 +9,10 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use horizon_core::{PanelOptions, PresetConfig, WorkspaceId};
+use horizon_core::{PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
 
 use self::support::detached_workspace_ids;
-use super::DetachedWorkspaceViewportState;
+use super::{DetachedWorkspaceViewportState, HorizonApp};
 
 fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Option<PathBuf> {
     board
@@ -73,10 +73,10 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
-fn align_attached_workspaces(
+pub(super) fn align_attached_workspaces(
     board: &mut horizon_core::Board,
     detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
-) -> Option<WorkspaceId> {
+) -> Option<WorkspaceAlignment> {
     let detached_workspace_ids = detached_workspace_ids(board, detached_workspaces);
     let workspace_ids: Vec<_> = board
         .workspaces
@@ -85,6 +85,21 @@ fn align_attached_workspaces(
         .map(|workspace| workspace.id)
         .collect();
     board.align_workspaces_horizontally(&workspace_ids)
+}
+
+impl HorizonApp {
+    pub(in crate::app) fn align_attached_workspaces_horizontally(&mut self, ctx: &egui::Context) {
+        let Some(alignment) = align_attached_workspaces(&mut self.board, &self.detached_workspaces) else {
+            return;
+        };
+
+        if let Some((min, max)) = self.board.workspace_bounds(alignment.leftmost_workspace) {
+            self.focus_workspace_bounds(ctx, min, max, true);
+        }
+        if alignment.positions_changed {
+            self.mark_runtime_dirty();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -405,9 +420,10 @@ mod tests {
             DetachedWorkspaceViewportState::new(WindowConfig::default()),
         )]);
 
-        let leftmost = align_attached_workspaces(&mut board, &detached_workspaces);
+        let alignment = align_attached_workspaces(&mut board, &detached_workspaces).expect("attached workspaces");
 
-        assert_eq!(leftmost, Some(left));
+        assert_eq!(alignment.leftmost_workspace, left);
+        assert!(alignment.positions_changed);
         assert!(board.workspace(detached).is_some_and(|workspace| {
             workspace
                 .position

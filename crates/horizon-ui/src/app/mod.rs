@@ -12,6 +12,7 @@ mod panels;
 mod persistence;
 mod remote_hosts;
 mod root_chrome;
+mod root_viewport;
 mod session;
 mod session_manager;
 mod settings;
@@ -21,6 +22,8 @@ mod sidebar;
 pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
+#[cfg(test)]
+mod test_support;
 mod updates;
 pub(crate) mod util;
 mod view;
@@ -261,7 +264,10 @@ pub struct HorizonApp {
     search_overlay: Option<SearchOverlay>,
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,
+    startup_workspace_organization_pending: bool,
+    startup_selection_restored: bool,
     initial_pan_done: bool,
+    root_viewport_stabilizer: Option<root_viewport::RootViewportStabilizer>,
     file_hover_positions: HashMap<ViewportId, Pos2>,
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
@@ -438,7 +444,10 @@ impl HorizonApp {
             search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
+            startup_workspace_organization_pending: false,
+            startup_selection_restored: false,
             initial_pan_done: false,
+            root_viewport_stabilizer: None,
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
             ssh_upload_flow: None,
@@ -560,12 +569,31 @@ impl eframe::App for HorizonApp {
             return;
         }
 
+        let block_root_interaction = self.root_viewport_stabilization_blocks_interaction();
+        let root_viewport_is_stable = self.poll_root_viewport_stabilizer(ctx);
+        if block_root_interaction {
+            self.suppress_root_viewport_interaction(ctx);
+        }
+
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
         let had_terminal_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
-        self.render_active_view(ctx);
+        // The restored board must be normalized and include queued changes
+        // before its one-shot layout and initial viewport are finalized.
+        if root_viewport_is_stable {
+            let organization_was_requested = self.startup_workspace_organization_pending;
+            let aligned_leftmost_workspace = self.apply_startup_workspace_organization(ctx);
+            if !self.initial_pan_done {
+                let preserve_restored_selection = organization_was_requested && self.startup_selection_restored;
+                self.seed_initial_pan(ctx, aligned_leftmost_workspace, preserve_restored_selection);
+            }
+        }
+        self.render_active_view(ctx, block_root_interaction);
+        if block_root_interaction {
+            Self::render_root_viewport_stabilizing_overlay(ctx);
+        }
         self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
     }

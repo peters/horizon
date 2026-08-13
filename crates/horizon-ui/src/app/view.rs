@@ -87,13 +87,84 @@ impl HorizonApp {
         left_align: bool,
     ) {
         let canvas_rect = self.canvas_rect(ctx);
-        self.pan_target = Some(aligned_pan_offset(
-            canvas_rect,
-            canvas_pos,
-            canvas_size,
-            self.canvas_view.zoom,
-            left_align,
-        ));
+        let target = aligned_pan_offset(canvas_rect, canvas_pos, canvas_size, self.canvas_view.zoom, left_align);
+        let current = Vec2::new(self.canvas_view.pan_offset[0], self.canvas_view.pan_offset[1]);
+        self.pan_target = ((target - current).length_sq() >= 1.0).then_some(target);
+    }
+
+    pub(super) fn align_initial_view_to_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
+        if self.workspace_is_detached(workspace_id) {
+            return false;
+        }
+
+        let Some((pos, _size)) = self.workspace_focus_frame(workspace_id) else {
+            return false;
+        };
+        let canvas_rect = self.canvas_rect(ctx);
+        self.canvas_view.align_canvas_point_to_screen(
+            [canvas_rect.min.x, canvas_rect.min.y],
+            [pos.x, pos.y],
+            [canvas_rect.min.x + 40.0, canvas_rect.center().y],
+        );
+        self.pan_target = None;
+        true
+    }
+
+    pub(super) fn startup_workspace_view_anchor(&self, ctx: &Context) -> Option<(WorkspaceId, Pos2)> {
+        let preferred_workspace = self
+            .board
+            .focused
+            .and_then(|panel_id| self.board.panel_workspace_id(panel_id))
+            .or(self.board.active_workspace);
+        preferred_workspace
+            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
+            .and_then(|workspace_id| {
+                self.visible_workspace_screen_center(ctx, workspace_id)
+                    .map(|screen_center| (workspace_id, screen_center))
+            })
+            .or_else(|| {
+                self.board
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| !self.workspace_is_detached(workspace.id))
+                    .find_map(|workspace| {
+                        self.visible_workspace_screen_center(ctx, workspace.id)
+                            .map(|screen_center| (workspace.id, screen_center))
+                    })
+            })
+    }
+
+    pub(super) fn restore_startup_workspace_view_anchor(
+        &mut self,
+        ctx: &Context,
+        workspace_id: WorkspaceId,
+        screen_anchor: Pos2,
+    ) {
+        if self.visible_workspace_screen_center(ctx, workspace_id).is_some() {
+            return;
+        }
+
+        let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
+            return;
+        };
+        let current_center = self.canvas_to_screen(self.canvas_rect(ctx), pos + size * 0.5);
+        let delta = screen_anchor - current_center;
+        self.canvas_view.set_pan_offset([
+            self.canvas_view.pan_offset[0] + delta.x,
+            self.canvas_view.pan_offset[1] + delta.y,
+        ]);
+        self.pan_target = None;
+    }
+
+    fn visible_workspace_screen_center(&self, ctx: &Context, workspace_id: WorkspaceId) -> Option<Pos2> {
+        let (pos, size) = self.workspace_focus_frame(workspace_id)?;
+        let canvas_rect = self.canvas_rect(ctx);
+        let screen_min = self.canvas_to_screen(canvas_rect, pos);
+        let screen_size = self.canvas_size_to_screen(size);
+        let screen_rect = Rect::from_min_size(screen_min, screen_size);
+        canvas_rect
+            .contains(screen_rect.center())
+            .then_some(screen_rect.center())
     }
 
     pub(super) fn canvas_to_screen(&self, canvas_rect: Rect, position: Pos2) -> Pos2 {

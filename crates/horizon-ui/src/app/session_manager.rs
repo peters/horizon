@@ -109,6 +109,9 @@ impl SessionManagerViewState {
 
 impl HorizonApp {
     pub(super) fn toggle_session_manager(&mut self) {
+        if self.root_viewport_stabilization_blocks_interaction() {
+            return;
+        }
         if self.session_manager.is_some() {
             self.session_manager = None;
             return;
@@ -200,6 +203,10 @@ impl HorizonApp {
     }
 
     fn activate_runtime_session(&mut self, ctx: &Context, session: &ResolvedSession) {
+        if self.root_viewport_stabilization_blocks_interaction() {
+            tracing::debug!("session switch ignored while the root viewport is stabilizing");
+            return;
+        }
         self.prepare_session_switch();
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
@@ -207,7 +214,7 @@ impl HorizonApp {
     }
 
     fn prepare_session_switch(&mut self) {
-        self.auto_save_runtime_state();
+        let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,
         // and no microphone may survive the teardown. Rebuilding drops the
@@ -629,3 +636,6 @@ enum SessionCardAction {
     CancelRemove,
     ConfirmRemove(String),
 }
+
+#[cfg(test)]
+mod tests;

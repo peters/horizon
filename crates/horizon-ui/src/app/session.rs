@@ -193,6 +193,9 @@ impl HorizonApp {
         self.canvas_view = runtime_state.canvas_view_or_default();
         self.pan_target = None;
         self.initial_pan_done = runtime_state.has_persisted_canvas_view();
+        self.startup_workspace_organization_pending = self.template_config.features.organize_workspaces_on_session_load;
+        self.startup_selection_restored = false;
+        self.arm_root_viewport_stabilizer(false, [self.window_config.width, self.window_config.height]);
         self.runtime_dirty_since = None;
         self.git_watchers.clear();
         let needs_bootstrap = Self::runtime_state_needs_session_bootstrap(runtime_state);
@@ -432,6 +435,7 @@ impl HorizonApp {
                 Board::new()
             });
         self.board.attention_enabled = self.template_config.features.attention_feed;
+        self.startup_selection_restored = runtime_state_selection_was_restored(&self.board, runtime_state);
     }
 
     pub(super) fn refresh_active_session_lease(&mut self) {
@@ -637,6 +641,24 @@ impl HorizonApp {
         self.queue_panel_restart(panel_id);
         true
     }
+}
+
+fn runtime_state_selection_was_restored(board: &Board, runtime_state: &horizon_core::RuntimeState) -> bool {
+    runtime_state
+        .active_workspace_local_id
+        .as_ref()
+        .is_some_and(|local_id| {
+            board
+                .active_workspace
+                .and_then(|workspace_id| board.workspace(workspace_id))
+                .is_some_and(|workspace| workspace.local_id == *local_id)
+        })
+        || runtime_state.focused_panel_local_id.as_ref().is_some_and(|local_id| {
+            board
+                .focused
+                .and_then(|panel_id| board.panel(panel_id))
+                .is_some_and(|panel| panel.local_id == *local_id)
+        })
 }
 
 #[cfg(test)]

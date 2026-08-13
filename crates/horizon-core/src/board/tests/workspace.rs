@@ -80,6 +80,33 @@ fn translating_workspace_moves_workspace_origin_and_panels() {
 }
 
 #[test]
+fn translating_workspace_reports_when_delta_is_below_coordinate_precision() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace_at("far away", [1.0e30, 1.0e30]);
+    let panel_id = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("panel should spawn");
+    board.panel_mut(panel_id).expect("panel").layout.position = [1.0e30, 1.0e30];
+    let workspace_before = board.workspace(workspace_id).expect("workspace").position;
+    let panel_before = board.panel(panel_id).expect("panel").layout.position;
+
+    assert!(!board.translate_workspace(workspace_id, [1.0e10, 0.0]));
+
+    assert_eq!(
+        board
+            .workspace(workspace_id)
+            .expect("workspace")
+            .position
+            .map(f32::to_bits),
+        workspace_before.map(f32::to_bits)
+    );
+    assert_eq!(
+        board.panel(panel_id).expect("panel").layout.position.map(f32::to_bits),
+        panel_before.map(f32::to_bits)
+    );
+}
+
+#[test]
 fn translate_workspace_with_push_in_scope_ignores_out_of_scope_workspaces() {
     let mut board = Board::new();
     let alpha = board.create_workspace_at("alpha", [0.0, 40.0]);
@@ -235,56 +262,6 @@ fn close_panels_in_workspace_keeps_workspace_available() {
         Some(WorkspaceLayout::Rows)
     );
     assert!(board.workspace(workspace_id).expect("workspace").panels.is_empty());
-}
-
-#[test]
-fn align_workspaces_horizontally_arranges_in_row() {
-    let mut board = Board::new();
-    let first_workspace = board.create_workspace("first");
-    let second_workspace = board.create_workspace("second");
-    let third_workspace = board.create_workspace("third");
-
-    board.move_workspace(first_workspace, [100.0, 200.0]);
-    board.move_workspace(second_workspace, [500.0, 50.0]);
-    board.move_workspace(third_workspace, [300.0, 400.0]);
-
-    board.align_workspaces_horizontally(&[first_workspace, second_workspace, third_workspace]);
-
-    let first_position = board.workspace(first_workspace).expect("first").position;
-    let third_position = board.workspace(third_workspace).expect("third").position;
-    let second_position = board.workspace(second_workspace).expect("second").position;
-
-    assert!((first_position[1] - third_position[1]).abs() <= f32::EPSILON);
-    assert!((third_position[1] - second_position[1]).abs() <= f32::EPSILON);
-    assert!(third_position[0] > first_position[0], "third should be right of first");
-    assert!(
-        second_position[0] > third_position[0],
-        "second should be right of third"
-    );
-}
-
-#[test]
-fn align_workspaces_horizontally_only_moves_selected_workspaces() {
-    let mut board = Board::new();
-    let first_workspace = board.create_workspace("first");
-    let second_workspace = board.create_workspace("second");
-    let third_workspace = board.create_workspace("third");
-
-    board.move_workspace(first_workspace, [100.0, 200.0]);
-    board.move_workspace(second_workspace, [500.0, 50.0]);
-    board.move_workspace(third_workspace, [20.0, 20.0]);
-
-    let original_third_position = board.workspace(third_workspace).expect("third").position;
-    let leftmost = board
-        .align_workspaces_horizontally(&[first_workspace, second_workspace])
-        .expect("aligned workspace");
-
-    assert_eq!(leftmost, first_workspace);
-    let current_third_position = board.workspace(third_workspace).expect("third").position;
-    assert!(
-        vec2_eq(current_third_position, original_third_position),
-        "expected detached workspace position {original_third_position:?}, got {current_third_position:?}"
-    );
 }
 
 #[test]
