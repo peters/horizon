@@ -256,6 +256,10 @@ impl HorizonApp {
             return false;
         }
 
+        if self.startup_chooser.is_none() && !self.initial_pan_done && !self.startup_workspace_organization_pending {
+            self.seed_initial_pan(ctx, None, false);
+        }
+
         true
     }
 

@@ -119,6 +119,33 @@ fn viewport_stabilization_is_non_modal_when_organization_is_disabled() {
 }
 
 #[test]
+fn disabled_organization_seeds_initial_view_before_accepting_root_input() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &Config::default(),
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(two_workspace_runtime(None)),
+        },
+    );
+    app.theme_applied = true;
+    let mut input = raw_input_without_native_rect([1400.0, 900.0]);
+    input
+        .events
+        .push(egui::Event::PointerMoved(egui::Pos2::new(400.0, 300.0)));
+    input.events.push(egui::Event::Zoom(1.25));
+
+    let _ = run_app_frame_with_input(&ctx, &mut app, input);
+
+    assert!(app.initial_pan_done);
+    assert!(app.root_viewport_stabilizer.is_some());
+    assert!((app.canvas_view.zoom - 1.25).abs() <= f32::EPSILON);
+    let accepted_view = app.canvas_view;
+
+    app.root_viewport_stabilizer = None;
+    let _ = run_app_frame_with_input(&ctx, &mut app, raw_input_without_native_rect([1400.0, 900.0]));
+    assert_eq!(app.canvas_view, accepted_view);
+}
+
+#[test]
 fn viewport_stabilization_suppresses_raw_root_interaction() {
     let (_temp, ctx, mut app) = enabled_test_app(two_workspace_runtime(None));
     let mut input = raw_input_without_native_rect([1400.0, 900.0]);
