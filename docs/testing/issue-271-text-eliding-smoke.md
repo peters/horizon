@@ -91,8 +91,8 @@ during the same board update. The fixture below instead exercises Horizon's
 real failed-restore path. Its panel name starts after the 19-byte
 `Failed to restore '` prefix, so nine ASCII characters place `å` across the old
 `summary[..29]` byte boundary. A second failed restore starts with wide CJK
-glyphs to verify the badge's 110 px slot cap independently of the character
-budget.
+glyphs to verify measured badge width and the compact narrow-panel fallback
+independently of the character budget.
 
 Create the fixture directories:
 
@@ -243,9 +243,12 @@ open "$HORIZON_SMOKE_ROOT"
 ## Stable tooltip lanes
 
 For every lane, keep the pointer stationary for at least five seconds while
-Horizon redraws. Except for the deliberately multiline Update lane below,
-confirm a single-line tooltip stays within the viewport, uses `…` when needed,
-never narrows frame over frame, and never opens a nested native tooltip.
+Horizon redraws. For the Empty preset, detached-window, and minimap lanes,
+confirm the single-line tooltip stays within the viewport, uses `…` when
+needed, never narrows frame over frame, and never opens a nested native
+tooltip. For the FPS, microphone, invalid-shortcut, and Update lanes, confirm
+the bounded tooltip wraps at words, preserves every diagnostic line, and stays
+the same width frame over frame.
 
 - Toolbar FPS meter, including its idle state.
 - Panel microphone: in the speech-enabled seeded process, hover the mic on the

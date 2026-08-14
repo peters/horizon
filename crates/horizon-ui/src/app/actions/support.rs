@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Button, Color32, FontId, Ui};
+use egui::{Button, Color32, FontId, Ui, WidgetText};
 use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
@@ -108,7 +108,7 @@ fn preset_category(preset: &PresetConfig) -> PresetCategory {
     }
 }
 
-fn preset_button_label(preset: &PresetConfig, max_width: f32) -> LayoutJob {
+fn preset_button_layout_job(preset: &PresetConfig, max_width: f32) -> LayoutJob {
     let mut job = single_line_job(max_width);
     append_single_line_text(
         &mut job,
@@ -135,6 +135,10 @@ fn preset_button_label(preset: &PresetConfig, max_width: f32) -> LayoutJob {
     job
 }
 
+fn preset_button_label(ui: &Ui, preset: &PresetConfig, max_width: f32) -> WidgetText {
+    WidgetText::Galley(ui.painter().layout_job(preset_button_layout_job(preset, max_width)))
+}
+
 fn render_preset_picker_row(
     ui: &mut Ui,
     target_workspace: Option<WorkspaceId>,
@@ -157,7 +161,7 @@ fn render_panel_preset_picker_row(
     ui.horizontal(|ui| {
         let label_width = (ui.available_width() - 44.0).max(0.0);
         if ui
-            .add(Button::new(preset_button_label(preset, label_width)).frame(false))
+            .add(Button::new(preset_button_label(ui, preset, label_width)).frame(false))
             .clicked()
         {
             selected_action = Some(PresetPickerAction::CreatePanel {
@@ -185,7 +189,7 @@ fn render_workspace_preset_picker_row(
     preset: &PresetConfig,
 ) -> Option<PresetPickerAction> {
     if !ui
-        .add(Button::new(preset_button_label(preset, ui.available_width())).frame(false))
+        .add(Button::new(preset_button_label(ui, preset, ui.available_width())).frame(false))
         .clicked()
     {
         return None;
@@ -312,7 +316,9 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
 mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
-    use super::{PresetCategory, command_palette_preset_entries, preset_button_label, preset_category};
+    use super::{
+        PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job, preset_category,
+    };
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
         PresetConfig {
@@ -354,12 +360,36 @@ mod tests {
         preset.name = "deploy\nstaging with a deliberately long name".to_string();
         preset.alias = Some("alias\u{000B}next".to_string());
 
-        let job = preset_button_label(&preset, 80.0);
+        let job = preset_button_layout_job(&preset, 80.0);
 
         assert_eq!(job.text, "deploy staging with a deliberately long name  alias next");
         assert!(!job.break_on_newline);
         assert_eq!(job.wrap.max_rows, 1);
         assert_eq!(job.wrap.overflow_character, Some('…'));
         assert!((job.wrap.max_width - 80.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn preset_button_widget_reuses_the_bounded_galley() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "deploy staging with a deliberately long name".to_string();
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut measured = None;
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let egui::WidgetText::Galley(galley) = preset_button_label(ui, &preset, 80.0) else {
+                    panic!("preset label did not retain its precomputed galley");
+                };
+                measured = Some((galley.size().x, galley.elided));
+            });
+        });
+
+        let Some((width, elided)) = measured else {
+            panic!("preset galley was not measured");
+        };
+        assert!(width <= 80.0);
+        assert!(elided);
     }
 }

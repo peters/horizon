@@ -167,7 +167,7 @@ fn flatten_layout_job_newlines(job: &mut LayoutJob) {
         .sections
         .first()
         .is_some_and(|section| section.byte_range == (0..original.len()));
-    if job.sections.is_empty() || single_section_covers_all_text {
+    if job.sections.is_empty() || (job.sections.len() == 1 && single_section_covers_all_text) {
         push_flattened_newlines(&mut job.text, &original);
         if let Some(section) = job.sections.first_mut() {
             section.byte_range = 0..job.text.len();
@@ -431,6 +431,19 @@ mod tests {
         assert!(!job.break_on_newline);
         assert_eq!(job.wrap.max_rows, 1);
         assert_eq!(job.wrap.overflow_character, Some('…'));
+    }
+
+    #[test]
+    fn tooltip_constraints_remap_sections_after_a_full_text_section() {
+        let mut job = LayoutJob::default();
+        job.append("first\r\nsecond", 0.0, TextFormat::default());
+        job.append("", 0.0, TextFormat::default());
+
+        apply_single_line_constraints(&mut job, 96.0);
+
+        assert_eq!(job.text, "first second");
+        assert_eq!(job.sections[0].byte_range, 0..job.text.len());
+        assert_eq!(job.sections[1].byte_range, job.text.len()..job.text.len());
     }
 
     #[test]

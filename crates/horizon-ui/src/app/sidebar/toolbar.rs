@@ -8,7 +8,7 @@ use crate::app::root_chrome::{
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
-use crate::text::{stable_hover_text, stable_wrapped_hover_text_lazy};
+use crate::text::{stable_hover_text_lazy, stable_wrapped_hover_text_lazy};
 use crate::{branding, theme};
 
 impl HorizonApp {
@@ -158,24 +158,22 @@ impl HorizonApp {
                     util::chrome_button(action.label())
                         .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
                 );
-                stable_hover_text(
-                    response,
+                stable_hover_text_lazy(response, || {
                     self.shortcuts
                         .command_palette
-                        .display_label(util::primary_shortcut_label()),
-                )
+                        .display_label(util::primary_shortcut_label())
+                })
             }
             ToolbarAction::RemoteHosts => {
                 let response = ui.add(
                     util::chrome_button(action.label())
                         .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
                 );
-                stable_hover_text(
-                    response,
+                stable_hover_text_lazy(response, || {
                     self.shortcuts
                         .open_remote_hosts
-                        .display_label(util::primary_shortcut_label()),
-                )
+                        .display_label(util::primary_shortcut_label())
+                })
             }
             ToolbarAction::Update => {
                 let response = ui.add(

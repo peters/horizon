@@ -1,11 +1,11 @@
-use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::truncate_chars;
-
 use crate::badge::paint_badge_background;
 use crate::text::{painter_text_galley, single_line_label_job};
 use crate::theme;
+use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
+
+const MAX_SEARCH_DETAIL_SHAPING_SCALARS: usize = 512;
 
 pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: bool, hovered: bool, has_query: bool) {
     let painter = ui.painter();
@@ -136,12 +136,20 @@ pub(super) fn paint_empty_results(ui: &mut egui::Ui, message: &str) {
 
 pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) {
     let rect = ui.allocate_space(Vec2::new(width, SECTION_HEADER_HEIGHT)).1;
-    ui.painter_at(rect).text(
-        Pos2::new(rect.min.x + 4.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
+    let painter = ui.painter_at(rect);
+    let text_x = rect.min.x + 4.0;
+    let galley = painter_text_galley(
+        &painter,
         title,
-        BADGE_FONT,
+        &BADGE_FONT,
         theme::FG_DIM(),
+        (rect.max.x - text_x - 4.0).max(0.0),
+    );
+    let text_rect = Rect::from_min_max(Pos2::new(text_x, rect.min.y), Pos2::new(rect.max.x - 4.0, rect.max.y));
+    painter.with_clip_rect(text_rect).galley(
+        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        Color32::TRANSPARENT,
     );
 }
 
@@ -219,7 +227,7 @@ pub(super) fn render_match_row(
 
     if detail_x < max_detail_x {
         let available = max_detail_x - detail_x;
-        let detail_galley = painter.layout_job(search_detail_layout_job(data.line_text, available));
+        let detail_galley = painter.layout_job(search_detail_layout_job(&painter, data.line_text, available));
         let detail_rect = Rect::from_min_max(
             Pos2::new(detail_x, row_rect.min.y),
             Pos2::new(max_detail_x, row_rect.max.y),
@@ -316,29 +324,40 @@ fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
     );
 }
 
-fn search_detail_layout_job(text: &str, max_width: f32) -> egui::text::LayoutJob {
+fn search_detail_layout_job(painter: &Painter, text: &str, max_width: f32) -> egui::text::LayoutJob {
     let trimmed = text.trim();
-    let display_text = truncate_chars(trimmed, detail_character_budget(max_width));
-    single_line_label_job(&display_text, &DETAIL_FONT, theme::FG_DIM(), max_width)
+    let display_text = precut_search_detail(painter, trimmed, max_width);
+    single_line_label_job(display_text, &DETAIL_FONT, theme::FG_DIM(), max_width)
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "finite non-negative pixel width is deliberately converted to a conservative character pre-cut budget"
-)]
-fn detail_character_budget(max_width: f32) -> usize {
+fn precut_search_detail<'a>(painter: &Painter, text: &'a str, max_width: f32) -> &'a str {
     if !max_width.is_finite() {
-        return usize::MAX;
+        return text;
     }
-    ((max_width.max(0.0) / DETAIL_FONT.size * 4.0).ceil() as usize).max(1)
+
+    let shaping_width_budget = max_width.max(0.0) * 4.0;
+    let cut_at = painter.fonts_mut(|fonts| {
+        let mut measured_width = 0.0;
+        for (scalar_index, (byte_index, character)) in text.char_indices().enumerate() {
+            if scalar_index == MAX_SEARCH_DETAIL_SHAPING_SCALARS {
+                return byte_index;
+            }
+            let glyph_width = fonts.glyph_width(&DETAIL_FONT, character).max(0.0);
+            if glyph_width > 0.0 && measured_width + glyph_width > shaping_width_budget {
+                return byte_index;
+            }
+            measured_width += glyph_width;
+        }
+        text.len()
+    });
+    &text[..cut_at]
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
-    use super::{detail_character_budget, search_detail_layout_job};
+    use super::search_detail_layout_job;
 
     #[test]
     fn detail_layout_uses_real_glyph_width_and_single_line_elision() {
@@ -349,9 +368,11 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let galley = ui
-                    .painter()
-                    .layout_job(search_detail_layout_job("wide 二二二二二二二二二二", 40.0));
+                let galley = ui.painter().layout_job(search_detail_layout_job(
+                    ui.painter(),
+                    "wide 二二二二二二二二二二",
+                    40.0,
+                ));
                 width.set(galley.size().x);
                 elided.set(galley.elided);
             });
@@ -359,15 +380,44 @@ mod tests {
 
         assert!(width.get() <= 40.0, "detail exceeded pixel budget: {}", width.get());
         assert!(elided.get());
-        assert_eq!(search_detail_layout_job(" first\r\nsecond ", 40.0).text, "first second");
+        let text = RefCell::new(String::new());
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *text.borrow_mut() = search_detail_layout_job(ui.painter(), " first\r\nsecond ", 40.0).text;
+            });
+        });
+        assert_eq!(*text.borrow(), "first second");
     }
 
     #[test]
     fn detail_layout_precuts_pathological_rows_before_glyph_shaping() {
         let source = "二".repeat(4_000);
-        let job = search_detail_layout_job(&source, 80.0);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let text = RefCell::new(String::new());
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+            });
+        });
 
-        assert!(job.text.chars().count() <= detail_character_budget(80.0));
-        assert!(job.text.ends_with('…'));
+        assert!(text.borrow().chars().count() < source.chars().count());
+        assert!(!text.borrow().ends_with('…'));
+    }
+
+    #[test]
+    fn detail_precut_does_not_charge_zero_width_scalars_against_visible_content() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let job_text = RefCell::new(String::new());
+        let source = format!("error{}: cannot open /etc/hosts", "\u{200B}".repeat(40));
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+            });
+        });
+
+        assert!(job_text.borrow().contains(": cannot"));
     }
 }
