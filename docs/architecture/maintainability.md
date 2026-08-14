@@ -43,7 +43,8 @@ back into large multi-purpose modules.
     dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
-  - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
+  - `panel_chrome`: panel titlebar orchestration, controls, and rename UI, with
+    history, attention, and SSH badge layout/painting in `panel_chrome/badges.rs`
   - `panels`: panel-area orchestration and body rendering
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, and row/header paint helpers split into `remote_hosts_overlay/`

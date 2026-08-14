@@ -350,9 +350,64 @@ fn label_text_color(is_active: bool) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use egui::{Pos2, Rect, Vec2};
 
-    use super::{VERT_PAD, resolve_label_rect, vertical_label_badge_rect};
+    use super::{
+        MinimapWorkspaceLabel, VERT_PAD, glyph_count, horizontal_label_layout, resolve_label_rect,
+        vertical_label_badge_rect, vertical_label_layout,
+    };
+
+    #[test]
+    fn newline_workspace_label_has_the_same_layout_as_normalized_text() {
+        let ctx = egui::Context::default();
+        let exercised = Cell::new(false);
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let workspace_rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(180.0, 120.0));
+                let title_strip_rect = Some(Rect::from_min_size(workspace_rect.min, Vec2::new(180.0, 18.0)));
+                let newline = MinimapWorkspaceLabel {
+                    name: "build\nserver",
+                    color: egui::Color32::WHITE,
+                    is_active: true,
+                    workspace_rect,
+                    title_strip_rect,
+                };
+                let normalized = MinimapWorkspaceLabel {
+                    name: "build server",
+                    color: egui::Color32::WHITE,
+                    is_active: true,
+                    workspace_rect,
+                    title_strip_rect,
+                };
+
+                let newline_horizontal = horizontal_label_layout(ui.painter(), &newline).expect("horizontal label");
+                let normalized_horizontal =
+                    horizontal_label_layout(ui.painter(), &normalized).expect("normalized horizontal label");
+                assert_eq!(newline_horizontal.galley.size(), normalized_horizontal.galley.size());
+                assert_eq!(newline_horizontal.galley.elided, normalized_horizontal.galley.elided);
+                assert_eq!(
+                    glyph_count(&newline_horizontal.galley),
+                    glyph_count(&normalized_horizontal.galley)
+                );
+
+                let newline_vertical = vertical_label_layout(ui.painter(), &newline).expect("vertical label");
+                let normalized_vertical =
+                    vertical_label_layout(ui.painter(), &normalized).expect("normalized vertical label");
+                assert_eq!(newline_vertical.galley.size(), normalized_vertical.galley.size());
+                assert_eq!(newline_vertical.galley.elided, normalized_vertical.galley.elided);
+                assert_eq!(
+                    glyph_count(&newline_vertical.galley),
+                    glyph_count(&normalized_vertical.galley)
+                );
+                exercised.set(true);
+            });
+        });
+
+        assert!(exercised.get());
+    }
 
     #[test]
     fn vertical_label_badge_wraps_rotated_galley_with_padding() {

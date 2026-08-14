@@ -1,8 +1,7 @@
 use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::truncate_chars;
 
 use crate::badge::paint_badge_background;
-use crate::text::painter_text_galley;
+use crate::text::{painter_text_galley, single_line_label_job};
 use crate::theme;
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
@@ -203,13 +202,15 @@ pub(super) fn render_match_row(
 
     if detail_x < max_detail_x {
         let available = max_detail_x - detail_x;
-        let truncated = truncate_to_width(data.line_text.trim(), available, 10.5);
-        painter.text(
-            Pos2::new(detail_x, text_y),
-            egui::Align2::LEFT_CENTER,
-            &truncated,
-            DETAIL_FONT,
-            theme::FG_DIM(),
+        let detail_galley = painter.layout_job(search_detail_layout_job(data.line_text, available));
+        let detail_rect = Rect::from_min_max(
+            Pos2::new(detail_x, row_rect.min.y),
+            Pos2::new(max_detail_x, row_rect.max.y),
+        );
+        painter.with_clip_rect(detail_rect).galley(
+            Pos2::new(detail_x, text_y - detail_galley.size().y * 0.5),
+            detail_galley,
+            Color32::TRANSPARENT,
         );
     }
 
@@ -289,25 +290,34 @@ fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
     );
 }
 
-fn truncate_to_width(text: &str, max_width: f32, font_size: f32) -> String {
-    let char_width = font_size * 0.58;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let max_chars = (max_width / char_width) as usize;
-
-    truncate_chars(text, max_chars).into_owned()
+fn search_detail_layout_job(text: &str, max_width: f32) -> egui::text::LayoutJob {
+    single_line_label_job(text.trim(), &DETAIL_FONT, theme::FG_DIM(), max_width)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_to_width;
+    use std::cell::Cell;
+
+    use super::search_detail_layout_job;
 
     #[test]
-    fn width_truncation_uses_unicode_character_boundaries() {
-        assert_eq!(truncate_to_width("blåbær", 24.0, 10.0), "blå…");
-    }
+    fn detail_layout_uses_real_glyph_width_and_single_line_elision() {
+        let ctx = egui::Context::default();
+        let width = Cell::new(0.0_f32);
+        let elided = Cell::new(false);
 
-    #[test]
-    fn width_smaller_than_one_character_returns_empty() {
-        assert_eq!(truncate_to_width("terminal", 0.5, 10.0), "");
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let galley = ui
+                    .painter()
+                    .layout_job(search_detail_layout_job("wide 二二二二二二二二二二", 40.0));
+                width.set(galley.size().x);
+                elided.set(galley.elided);
+            });
+        });
+
+        assert!(width.get() <= 40.0, "detail exceeded pixel budget: {}", width.get());
+        assert!(elided.get());
+        assert_eq!(search_detail_layout_job(" first\r\nsecond ", 40.0).text, "first second");
     }
 }

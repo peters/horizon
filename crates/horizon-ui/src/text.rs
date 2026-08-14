@@ -107,7 +107,7 @@ pub(crate) fn single_line_tooltip(ui: &mut Ui, text: impl Into<WidgetText>) {
         ui.text_valign(),
     ));
     apply_single_line_constraints(&mut job, max_width);
-    show_tooltip_job(ui, job, max_width);
+    show_tooltip_job(ui, job);
 }
 
 fn wrapped_tooltip(ui: &mut Ui, text: impl Into<WidgetText>) {
@@ -117,14 +117,12 @@ fn wrapped_tooltip(ui: &mut Ui, text: impl Into<WidgetText>) {
         FontSelection::Default,
         ui.text_valign(),
     ));
-    job.wrap.max_width = max_width;
-    job.wrap.break_anywhere = true;
-    show_tooltip_job(ui, job, max_width);
+    apply_wrapped_constraints(&mut job, max_width);
+    show_tooltip_job(ui, job);
 }
 
-fn show_tooltip_job(ui: &mut Ui, job: LayoutJob, max_width: f32) {
+fn show_tooltip_job(ui: &mut Ui, job: LayoutJob) {
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    ui.set_max_width(max_width);
     let _ = ui.add(Label::new(WidgetText::Galley(galley)).show_tooltip_when_elided(false));
 }
 
@@ -138,6 +136,14 @@ fn apply_single_line_constraints(job: &mut LayoutJob, max_width: f32) {
     flatten_layout_job_newlines(job);
     job.break_on_newline = false;
     job.wrap = single_line_wrapping(max_width);
+}
+
+fn apply_wrapped_constraints(job: &mut LayoutJob, max_width: f32) {
+    job.break_on_newline = true;
+    job.wrap.max_width = max_width.max(0.0);
+    job.wrap.max_rows = usize::MAX;
+    job.wrap.break_anywhere = false;
+    job.wrap.overflow_character = None;
 }
 
 fn flatten_layout_job_newlines(job: &mut LayoutJob) {
@@ -207,8 +213,9 @@ mod tests {
     };
 
     use super::{
-        append_single_line_text, apply_single_line_constraints, painter_text_galley, single_line_job,
-        single_line_label_job, stable_hover_text_lazy, stable_wrapped_hover_text_lazy, tooltip_max_width,
+        append_single_line_text, apply_single_line_constraints, apply_wrapped_constraints, painter_text_galley,
+        single_line_job, single_line_label_job, stable_hover_text_lazy, stable_wrapped_hover_text_lazy,
+        tooltip_max_width,
     };
 
     fn assert_near(actual: f32, expected: f32) {
@@ -310,6 +317,43 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_tooltip_constraints_preserve_lines_and_wrap_at_words() {
+        let mut job =
+            LayoutJob::simple_singleline("first line\nsecond line".to_string(), FontId::default(), Color32::WHITE);
+
+        apply_wrapped_constraints(&mut job, 96.0);
+
+        assert!(job.break_on_newline);
+        assert_ne!(job.wrap.max_rows, 1);
+        assert!(!job.wrap.break_anywhere);
+        assert_eq!(job.wrap.overflow_character, None);
+        assert_near(job.wrap.max_width, 96.0);
+    }
+
+    #[test]
+    fn wrapped_tooltip_layout_breaks_between_words() {
+        let ctx = egui::Context::default();
+        let rows = std::cell::RefCell::new(Vec::<String>::new());
+
+        let _ = ctx.run(RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut job = LayoutJob::simple_singleline(
+                    "alpha beta gamma".to_string(),
+                    FontId::proportional(14.0),
+                    Color32::WHITE,
+                );
+                apply_wrapped_constraints(&mut job, 50.0);
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                rows.replace(galley.rows.iter().map(|row| row.text()).collect());
+            });
+        });
+
+        let rows = rows.borrow();
+        let normalized: Vec<_> = rows.iter().map(|row| row.trim()).collect();
+        assert_eq!(normalized, ["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
     fn lazy_tooltip_text_is_not_built_without_hover() {
         let ctx = egui::Context::default();
         let built = Cell::new(false);
@@ -353,7 +397,11 @@ mod tests {
                     if wrapped {
                         let _ = stable_wrapped_hover_text_lazy(response, || {
                             build_count.set(build_count.get() + 1);
-                            "line one\nline two\nline three\nline four with a full failure detail"
+                            concat!(
+                                "line one\nline two\nline three\n",
+                                "line four contains a deliberately long diagnostic message that must wrap ",
+                                "at word boundaries while preserving every user-visible failure detail"
+                            )
                         });
                     } else {
                         let _ = stable_hover_text_lazy(response, || {
@@ -402,6 +450,10 @@ mod tests {
         let (sizes, build_count) = hovered_tooltip_sizes(false);
 
         assert_eq!(build_count, 4);
+        assert!(
+            sizes.iter().all(|size| size.y < 40.0),
+            "single-line tooltip unexpectedly wrapped: {sizes:?}"
+        );
         assert_stable_tooltip_widths(&sizes);
     }
 
@@ -411,7 +463,7 @@ mod tests {
 
         assert_eq!(build_count, 4);
         assert!(
-            sizes.iter().all(|size| size.y > 40.0),
+            sizes.iter().all(|size| size.y > 60.0),
             "wrapped rows were lost: {sizes:?}"
         );
         assert_stable_tooltip_widths(&sizes);
