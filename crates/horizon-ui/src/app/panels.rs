@@ -11,7 +11,7 @@ use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
     TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView, viewport_for_available_space,
 };
-use super::super::text::stable_hover_text_lazy;
+use super::super::text::stable_wrapped_hover_text_lazy;
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
@@ -500,7 +500,7 @@ impl HorizonApp {
                     // Built lazily: the summary allocates per profile, so it
                     // must only run for the hovered mic, not every visible
                     // panel every frame.
-                    let response = stable_hover_text_lazy(response, || match state {
+                    let response = stable_wrapped_hover_text_lazy(response, || match state {
                         MicState::Recording => "Recording into this panel (click to stop)".to_string(),
                         MicState::Busy => "Transcribing dictation for this panel".to_string(),
                         MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
@@ -566,44 +566,39 @@ impl HorizonApp {
                     self.board.panel(panel_id).map(|p| p.display_title())
                 };
 
-                paint_panel_chrome(
-                    ui,
-                    PanelChrome {
-                        panel_id,
-                        kind: snapshot.kind,
-                        panel_rect: rects.panel,
-                        titlebar_rect: rects.titlebar,
-                        close_rect: rects.close,
-                        resize_rect: rects.resize,
-                        title: display_title.as_deref(),
-                        history_size: snapshot.history_size,
-                        scrollback_limit: snapshot.scrollback_limit,
-                        focused: snapshot.is_focused,
-                        close_hovered: close_response.hovered(),
-                        workspace_accent: snapshot.workspace_accent,
-                        attention_badge: snapshot.attention_badge.as_ref(),
-                        ssh_status: snapshot.ssh_status,
-                        mic: mic_response.as_ref().map(|mic| MicControl {
-                            rect: rects.mic,
-                            hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
-                            state: mic.state,
-                        }),
-                    },
-                );
+                let chrome = PanelChrome {
+                    panel_id,
+                    kind: snapshot.kind,
+                    panel_rect: rects.panel,
+                    titlebar_rect: rects.titlebar,
+                    close_rect: rects.close,
+                    resize_rect: rects.resize,
+                    title: display_title.as_deref(),
+                    history_size: snapshot.history_size,
+                    scrollback_limit: snapshot.scrollback_limit,
+                    focused: snapshot.is_focused,
+                    close_hovered: close_response.hovered(),
+                    workspace_accent: snapshot.workspace_accent,
+                    attention_badge: snapshot.attention_badge.as_ref(),
+                    ssh_status: snapshot.ssh_status,
+                    mic: mic_response.as_ref().map(|mic| MicControl {
+                        rect: rects.mic,
+                        hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
+                        state: mic.state,
+                    }),
+                };
+                let rename_rect = snapshot
+                    .is_renaming
+                    .then(|| panel_title_content_rect(ui.painter(), &chrome));
+                paint_panel_chrome(ui, chrome);
 
                 // Release the shared board borrow before the mutable borrow below.
                 drop(display_title);
 
-                if snapshot.is_renaming {
+                if let Some(rename_rect) = rename_rect {
                     outcome.rename_action = show_inline_rename_editor(
                         ui,
-                        panel_title_content_rect(
-                            rects.titlebar,
-                            // The rename editor must stop left of the mic
-                            // control when one is shown.
-                            if mic_eligible { rects.mic } else { rects.close },
-                            snapshot.workspace_accent.is_some(),
-                        ),
+                        rename_rect,
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
                     );

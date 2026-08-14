@@ -8,6 +8,7 @@ use horizon_core::{Config, SpeechBackend, SpeechHotkeyMode, SpeechTask};
 
 use crate::app::shortcuts::{is_clipboard_pseudo_event, mark_captured_clipboard_event};
 use crate::app::speech::built_with_speech;
+use crate::text::stable_hover_text;
 
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
@@ -280,9 +281,10 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
                     }
                 }
             });
-        let refresh = ui
-            .button(egui::RichText::new("↻").size(12.0))
-            .on_hover_text("Re-scan audio input devices");
+        let refresh = stable_hover_text(
+            ui.button(egui::RichText::new("↻").size(12.0)),
+            "Re-scan audio input devices",
+        );
         if refresh.clicked() {
             ui.data_mut(|data| data.remove_temp::<DeviceListState>(egui::Id::new(DEVICE_LIST_ID)));
             ui.ctx().request_repaint();

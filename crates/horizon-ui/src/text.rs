@@ -64,14 +64,26 @@ pub(crate) fn single_line_label_job(text: &str, font: &FontId, color: Color32, m
 
 /// Lays out painter text once so callers can use its exact glyph width and
 /// reuse the same galley for painting.
-pub(crate) fn painter_text_galley(painter: &Painter, text: &str, font: FontId, color: Color32) -> Arc<Galley> {
-    painter.layout_no_wrap(text.to_owned(), font, color)
+pub(crate) fn painter_text_galley(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+) -> Arc<Galley> {
+    painter.layout_job(single_line_label_job(text, font, color, max_width))
 }
 
 /// Adds a single-line, width-bounded tooltip to `response`.
 #[must_use]
 pub(crate) fn stable_hover_text(response: Response, text: impl Into<WidgetText>) -> Response {
     stable_hover_text_lazy(response, || text)
+}
+
+/// Adds a width-bounded tooltip that preserves and wraps all content.
+#[must_use]
+pub(crate) fn stable_wrapped_hover_text(response: Response, text: impl Into<WidgetText>) -> Response {
+    stable_wrapped_hover_text_lazy(response, || text)
 }
 
 /// Lazily builds a single-line, width-bounded tooltip for `response`.
@@ -100,24 +112,21 @@ where
 /// Renders tooltip text without allowing last frame's tooltip size to feed
 /// back into wrapping on the next frame.
 pub(crate) fn single_line_tooltip(ui: &mut Ui, text: impl Into<WidgetText>) {
-    let max_width = tooltip_max_width(ui.ctx().content_rect().width(), ui.spacing().tooltip_width);
-    let mut job = Arc::unwrap_or_clone(text.into().into_layout_job(
-        ui.style(),
-        FontSelection::Default,
-        ui.text_valign(),
-    ));
-    apply_single_line_constraints(&mut job, max_width);
-    show_tooltip_job(ui, job);
+    constrained_tooltip(ui, text, apply_single_line_constraints);
 }
 
 fn wrapped_tooltip(ui: &mut Ui, text: impl Into<WidgetText>) {
+    constrained_tooltip(ui, text, apply_wrapped_constraints);
+}
+
+fn constrained_tooltip(ui: &mut Ui, text: impl Into<WidgetText>, apply_constraints: impl FnOnce(&mut LayoutJob, f32)) {
     let max_width = tooltip_max_width(ui.ctx().content_rect().width(), ui.spacing().tooltip_width);
     let mut job = Arc::unwrap_or_clone(text.into().into_layout_job(
         ui.style(),
         FontSelection::Default,
         ui.text_valign(),
     ));
-    apply_wrapped_constraints(&mut job, max_width);
+    apply_constraints(&mut job, max_width);
     show_tooltip_job(ui, job);
 }
 
@@ -152,21 +161,65 @@ fn flatten_layout_job_newlines(job: &mut LayoutJob) {
     }
 
     let original = std::mem::take(&mut job.text);
-    let mut offsets = vec![0_usize; original.len() + 1];
     job.text.reserve(original.len());
+
+    let single_section_covers_all_text = job
+        .sections
+        .first()
+        .is_some_and(|section| section.byte_range == (0..original.len()));
+    if job.sections.is_empty() || single_section_covers_all_text {
+        push_flattened_newlines(&mut job.text, &original);
+        if let Some(section) = job.sections.first_mut() {
+            section.byte_range = 0..job.text.len();
+        }
+        return;
+    }
+
+    let mut boundaries = Vec::with_capacity(job.sections.len() * 2);
+    for section in &job.sections {
+        boundaries.extend([section.byte_range.start, section.byte_range.end]);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut remapped_boundaries = Vec::with_capacity(boundaries.len());
+    let mut next_boundary = 0;
 
     let mut characters = original.char_indices().peekable();
     while let Some((byte_index, character)) = characters.next() {
-        offsets[byte_index] = job.text.len();
+        record_boundaries(
+            &boundaries,
+            &mut remapped_boundaries,
+            &mut next_boundary,
+            byte_index,
+            job.text.len(),
+        );
         if character == '\r' {
             job.text.push(' ');
             let end = byte_index + character.len_utf8();
-            offsets[end] = job.text.len();
+            record_boundaries(
+                &boundaries,
+                &mut remapped_boundaries,
+                &mut next_boundary,
+                end,
+                job.text.len(),
+            );
             if characters.peek().is_some_and(|(_, next)| *next == '\n')
                 && let Some((line_feed_index, line_feed)) = characters.next()
             {
-                offsets[line_feed_index] = job.text.len();
-                offsets[line_feed_index + line_feed.len_utf8()] = job.text.len();
+                record_boundaries(
+                    &boundaries,
+                    &mut remapped_boundaries,
+                    &mut next_boundary,
+                    line_feed_index,
+                    job.text.len(),
+                );
+                record_boundaries(
+                    &boundaries,
+                    &mut remapped_boundaries,
+                    &mut next_boundary,
+                    line_feed_index + line_feed.len_utf8(),
+                    job.text.len(),
+                );
             }
         } else {
             if is_line_separator(character) {
@@ -174,13 +227,48 @@ fn flatten_layout_job_newlines(job: &mut LayoutJob) {
             } else {
                 job.text.push(character);
             }
-            offsets[byte_index + character.len_utf8()] = job.text.len();
+            record_boundaries(
+                &boundaries,
+                &mut remapped_boundaries,
+                &mut next_boundary,
+                byte_index + character.len_utf8(),
+                job.text.len(),
+            );
         }
     }
+    record_boundaries(
+        &boundaries,
+        &mut remapped_boundaries,
+        &mut next_boundary,
+        original.len(),
+        job.text.len(),
+    );
 
     for section in &mut job.sections {
-        section.byte_range = offsets[section.byte_range.start]..offsets[section.byte_range.end];
+        section.byte_range = remapped_boundary(&boundaries, &remapped_boundaries, section.byte_range.start)
+            ..remapped_boundary(&boundaries, &remapped_boundaries, section.byte_range.end);
     }
+}
+
+fn record_boundaries(
+    boundaries: &[usize],
+    remapped: &mut Vec<usize>,
+    next_boundary: &mut usize,
+    original_offset: usize,
+    flattened_offset: usize,
+) {
+    while boundaries.get(*next_boundary) == Some(&original_offset) {
+        remapped.push(flattened_offset);
+        *next_boundary += 1;
+    }
+}
+
+fn remapped_boundary(boundaries: &[usize], remapped: &[usize], original_offset: usize) -> usize {
+    boundaries
+        .binary_search(&original_offset)
+        .ok()
+        .and_then(|index| remapped.get(index).copied())
+        .unwrap_or(original_offset)
 }
 
 fn push_flattened_newlines(output: &mut String, text: &str) {
@@ -200,7 +288,10 @@ fn push_flattened_newlines(output: &mut String, text: &str) {
 }
 
 fn is_line_separator(character: char) -> bool {
-    matches!(character, '\r' | '\n' | '\u{0085}' | '\u{2028}' | '\u{2029}')
+    matches!(
+        character,
+        '\r' | '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+    )
 }
 
 #[cfg(test)]
@@ -252,6 +343,19 @@ mod tests {
     }
 
     #[test]
+    fn single_line_text_flattens_all_mandatory_line_separators() {
+        let font = FontId::proportional(13.0);
+        let job = single_line_label_job(
+            "cr\rlf\nvt\u{000B}ff\u{000C}nel\u{0085}ls\u{2028}ps\u{2029}end",
+            &font,
+            Color32::WHITE,
+            400.0,
+        );
+
+        assert_eq!(job.text, "cr lf vt ff nel ls ps end");
+    }
+
+    #[test]
     fn append_single_line_text_flattens_newlines_without_extra_sections() {
         let mut job = single_line_job(96.0);
         append_single_line_text(&mut job, "first\r\nsecond", 2.0, TextFormat::default());
@@ -265,20 +369,33 @@ mod tests {
     #[test]
     fn painter_text_galley_uses_actual_glyph_metrics() {
         let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
         let narrow_width = Cell::new(0.0_f32);
         let wide_width = Cell::new(0.0_f32);
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 narrow_width.set(
-                    painter_text_galley(ui.painter(), "iii", FontId::proportional(12.0), Color32::WHITE)
-                        .size()
-                        .x,
+                    painter_text_galley(
+                        ui.painter(),
+                        "iii",
+                        &FontId::proportional(12.0),
+                        Color32::WHITE,
+                        f32::INFINITY,
+                    )
+                    .size()
+                    .x,
                 );
                 wide_width.set(
-                    painter_text_galley(ui.painter(), "WWW", FontId::proportional(12.0), Color32::WHITE)
-                        .size()
-                        .x,
+                    painter_text_galley(
+                        ui.painter(),
+                        "WWW",
+                        &FontId::proportional(12.0),
+                        Color32::WHITE,
+                        f32::INFINITY,
+                    )
+                    .size()
+                    .x,
                 );
             });
         });
@@ -333,6 +450,7 @@ mod tests {
     #[test]
     fn wrapped_tooltip_layout_breaks_between_words() {
         let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
         let rows = std::cell::RefCell::new(Vec::<String>::new());
 
         let _ = ctx.run(RawInput::default(), |ctx| {
@@ -356,6 +474,7 @@ mod tests {
     #[test]
     fn lazy_tooltip_text_is_not_built_without_hover() {
         let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
         let built = Cell::new(false);
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -373,6 +492,7 @@ mod tests {
 
     fn hovered_tooltip_sizes(wrapped: bool) -> (Vec<Vec2>, usize) {
         let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
         ctx.style_mut(|style| {
             style.interaction.tooltip_delay = 0.0;
             style.interaction.show_tooltips_only_when_still = false;

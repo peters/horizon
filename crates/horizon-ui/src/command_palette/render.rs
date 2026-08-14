@@ -1,8 +1,8 @@
-use egui::{CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::util::usize_to_f32;
 use crate::badge::paint_badge_background;
-use crate::text::painter_text_galley;
+use crate::text::{painter_text_galley, single_line_label_job};
 use crate::theme;
 
 use super::{INPUT_HEIGHT, MAX_VISIBLE_ROWS, PALETTE_WIDTH, ROW_HEIGHT, ResultItem, SECTION_HEADER_HEIGHT};
@@ -33,12 +33,15 @@ pub(super) fn palette_layout(screen: Rect) -> PaletteLayout {
 
 pub(crate) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
     let painter = ui.painter();
-    painter.rect_filled(card_rect, CornerRadius::same(20), theme::PANEL_BG());
-    painter.rect_stroke(
+    paint_badge_background(
+        painter,
         card_rect,
         CornerRadius::same(20),
-        Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)),
-        StrokeKind::Outside,
+        theme::PANEL_BG(),
+        Some((
+            Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)),
+            StrokeKind::Outside,
+        )),
     );
     painter.rect_stroke(
         card_rect.expand(2.0),
@@ -109,31 +112,53 @@ pub(super) fn render_result_row(
     } else {
         row_rect.min.x + 10.0
     };
+    let shortcut_galley = item.shortcut.as_ref().map(|shortcut| {
+        painter_text_galley(
+            &painter,
+            shortcut,
+            &egui::FontId::monospace(10.0),
+            theme::FG_DIM(),
+            (row_rect.width() - 28.0).max(0.0),
+        )
+    });
+    let reserved_shortcut_width = shortcut_galley.as_ref().map_or(0.0, |galley| galley.size().x + 28.0);
+    let content_right = row_rect.max.x - 12.0 - reserved_shortcut_width;
     let label_color = if is_selected { theme::FG() } else { theme::FG_SOFT() };
-    let label_galley = painter_text_galley(&painter, &item.label, egui::FontId::proportional(13.0), label_color);
+    let label_galley = painter_text_galley(
+        &painter,
+        &item.label,
+        &egui::FontId::proportional(13.0),
+        label_color,
+        (content_right - label_x).max(0.0),
+    );
     let label_size = label_galley.size();
-    painter.galley(
+    let label_rect = Rect::from_min_max(
+        Pos2::new(label_x, row_rect.min.y),
+        Pos2::new(content_right.max(label_x), row_rect.max.y),
+    );
+    painter.with_clip_rect(label_rect).galley(
         Pos2::new(label_x, text_y - label_size.y * 0.5),
         label_galley,
-        label_color,
+        Color32::TRANSPARENT,
     );
-
-    let shortcut_galley = item
-        .shortcut
-        .as_ref()
-        .map(|shortcut| painter_text_galley(&painter, shortcut, egui::FontId::monospace(10.0), theme::FG_DIM()));
 
     if !item.detail.is_empty() {
         let detail_x = label_x + label_size.x + 12.0;
-        let reserved_shortcut_width = shortcut_galley.as_ref().map_or(0.0, |galley| galley.size().x + 28.0);
-        let max_detail_x = row_rect.max.x - 12.0 - reserved_shortcut_width;
-        if detail_x < max_detail_x {
-            painter.text(
-                Pos2::new(detail_x, text_y),
-                egui::Align2::LEFT_CENTER,
-                &item.detail,
-                egui::FontId::proportional(11.0),
+        if detail_x < content_right {
+            let detail_galley = painter.layout_job(single_line_label_job(
+                item.detail.trim(),
+                &egui::FontId::proportional(11.0),
                 theme::FG_DIM(),
+                content_right - detail_x,
+            ));
+            let detail_rect = Rect::from_min_max(
+                Pos2::new(detail_x, row_rect.min.y),
+                Pos2::new(content_right, row_rect.max.y),
+            );
+            painter.with_clip_rect(detail_rect).galley(
+                Pos2::new(detail_x, text_y - detail_galley.size().y * 0.5),
+                detail_galley,
+                Color32::TRANSPARENT,
             );
         }
     }

@@ -485,7 +485,7 @@ fn managed_install_state() -> (Option<ManagedInstall>, Option<Instant>) {
     (managed_install, next_surge_update_check_at)
 }
 
-fn configure_fonts() -> egui::FontDefinitions {
+pub(crate) fn configure_fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
 
     insert_font_data(

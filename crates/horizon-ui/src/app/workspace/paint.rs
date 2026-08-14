@@ -12,12 +12,15 @@ pub(super) fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color3
     let fill_alpha = if is_active { 24 } else { 14 };
     let frame_fill = theme::alpha(theme::blend(theme::PANEL_BG(), color, 0.12), fill_alpha);
 
-    painter.rect_filled(rect, corner_radius, frame_fill);
-    painter.rect_stroke(
+    paint_badge_background(
+        &painter,
         rect,
         corner_radius,
-        Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
-        StrokeKind::Outside,
+        frame_fill,
+        Some((
+            Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
+            StrokeKind::Outside,
+        )),
     );
 }
 

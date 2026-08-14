@@ -10,6 +10,7 @@ use horizon_core::{
     AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
 };
 
+use crate::text::stable_hover_text;
 use crate::theme;
 
 use super::panels::panel_kind_icon;
@@ -216,23 +217,23 @@ impl HorizonApp {
             ui.add_space(6.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(12.0);
-                let fit = ui
-                    .add_enabled(
+                let fit = stable_hover_text(
+                    ui.add_enabled(
                         self.has_attached_workspace(),
                         util::chrome_button("Fit").min_size(Vec2::new(42.0, 24.0)),
-                    )
-                    .on_hover_text(
-                        self.shortcuts
-                            .fit_active_workspace
-                            .display_label(util::primary_shortcut_label()),
-                    );
+                    ),
+                    self.shortcuts
+                        .fit_active_workspace
+                        .display_label(util::primary_shortcut_label()),
+                );
                 if fit.clicked() {
                     actions.fit_active_workspace = true;
                 }
 
-                let new_workspace = ui
-                    .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
-                    .on_hover_text("Create a new workspace.");
+                let new_workspace = stable_hover_text(
+                    ui.add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0))),
+                    "Create a new workspace.",
+                );
                 if new_workspace.clicked() {
                     actions.create_workspace = true;
                 }

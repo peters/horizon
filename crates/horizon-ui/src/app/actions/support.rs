@@ -5,6 +5,7 @@ use egui::{Button, Color32, FontId, Ui};
 use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
+use crate::text::{append_single_line_text, single_line_job};
 use crate::theme;
 
 use super::PresetPickerAction;
@@ -107,9 +108,10 @@ fn preset_category(preset: &PresetConfig) -> PresetCategory {
     }
 }
 
-fn preset_button_label(preset: &PresetConfig) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    job.append(
+fn preset_button_label(preset: &PresetConfig, max_width: f32) -> LayoutJob {
+    let mut job = single_line_job(max_width);
+    append_single_line_text(
+        &mut job,
         &preset.name,
         0.0,
         TextFormat {
@@ -119,7 +121,8 @@ fn preset_button_label(preset: &PresetConfig) -> LayoutJob {
         },
     );
     if let Some(alias) = &preset.alias {
-        job.append(
+        append_single_line_text(
+            &mut job,
             &format!("  {alias}"),
             0.0,
             TextFormat {
@@ -152,7 +155,11 @@ fn render_panel_preset_picker_row(
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
     ui.horizontal(|ui| {
-        if ui.add(Button::new(preset_button_label(preset)).frame(false)).clicked() {
+        let label_width = (ui.available_width() - 44.0).max(0.0);
+        if ui
+            .add(Button::new(preset_button_label(preset, label_width)).frame(false))
+            .clicked()
+        {
             selected_action = Some(PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset: preset.clone(),
@@ -177,7 +184,10 @@ fn render_workspace_preset_picker_row(
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
 ) -> Option<PresetPickerAction> {
-    if !ui.add(Button::new(preset_button_label(preset)).frame(false)).clicked() {
+    if !ui
+        .add(Button::new(preset_button_label(preset, ui.available_width())).frame(false))
+        .clicked()
+    {
         return None;
     }
 
@@ -302,7 +312,7 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
 mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
-    use super::{PresetCategory, command_palette_preset_entries, preset_category};
+    use super::{PresetCategory, command_palette_preset_entries, preset_button_label, preset_category};
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
         PresetConfig {
@@ -336,5 +346,20 @@ mod tests {
         assert_eq!(entries[0].detail, "Shell");
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "prod-api"));
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "deploy"));
+    }
+
+    #[test]
+    fn preset_button_label_is_single_line_and_width_bounded() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "deploy\nstaging with a deliberately long name".to_string();
+        preset.alias = Some("alias\u{000B}next".to_string());
+
+        let job = preset_button_label(&preset, 80.0);
+
+        assert_eq!(job.text, "deploy staging with a deliberately long name  alias next");
+        assert!(!job.break_on_newline);
+        assert_eq!(job.wrap.max_rows, 1);
+        assert_eq!(job.wrap.overflow_character, Some('…'));
+        assert!((job.wrap.max_width - 80.0).abs() < f32::EPSILON);
     }
 }

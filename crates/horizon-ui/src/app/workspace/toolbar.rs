@@ -2,6 +2,7 @@ use egui::emath::TSTransform;
 use egui::{Button, Context, Id, Margin, Pos2, Rect, Stroke, Vec2};
 use horizon_core::WorkspaceLayout;
 
+use crate::text::stable_hover_text;
 use crate::theme;
 
 use super::render::apply_canvas_transform;
@@ -46,8 +47,8 @@ pub(super) fn render_workspace_layout_toolbar(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = WORKSPACE_LAYOUT_BUTTON_SPACING;
                         let is_default = workspace.layout.is_none();
-                        let response = ui
-                            .add(
+                        let response = stable_hover_text(
+                            ui.add(
                                 Button::new(egui::RichText::new("Default").size(10.5).color(if is_default {
                                     theme::FG()
                                 } else {
@@ -71,16 +72,17 @@ pub(super) fn render_workspace_layout_toolbar(
                                     },
                                 ))
                                 .corner_radius(8),
-                            )
-                            .on_hover_text("Manual placement");
+                            ),
+                            "Manual placement",
+                        );
                         if response.clicked() {
                             action = Some(WorkspaceAction::ClearLayout);
                         }
 
                         for layout in WorkspaceLayout::ALL {
                             let is_selected = workspace.layout == Some(layout);
-                            let response = ui
-                                .add(
+                            let response = stable_hover_text(
+                                ui.add(
                                     Button::new(
                                         egui::RichText::new(workspace_layout_label(layout))
                                             .size(10.5)
@@ -107,8 +109,9 @@ pub(super) fn render_workspace_layout_toolbar(
                                         },
                                     ))
                                     .corner_radius(8),
-                                )
-                                .on_hover_text(layout.label());
+                                ),
+                                layout.label(),
+                            );
                             if response.clicked() {
                                 action = Some(WorkspaceAction::ArrangeLayout(layout));
                             }
@@ -223,19 +226,21 @@ fn workspace_layout_preset_row_width() -> f32 {
 }
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
-    ui.add(
-        Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
-            .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
-            .fill(theme::alpha(
-                theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
-                220,
-            ))
-            .stroke(Stroke::new(
-                1.0_f32,
-                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
-            ))
-            .corner_radius(8),
+    stable_hover_text(
+        ui.add(
+            Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
+                .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+                .fill(theme::alpha(
+                    theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
+                    220,
+                ))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
+                ))
+                .corner_radius(8),
+        ),
+        "Open in a separate window",
     )
-    .on_hover_text("Open in a separate window")
     .clicked()
 }
