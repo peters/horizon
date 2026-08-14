@@ -1,7 +1,8 @@
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::badge::paint_badge_background;
-use crate::text::single_line_label_job;
 use crate::theme;
 
 #[profiling::function]
@@ -62,7 +63,7 @@ pub(super) fn paint_workspace_label_bg(
 pub(super) fn paint_workspace_label(
     ui: &mut egui::Ui,
     rect: Rect,
-    name: &str,
+    label_galley: &Arc<Galley>,
     color: Color32,
     is_active: bool,
     hovered: bool,
@@ -80,17 +81,9 @@ pub(super) fn paint_workspace_label(
     );
 
     let text_x = rect.min.x + 26.0;
-    let max_text_width = (grip_center.x - 8.0 - text_x).max(0.0);
-    let job = single_line_label_job(
-        name,
-        &egui::FontId::proportional(12.5),
-        if is_active { theme::FG() } else { theme::FG_SOFT() },
-        max_text_width,
-    );
-    let galley = painter.layout_job(job);
     painter.galley(
-        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
-        galley,
+        Pos2::new(text_x, rect.center().y - label_galley.size().y * 0.5),
+        Arc::clone(label_galley),
         Color32::TRANSPARENT,
     );
 

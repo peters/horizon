@@ -15,7 +15,8 @@ use super::super::text::stable_wrapped_hover_text_lazy;
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
-    MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
+    MicControl, PanelChrome, layout_status_badges, paint_panel_chrome, panel_kind_icon, panel_title_content_rect,
+    show_inline_rename_editor,
 };
 use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
 use super::speech::MicState;
@@ -587,10 +588,11 @@ impl HorizonApp {
                         state: mic.state,
                     }),
                 };
+                let status_badges = layout_status_badges(&ui.painter_at(chrome.panel_rect), &chrome);
                 let rename_rect = snapshot
                     .is_renaming
-                    .then(|| panel_title_content_rect(ui.painter(), &chrome));
-                paint_panel_chrome(ui, chrome);
+                    .then(|| panel_title_content_rect(&chrome, &status_badges));
+                paint_panel_chrome(ui, chrome, &status_badges);
 
                 // Release the shared board borrow before the mutable borrow below.
                 drop(display_title);

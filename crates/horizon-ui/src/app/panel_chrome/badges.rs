@@ -28,7 +28,7 @@ pub(super) struct HistoryMeter {
 }
 
 #[derive(Clone)]
-pub(super) struct StatusBadgeStrip {
+pub(in crate::app) struct StatusBadgeStrip {
     pub(super) title_right: f32,
     attention: Option<StatusBadge>,
     ssh: Option<StatusBadge>,
@@ -55,11 +55,18 @@ struct StatusBadgeSpec<'a> {
     right: f32,
     left_limit: f32,
     center_text: bool,
+    overflow: StatusBadgeOverflow,
+}
+
+#[derive(Clone, Copy)]
+enum StatusBadgeOverflow {
+    Compact,
+    ElideThenCompact,
 }
 
 /// Lays out the status strip once so painting, title elision, and inline
 /// rename use the same measured badge edges.
-pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome<'_>) -> StatusBadgeStrip {
+pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome<'_>) -> StatusBadgeStrip {
     let anchor = chrome.controls_anchor();
     let has_history_meter = chrome.scrollback_limit > 0;
     let trailing_right = trailing_status_badge_right(chrome.titlebar_rect, anchor, has_history_meter);
@@ -81,7 +88,7 @@ pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome
         galley.size().x + ATTENTION_BADGE_HORIZONTAL_PADDING + STATUS_BADGE_GAP
     });
 
-    let ssh = chrome.ssh_status.map(|status| {
+    let ssh = chrome.ssh_status.and_then(|status| {
         let color = ssh_status_color(status);
         layout_status_badge(
             painter,
@@ -98,6 +105,7 @@ pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome
                 right: trailing_right,
                 left_limit: left_limit + attention_reservation,
                 center_text: true,
+                overflow: StatusBadgeOverflow::Compact,
             },
         )
     });
@@ -105,7 +113,7 @@ pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome
     let attention_right = ssh
         .as_ref()
         .map_or(trailing_right, |badge| badge.rect.min.x - STATUS_BADGE_GAP);
-    let attention = chrome.attention_badge.map(|(severity, summary)| {
+    let attention = chrome.attention_badge.and_then(|(severity, summary)| {
         let color = attention_severity_color(*severity);
         let text = attention_badge_text(*severity, summary);
         layout_status_badge(
@@ -123,6 +131,7 @@ pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome
                 right: attention_right,
                 left_limit,
                 center_text: false,
+                overflow: StatusBadgeOverflow::ElideThenCompact,
             },
         )
     });
@@ -139,13 +148,31 @@ pub(super) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome
     }
 }
 
-fn layout_status_badge(painter: &egui::Painter, titlebar_rect: Rect, spec: &StatusBadgeSpec<'_>) -> StatusBadge {
-    let natural_galley = painter.layout_job(single_line_label_job(spec.text, &spec.font, spec.color, f32::INFINITY));
+fn layout_status_badge(
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    spec: &StatusBadgeSpec<'_>,
+) -> Option<StatusBadge> {
     let available_width = (spec.right - spec.left_limit).max(0.0);
-    let natural_width = natural_galley.size().x + spec.horizontal_padding;
-    let (galley, badge_width) = if natural_width <= available_width {
-        (natural_galley, natural_width)
-    } else {
+    let text_width = (available_width - spec.horizontal_padding).max(0.0);
+    let bounded_galley = painter.layout_job(single_line_label_job(spec.text, &spec.font, spec.color, text_width));
+    let use_compact = bounded_galley.elided
+        && match spec.overflow {
+            StatusBadgeOverflow::Compact => true,
+            StatusBadgeOverflow::ElideThenCompact => {
+                let compact_width = spec.compact_galley.as_ref().map_or_else(
+                    || {
+                        spec.compact_text.chars().next().map_or(0.0, |character| {
+                            painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, character))
+                        })
+                    },
+                    |galley| galley.size().x,
+                );
+                let ellipsis_width = painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, '…'));
+                text_width < compact_width + ellipsis_width
+            }
+        };
+    let galley = if use_compact {
         let compact_galley = spec.compact_galley.as_ref().map_or_else(
             || {
                 painter.layout_job(single_line_label_job(
@@ -157,9 +184,14 @@ fn layout_status_badge(painter: &egui::Painter, titlebar_rect: Rect, spec: &Stat
             },
             Arc::clone,
         );
-        let compact_width = (compact_galley.size().x + spec.horizontal_padding).min(available_width);
-        (compact_galley, compact_width)
+        if compact_galley.size().x + spec.horizontal_padding > available_width {
+            return None;
+        }
+        compact_galley
+    } else {
+        bounded_galley
     };
+    let badge_width = (galley.size().x + spec.horizontal_padding).min(available_width);
     let badge_height = 18.0;
     let badge_left = (spec.right - badge_width).max(spec.left_limit);
     let rect = Rect::from_min_size(
@@ -173,13 +205,13 @@ fn layout_status_badge(painter: &egui::Painter, titlebar_rect: Rect, spec: &Stat
     };
     let text_position = Pos2::new(text_x, rect.center().y - galley.size().y * 0.5);
 
-    StatusBadge {
+    Some(StatusBadge {
         rect,
         galley,
         text_position,
         fill: spec.fill,
         stroke: spec.stroke,
-    }
+    })
 }
 
 #[profiling::function]
@@ -321,10 +353,13 @@ fn trailing_status_badge_right(titlebar_rect: Rect, close_rect: Rect, has_histor
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, Rect, Vec2};
+    use egui::{Color32, Pos2, Rect, Vec2};
     use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
 
-    use super::{TITLE_BADGE_GAP, TITLEBAR_LEADING_CONTROL_SPACE, attention_badge_text, layout_status_badges};
+    use super::{
+        StatusBadgeOverflow, StatusBadgeSpec, TITLE_BADGE_GAP, TITLEBAR_LEADING_CONTROL_SPACE, attention_badge_text,
+        layout_status_badge, layout_status_badges,
+    };
     use crate::app::panel_chrome::{MicControl, PanelChrome};
     use crate::app::speech::MicState;
 
@@ -351,12 +386,13 @@ mod tests {
     }
 
     fn status_layout(width: f32, features: &[StatusFeature]) -> super::StatusBadgeStrip {
+        status_layout_with_summary(width, features, "Claude needs your approval to run a command")
+    }
+
+    fn status_layout_with_summary(width: f32, features: &[StatusFeature], summary: &str) -> super::StatusBadgeStrip {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
-        let attention_data = (
-            AttentionSeverity::High,
-            "Claude needs your approval to run a command".to_string(),
-        );
+        let attention_data = (AttentionSeverity::High, summary.to_string());
         let mut result = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -417,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn narrow_strip_keeps_compact_attention_and_ssh_signals_visible() {
+    fn minimum_width_strip_keeps_elided_attention_and_compact_ssh_visible() {
         let layout = status_layout(
             320.0,
             &[
@@ -434,11 +470,59 @@ mod tests {
             panic!("SSH badge was not laid out");
         };
 
-        assert_eq!(attention.galley.job.text, "⚠");
+        assert!(attention.galley.elided);
+        assert!(attention.galley.job.text.starts_with("⚠ Claude"));
         assert_eq!(ssh.galley.job.text, "×");
         assert!(attention.rect.min.x >= 10.0 + TITLEBAR_LEADING_CONTROL_SPACE);
         assert!(attention.rect.max.x < ssh.rect.min.x);
         assert_near(layout.title_right, attention.rect.min.x - TITLE_BADGE_GAP);
+    }
+
+    #[test]
+    fn moderate_strip_elides_attention_summary_before_compacting_to_icon() {
+        let summary = "二".repeat(30);
+        let layout = status_layout_with_summary(
+            440.0,
+            &[StatusFeature::History, StatusFeature::Ssh, StatusFeature::Attention],
+            &summary,
+        );
+        let Some(attention) = layout.attention else {
+            panic!("attention badge was not laid out");
+        };
+
+        assert!(attention.galley.elided);
+        assert!(attention.galley.job.text.starts_with("⚠ 二"));
+    }
+
+    #[test]
+    fn compact_badge_is_omitted_when_reserved_space_cannot_hold_its_icon() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut result = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                result = Some(layout_status_badge(
+                    ui.painter(),
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(80.0, 34.0)),
+                    &StatusBadgeSpec {
+                        text: "Disconnected",
+                        compact_text: "×",
+                        compact_galley: None,
+                        font: egui::FontId::proportional(10.0),
+                        color: Color32::WHITE,
+                        fill: Color32::BLACK,
+                        stroke: None,
+                        horizontal_padding: 16.0,
+                        right: 50.0,
+                        left_limit: 45.0,
+                        center_text: true,
+                        overflow: StatusBadgeOverflow::Compact,
+                    },
+                ));
+            });
+        });
+
+        assert!(matches!(result, Some(None)));
     }
 
     #[test]

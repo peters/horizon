@@ -94,7 +94,7 @@ pub(super) fn render_workspace_visual(
                 paint_workspace_label(
                     ui,
                     rect,
-                    &workspace.name,
+                    &workspace.label_galley,
                     workspace.color,
                     workspace.is_active,
                     label_response.hovered(),

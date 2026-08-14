@@ -133,6 +133,10 @@ features:
         target_language: en
         hotkey: F3
         preload: false
+presets:
+  - name: "Deploy first line\nDeploy second line with a deliberately long preset name 二二二 😊"
+    alias: "deploy-alias-with-extra-detail"
+    kind: shell
 workspaces:
   - name: "Workspace first line\nWorkspace second line æøå 😊"
     terminals:
@@ -216,6 +220,10 @@ Record the exact PID separately from the baseline PID.
    Compare attention, minimap-label, search-count, and command-shortcut badge
    backgrounds in both themes. Their prior corner radii, fills, strokes,
    alignment, and clipping must remain visually unchanged.
+5. Open the New Terminal preset picker and leave it open with the pointer
+   stationary for at least five seconds. Confirm the popup width remains
+   constant across redraws and the seeded long preset stays on one elided line
+   rather than making the popup ratchet narrower frame by frame.
 
 ## SSH upload Unicode lane
 

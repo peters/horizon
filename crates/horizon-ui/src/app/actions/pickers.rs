@@ -10,6 +10,9 @@ use crate::theme;
 use super::PresetPickerAction;
 use super::support::{preset_picker_heading, render_grouped_preset_rows};
 
+const PRESET_PICKER_MIN_WIDTH: f32 = 160.0;
+const PRESET_PICKER_MAX_WIDTH: f32 = 320.0;
+
 impl HorizonApp {
     pub(in crate::app) fn render_dir_picker(&mut self, ctx: &Context) {
         let Some(picker) = self.dir_picker.as_mut() else {
@@ -125,6 +128,7 @@ impl HorizonApp {
         canvas_pos: [f32; 2],
     ) -> (Rect, Option<PresetPickerAction>) {
         let mut selected_action = None;
+        let picker_width = (ctx.content_rect().width() - 32.0).clamp(PRESET_PICKER_MIN_WIDTH, PRESET_PICKER_MAX_WIDTH);
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
             .constrain(true)
@@ -136,7 +140,7 @@ impl HorizonApp {
                     .corner_radius(8)
                     .inner_margin(Margin::symmetric(8, 6))
                     .show(ui, |ui| {
-                        ui.set_min_width(160.0);
+                        ui.set_width(picker_width);
                         ui.label(
                             egui::RichText::new(preset_picker_heading(target_workspace))
                                 .size(11.0)
@@ -146,7 +150,7 @@ impl HorizonApp {
                         ui.add_space(4.0);
 
                         if let Some(action) =
-                            render_grouped_preset_rows(ui, target_workspace, canvas_pos, &self.presets)
+                            render_grouped_preset_rows(ui, target_workspace, canvas_pos, &self.presets, picker_width)
                         {
                             selected_action = Some(action);
                         }

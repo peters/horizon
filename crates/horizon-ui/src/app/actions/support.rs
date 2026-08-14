@@ -24,6 +24,7 @@ pub(super) fn render_grouped_preset_rows(
     target_workspace: Option<WorkspaceId>,
     canvas_pos: [f32; 2],
     presets: &[PresetConfig],
+    row_width: f32,
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
     let mut any_group_rendered = false;
@@ -49,7 +50,7 @@ pub(super) fn render_grouped_preset_rows(
                 group_started = true;
             }
 
-            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset) {
+            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset, row_width) {
                 selected_action = Some(action);
             }
         }
@@ -144,10 +145,11 @@ fn render_preset_picker_row(
     target_workspace: Option<WorkspaceId>,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
+    row_width: f32,
 ) -> Option<PresetPickerAction> {
     match target_workspace {
-        Some(workspace_id) => render_panel_preset_picker_row(ui, workspace_id, canvas_pos, preset),
-        None => render_workspace_preset_picker_row(ui, canvas_pos, preset),
+        Some(workspace_id) => render_panel_preset_picker_row(ui, workspace_id, canvas_pos, preset, row_width),
+        None => render_workspace_preset_picker_row(ui, canvas_pos, preset, row_width),
     }
 }
 
@@ -156,10 +158,11 @@ fn render_panel_preset_picker_row(
     workspace_id: WorkspaceId,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
+    row_width: f32,
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
     ui.horizontal(|ui| {
-        let label_width = (ui.available_width() - 44.0).max(0.0);
+        let label_width = (row_width - 44.0).max(0.0);
         if ui
             .add(Button::new(preset_button_label(ui, preset, label_width)).frame(false))
             .clicked()
@@ -187,9 +190,10 @@ fn render_workspace_preset_picker_row(
     ui: &mut Ui,
     canvas_pos: [f32; 2],
     preset: &PresetConfig,
+    row_width: f32,
 ) -> Option<PresetPickerAction> {
     if !ui
-        .add(Button::new(preset_button_label(ui, preset, ui.available_width())).frame(false))
+        .add(Button::new(preset_button_label(ui, preset, row_width)).frame(false))
         .clicked()
     {
         return None;
@@ -318,6 +322,7 @@ mod tests {
 
     use super::{
         PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job, preset_category,
+        render_grouped_preset_rows,
     };
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
@@ -391,5 +396,26 @@ mod tests {
         };
         assert!(width <= 80.0);
         assert!(elided);
+    }
+
+    #[test]
+    fn fixed_preset_picker_width_does_not_feed_back_between_frames() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "deploy staging with a deliberately long preset name".to_string();
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut widths = Vec::new();
+
+        for _ in 0..4 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                let area = egui::Area::new(egui::Id::new("preset-picker-width-test")).show(ctx, |ui| {
+                    ui.set_width(320.0);
+                    let _ = render_grouped_preset_rows(ui, None, [0.0, 0.0], std::slice::from_ref(&preset), 320.0);
+                });
+                widths.push(area.response.rect.width());
+            });
+        }
+
+        assert!(widths.windows(2).all(|pair| (pair[0] - pair[1]).abs() < f32::EPSILON));
     }
 }

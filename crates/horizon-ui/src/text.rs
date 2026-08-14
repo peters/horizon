@@ -3,12 +3,16 @@
 use std::sync::Arc;
 
 use egui::{
-    Color32, FontId, FontSelection, Galley, Label, Painter, Response, Ui, WidgetText,
+    Color32, Context, FontId, FontSelection, Galley, Label, Painter, Response, Ui, WidgetText,
     text::{LayoutJob, LayoutSection, TextFormat, TextWrapping},
 };
+use horizon_core::flatten_line_separators;
 
 const TOOLTIP_MIN_WIDTH: f32 = 80.0;
 const TOOLTIP_VIEWPORT_MARGIN: f32 = 24.0;
+const MAX_SHAPING_VISIBLE_SCALARS: usize = 512;
+const MAX_SHAPING_SCANNED_SCALARS: usize = 4_096;
+const SHAPING_WIDTH_BUDGET_MULTIPLIER: f32 = 4.0;
 
 fn single_line_wrapping(max_width: f32) -> TextWrapping {
     TextWrapping {
@@ -34,11 +38,7 @@ pub(crate) fn single_line_job(max_width: f32) -> LayoutJob {
 pub(crate) fn append_single_line_text(job: &mut LayoutJob, text: &str, leading_space: f32, format: TextFormat) {
     let start = job.text.len();
     job.text.reserve(text.len());
-    if text.chars().any(is_line_separator) {
-        push_flattened_newlines(&mut job.text, text);
-    } else {
-        job.text.push_str(text);
-    }
+    job.text.push_str(&flatten_line_separators(text));
     job.sections.push(LayoutSection {
         leading_space,
         byte_range: start..job.text.len(),
@@ -72,6 +72,41 @@ pub(crate) fn painter_text_galley(
     max_width: f32,
 ) -> Arc<Galley> {
     painter.layout_job(single_line_label_job(text, font, color, max_width))
+}
+
+/// Conservatively bounds the prefix sent to the text shaper while keeping
+/// zero-width scalars from consuming the visible-content budget.
+pub(crate) fn precut_text_for_shaping<'a>(ctx: &Context, text: &'a str, font: &FontId, max_width: f32) -> &'a str {
+    if text.is_empty() || !max_width.is_finite() {
+        return text;
+    }
+
+    let shaping_width_budget = max_width.max(0.0) * SHAPING_WIDTH_BUDGET_MULTIPLIER;
+    let cut_at = ctx.fonts_mut(|fonts| {
+        let mut measured_width = 0.0;
+        let mut visible_scalars = 0;
+        for (scanned_scalars, (byte_index, character)) in text.char_indices().enumerate() {
+            if scanned_scalars == MAX_SHAPING_SCANNED_SCALARS {
+                return byte_index;
+            }
+
+            let glyph_width = fonts.glyph_width(font, character).max(0.0);
+            if glyph_width == 0.0 {
+                continue;
+            }
+            if visible_scalars == MAX_SHAPING_VISIBLE_SCALARS || measured_width + glyph_width > shaping_width_budget {
+                return if visible_scalars == 0 {
+                    byte_index + character.len_utf8()
+                } else {
+                    byte_index
+                };
+            }
+            measured_width += glyph_width;
+            visible_scalars += 1;
+        }
+        text.len()
+    });
+    &text[..cut_at]
 }
 
 /// Adds a single-line, width-bounded tooltip to `response`.
@@ -175,6 +210,8 @@ fn flatten_layout_job_newlines(job: &mut LayoutJob) {
         return;
     }
 
+    sanitize_section_ranges(&mut job.sections, &original);
+
     let mut boundaries = Vec::with_capacity(job.sections.len() * 2);
     for section in &job.sections {
         boundaries.extend([section.byte_range.start, section.byte_range.end]);
@@ -268,7 +305,23 @@ fn remapped_boundary(boundaries: &[usize], remapped: &[usize], original_offset: 
         .binary_search(&original_offset)
         .ok()
         .and_then(|index| remapped.get(index).copied())
-        .unwrap_or(original_offset)
+        .unwrap_or_else(|| remapped.last().copied().unwrap_or(0))
+}
+
+fn sanitize_section_ranges(sections: &mut [LayoutSection], text: &str) {
+    for section in sections {
+        let start = clamped_char_boundary(text, section.byte_range.start);
+        let end = clamped_char_boundary(text, section.byte_range.end).max(start);
+        section.byte_range = start..end;
+    }
+}
+
+fn clamped_char_boundary(text: &str, offset: usize) -> usize {
+    let mut boundary = offset.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 fn push_flattened_newlines(output: &mut String, text: &str) {
@@ -444,6 +497,37 @@ mod tests {
         assert_eq!(job.text, "first second");
         assert_eq!(job.sections[0].byte_range, 0..job.text.len());
         assert_eq!(job.sections[1].byte_range, job.text.len()..job.text.len());
+    }
+
+    #[test]
+    fn tooltip_constraints_sanitize_malformed_section_boundaries() {
+        let malformed_start = 8;
+        let malformed_end = 2;
+        let mut job = LayoutJob {
+            text: "é\r\nready".to_string(),
+            sections: vec![
+                egui::text::LayoutSection {
+                    leading_space: 0.0,
+                    byte_range: 1..usize::MAX,
+                    format: TextFormat::default(),
+                },
+                egui::text::LayoutSection {
+                    leading_space: 0.0,
+                    byte_range: malformed_start..malformed_end,
+                    format: TextFormat::default(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        apply_single_line_constraints(&mut job, 96.0);
+
+        for section in &job.sections {
+            assert!(section.byte_range.start <= section.byte_range.end);
+            assert!(section.byte_range.end <= job.text.len());
+            assert!(job.text.is_char_boundary(section.byte_range.start));
+            assert!(job.text.is_char_boundary(section.byte_range.end));
+        }
     }
 
     #[test]

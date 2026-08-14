@@ -9,7 +9,8 @@ use super::speech::MicState;
 
 mod badges;
 
-use badges::{HistoryMeter, layout_status_badges, paint_history_meter, paint_status_badges};
+use badges::{HistoryMeter, paint_history_meter, paint_status_badges};
+pub(super) use badges::{StatusBadgeStrip, layout_status_badges};
 
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
@@ -135,10 +136,9 @@ fn panel_kind_label_color(base: Color32, focused: bool) -> Color32 {
 }
 
 #[profiling::function]
-pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
+pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>, status_badges: &StatusBadgeStrip) {
     let painter = ui.painter_at(chrome.panel_rect);
     let accent = panel_chrome_accent(chrome.kind, chrome.workspace_accent, chrome.focused);
-    let status_badges = layout_status_badges(&painter, &chrome);
 
     if let Some(stroke) = focus_ring_stroke(accent, chrome.focused) {
         painter.rect_stroke(
@@ -196,7 +196,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
-    paint_status_badges(&painter, &status_badges);
+    paint_status_badges(&painter, status_badges);
 
     if chrome.scrollback_limit > 0 {
         paint_history_meter(
@@ -332,13 +332,13 @@ fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focus
     panel_accent(workspace_accent, focused)
 }
 
-pub(super) fn panel_title_content_rect(painter: &egui::Painter, chrome: &PanelChrome<'_>) -> Rect {
+pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>, status_badges: &StatusBadgeStrip) -> Rect {
     let left = if chrome.workspace_accent.is_some() {
         chrome.titlebar_rect.min.x + 26.0
     } else {
         chrome.titlebar_rect.min.x + 12.0
     };
-    let right = layout_status_badges(painter, chrome).title_right.max(left + 1.0);
+    let right = status_badges.title_right.max(left + 1.0);
 
     Rect::from_min_max(
         Pos2::new(left, chrome.titlebar_rect.min.y + 2.0),

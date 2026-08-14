@@ -9,6 +9,8 @@ pub(crate) fn paint_badge_background(
     fill: Color32,
     stroke: Option<(Stroke, StrokeKind)>,
 ) {
-    let (stroke, stroke_kind) = stroke.unwrap_or((Stroke::NONE, StrokeKind::Inside));
-    let _ = painter.rect(rect, corner_radius, fill, stroke, stroke_kind);
+    painter.rect_filled(rect, corner_radius, fill);
+    if let Some((stroke, stroke_kind)) = stroke {
+        painter.rect_stroke(rect, corner_radius, stroke, stroke_kind);
+    }
 }

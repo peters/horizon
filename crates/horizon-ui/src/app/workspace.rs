@@ -3,12 +3,19 @@ mod render;
 mod toolbar;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use egui::{Color32, Context, Pos2, Rect, Vec2};
+use egui::{Color32, Context, FontId, Galley, Pos2, Rect, Vec2};
 use horizon_core::{WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
-use super::util::{OverlayExclusion, workspace_label_width};
-use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
+use crate::text::{precut_text_for_shaping, single_line_label_job};
+use crate::theme;
+
+use super::util::OverlayExclusion;
+use super::{
+    HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_LABEL_MAX_WIDTH, WS_LABEL_MIN_WIDTH,
+    WS_TITLE_HEIGHT,
+};
 
 use self::render::render_workspace_visual;
 use self::toolbar::workspace_layout_toolbar_rect;
@@ -16,6 +23,7 @@ use self::toolbar::workspace_layout_toolbar_rect;
 struct WorkspaceVisual {
     id: WorkspaceId,
     name: String,
+    label_galley: Arc<Galley>,
     color: Color32,
     canvas_rect: Rect,
     screen_rect: Rect,
@@ -54,6 +62,36 @@ const WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X: i8 = 6;
 const WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y: i8 = 5;
 const WORKSPACE_LAYOUT_TOOLBAR_OFFSET_X: f32 = 10.0;
 const WORKSPACE_DOCK_SNAP_DISTANCE: f32 = 72.0;
+
+fn workspace_label_layout(ctx: &Context, name: &str, is_active: bool) -> (f32, Arc<Galley>) {
+    let label_color = if is_active { theme::FG() } else { theme::FG_SOFT() };
+    let label_font = FontId::proportional(12.5);
+    let maximum_text_width = (WS_LABEL_MAX_WIDTH - 48.0).max(0.0);
+    let display_name = precut_text_for_shaping(ctx, name, &label_font, maximum_text_width);
+    let natural_galley = ctx.fonts_mut(|fonts| {
+        fonts.layout_job(single_line_label_job(
+            display_name,
+            &label_font,
+            label_color,
+            f32::INFINITY,
+        ))
+    });
+    let label_width = (natural_galley.size().x + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH);
+    let max_text_width = (label_width - 48.0).max(0.0);
+    let label_galley = if natural_galley.size().x <= max_text_width {
+        natural_galley
+    } else {
+        ctx.fonts_mut(|fonts| {
+            fonts.layout_job(single_line_label_job(
+                display_name,
+                &label_font,
+                label_color,
+                max_text_width,
+            ))
+        })
+    };
+    (label_width, label_galley)
+}
 
 #[derive(Clone, Copy)]
 struct WorkspaceDockTarget {
@@ -110,7 +148,13 @@ impl HorizonApp {
     ) {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
-        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
+        let visuals = self.workspace_visuals(
+            ctx,
+            canvas_rect,
+            workspace_bounds,
+            overlay_zones,
+            visible_detached_workspace,
+        );
         let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
@@ -278,6 +322,7 @@ impl HorizonApp {
     #[profiling::function]
     fn workspace_visuals(
         &self,
+        ctx: &Context,
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
@@ -324,9 +369,10 @@ impl HorizonApp {
                     return None;
                 }
 
+                let (label_width, label_galley) = workspace_label_layout(ctx, &workspace.name, is_active);
                 let label_canvas_rect = Rect::from_min_size(
                     workspace_canvas_rect.min + Vec2::new(14.0, 12.0),
-                    Vec2::new(workspace_label_width(&workspace.name), WS_LABEL_HEIGHT),
+                    Vec2::new(label_width, WS_LABEL_HEIGHT),
                 );
                 let label_screen_rect = Rect::from_min_size(
                     self.canvas_to_screen(canvas_rect, label_canvas_rect.min),
@@ -340,6 +386,7 @@ impl HorizonApp {
                 Some(WorkspaceVisual {
                     id: workspace.id,
                     name: workspace.name.clone(),
+                    label_galley,
                     color,
                     canvas_rect: workspace_canvas_rect,
                     screen_rect,
@@ -408,15 +455,30 @@ fn workspace_dock_side(dragged_rect: Rect, target_rect: Rect) -> Option<Workspac
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspaceVisual, toolbar::should_show_workspace_layout_toolbar};
+    use super::{WorkspaceVisual, toolbar::should_show_workspace_layout_toolbar, workspace_label_layout};
     use egui::{Color32, Pos2, Rect, Vec2};
     use horizon_core::WorkspaceId;
 
+    fn measured_workspace_label(name: &str) -> (f32, std::sync::Arc<egui::Galley>) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut result = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            result = Some(workspace_label_layout(ctx, name, false));
+        });
+        let Some(result) = result else {
+            panic!("workspace label was not measured");
+        };
+        result
+    }
+
     fn workspace_visual(panel_count: usize) -> WorkspaceVisual {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(120.0, 64.0));
+        let (_, label_galley) = measured_workspace_label("Alpha");
         WorkspaceVisual {
             id: WorkspaceId(1),
             name: "Alpha".to_string(),
+            label_galley,
             color: Color32::WHITE,
             canvas_rect: rect,
             screen_rect: rect,
@@ -439,5 +501,14 @@ mod tests {
     #[test]
     fn layout_toolbar_stays_visible_for_single_panel_workspaces() {
         assert!(should_show_workspace_layout_toolbar(&workspace_visual(1)));
+    }
+
+    #[test]
+    fn workspace_label_width_uses_real_wide_glyph_metrics() {
+        let (ascii_width, _) = measured_workspace_label("AAAAAA");
+        let (cjk_width, cjk_galley) = measured_workspace_label("二二二二二二");
+
+        assert!(cjk_width > ascii_width);
+        assert_eq!(cjk_galley.job.text, "二二二二二二");
     }
 }

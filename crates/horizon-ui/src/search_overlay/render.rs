@@ -1,11 +1,9 @@
 use crate::badge::paint_badge_background;
-use crate::text::{painter_text_galley, single_line_label_job};
+use crate::text::{painter_text_galley, precut_text_for_shaping, single_line_label_job};
 use crate::theme;
 use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
-
-const MAX_SEARCH_DETAIL_SHAPING_SCALARS: usize = 512;
 
 pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: bool, hovered: bool, has_query: bool) {
     let painter = ui.painter();
@@ -145,7 +143,10 @@ pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) 
         theme::FG_DIM(),
         (rect.max.x - text_x - 4.0).max(0.0),
     );
-    let text_rect = Rect::from_min_max(Pos2::new(text_x, rect.min.y), Pos2::new(rect.max.x - 4.0, rect.max.y));
+    let text_rect = Rect::from_min_max(
+        Pos2::new(text_x, rect.min.y),
+        Pos2::new((rect.max.x - 4.0).max(text_x), rect.max.y),
+    );
     painter.with_clip_rect(text_rect).galley(
         Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -258,7 +259,7 @@ pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool,
         label,
         &egui::FontId::proportional(10.0),
         fg,
-        ui.available_width().max(0.0),
+        f32::INFINITY,
     );
     let label_size = label_galley.size();
     let size = Vec2::new(label_size.x + 14.0, 22.0);
@@ -326,31 +327,8 @@ fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
 
 fn search_detail_layout_job(painter: &Painter, text: &str, max_width: f32) -> egui::text::LayoutJob {
     let trimmed = text.trim();
-    let display_text = precut_search_detail(painter, trimmed, max_width);
+    let display_text = precut_text_for_shaping(painter.ctx(), trimmed, &DETAIL_FONT, max_width);
     single_line_label_job(display_text, &DETAIL_FONT, theme::FG_DIM(), max_width)
-}
-
-fn precut_search_detail<'a>(painter: &Painter, text: &'a str, max_width: f32) -> &'a str {
-    if !max_width.is_finite() {
-        return text;
-    }
-
-    let shaping_width_budget = max_width.max(0.0) * 4.0;
-    let cut_at = painter.fonts_mut(|fonts| {
-        let mut measured_width = 0.0;
-        for (scalar_index, (byte_index, character)) in text.char_indices().enumerate() {
-            if scalar_index == MAX_SEARCH_DETAIL_SHAPING_SCALARS {
-                return byte_index;
-            }
-            let glyph_width = fonts.glyph_width(&DETAIL_FONT, character).max(0.0);
-            if glyph_width > 0.0 && measured_width + glyph_width > shaping_width_budget {
-                return byte_index;
-            }
-            measured_width += glyph_width;
-        }
-        text.len()
-    });
-    &text[..cut_at]
 }
 
 #[cfg(test)]
@@ -410,7 +388,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
         let job_text = RefCell::new(String::new());
-        let source = format!("error{}: cannot open /etc/hosts", "\u{200B}".repeat(40));
+        let source = format!("error{}: cannot open /etc/hosts", "\u{200B}".repeat(600));
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -419,5 +397,20 @@ mod tests {
         });
 
         assert!(job_text.borrow().contains(": cannot"));
+    }
+
+    #[test]
+    fn detail_precut_keeps_a_first_visible_scalar_for_tiny_widths() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let job_text = RefCell::new(String::new());
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), "二 detail", 0.5).text;
+            });
+        });
+
+        assert_eq!(*job_text.borrow(), "二");
     }
 }

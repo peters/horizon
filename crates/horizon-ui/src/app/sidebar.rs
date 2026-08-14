@@ -8,6 +8,7 @@ use egui::{
 };
 use horizon_core::{
     AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
+    flatten_line_separators,
 };
 
 use crate::text::{stable_hover_text, stable_hover_text_lazy};
@@ -478,10 +479,11 @@ impl HorizonApp {
                     ui.add_space(4.0);
 
                     let title_width = (ui.available_width() - 28.0).max(48.0);
+                    let title = flatten_line_separators(&panel.title);
                     let title_response = ui.add_sized(
                         Vec2::new(title_width, 18.0),
                         egui::Label::new(
-                            egui::RichText::new(&panel.title)
+                            egui::RichText::new(title.as_ref())
                                 .color(if panel.is_focused {
                                     theme::FG()
                                 } else {
@@ -514,10 +516,11 @@ impl HorizonApp {
                         click_target_hovered |= tag_response.hovered();
                         row_clicked |= tag_response.clicked();
                         ui.add_space(4.0);
+                        let summary = flatten_line_separators(&attention_item.summary);
                         let summary_response = ui.add_sized(
                             Vec2::new(ui.available_width(), 14.0),
                             egui::Label::new(
-                                egui::RichText::new(&attention_item.summary)
+                                egui::RichText::new(summary.as_ref())
                                     .size(9.0)
                                     .color(theme::alpha(color, 180)),
                             )

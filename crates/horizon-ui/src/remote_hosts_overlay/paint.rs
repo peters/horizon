@@ -245,12 +245,13 @@ fn paint_host_row_contents(ui: &mut Ui, layout: &HostRowLayout, row: &HostRowRen
             theme::FG_DIM()
         },
     );
-    painter.text(
+    render_truncated_text(
+        &painter,
         Pos2::new(layout.body.min.x, y),
-        egui::Align2::LEFT_CENTER,
         &row.host.label,
-        mono.clone(),
+        &mono,
         alias_color(row.host.status),
+        x + row.columns.ipv4 - COLUMN_GUTTER,
     );
 
     paint_row_columns(&painter, x, y, &mono_sm, row);
@@ -368,7 +369,15 @@ fn render_truncated_text(painter: &egui::Painter, pos: Pos2, text: &str, font: &
         return;
     }
 
-    let mut job = single_line_job(max_x - pos.x);
+    render_layout_job(
+        painter,
+        pos,
+        truncated_text_layout_job(text, font, color, max_x - pos.x),
+    );
+}
+
+fn truncated_text_layout_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> LayoutJob {
+    let mut job = single_line_job(max_width);
     append_single_line_text(
         &mut job,
         text,
@@ -379,7 +388,7 @@ fn render_truncated_text(painter: &egui::Painter, pos: Pos2, text: &str, font: &
             ..Default::default()
         },
     );
-    render_layout_job(painter, pos, job);
+    job
 }
 
 fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
@@ -561,5 +570,21 @@ mod tests {
         assert_eq!(job.wrap.max_rows, 1);
         assert!(job.wrap.break_anywhere);
         assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
+    }
+
+    #[test]
+    fn host_alias_layout_flattens_newlines_and_honors_its_column_width() {
+        let font = FontId::monospace(12.0);
+        let job = truncated_text_layout_job(
+            "production\r\nwith a deliberately long alias",
+            &font,
+            Color32::WHITE,
+            90.0,
+        );
+
+        assert_eq!(job.text, "production with a deliberately long alias");
+        assert_eq!(job.wrap.max_rows, 1);
+        assert_eq!(job.wrap.overflow_character, Some('…'));
+        assert!((job.wrap.max_width - 90.0).abs() < f32::EPSILON);
     }
 }

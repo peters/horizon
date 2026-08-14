@@ -123,23 +123,6 @@ pub(super) fn clamp_panel_size(size: Vec2) -> Vec2 {
     )
 }
 
-pub(super) fn workspace_label_width(name: &str) -> f32 {
-    let estimated_text_width: f32 = name
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_uppercase() {
-                8.6
-            } else if ch.is_ascii_whitespace() {
-                4.5
-            } else {
-                7.6
-            }
-        })
-        .sum();
-
-    (estimated_text_width + 60.0).clamp(super::WS_LABEL_MIN_WIDTH, super::WS_LABEL_MAX_WIDTH)
-}
-
 pub(super) fn format_compact_count(value: usize) -> String {
     if value >= 10_000 {
         return format!("{}k", value / 1_000);

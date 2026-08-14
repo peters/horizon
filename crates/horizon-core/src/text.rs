@@ -2,6 +2,41 @@
 
 use std::borrow::Cow;
 
+/// Replaces mandatory line separators with spaces for single-line UI text.
+/// A CRLF pair becomes one space.
+///
+/// The original string is borrowed when no normalization is needed.
+#[must_use]
+pub fn flatten_line_separators(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_line_separator) {
+        return Cow::Borrowed(text);
+    }
+
+    let mut flattened = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek().is_some_and(|next| *next == '\n') {
+                let _ = characters.next();
+            }
+            flattened.push(' ');
+        } else if is_line_separator(character) {
+            flattened.push(' ');
+        } else {
+            flattened.push(character);
+        }
+    }
+
+    Cow::Owned(flattened)
+}
+
+fn is_line_separator(character: char) -> bool {
+    matches!(
+        character,
+        '\r' | '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
 /// Caps `text` at `max_chars` Unicode scalar values, ending a truncated
 /// result with an ellipsis that counts toward the budget.
 ///
@@ -31,7 +66,16 @@ pub fn truncate_chars(text: &str, max_chars: usize) -> Cow<'_, str> {
 mod tests {
     use std::borrow::Cow;
 
-    use super::truncate_chars;
+    use super::{flatten_line_separators, truncate_chars};
+
+    #[test]
+    fn line_separator_flattening_borrows_plain_text_and_normalizes_crlf() {
+        assert!(matches!(flatten_line_separators("build server"), Cow::Borrowed(_)));
+        assert_eq!(
+            flatten_line_separators("build\r\nserver\u{2028}ready\u{0085}now"),
+            "build server ready now"
+        );
+    }
 
     #[test]
     fn keeps_short_text_borrowed() {
