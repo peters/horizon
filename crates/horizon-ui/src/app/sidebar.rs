@@ -19,6 +19,9 @@ use super::root_chrome::effective_sidebar_width;
 use super::util;
 use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
+const DETACHED_WORKSPACE_LABEL_RESERVATION: f32 = 68.0;
+const PANEL_CONTEXT_MENU_WIDTH: f32 = 220.0;
+
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
     name: String,
@@ -281,7 +284,14 @@ impl HorizonApp {
                 ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
 
                 ui.add_space(8.0);
-                let name_response = ui.add(
+                let detached_reservation = if workspace.detached {
+                    DETACHED_WORKSPACE_LABEL_RESERVATION
+                } else {
+                    0.0
+                };
+                let name_width = (ui.available_width() - detached_reservation).max(0.0);
+                let name_response = ui.add_sized(
+                    Vec2::new(name_width, 18.0),
                     egui::Label::new(
                         egui::RichText::new(&workspace.name)
                             .color(if workspace.is_active {
@@ -292,6 +302,7 @@ impl HorizonApp {
                             .size(13.0)
                             .strong(),
                     )
+                    .truncate()
                     .sense(Sense::click()),
                 );
                 click_target_hovered |= name_response.hovered();
@@ -571,7 +582,7 @@ impl HorizonApp {
         actions: &mut SidebarActions,
     ) {
         response.context_menu(|ui| {
-            ui.set_min_width(160.0);
+            ui.set_width(PANEL_CONTEXT_MENU_WIDTH);
             ui.label(
                 egui::RichText::new("Move to Workspace")
                     .size(11.0)
@@ -584,7 +595,13 @@ impl HorizonApp {
                 let text = egui::RichText::new(&other_workspace.name)
                     .size(12.0)
                     .color(theme::FG_SOFT());
-                if ui.add(Button::new(text).frame(false)).clicked() {
+                if ui
+                    .add_sized(
+                        Vec2::new(PANEL_CONTEXT_MENU_WIDTH, 22.0),
+                        Button::new(text).frame(false).truncate(),
+                    )
+                    .clicked()
+                {
                     self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
                     self.mark_runtime_dirty();
                     ui.close();
