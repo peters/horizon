@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod badge;
 mod branding;
 mod command_palette;
 mod command_registry;

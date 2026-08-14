@@ -1,6 +1,7 @@
 use egui::{Color32, Stroke, Ui};
 use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
+use crate::text::stable_hover_text;
 use crate::theme;
 
 const ALL_KINDS: [PanelKind; 12] = [
@@ -104,7 +105,7 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
                         .text_color(name_color),
                 );
                 if preset.name.trim().is_empty() {
-                    name_response.on_hover_text("Preset name cannot be empty");
+                    let _ = stable_hover_text(name_response, "Preset name cannot be empty");
                 }
 
                 let mut alias_str = preset.alias.clone().unwrap_or_default();

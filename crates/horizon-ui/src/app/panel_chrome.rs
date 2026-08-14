@@ -1,6 +1,8 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
+use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition, truncate_chars};
 
+use crate::badge::paint_badge_background;
+use crate::text::single_line_label_job;
 use crate::theme;
 
 use super::RenameEditAction;
@@ -356,22 +358,12 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
 
 #[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
-    use egui::text::{LayoutJob, TextFormat, TextWrapping};
-
-    let mut job = LayoutJob::single_section(
-        title.to_string(),
-        TextFormat {
-            font_id: egui::FontId::proportional(13.0),
-            color: panel_title_color(focused),
-            ..Default::default()
-        },
-    );
-    job.wrap = TextWrapping {
+    let job = single_line_label_job(
+        title,
+        &egui::FontId::proportional(13.0),
+        panel_title_color(focused),
         max_width,
-        max_rows: 1,
-        break_anywhere: true,
-        overflow_character: Some('\u{2026}'),
-    };
+    );
     let galley = painter.layout_job(job);
     let text_height = galley.size().y;
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
@@ -460,17 +452,7 @@ fn paint_attention_badge(
     summary: &str,
 ) {
     let color = attention_severity_color(severity);
-    let icon = attention_severity_icon(severity);
-
-    // Truncate the summary for display.
-    let display_text = if summary.len() > 30 {
-        let mut truncated = summary[..29].to_string();
-        truncated.push('\u{2026}');
-        truncated
-    } else {
-        summary.to_string()
-    };
-    let badge_text = format!("{icon} {display_text}");
+    let badge_text = attention_badge_text(severity, summary);
     let font = egui::FontId::proportional(10.0);
 
     // Position the badge left of the history meter area.
@@ -486,10 +468,13 @@ fn paint_attention_badge(
         Vec2::new(badge_right - badge_left, badge_height),
     );
 
-    painter.rect_filled(
+    paint_badge_background(
+        painter,
         badge_rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
+        Stroke::NONE,
+        StrokeKind::Inside,
     );
     painter.text(
         Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
@@ -498,6 +483,12 @@ fn paint_attention_badge(
         font,
         color,
     );
+}
+
+fn attention_badge_text(severity: AttentionSeverity, summary: &str) -> String {
+    let icon = attention_severity_icon(severity);
+    let display_text = truncate_chars(summary, 30);
+    format!("{icon} {display_text}")
 }
 
 #[profiling::function]
@@ -635,9 +626,20 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color, panel_titlebar_fill,
-        title_focus_indicator_rect,
+        attention_badge_text, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        panel_titlebar_fill, title_focus_indicator_rect,
     };
+    use horizon_core::AttentionSeverity;
+
+    #[test]
+    fn attention_badge_truncates_utf8_summary_without_slicing_bytes() {
+        let summary = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaåzz";
+
+        assert_eq!(
+            attention_badge_text(AttentionSeverity::Low, summary),
+            "ℹ aaaaaaaaaaaaaaaaaaaaaaaaaaaaå…"
+        );
+    }
 
     #[test]
     fn focused_panel_style_is_more_prominent() {

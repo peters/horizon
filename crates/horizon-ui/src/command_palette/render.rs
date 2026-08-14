@@ -1,6 +1,7 @@
 use egui::{CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::util::usize_to_f32;
+use crate::badge::paint_badge_background;
 use crate::theme;
 
 use super::{INPUT_HEIGHT, MAX_VISIBLE_ROWS, PALETTE_WIDTH, ROW_HEIGHT, ResultItem, SECTION_HEADER_HEIGHT};
@@ -143,18 +144,16 @@ fn paint_shortcut_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, shortcut: &s
         Pos2::new(row_rect.max.x - badge_width - 8.0, text_y - 10.0),
         Vec2::new(badge_width, 20.0),
     );
-    ui.painter_at(row_rect).rect_filled(
+    let painter = ui.painter_at(row_rect);
+    paint_badge_background(
+        &painter,
         badge_rect,
         CornerRadius::same(5),
         theme::alpha(theme::BG_ELEVATED(), 200),
-    );
-    ui.painter_at(row_rect).rect_stroke(
-        badge_rect,
-        CornerRadius::same(5),
         Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
-    ui.painter_at(row_rect).text(
+    painter.text(
         badge_rect.center(),
         egui::Align2::CENTER_CENTER,
         shortcut,

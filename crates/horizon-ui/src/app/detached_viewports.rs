@@ -8,6 +8,7 @@ use egui::{
 };
 use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
+use crate::text::stable_hover_text;
 use crate::{branding, theme};
 
 use super::util::{chrome_button, primary_shortcut_label, viewport_local_rect};
@@ -312,18 +313,20 @@ impl HorizonApp {
                         ctx.request_repaint_of(ViewportId::ROOT);
                     }
 
-                    if ui
-                        .add(chrome_button("Fit Workspace").min_size(Vec2::new(126.0, 30.0)))
-                        .on_hover_text(fit_shortcut.as_str())
-                        .clicked()
+                    if stable_hover_text(
+                        ui.add(chrome_button("Fit Workspace").min_size(Vec2::new(126.0, 30.0))),
+                        fit_shortcut.as_str(),
+                    )
+                    .clicked()
                     {
                         let _ = self.fit_workspace_in_rect(workspace_id, detached_canvas_rect(ctx));
                     }
 
-                    if ui
-                        .add(chrome_button(minimap_label).min_size(Vec2::new(124.0, 30.0)))
-                        .on_hover_text(minimap_shortcut.as_str())
-                        .clicked()
+                    if stable_hover_text(
+                        ui.add(chrome_button(minimap_label).min_size(Vec2::new(124.0, 30.0))),
+                        minimap_shortcut.as_str(),
+                    )
+                    .clicked()
                     {
                         self.minimap_visible = !self.minimap_visible;
                     }

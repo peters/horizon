@@ -24,6 +24,8 @@ back into large multi-purpose modules.
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
+- `text.rs` owns presentation-neutral Unicode text transformations shared by
+  core and UI; egui layout and painting remain in `horizon-ui`.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
@@ -33,6 +35,8 @@ back into large multi-purpose modules.
 
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
+- Crate-level `text.rs` and `badge.rs` own shared egui text and badge-painting
+  primitives used across feature renderers.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut

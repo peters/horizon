@@ -1,10 +1,9 @@
 use std::{cmp::Ordering, collections::HashMap, f32::consts::FRAC_PI_2, sync::Arc};
 
-use egui::{
-    Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, epaint::TextShape,
-};
+use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, Vec2, epaint::TextShape};
 use horizon_core::WorkspaceId;
 
+use crate::badge::paint_badge_background;
 use crate::{text::single_line_label_job, theme};
 
 use super::{
@@ -332,8 +331,14 @@ fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: b
         236,
     );
     let stroke = Stroke::new(1.0_f32, theme::alpha(color, if is_active { 210 } else { 140 }));
-    painter.rect_filled(rect, CornerRadius::same(4), fill);
-    painter.rect_stroke(rect, CornerRadius::same(4), stroke, StrokeKind::Outside);
+    paint_badge_background(
+        painter,
+        rect,
+        egui::CornerRadius::same(4),
+        fill,
+        stroke,
+        egui::StrokeKind::Outside,
+    );
 }
 
 fn label_text_color(is_active: bool) -> Color32 {

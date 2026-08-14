@@ -6,6 +6,7 @@ use crate::app::shortcut_inventory::{
 };
 use crate::app::util;
 use crate::terminal_widget::SSH_RECONNECT_SHORTCUT;
+use crate::text::stable_hover_text;
 use crate::theme;
 
 const LABEL_WIDTH: f32 = 130.0;
@@ -225,7 +226,7 @@ fn shortcut_row(ui: &mut Ui, label: &str, value: &mut String, all_valid: &mut bo
         if let Err(horizon_core::Error::Config(msg)) = &validation {
             *all_valid = false;
             let indicator = ui.label(egui::RichText::new("!").color(theme::PALETTE_RED()).size(12.0).strong());
-            indicator.on_hover_text(msg.as_str());
+            let _ = stable_hover_text(indicator, msg.as_str());
         } else if validation.is_err() {
             *all_valid = false;
         }

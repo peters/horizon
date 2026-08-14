@@ -1,6 +1,6 @@
-use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
+use crate::text::single_line_label_job;
 use crate::theme;
 
 #[profiling::function]
@@ -74,20 +74,12 @@ pub(super) fn paint_workspace_label(
 
     let text_x = rect.min.x + 26.0;
     let max_text_width = (grip_center.x - 8.0 - text_x).max(0.0);
-    let mut job = LayoutJob::single_section(
-        name.to_string(),
-        TextFormat {
-            font_id: egui::FontId::proportional(12.5),
-            color: if is_active { theme::FG() } else { theme::FG_SOFT() },
-            ..Default::default()
-        },
+    let job = single_line_label_job(
+        name,
+        &egui::FontId::proportional(12.5),
+        if is_active { theme::FG() } else { theme::FG_SOFT() },
+        max_text_width,
     );
-    job.wrap = TextWrapping {
-        max_width: max_text_width,
-        max_rows: 1,
-        break_anywhere: true,
-        overflow_character: Some('\u{2026}'),
-    };
     let galley = painter.layout_job(job);
     painter.galley(
         Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),

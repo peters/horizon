@@ -8,6 +8,7 @@ use crate::app::root_chrome::{
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
+use crate::text::stable_hover_text_lazy;
 use crate::{branding, theme};
 
 impl HorizonApp {
@@ -138,15 +139,16 @@ impl HorizonApp {
             theme::alpha(theme::FG_DIM(), 220),
         );
 
-        let tooltip = if stats.sample_count == 0 {
-            "Idle. The meter resumes once Horizon redraws again.".to_string()
-        } else {
-            format!(
-                "{:.0} FPS average over {} frames ({:.2} ms/frame)",
-                stats.fps, stats.sample_count, stats.frame_time_ms
-            )
-        };
-        let _ = response.on_hover_text(tooltip);
+        let _ = stable_hover_text_lazy(response, || {
+            if stats.sample_count == 0 {
+                "Idle. The meter resumes once Horizon redraws again.".to_string()
+            } else {
+                format!(
+                    "{:.0} FPS average over {} frames ({:.2} ms/frame)",
+                    stats.fps, stats.sample_count, stats.frame_time_ms
+                )
+            }
+        });
     }
 
     fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
@@ -176,8 +178,8 @@ impl HorizonApp {
                     util::primary_button(action.label())
                         .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
                 );
-                if let Some(tooltip) = self.available_update_hover_text() {
-                    response.on_hover_text(tooltip)
+                if self.has_available_update() {
+                    stable_hover_text_lazy(response, || self.available_update_hover_text().unwrap_or_default())
                 } else {
                     response
                 }

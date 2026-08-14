@@ -1,6 +1,8 @@
 use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
+use horizon_core::truncate_chars;
 
 use crate::app::util::usize_to_f32;
+use crate::badge::paint_badge_background;
 use crate::theme;
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
@@ -267,18 +269,16 @@ fn paint_count_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, label: &str) {
         Pos2::new(row_rect.max.x - badge_w - 6.0, text_y - 9.0),
         Vec2::new(badge_w, 18.0),
     );
-    ui.painter_at(row_rect).rect_filled(
+    let painter = ui.painter_at(row_rect);
+    paint_badge_background(
+        &painter,
         badge_rect,
         CornerRadius::same(4),
         theme::alpha(theme::BG_ELEVATED(), 200),
-    );
-    ui.painter_at(row_rect).rect_stroke(
-        badge_rect,
-        CornerRadius::same(4),
         Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
         StrokeKind::Inside,
     );
-    ui.painter_at(row_rect).text(
+    painter.text(
         badge_rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
@@ -313,11 +313,20 @@ fn truncate_to_width(text: &str, max_width: f32, font_size: f32) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let max_chars = (max_width / char_width) as usize;
 
-    if text.chars().count() <= max_chars {
-        return text.to_string();
+    truncate_chars(text, max_chars).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_to_width;
+
+    #[test]
+    fn width_truncation_uses_unicode_character_boundaries() {
+        assert_eq!(truncate_to_width("blåbær", 24.0, 10.0), "blå…");
     }
 
-    let mut result: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    result.push('\u{2026}');
-    result
+    #[test]
+    fn width_smaller_than_one_character_returns_empty() {
+        assert_eq!(truncate_to_width("terminal", 0.5, 10.0), "");
+    }
 }

@@ -13,6 +13,7 @@ use super::{
 };
 use crate::error::Error;
 
+mod labels;
 mod provider_scoping;
 
 #[test]

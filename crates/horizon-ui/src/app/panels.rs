@@ -11,6 +11,7 @@ use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
     TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView, viewport_for_available_space,
 };
+use super::super::text::stable_hover_text_lazy;
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
@@ -499,28 +500,25 @@ impl HorizonApp {
                     // Built lazily: the summary allocates per profile, so it
                     // must only run for the hovered mic, not every visible
                     // panel every frame.
-                    let response = response.on_hover_ui(|ui| {
-                        let tooltip = match state {
-                            MicState::Recording => "Recording into this panel (click to stop)".to_string(),
-                            MicState::Busy => "Transcribing dictation for this panel".to_string(),
-                            MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
-                                "Dictation is active in another panel".to_string()
-                            }
-                            MicState::Idle => speech.map_or_else(
-                                || "Dictate into this panel (click to start/stop)".to_string(),
-                                |speech| match speech.hotkey_summary(primary_shortcut_label()) {
-                                    Some(summary) => {
-                                        let verb = match speech.hotkey_mode() {
-                                            horizon_core::SpeechHotkeyMode::Hold => "hold",
-                                            horizon_core::SpeechHotkeyMode::Toggle => "press",
-                                        };
-                                        format!("Dictate into this panel (click, or {verb}: {summary})")
-                                    }
-                                    None => "Dictate into this panel (click to start/stop)".to_string(),
-                                },
-                            ),
-                        };
-                        ui.label(tooltip);
+                    let response = stable_hover_text_lazy(response, || match state {
+                        MicState::Recording => "Recording into this panel (click to stop)".to_string(),
+                        MicState::Busy => "Transcribing dictation for this panel".to_string(),
+                        MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
+                            "Dictation is active in another panel".to_string()
+                        }
+                        MicState::Idle => speech.map_or_else(
+                            || "Dictate into this panel (click to start/stop)".to_string(),
+                            |speech| match speech.hotkey_summary(primary_shortcut_label()) {
+                                Some(summary) => {
+                                    let verb = match speech.hotkey_mode() {
+                                        horizon_core::SpeechHotkeyMode::Hold => "hold",
+                                        horizon_core::SpeechHotkeyMode::Toggle => "press",
+                                    };
+                                    format!("Dictate into this panel (click, or {verb}: {summary})")
+                                }
+                                None => "Dictate into this panel (click to start/stop)".to_string(),
+                            },
+                        ),
                     });
                     PanelMicInteraction {
                         response,

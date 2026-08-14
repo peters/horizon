@@ -1,6 +1,7 @@
 use egui::{
     Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, Rect, RichText, Stroke, StrokeKind, Vec2,
 };
+use horizon_core::truncate_chars;
 
 use crate::{loading_spinner, theme};
 
@@ -255,21 +256,11 @@ fn render_single_file_pill(ui: &mut egui::Ui, name: &str, size_bytes: u64) {
                 let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(6.0, 14.0), egui::Sense::hover());
                 ui.painter_at(dot_rect)
                     .circle_filled(dot_rect.center(), 3.0, theme::PALETTE_CYAN());
-                let display_name = truncate_name(name, 20);
+                let display_name = truncate_chars(name, 20);
                 ui.label(RichText::new(display_name).size(11.0).color(theme::FG_SOFT()));
                 ui.label(RichText::new(human_bytes(size_bytes)).size(10.0).color(theme::FG_DIM()));
             });
         });
-}
-
-fn truncate_name(name: &str, max_chars: usize) -> String {
-    let char_count = name.chars().count();
-    if char_count > max_chars {
-        let truncated: String = name.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{truncated}...")
-    } else {
-        name.to_string()
-    }
 }
 
 // ---------------------------------------------------------------------------
