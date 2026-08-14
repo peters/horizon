@@ -404,18 +404,21 @@ mod tests {
         preset.name = "deploy staging with a deliberately long preset name".to_string();
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
+        let picker_width = 320.0;
         let mut widths = Vec::new();
 
         for _ in 0..4 {
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
                 let area = egui::Area::new(egui::Id::new("preset-picker-width-test")).show(ctx, |ui| {
-                    ui.set_width(320.0);
-                    let _ = render_grouped_preset_rows(ui, None, [0.0, 0.0], std::slice::from_ref(&preset), 320.0);
+                    ui.set_width(picker_width);
+                    let _ =
+                        render_grouped_preset_rows(ui, None, [0.0, 0.0], std::slice::from_ref(&preset), picker_width);
                 });
                 widths.push(area.response.rect.width());
             });
         }
 
+        assert!(widths.iter().all(|width| (*width - picker_width).abs() < f32::EPSILON));
         assert!(widths.windows(2).all(|pair| (pair[0] - pair[1]).abs() < f32::EPSILON));
     }
 }

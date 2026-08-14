@@ -13,6 +13,10 @@ use super::support::{preset_picker_heading, render_grouped_preset_rows};
 const PRESET_PICKER_MIN_WIDTH: f32 = 160.0;
 const PRESET_PICKER_MAX_WIDTH: f32 = 320.0;
 
+fn preset_picker_width(content_width: f32) -> f32 {
+    (content_width - 32.0).clamp(PRESET_PICKER_MIN_WIDTH, PRESET_PICKER_MAX_WIDTH)
+}
+
 impl HorizonApp {
     pub(in crate::app) fn render_dir_picker(&mut self, ctx: &Context) {
         let Some(picker) = self.dir_picker.as_mut() else {
@@ -128,7 +132,7 @@ impl HorizonApp {
         canvas_pos: [f32; 2],
     ) -> (Rect, Option<PresetPickerAction>) {
         let mut selected_action = None;
-        let picker_width = (ctx.content_rect().width() - 32.0).clamp(PRESET_PICKER_MIN_WIDTH, PRESET_PICKER_MAX_WIDTH);
+        let picker_width = preset_picker_width(ctx.content_rect().width());
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
             .constrain(true)
@@ -190,5 +194,17 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preset_picker_width;
+
+    #[test]
+    fn picker_width_uses_stable_viewport_bounds() {
+        assert!((preset_picker_width(1_200.0) - 320.0).abs() < f32::EPSILON);
+        assert!((preset_picker_width(240.0) - 208.0).abs() < f32::EPSILON);
+        assert!((preset_picker_width(120.0) - 160.0).abs() < f32::EPSILON);
     }
 }

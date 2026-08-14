@@ -2,7 +2,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::util::usize_to_f32;
 use crate::badge::paint_badge_background;
-use crate::text::{painter_text_galley, precut_text_for_shaping, single_line_label_job};
+use crate::text::painter_text_galley;
 use crate::theme;
 
 use super::{INPUT_HEIGHT, MAX_VISIBLE_ROWS, PALETTE_WIDTH, ROW_HEIGHT, ResultItem, SECTION_HEADER_HEIGHT};
@@ -64,8 +64,7 @@ pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) 
     let text_x = rect.min.x + 4.0;
     let max_width = (rect.max.x - text_x - 4.0).max(0.0);
     let font = egui::FontId::proportional(10.5);
-    let text = precut_text_for_shaping(painter.ctx(), title, &font, max_width);
-    let galley = painter_text_galley(&painter, text, &font, theme::FG_DIM(), max_width);
+    let galley = painter_text_galley(&painter, title, &font, theme::FG_DIM(), max_width);
     let text_rect = Rect::from_min_max(
         Pos2::new(text_x, rect.min.y),
         Pos2::new((rect.max.x - 4.0).max(text_x), rect.max.y),
@@ -122,17 +121,16 @@ pub(super) fn render_result_row(
     };
     let shortcut_max_width = (row_rect.width() - 28.0).max(0.0);
     let shortcut_font = egui::FontId::monospace(10.0);
-    let shortcut_galley = item.shortcut.as_ref().map(|shortcut| {
-        let shortcut = precut_text_for_shaping(painter.ctx(), shortcut, &shortcut_font, shortcut_max_width);
-        painter_text_galley(&painter, shortcut, &shortcut_font, theme::FG_DIM(), shortcut_max_width)
-    });
+    let shortcut_galley = item
+        .shortcut
+        .as_ref()
+        .map(|shortcut| painter_text_galley(&painter, shortcut, &shortcut_font, theme::FG_DIM(), shortcut_max_width));
     let reserved_shortcut_width = shortcut_galley.as_ref().map_or(0.0, |galley| galley.size().x + 28.0);
     let content_right = row_rect.max.x - 12.0 - reserved_shortcut_width;
     let label_color = if is_selected { theme::FG() } else { theme::FG_SOFT() };
     let label_max_width = (content_right - label_x).max(0.0);
     let label_font = egui::FontId::proportional(13.0);
-    let label = precut_text_for_shaping(painter.ctx(), &item.label, &label_font, label_max_width);
-    let label_galley = painter_text_galley(&painter, label, &label_font, label_color, label_max_width);
+    let label_galley = painter_text_galley(&painter, &item.label, &label_font, label_color, label_max_width);
     let label_size = label_galley.size();
     let label_rect = Rect::from_min_max(
         Pos2::new(label_x, row_rect.min.y),
@@ -149,8 +147,7 @@ pub(super) fn render_result_row(
         if detail_x < content_right {
             let max_width = content_right - detail_x;
             let font = egui::FontId::proportional(11.0);
-            let detail = precut_text_for_shaping(painter.ctx(), item.detail.trim(), &font, max_width);
-            let detail_galley = painter.layout_job(single_line_label_job(detail, &font, theme::FG_DIM(), max_width));
+            let detail_galley = painter_text_galley(&painter, item.detail.trim(), &font, theme::FG_DIM(), max_width);
             let detail_rect = Rect::from_min_max(
                 Pos2::new(detail_x, row_rect.min.y),
                 Pos2::new(content_right, row_rect.max.y),

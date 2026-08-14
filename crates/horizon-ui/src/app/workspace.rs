@@ -68,28 +68,15 @@ fn workspace_label_layout(ctx: &Context, name: &str, is_active: bool) -> (f32, A
     let label_font = FontId::proportional(12.5);
     let maximum_text_width = (WS_LABEL_MAX_WIDTH - 48.0).max(0.0);
     let display_name = precut_text_for_shaping(ctx, name, &label_font, maximum_text_width);
-    let natural_galley = ctx.fonts_mut(|fonts| {
+    let label_galley = ctx.fonts_mut(|fonts| {
         fonts.layout_job(single_line_label_job(
-            display_name,
+            display_name.as_ref(),
             &label_font,
             label_color,
-            f32::INFINITY,
+            maximum_text_width,
         ))
     });
-    let label_width = (natural_galley.size().x + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH);
-    let max_text_width = (label_width - 48.0).max(0.0);
-    let label_galley = if natural_galley.size().x <= max_text_width {
-        natural_galley
-    } else {
-        ctx.fonts_mut(|fonts| {
-            fonts.layout_job(single_line_label_job(
-                display_name,
-                &label_font,
-                label_color,
-                max_text_width,
-            ))
-        })
-    };
+    let label_width = (label_galley.size().x + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH);
     (label_width, label_galley)
 }
 

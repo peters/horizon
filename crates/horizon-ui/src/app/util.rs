@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use egui::{Button, Context, Pos2, Rect, Stroke, Vec2};
-use horizon_core::truncate_chars;
+use horizon_core::{flatten_line_separators, truncate_chars};
 
 use crate::theme;
 
@@ -97,7 +97,8 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
 }
 
 pub(super) fn truncate_session_menu_label(label: &str) -> String {
-    truncate_chars(label, 40).into_owned()
+    let single_line_label = flatten_line_separators(label);
+    truncate_chars(single_line_label.as_ref(), 40).into_owned()
 }
 
 pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
@@ -200,7 +201,9 @@ pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label};
+    use super::{
+        OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label, truncate_session_menu_label,
+    };
     use egui::{Pos2, Rect, Vec2};
 
     fn default_panel_canvas_pos(index: usize) -> Pos2 {
@@ -250,5 +253,17 @@ mod tests {
         let expected = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
 
         assert_eq!(primary_shortcut_label(), expected);
+    }
+
+    #[test]
+    fn session_menu_label_is_single_line_before_truncation() {
+        assert_eq!(
+            truncate_session_menu_label("first\r\nsecond\u{2028}third"),
+            "first second third"
+        );
+        assert_eq!(
+            truncate_session_menu_label(&"a".repeat(41)),
+            format!("{}…", "a".repeat(39))
+        );
     }
 }

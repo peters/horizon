@@ -145,7 +145,7 @@ impl HorizonApp {
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
-                    name: workspace.name.clone(),
+                    name: flatten_line_separators(&workspace.name).into_owned(),
                     color: Color32::from_rgb(r, g, b),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),

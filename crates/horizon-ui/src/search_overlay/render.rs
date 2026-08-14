@@ -328,7 +328,7 @@ fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
 fn search_detail_layout_job(painter: &Painter, text: &str, max_width: f32) -> egui::text::LayoutJob {
     let trimmed = text.trim();
     let display_text = precut_text_for_shaping(painter.ctx(), trimmed, &DETAIL_FONT, max_width);
-    single_line_label_job(display_text, &DETAIL_FONT, theme::FG_DIM(), max_width)
+    single_line_label_job(display_text.as_ref(), &DETAIL_FONT, theme::FG_DIM(), max_width)
 }
 
 #[cfg(test)]
@@ -397,6 +397,23 @@ mod tests {
         });
 
         assert!(job_text.borrow().contains(": cannot"));
+    }
+
+    #[test]
+    fn detail_scan_cap_marks_an_omitted_visible_suffix() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let job_text = RefCell::new(String::new());
+        let source = format!("{}visible suffix", "\u{200B}".repeat(4_100));
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+            });
+        });
+
+        assert!(job_text.borrow().ends_with('…'));
+        assert!(!job_text.borrow().contains("visible suffix"));
     }
 
     #[test]

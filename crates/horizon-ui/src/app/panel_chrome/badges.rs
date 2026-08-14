@@ -55,17 +55,11 @@ struct StatusBadgeSpec<'a> {
     right: f32,
     left_limit: f32,
     center_text: bool,
-    overflow: StatusBadgeOverflow,
-}
-
-#[derive(Clone, Copy)]
-enum StatusBadgeOverflow {
-    Compact,
-    ElideThenCompact,
 }
 
 /// Lays out the status strip once so painting, title elision, and inline
 /// rename use the same measured badge edges.
+#[profiling::function]
 pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &PanelChrome<'_>) -> StatusBadgeStrip {
     let anchor = chrome.controls_anchor();
     let has_history_meter = chrome.scrollback_limit > 0;
@@ -105,7 +99,6 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
                 right: trailing_right,
                 left_limit: left_limit + attention_reservation,
                 center_text: true,
-                overflow: StatusBadgeOverflow::Compact,
             },
         )
     });
@@ -131,7 +124,6 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
                 right: attention_right,
                 left_limit,
                 center_text: false,
-                overflow: StatusBadgeOverflow::ElideThenCompact,
             },
         )
     });
@@ -148,6 +140,7 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
     }
 }
 
+#[profiling::function]
 fn layout_status_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,
@@ -156,22 +149,18 @@ fn layout_status_badge(
     let available_width = (spec.right - spec.left_limit).max(0.0);
     let text_width = (available_width - spec.horizontal_padding).max(0.0);
     let bounded_galley = painter.layout_job(single_line_label_job(spec.text, &spec.font, spec.color, text_width));
-    let use_compact = bounded_galley.elided
-        && match spec.overflow {
-            StatusBadgeOverflow::Compact => true,
-            StatusBadgeOverflow::ElideThenCompact => {
-                let compact_width = spec.compact_galley.as_ref().map_or_else(
-                    || {
-                        spec.compact_text.chars().next().map_or(0.0, |character| {
-                            painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, character))
-                        })
-                    },
-                    |galley| galley.size().x,
-                );
-                let ellipsis_width = painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, '…'));
-                text_width < compact_width + ellipsis_width
-            }
-        };
+    let use_compact = bounded_galley.elided && {
+        let compact_width = spec.compact_galley.as_ref().map_or_else(
+            || {
+                spec.compact_text.chars().next().map_or(0.0, |character| {
+                    painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, character))
+                })
+            },
+            |galley| galley.size().x,
+        );
+        let ellipsis_width = painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, '…'));
+        text_width < compact_width + ellipsis_width
+    };
     let galley = if use_compact {
         let compact_galley = spec.compact_galley.as_ref().map_or_else(
             || {
@@ -357,8 +346,8 @@ mod tests {
     use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus};
 
     use super::{
-        StatusBadgeOverflow, StatusBadgeSpec, TITLE_BADGE_GAP, TITLEBAR_LEADING_CONTROL_SPACE, attention_badge_text,
-        layout_status_badge, layout_status_badges,
+        StatusBadgeSpec, TITLE_BADGE_GAP, TITLEBAR_LEADING_CONTROL_SPACE, attention_badge_text, layout_status_badge,
+        layout_status_badges,
     };
     use crate::app::panel_chrome::{MicControl, PanelChrome};
     use crate::app::speech::MicState;
@@ -453,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn minimum_width_strip_keeps_elided_attention_and_compact_ssh_visible() {
+    fn minimum_width_strip_keeps_compact_attention_and_elided_ssh_visible() {
         let layout = status_layout(
             320.0,
             &[
@@ -470,9 +459,10 @@ mod tests {
             panic!("SSH badge was not laid out");
         };
 
-        assert!(attention.galley.elided);
-        assert!(attention.galley.job.text.starts_with("⚠ Claude"));
-        assert_eq!(ssh.galley.job.text, "×");
+        assert!(!attention.galley.elided);
+        assert_eq!(attention.galley.job.text, "⚠");
+        assert!(ssh.galley.elided);
+        assert_eq!(ssh.galley.job.text, "Disconnected");
         assert!(attention.rect.min.x >= 10.0 + TITLEBAR_LEADING_CONTROL_SPACE);
         assert!(attention.rect.max.x < ssh.rect.min.x);
         assert_near(layout.title_right, attention.rect.min.x - TITLE_BADGE_GAP);
@@ -516,7 +506,6 @@ mod tests {
                         right: 50.0,
                         left_limit: 45.0,
                         center_text: true,
-                        overflow: StatusBadgeOverflow::Compact,
                     },
                 ));
             });
