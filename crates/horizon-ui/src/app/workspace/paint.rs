@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Stroke, Vec2};
 
-use crate::badge::paint_badge_background;
+use crate::badge::{BadgeStroke, paint_badge_background};
 use crate::theme;
 
 #[profiling::function]
@@ -18,10 +18,10 @@ pub(super) fn paint_workspace_frame(ui: &mut egui::Ui, rect: Rect, color: Color3
         rect,
         corner_radius,
         frame_fill,
-        Some((
-            Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
-            StrokeKind::Outside,
-        )),
+        Some(BadgeStroke::outside(Stroke::new(
+            1.0_f32,
+            theme::alpha(color, border_alpha),
+        ))),
     );
 }
 
@@ -52,10 +52,10 @@ pub(super) fn paint_workspace_label_bg(
         rect,
         CornerRadius::same(10),
         fill,
-        Some((
-            Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
-            StrokeKind::Outside,
-        )),
+        Some(BadgeStroke::outside(Stroke::new(
+            1.0_f32,
+            theme::alpha(color, border_alpha),
+        ))),
     );
 }
 

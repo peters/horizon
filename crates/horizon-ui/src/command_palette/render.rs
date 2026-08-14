@@ -1,8 +1,8 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::util::usize_to_f32;
-use crate::badge::paint_badge_background;
-use crate::text::painter_text_galley;
+use crate::badge::{BadgeStroke, paint_badge_background};
+use crate::text::{paint_section_header as paint_text_section_header, painter_text_galley};
 use crate::theme;
 
 use super::{INPUT_HEIGHT, MAX_VISIBLE_ROWS, PALETTE_WIDTH, ROW_HEIGHT, ResultItem, SECTION_HEADER_HEIGHT};
@@ -38,10 +38,10 @@ pub(crate) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
         card_rect,
         CornerRadius::same(20),
         theme::PANEL_BG(),
-        Some((
-            Stroke::new(1.5_f32, theme::alpha(theme::ACCENT(), 80)),
-            StrokeKind::Outside,
-        )),
+        Some(BadgeStroke::outside(Stroke::new(
+            1.5_f32,
+            theme::alpha(theme::ACCENT(), 80),
+        ))),
     );
     painter.rect_stroke(
         card_rect.expand(2.0),
@@ -59,21 +59,8 @@ pub(super) fn paint_empty_results(ui: &mut egui::Ui, message: &str) {
 }
 
 pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) {
-    let rect = ui.allocate_space(Vec2::new(width, SECTION_HEADER_HEIGHT)).1;
-    let painter = ui.painter_at(rect);
-    let text_x = rect.min.x + 4.0;
-    let max_width = (rect.max.x - text_x - 4.0).max(0.0);
     let font = egui::FontId::proportional(10.5);
-    let galley = painter_text_galley(&painter, title, &font, theme::FG_DIM(), max_width);
-    let text_rect = Rect::from_min_max(
-        Pos2::new(text_x, rect.min.y),
-        Pos2::new((rect.max.x - 4.0).max(text_x), rect.max.y),
-    );
-    painter.with_clip_rect(text_rect).galley(
-        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
-        galley,
-        Color32::TRANSPARENT,
-    );
+    paint_text_section_header(ui, width, SECTION_HEADER_HEIGHT, title, &font, theme::FG_DIM());
 }
 
 pub(super) fn render_result_row(
@@ -184,10 +171,10 @@ fn paint_shortcut_badge(
         badge_rect,
         CornerRadius::same(5),
         theme::alpha(theme::BG_ELEVATED(), 200),
-        Some((
-            Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-            StrokeKind::Inside,
-        )),
+        Some(BadgeStroke::inside(Stroke::new(
+            0.5_f32,
+            theme::alpha(theme::BORDER_SUBTLE(), 180),
+        ))),
     );
     painter.galley(
         badge_rect.center() - shortcut_size * 0.5,

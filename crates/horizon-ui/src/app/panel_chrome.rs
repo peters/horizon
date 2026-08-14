@@ -1,7 +1,7 @@
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
 
-use crate::text::single_line_label_job;
+use crate::text::painter_text_galley;
 use crate::theme;
 
 use super::RenameEditAction;
@@ -314,13 +314,13 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 
 #[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
-    let job = single_line_label_job(
+    let galley = painter_text_galley(
+        painter,
         title,
         &egui::FontId::proportional(13.0),
         panel_title_color(focused),
         max_width,
     );
-    let galley = painter.layout_job(job);
     let text_height = galley.size().y;
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
 }

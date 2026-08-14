@@ -1,17 +1,14 @@
 mod shortcut_actions;
+mod toolbar;
 
 use std::collections::BTreeSet;
 
-use egui::{
-    Align, Button, Color32, Context, CornerRadius, Layout, Pos2, Rect, Stroke, TopBottomPanel, Vec2, ViewportBuilder,
-    ViewportCommand, ViewportId,
-};
+use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
 use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
 
-use crate::text::stable_hover_text;
-use crate::{branding, theme};
+use crate::branding;
 
-use super::util::{chrome_button, primary_shortcut_label, viewport_local_rect};
+use super::util::viewport_local_rect;
 use super::{DetachedWorkspaceViewportState, HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 use shortcut_actions::detached_shortcut_actions;
 
@@ -187,7 +184,7 @@ impl HorizonApp {
         }
 
         self.handle_detached_shortcuts(ctx, workspace_id);
-        self.render_detached_toolbar(ctx, workspace_id, workspace_local_id, &workspace_name);
+        toolbar::render(self, ctx, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
         let workspace_bounds = self.board.workspace_bounds_map();
@@ -252,87 +249,6 @@ impl HorizonApp {
         if actions.toggle_minimap {
             self.minimap_visible = !self.minimap_visible;
         }
-    }
-
-    fn render_detached_toolbar(
-        &mut self,
-        ctx: &Context,
-        workspace_id: WorkspaceId,
-        workspace_local_id: &str,
-        workspace_name: &str,
-    ) {
-        let fit_shortcut = self
-            .shortcuts
-            .fit_active_workspace
-            .display_label(primary_shortcut_label());
-        let minimap_shortcut = self.shortcuts.toggle_minimap.display_label(primary_shortcut_label());
-        let minimap_label = if self.minimap_visible {
-            "Hide Minimap"
-        } else {
-            "Show Minimap"
-        };
-
-        TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
-            ui.set_height(TOOLBAR_HEIGHT);
-            ui.painter()
-                .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG());
-            ui.painter().line_segment(
-                [
-                    Pos2::new(ui.max_rect().min.x, ui.max_rect().max.y),
-                    Pos2::new(ui.max_rect().max.x, ui.max_rect().max.y),
-                ],
-                Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 170)),
-            );
-
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new(workspace_name)
-                        .color(theme::FG())
-                        .size(13.5)
-                        .strong(),
-                );
-                ui.label(
-                    egui::RichText::new("Detached Workspace")
-                        .color(theme::FG_DIM())
-                        .size(10.5),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(
-                            Button::new(
-                                egui::RichText::new("Attach to Main Window")
-                                    .size(11.5)
-                                    .color(theme::FG_SOFT()),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
-                        self.schedule_detached_workspace_reattach(workspace_local_id);
-                        ctx.request_repaint_of(ViewportId::ROOT);
-                    }
-
-                    if stable_hover_text(
-                        ui.add(chrome_button("Fit Workspace").min_size(Vec2::new(126.0, 30.0))),
-                        fit_shortcut.as_str(),
-                    )
-                    .clicked()
-                    {
-                        let _ = self.fit_workspace_in_rect(workspace_id, detached_canvas_rect(ctx));
-                    }
-
-                    if stable_hover_text(
-                        ui.add(chrome_button(minimap_label).min_size(Vec2::new(124.0, 30.0))),
-                        minimap_shortcut.as_str(),
-                    )
-                    .clicked()
-                    {
-                        self.minimap_visible = !self.minimap_visible;
-                    }
-                });
-            });
-        });
     }
 
     fn restore_detached_viewport_state(&mut self, workspace_local_id: &str) -> bool {

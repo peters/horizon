@@ -1,5 +1,5 @@
-use crate::badge::paint_badge_background;
-use crate::text::{painter_text_galley, precut_text_for_shaping, single_line_label_job};
+use crate::badge::{BadgeStroke, paint_badge_background};
+use crate::text::{paint_section_header as paint_text_section_header, painter_text_galley};
 use crate::theme;
 use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 
@@ -80,7 +80,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
         core_rect,
         CornerRadius::same(9),
         core_fill,
-        Some((Stroke::new(1.0_f32, border), StrokeKind::Inside)),
+        Some(BadgeStroke::inside(Stroke::new(1.0_f32, border))),
     );
 
     painter.line_segment(
@@ -100,7 +100,7 @@ pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: boo
         badge_rect,
         CornerRadius::same(7),
         icon_fill,
-        Some((Stroke::new(1.0_f32, icon_stroke), StrokeKind::Inside)),
+        Some(BadgeStroke::inside(Stroke::new(1.0_f32, icon_stroke))),
     );
     paint_search_icon(painter, badge_rect.center(), icon_color);
 }
@@ -112,10 +112,10 @@ pub(super) fn paint_dropdown_frame(ui: &egui::Ui, rect: Rect) {
         rect,
         CornerRadius::same(14),
         theme::PANEL_BG(),
-        Some((
-            Stroke::new(1.0_f32, theme::alpha(theme::ACCENT(), 60)),
-            StrokeKind::Outside,
-        )),
+        Some(BadgeStroke::outside(Stroke::new(
+            1.0_f32,
+            theme::alpha(theme::ACCENT(), 60),
+        ))),
     );
     painter.rect_stroke(
         rect.expand(1.5),
@@ -133,25 +133,7 @@ pub(super) fn paint_empty_results(ui: &mut egui::Ui, message: &str) {
 }
 
 pub(super) fn render_section_header(ui: &mut egui::Ui, width: f32, title: &str) {
-    let rect = ui.allocate_space(Vec2::new(width, SECTION_HEADER_HEIGHT)).1;
-    let painter = ui.painter_at(rect);
-    let text_x = rect.min.x + 4.0;
-    let galley = painter_text_galley(
-        &painter,
-        title,
-        &BADGE_FONT,
-        theme::FG_DIM(),
-        (rect.max.x - text_x - 4.0).max(0.0),
-    );
-    let text_rect = Rect::from_min_max(
-        Pos2::new(text_x, rect.min.y),
-        Pos2::new((rect.max.x - 4.0).max(text_x), rect.max.y),
-    );
-    painter.with_clip_rect(text_rect).galley(
-        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
-        galley,
-        Color32::TRANSPARENT,
-    );
+    paint_text_section_header(ui, width, SECTION_HEADER_HEIGHT, title, &BADGE_FONT, theme::FG_DIM());
 }
 
 pub(super) struct MatchRowData<'a> {
@@ -228,7 +210,7 @@ pub(super) fn render_match_row(
 
     if detail_x < max_detail_x {
         let available = max_detail_x - detail_x;
-        let detail_galley = painter.layout_job(search_detail_layout_job(&painter, data.line_text, available));
+        let detail_galley = search_detail_galley(&painter, data.line_text, available);
         let detail_rect = Rect::from_min_max(
             Pos2::new(detail_x, row_rect.min.y),
             Pos2::new(max_detail_x, row_rect.max.y),
@@ -270,10 +252,10 @@ pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool,
         rect,
         CornerRadius::same(5),
         bg,
-        Some((
-            Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-            StrokeKind::Inside,
-        )),
+        Some(BadgeStroke::inside(Stroke::new(
+            0.5_f32,
+            theme::alpha(theme::BORDER_SUBTLE(), 180),
+        ))),
     );
     ui.painter().galley(rect.center() - label_size * 0.5, label_galley, fg);
 
@@ -305,10 +287,10 @@ fn paint_count_badge(painter: &Painter, row_rect: Rect, text_y: f32, label_galle
         badge_rect,
         CornerRadius::same(4),
         theme::alpha(theme::BG_ELEVATED(), 200),
-        Some((
-            Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-            StrokeKind::Inside,
-        )),
+        Some(BadgeStroke::inside(Stroke::new(
+            0.5_f32,
+            theme::alpha(theme::BORDER_SUBTLE(), 180),
+        ))),
     );
     painter.galley(badge_rect.center() - label_size * 0.5, label_galley, theme::FG_DIM());
 }
@@ -325,17 +307,15 @@ fn paint_search_icon(painter: &Painter, center: Pos2, color: Color32) {
     );
 }
 
-fn search_detail_layout_job(painter: &Painter, text: &str, max_width: f32) -> egui::text::LayoutJob {
-    let trimmed = text.trim();
-    let display_text = precut_text_for_shaping(painter.ctx(), trimmed, &DETAIL_FONT, max_width);
-    single_line_label_job(display_text.as_ref(), &DETAIL_FONT, theme::FG_DIM(), max_width)
+fn search_detail_galley(painter: &Painter, text: &str, max_width: f32) -> std::sync::Arc<egui::Galley> {
+    painter_text_galley(painter, text.trim(), &DETAIL_FONT, theme::FG_DIM(), max_width)
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use super::search_detail_layout_job;
+    use super::search_detail_galley;
 
     #[test]
     fn detail_layout_uses_real_glyph_width_and_single_line_elision() {
@@ -346,11 +326,7 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let galley = ui.painter().layout_job(search_detail_layout_job(
-                    ui.painter(),
-                    "wide 二二二二二二二二二二",
-                    40.0,
-                ));
+                let galley = search_detail_galley(ui.painter(), "wide 二二二二二二二二二二", 40.0);
                 width.set(galley.size().x);
                 elided.set(galley.elided);
             });
@@ -361,7 +337,10 @@ mod tests {
         let text = RefCell::new(String::new());
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                *text.borrow_mut() = search_detail_layout_job(ui.painter(), " first\r\nsecond ", 40.0).text;
+                *text.borrow_mut() = search_detail_galley(ui.painter(), " first\r\nsecond ", 40.0)
+                    .job
+                    .text
+                    .clone();
             });
         });
         assert_eq!(*text.borrow(), "first second");
@@ -375,7 +354,7 @@ mod tests {
         let text = RefCell::new(String::new());
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                *text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+                *text.borrow_mut() = search_detail_galley(ui.painter(), &source, 80.0).job.text.clone();
             });
         });
 
@@ -392,7 +371,7 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+                *job_text.borrow_mut() = search_detail_galley(ui.painter(), &source, 80.0).job.text.clone();
             });
         });
 
@@ -408,7 +387,7 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), &source, 80.0).text;
+                *job_text.borrow_mut() = search_detail_galley(ui.painter(), &source, 80.0).job.text.clone();
             });
         });
 
@@ -421,10 +400,11 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
         let job_text = RefCell::new(String::new());
+        let source = "二".repeat(600);
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                *job_text.borrow_mut() = search_detail_layout_job(ui.painter(), "二 detail", 0.5).text;
+                *job_text.borrow_mut() = search_detail_galley(ui.painter(), &source, 0.5).job.text.clone();
             });
         });
 

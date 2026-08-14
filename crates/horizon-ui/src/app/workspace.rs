@@ -8,7 +8,7 @@ use std::sync::Arc;
 use egui::{Color32, Context, FontId, Galley, Pos2, Rect, Vec2};
 use horizon_core::{WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
-use crate::text::{precut_text_for_shaping, single_line_label_job};
+use crate::text::context_text_galley;
 use crate::theme;
 
 use super::util::OverlayExclusion;
@@ -67,15 +67,7 @@ fn workspace_label_layout(ctx: &Context, name: &str, is_active: bool) -> (f32, A
     let label_color = if is_active { theme::FG() } else { theme::FG_SOFT() };
     let label_font = FontId::proportional(12.5);
     let maximum_text_width = (WS_LABEL_MAX_WIDTH - 48.0).max(0.0);
-    let display_name = precut_text_for_shaping(ctx, name, &label_font, maximum_text_width);
-    let label_galley = ctx.fonts_mut(|fonts| {
-        fonts.layout_job(single_line_label_job(
-            display_name.as_ref(),
-            &label_font,
-            label_color,
-            maximum_text_width,
-        ))
-    });
+    let label_galley = context_text_galley(ctx, name, &label_font, label_color, maximum_text_width);
     let label_width = (label_galley.size().x + 60.0).clamp(WS_LABEL_MIN_WIDTH, WS_LABEL_MAX_WIDTH);
     (label_width, label_galley)
 }

@@ -14,7 +14,9 @@ const PRESET_PICKER_MIN_WIDTH: f32 = 160.0;
 const PRESET_PICKER_MAX_WIDTH: f32 = 320.0;
 
 fn preset_picker_width(content_width: f32) -> f32 {
-    (content_width - 32.0).clamp(PRESET_PICKER_MIN_WIDTH, PRESET_PICKER_MAX_WIDTH)
+    let maximum = (content_width - 32.0).clamp(0.0, PRESET_PICKER_MAX_WIDTH);
+    let minimum = PRESET_PICKER_MIN_WIDTH.min(maximum);
+    maximum.clamp(minimum, PRESET_PICKER_MAX_WIDTH)
 }
 
 impl HorizonApp {
@@ -205,6 +207,7 @@ mod tests {
     fn picker_width_uses_stable_viewport_bounds() {
         assert!((preset_picker_width(1_200.0) - 320.0).abs() < f32::EPSILON);
         assert!((preset_picker_width(240.0) - 208.0).abs() < f32::EPSILON);
-        assert!((preset_picker_width(120.0) - 160.0).abs() < f32::EPSILON);
+        assert!((preset_picker_width(120.0) - 88.0).abs() < f32::EPSILON);
+        assert!(preset_picker_width(12.0).abs() < f32::EPSILON);
     }
 }

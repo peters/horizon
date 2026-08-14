@@ -3,8 +3,8 @@ use std::{cmp::Ordering, collections::HashMap, f32::consts::FRAC_PI_2, sync::Arc
 use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, Vec2, epaint::TextShape};
 use horizon_core::WorkspaceId;
 
-use crate::badge::paint_badge_background;
-use crate::{text::single_line_label_job, theme};
+use crate::badge::{BadgeStroke, paint_badge_background};
+use crate::{text::painter_text_galley, theme};
 
 use super::{
     HorizonApp, MinimapModel, MinimapScope, WS_TITLE_HEIGHT, scope_includes_workspace, workspace_minimap_screen_rect,
@@ -198,12 +198,13 @@ fn horizontal_label_layout(painter: &Painter, label: &MinimapWorkspaceLabel<'_>)
     }
 
     let font = font_fitting_row_height(painter, badge_height - BADGE_CLIP_MARGIN)?;
-    let galley = painter.layout_job(single_line_label_job(
+    let galley = painter_text_galley(
+        painter,
         label.name,
         &font,
         label_text_color(label.is_active),
         max_text_width,
-    ));
+    );
     has_visible_glyphs(&galley).then_some(HorizontalLabelLayout {
         strip,
         badge_height,
@@ -221,12 +222,13 @@ fn vertical_label_layout(painter: &Painter, label: &MinimapWorkspaceLabel<'_>) -
     // badge caps at width - 2 and the paint clips 1px inside it on each side.
     let font = font_fitting_row_height(painter, workspace_rect.width() - 2.0 - BADGE_CLIP_MARGIN)?;
     let max_text_length = workspace_rect.height() - 2.0 - VERT_PAD * 2.0;
-    let galley = painter.layout_job(single_line_label_job(
+    let galley = painter_text_galley(
+        painter,
         label.name,
         &font,
         label_text_color(label.is_active),
         max_text_length,
-    ));
+    );
     has_visible_glyphs(&galley).then_some(VerticalLabelLayout { galley })
 }
 
@@ -336,7 +338,7 @@ fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: b
         rect,
         egui::CornerRadius::same(4),
         fill,
-        Some((stroke, egui::StrokeKind::Outside)),
+        Some(BadgeStroke::outside(stroke)),
     );
 }
 

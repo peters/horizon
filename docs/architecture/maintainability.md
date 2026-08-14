@@ -35,13 +35,16 @@ back into large multi-purpose modules.
 
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
-- Crate-level `text.rs` and `badge.rs` own shared egui text and badge-painting
-  primitives used across feature renderers.
+- Crate-level `text.rs` orchestrates shared bounded layout jobs, with shaping
+  guards and tooltip behavior split into `text/shaping.rs` and
+  `text/tooltip.rs`; `badge.rs` owns shared badge-painting primitives.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
+  - `detached_viewports`: detached-window lifecycle and persistence, with
+    toolbar rendering isolated in `detached_viewports/toolbar.rs`
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panel_chrome`: panel titlebar orchestration, controls, and rename UI, with
     history, attention, and SSH badge layout/painting in `panel_chrome/badges.rs`
