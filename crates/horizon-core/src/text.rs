@@ -9,7 +9,7 @@ use std::borrow::Cow;
 #[must_use]
 pub fn truncate_chars(text: &str, max_chars: usize) -> Cow<'_, str> {
     if max_chars == 0 {
-        return Cow::Borrowed(if text.is_empty() { text } else { "" });
+        return Cow::Borrowed("");
     }
 
     let mut ellipsis_at = 0;

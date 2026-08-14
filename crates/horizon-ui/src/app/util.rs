@@ -96,7 +96,7 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
     [w, h]
 }
 
-pub(super) fn truncate_session_label(label: &str) -> String {
+pub(super) fn truncate_session_menu_label(label: &str) -> String {
     truncate_chars(label, 40).into_owned()
 }
 

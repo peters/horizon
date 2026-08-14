@@ -1,5 +1,6 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
+use crate::badge::paint_badge_background;
 use crate::text::single_line_label_job;
 use crate::theme;
 
@@ -42,12 +43,15 @@ pub(super) fn paint_workspace_label_bg(
     let fill = theme::blend(theme::PANEL_BG_ALT(), color, tint);
     let border_alpha = if is_active || hovered { 160 } else { 90 };
 
-    painter.rect_filled(rect, CornerRadius::same(10), fill);
-    painter.rect_stroke(
+    paint_badge_background(
+        painter,
         rect,
         CornerRadius::same(10),
-        Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
-        StrokeKind::Outside,
+        fill,
+        Some((
+            Stroke::new(1.0_f32, theme::alpha(color, border_alpha)),
+            StrokeKind::Outside,
+        )),
     );
 }
 

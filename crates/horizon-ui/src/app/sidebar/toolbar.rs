@@ -8,7 +8,7 @@ use crate::app::root_chrome::{
 };
 use crate::app::util;
 use crate::app::{HorizonApp, TOOLBAR_HEIGHT};
-use crate::text::stable_hover_text_lazy;
+use crate::text::{stable_hover_text_lazy, stable_wrapped_hover_text_lazy};
 use crate::{branding, theme};
 
 impl HorizonApp {
@@ -178,8 +178,8 @@ impl HorizonApp {
                     util::primary_button(action.label())
                         .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
                 );
-                if self.has_available_update() {
-                    stable_hover_text_lazy(response, || self.available_update_hover_text().unwrap_or_default())
+                if let Some(update) = self.surge_available_update.as_ref() {
+                    stable_wrapped_hover_text_lazy(response, || update.hover_text())
                 } else {
                     response
                 }

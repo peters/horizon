@@ -2,6 +2,7 @@ use egui::{CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::util::usize_to_f32;
 use crate::badge::paint_badge_background;
+use crate::text::painter_text_galley;
 use crate::theme;
 
 use super::{INPUT_HEIGHT, MAX_VISIBLE_ROWS, PALETTE_WIDTH, ROW_HEIGHT, ResultItem, SECTION_HEADER_HEIGHT};
@@ -74,9 +75,10 @@ pub(super) fn render_result_row(
 ) -> bool {
     let row_rect = ui.allocate_space(Vec2::new(width, ROW_HEIGHT)).1;
     let mut clicked = false;
+    let painter = ui.painter_at(row_rect);
 
     if is_selected {
-        ui.painter_at(row_rect).rect_filled(
+        painter.rect_filled(
             row_rect,
             CornerRadius::same(8),
             theme::alpha(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28), 200),
@@ -86,7 +88,7 @@ pub(super) fn render_result_row(
             .interact(row_rect, ui.make_persistent_id(("pal_hover", index)), Sense::hover())
             .hovered();
         if hover {
-            ui.painter_at(row_rect).rect_filled(
+            painter.rect_filled(
                 row_rect,
                 CornerRadius::same(8),
                 theme::alpha(theme::PANEL_BG_ALT(), 160),
@@ -102,26 +104,31 @@ pub(super) fn render_result_row(
     let text_y = row_rect.center().y;
 
     let label_x = if let Some(color) = item.accent {
-        ui.painter_at(row_rect)
-            .circle_filled(Pos2::new(row_rect.min.x + 14.0, text_y), 4.5, color);
+        painter.circle_filled(Pos2::new(row_rect.min.x + 14.0, text_y), 4.5, color);
         row_rect.min.x + 30.0
     } else {
         row_rect.min.x + 10.0
     };
-
-    ui.painter_at(row_rect).text(
-        Pos2::new(label_x, text_y),
-        egui::Align2::LEFT_CENTER,
-        &item.label,
-        egui::FontId::proportional(13.0),
-        if is_selected { theme::FG() } else { theme::FG_SOFT() },
+    let label_color = if is_selected { theme::FG() } else { theme::FG_SOFT() };
+    let label_galley = painter_text_galley(&painter, &item.label, egui::FontId::proportional(13.0), label_color);
+    let label_size = label_galley.size();
+    painter.galley(
+        Pos2::new(label_x, text_y - label_size.y * 0.5),
+        label_galley,
+        label_color,
     );
 
+    let shortcut_galley = item
+        .shortcut
+        .as_ref()
+        .map(|shortcut| painter_text_galley(&painter, shortcut, egui::FontId::monospace(10.0), theme::FG_DIM()));
+
     if !item.detail.is_empty() {
-        let detail_x = label_x + estimate_text_width(&item.label, 13.0) + 12.0;
-        let max_detail_x = row_rect.max.x - 12.0 - shortcut_width(item.shortcut.as_ref());
+        let detail_x = label_x + label_size.x + 12.0;
+        let reserved_shortcut_width = shortcut_galley.as_ref().map_or(0.0, |galley| galley.size().x + 28.0);
+        let max_detail_x = row_rect.max.x - 12.0 - reserved_shortcut_width;
         if detail_x < max_detail_x {
-            ui.painter_at(row_rect).text(
+            painter.text(
                 Pos2::new(detail_x, text_y),
                 egui::Align2::LEFT_CENTER,
                 &item.detail,
@@ -131,42 +138,38 @@ pub(super) fn render_result_row(
         }
     }
 
-    if let Some(shortcut) = &item.shortcut {
-        paint_shortcut_badge(ui, row_rect, text_y, shortcut);
+    if let Some(galley) = shortcut_galley {
+        paint_shortcut_badge(&painter, row_rect, text_y, galley);
     }
 
     clicked
 }
 
-fn paint_shortcut_badge(ui: &egui::Ui, row_rect: Rect, text_y: f32, shortcut: &str) {
-    let badge_width = estimate_text_width(shortcut, 10.0) + 12.0;
+fn paint_shortcut_badge(
+    painter: &egui::Painter,
+    row_rect: Rect,
+    text_y: f32,
+    shortcut_galley: std::sync::Arc<egui::Galley>,
+) {
+    let shortcut_size = shortcut_galley.size();
+    let badge_width = shortcut_size.x + 12.0;
     let badge_rect = Rect::from_min_size(
         Pos2::new(row_rect.max.x - badge_width - 8.0, text_y - 10.0),
         Vec2::new(badge_width, 20.0),
     );
-    let painter = ui.painter_at(row_rect);
     paint_badge_background(
-        &painter,
+        painter,
         badge_rect,
         CornerRadius::same(5),
         theme::alpha(theme::BG_ELEVATED(), 200),
-        Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-        StrokeKind::Inside,
+        Some((
+            Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+            StrokeKind::Inside,
+        )),
     );
-    painter.text(
-        badge_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        shortcut,
-        egui::FontId::monospace(10.0),
+    painter.galley(
+        badge_rect.center() - shortcut_size * 0.5,
+        shortcut_galley,
         theme::FG_DIM(),
     );
-}
-
-fn estimate_text_width(text: &str, font_size: f32) -> f32 {
-    let char_width = font_size * 0.58;
-    usize_to_f32(text.len()) * char_width
-}
-
-fn shortcut_width(shortcut: Option<&String>) -> f32 {
-    shortcut.map_or(0.0, |s| estimate_text_width(s, 10.0) + 28.0)
 }

@@ -336,8 +336,7 @@ fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: b
         rect,
         egui::CornerRadius::same(4),
         fill,
-        stroke,
-        egui::StrokeKind::Outside,
+        Some((stroke, egui::StrokeKind::Outside)),
     );
 }
 

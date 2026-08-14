@@ -21,6 +21,19 @@ pub(super) struct AvailableUpdate {
     pub(super) error_message: Option<String>,
 }
 
+impl AvailableUpdate {
+    pub(super) fn hover_text(&self) -> String {
+        let mut text = format!(
+            "Horizon {} is available.\nDownload the latest stable installer.",
+            self.latest_version
+        );
+        if let Some(error_message) = &self.error_message {
+            let _ = write!(text, "\n\nLast download attempt failed: {error_message}");
+        }
+        text
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum UpdateCheckMessage {
     Available(AvailableUpdate),
@@ -76,18 +89,6 @@ impl HorizonApp {
 
     pub(super) fn has_available_update(&self) -> bool {
         self.surge_available_update.is_some()
-    }
-
-    pub(super) fn available_update_hover_text(&self) -> Option<String> {
-        let update = self.surge_available_update.as_ref()?;
-        let mut text = format!(
-            "Horizon {} is available.\nDownload the latest stable installer.",
-            update.latest_version
-        );
-        if let Some(error_message) = &update.error_message {
-            let _ = write!(text, "\n\nLast download attempt failed: {error_message}");
-        }
-        Some(text)
     }
 
     pub(super) fn open_available_update(&mut self) {
@@ -277,9 +278,24 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        installer_asset_name, installer_download_url, installer_repository, next_update_check_deadline,
-        parse_github_repository, update_check_is_due,
+        AvailableUpdate, installer_asset_name, installer_download_url, installer_repository,
+        next_update_check_deadline, parse_github_repository, update_check_is_due,
     };
+
+    #[test]
+    fn update_hover_text_preserves_download_failure_detail() {
+        let update = AvailableUpdate {
+            latest_version: "1.2.3".to_string(),
+            installer_url: "https://example.invalid/installer".to_string(),
+            error_message: Some("failed to open installer download".to_string()),
+        };
+
+        assert_eq!(
+            update.hover_text(),
+            "Horizon 1.2.3 is available.\nDownload the latest stable installer.\n\n\
+             Last download attempt failed: failed to open installer download"
+        );
+    }
 
     #[test]
     fn installer_asset_name_matches_release_assets() {

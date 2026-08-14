@@ -7,7 +7,7 @@ use horizon_core::{
     live_claude_session_ids,
 };
 
-use super::util::{empty_string_as_none, short_session_id, truncate_session_label};
+use super::util::{empty_string_as_none, short_session_id, truncate_session_menu_label};
 use super::{ActiveSession, DetachedWorkspaceViewportState, HorizonApp, ResolvedSession};
 
 const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
@@ -606,7 +606,7 @@ impl HorizonApp {
             .take(8)
             .map(|session| {
                 let short_id = short_session_id(&session.session_id);
-                let label = truncate_session_label(
+                let label = truncate_session_menu_label(
                     &session
                         .label
                         .clone()

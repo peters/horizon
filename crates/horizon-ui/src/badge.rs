@@ -1,4 +1,4 @@
-//! Shared painter primitive for rounded badge backgrounds.
+//! Shared painter primitive for semantic badge and pill backgrounds.
 
 use egui::{Color32, CornerRadius, Painter, Rect, Stroke, StrokeKind};
 
@@ -7,11 +7,10 @@ pub(crate) fn paint_badge_background(
     rect: Rect,
     corner_radius: CornerRadius,
     fill: Color32,
-    stroke: Stroke,
-    stroke_kind: StrokeKind,
+    stroke: Option<(Stroke, StrokeKind)>,
 ) {
     painter.rect_filled(rect, corner_radius, fill);
-    if !stroke.is_empty() {
+    if let Some((stroke, stroke_kind)) = stroke {
         painter.rect_stroke(rect, corner_radius, stroke, stroke_kind);
     }
 }

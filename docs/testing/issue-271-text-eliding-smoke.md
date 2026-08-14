@@ -37,7 +37,7 @@ export HORIZON_SMOKE_PERSIST_HOME="$HORIZON_SMOKE_ROOT/persist-home"
 mkdir -p "$HORIZON_SMOKE_CLEAN_HOME" "$HORIZON_SMOKE_SEEDED_HOME" \
   "$HORIZON_SMOKE_UPDATE_HOME" "$HORIZON_SMOKE_PERSIST_HOME"
 
-CARGO_TARGET_DIR="$HORIZON_SMOKE_ROOT/target-pr" cargo build --locked
+CARGO_TARGET_DIR="$HORIZON_SMOKE_ROOT/target-pr" cargo build
 cp "$HORIZON_SMOKE_ROOT/target-pr/debug/horizon" "$HORIZON_SMOKE_ROOT/horizon-pr"
 export HORIZON_SMOKE_PR_BIN="$HORIZON_SMOKE_ROOT/horizon-pr"
 ```
@@ -46,13 +46,20 @@ For the microphone-tooltip lane, build the same head with the macOS speech
 feature and copy it before any other build:
 
 ```bash
-CARGO_TARGET_DIR="$HORIZON_SMOKE_ROOT/target-pr-speech" cargo build --locked --features speech
+CARGO_TARGET_DIR="$HORIZON_SMOKE_ROOT/target-pr-speech" cargo build --features speech
 cp "$HORIZON_SMOKE_ROOT/target-pr-speech/debug/horizon" "$HORIZON_SMOKE_ROOT/horizon-pr-speech"
 ```
 
 If the speech prerequisites are unavailable, record that lane as unavailable;
-all other lanes still use `HORIZON_SMOKE_PR_BIN`. Confirm `git diff --exit-code`
-again after both builds.
+all other lanes still use `HORIZON_SMOKE_PR_BIN`. The current base has a known
+manifest/lock mismatch in its Surge dependency, so Cargo refreshes only
+`Cargo.lock` during either build. Restore that generated change, then confirm
+the checkout is otherwise clean:
+
+```bash
+git restore --source=HEAD -- Cargo.lock
+git diff --exit-code
+```
 
 ## Baseline macOS/Metal launch and resize
 
@@ -83,7 +90,9 @@ notification is not sufficient because notification-only attention is resolved
 during the same board update. The fixture below instead exercises Horizon's
 real failed-restore path. Its panel name starts after the 19-byte
 `Failed to restore '` prefix, so nine ASCII characters place `å` across the old
-`summary[..29]` byte boundary.
+`summary[..29]` byte boundary. A second failed restore starts with wide CJK
+glyphs to verify the badge's 110 px slot cap independently of the character
+budget.
 
 Create the fixture directories:
 
@@ -128,6 +137,9 @@ workspaces:
   - name: "Workspace first line\nWorkspace second line æøå 😊"
     terminals:
       - name: "aaaaaaaaaå😊 very long broken restore panel"
+        kind: codex
+        command: "bad\0codex"
+      - name: "二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二 wide badge"
         kind: codex
         command: "bad\0codex"
       - name: "Panel first line\nPanel second line æøå 😊"
@@ -187,9 +199,11 @@ Record the exact PID separately from the baseline PID.
 
 ## Unicode truncation, labels, and badges
 
-1. On seeded startup, confirm the broken-restore placeholder appears and its
-   attention badge is visible. Confirm there is no panic at the former byte-29
-   boundary and the long summary ends in exactly one Unicode ellipsis.
+1. On seeded startup, confirm both broken-restore placeholders appear and their
+   attention badges are visible. Confirm there is no panic at the former
+   byte-29 boundary and the long summaries end in exactly one Unicode ellipsis.
+   Narrow both panels: the CJK badge must remain inside its reserved titlebar
+   slot without covering the title, history meter, microphone, or close button.
 2. Confirm the seeded panel and workspace names containing `\n`, Norwegian
    characters, and emoji render as one elided line rather than stopping at the
    newline. Check vertical centering, grip spacing, titlebar controls, and
@@ -229,9 +243,9 @@ open "$HORIZON_SMOKE_ROOT"
 ## Stable tooltip lanes
 
 For every lane, keep the pointer stationary for at least five seconds while
-Horizon redraws. Confirm a single-line tooltip stays within the viewport, uses
-`…` when needed, never narrows frame over frame, and never opens a nested
-native tooltip.
+Horizon redraws. Except for the deliberately multiline Update lane below,
+confirm a single-line tooltip stays within the viewport, uses `…` when needed,
+never narrows frame over frame, and never opens a nested native tooltip.
 
 - Toolbar FPS meter, including its idle state.
 - Panel microphone: in the speech-enabled seeded process, hover the mic on the
@@ -285,14 +299,14 @@ Rust HTTP update check remains available:
    `0.0.1` runtime version guarantees the public stable channel reports a newer
    macOS package. If release metadata is unreachable, attach the log and mark
    only this externally dependent lane unavailable.
-2. Hover Update and confirm the built-in newline-separated text is flattened
-   into one bounded line.
+2. Hover Update and confirm the built-in newline-separated text remains fully
+   visible as a bounded multiline tooltip.
 3. Click Update. The missing `open` command must append
    `Last download attempt failed: failed to open installer download: No such
    file or directory (os error 2)`.
 4. Hover again for five seconds and capture 0/2/5-second evidence for the long
-   multiline-plus-error tooltip. Confirm the button receives one click and the
-   tooltip remains stable.
+   multiline-plus-error tooltip. Confirm the complete failure reason remains
+   visible, the button receives one click, and the tooltip remains stable.
 
 ## Existing-state persistence and migration lane
 
@@ -308,8 +322,10 @@ export HORIZON_SMOKE_BASE_TREE="$HORIZON_SMOKE_ROOT/base-tree"
 git worktree add --detach "$HORIZON_SMOKE_BASE_TREE" "$HORIZON_SMOKE_BASE_SHA"
 git -C "$HORIZON_SMOKE_BASE_TREE" lfs pull
 CARGO_TARGET_DIR="$HORIZON_SMOKE_ROOT/target-base" \
-  cargo build --locked --manifest-path "$HORIZON_SMOKE_BASE_TREE/Cargo.toml"
+  cargo build --manifest-path "$HORIZON_SMOKE_BASE_TREE/Cargo.toml"
 cp "$HORIZON_SMOKE_ROOT/target-base/debug/horizon" "$HORIZON_SMOKE_ROOT/horizon-base"
+git -C "$HORIZON_SMOKE_BASE_TREE" restore --source=HEAD -- Cargo.lock
+git -C "$HORIZON_SMOKE_BASE_TREE" diff --exit-code
 git worktree remove "$HORIZON_SMOKE_BASE_TREE"
 mkdir -p "$HORIZON_SMOKE_PERSIST_HOME/.horizon"
 ```

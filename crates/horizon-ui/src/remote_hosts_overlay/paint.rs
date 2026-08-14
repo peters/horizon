@@ -7,7 +7,7 @@ use horizon_core::{
 };
 
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
-use crate::text::single_line_job;
+use crate::text::{append_single_line_text, single_line_job};
 use crate::theme;
 
 const COLUMN_GUTTER: f32 = 18.0;
@@ -369,7 +369,8 @@ fn render_truncated_text(painter: &egui::Painter, pos: Pos2, text: &str, font: &
     }
 
     let mut job = single_line_job(max_x - pos.x);
-    job.append(
+    append_single_line_text(
+        &mut job,
         text,
         0.0,
         TextFormat {
@@ -397,7 +398,8 @@ fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob 
 
     for (index, tag) in tags.iter().enumerate() {
         if index > 0 {
-            job.append(
+            append_single_line_text(
+                &mut job,
                 ",",
                 0.0,
                 TextFormat {
@@ -407,7 +409,8 @@ fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob 
                 },
             );
         }
-        job.append(
+        append_single_line_text(
+            &mut job,
             tag,
             0.0,
             TextFormat {
@@ -543,16 +546,16 @@ mod tests {
 
     #[test]
     fn tags_layout_job_uses_single_line_ellipsis_and_preserves_tag_colors() {
-        let tags = vec!["tag:cuda".to_string(), "tag:node".to_string()];
+        let tags = vec!["tag:cuda\r\nprod".to_string(), "tag:node\u{2028}gpu".to_string()];
         let font = FontId::monospace(11.0);
 
         let job = tags_layout_job(&tags, &font, 120.0);
 
-        assert_eq!(job.text, "tag:cuda,tag:node");
+        assert_eq!(job.text, "tag:cuda prod,tag:node gpu");
         assert_eq!(job.sections.len(), 3);
-        assert_eq!(job.sections[0].format.color, tag_color("tag:cuda"));
+        assert_eq!(job.sections[0].format.color, tag_color(&tags[0]));
         assert_eq!(job.sections[1].format.color, theme::FG_DIM());
-        assert_eq!(job.sections[2].format.color, tag_color("tag:node"));
+        assert_eq!(job.sections[2].format.color, tag_color(&tags[1]));
         assert!(!job.break_on_newline);
         assert!((job.wrap.max_width - 120.0).abs() < f32::EPSILON);
         assert_eq!(job.wrap.max_rows, 1);

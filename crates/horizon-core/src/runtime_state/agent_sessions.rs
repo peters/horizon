@@ -384,7 +384,7 @@ impl ClaudeSessionSummary {
             && let Some(found_prompt) = value.get("lastPrompt").and_then(Value::as_str)
             && !found_prompt.is_empty()
         {
-            self.last_prompt = Some(truncate_session_label(found_prompt));
+            self.last_prompt = Some(truncate_discovered_session_label(found_prompt));
         }
     }
 
@@ -447,7 +447,7 @@ fn scan_claude_session_tail(file: &mut std::fs::File, summary: &mut ClaudeSessio
     Ok(())
 }
 
-fn truncate_session_label(value: &str) -> String {
+fn truncate_discovered_session_label(value: &str) -> String {
     const MAX_CHARS: usize = 64;
 
     truncate_chars(value.trim(), MAX_CHARS).into_owned()
@@ -611,7 +611,7 @@ impl PiSessionSummary {
         }
 
         if let Some(user_message) = extract_pi_user_message(&value) {
-            self.last_user_message = Some(truncate_session_label(&user_message));
+            self.last_user_message = Some(truncate_discovered_session_label(&user_message));
         }
     }
 

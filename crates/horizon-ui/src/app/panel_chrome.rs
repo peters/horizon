@@ -9,6 +9,11 @@ use super::RenameEditAction;
 use super::speech::MicState;
 use super::util::{format_compact_count, usize_to_f32};
 
+const ATTENTION_BADGE_HORIZONTAL_PADDING: f32 = 12.0;
+const ATTENTION_BADGE_RESERVED_WIDTH: f32 = 110.0;
+const SSH_BADGE_RESERVED_WIDTH: f32 = 90.0;
+const TITLEBAR_LEADING_CONTROL_SPACE: f32 = 60.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
     pub panel_id: PanelId,
@@ -209,6 +214,8 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             &painter,
             chrome.titlebar_rect,
             chrome.controls_anchor(),
+            chrome.scrollback_limit > 0,
+            chrome.ssh_status.is_some(),
             *severity,
             summary,
         );
@@ -341,17 +348,14 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 /// for all badges (history meter, SSH status, attention) that sit to its right.
 fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     let anchor = chrome.controls_anchor();
-    let mut right = anchor.min.x - 12.0;
-    if chrome.scrollback_limit > 0 {
-        right = panel_history_badge_rect(chrome.titlebar_rect, anchor).min.x - 8.0;
-    }
+    let has_history_meter = chrome.scrollback_limit > 0;
+    let title_gap = if has_history_meter { 2.0 } else { 4.0 };
+    let mut right = trailing_status_badge_right(chrome.titlebar_rect, anchor, has_history_meter) - title_gap;
     if chrome.ssh_status.is_some() {
-        // SSH badge sits left of the history meter; reserve ~90px.
-        right -= 90.0;
+        right -= SSH_BADGE_RESERVED_WIDTH;
     }
     if chrome.attention_badge.is_some() {
-        // Attention badge sits left of the history meter; reserve ~110px.
-        right -= 110.0;
+        right -= ATTENTION_BADGE_RESERVED_WIDTH;
     }
     right
 }
@@ -402,22 +406,21 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
         format_compact_count(meter.scrollback_limit)
     );
 
-    painter.rect_filled(
+    paint_badge_background(
+        painter,
         badge_rect,
         CornerRadius::same(7),
         theme::alpha(
             theme::blend(theme::BG_ELEVATED(), meter.accent, 0.10),
             if meter.focused { 214 } else { 184 },
         ),
-    );
-    painter.rect_stroke(
-        badge_rect,
-        CornerRadius::same(7),
-        Stroke::new(
-            1.0_f32,
-            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), meter.accent, 0.34), 180),
-        ),
-        StrokeKind::Outside,
+        Some((
+            Stroke::new(
+                1.0_f32,
+                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), meter.accent, 0.34), 180),
+            ),
+            StrokeKind::Outside,
+        )),
     );
     painter.rect_filled(track_rect, CornerRadius::same(2), theme::alpha(theme::FG_DIM(), 52));
     if fill_width > 0.0 {
@@ -448,24 +451,27 @@ fn paint_attention_badge(
     painter: &egui::Painter,
     titlebar_rect: Rect,
     close_rect: Rect,
+    has_history_meter: bool,
+    has_ssh_badge: bool,
     severity: AttentionSeverity,
     summary: &str,
 ) {
     let color = attention_severity_color(severity);
-    let badge_text = attention_badge_text(severity, summary);
-    let font = egui::FontId::proportional(10.0);
 
-    // Position the badge left of the history meter area.
-    let history_badge = panel_history_badge_rect(titlebar_rect, close_rect);
-    let badge_right = history_badge.min.x - 6.0;
-    let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
-    let text_width = text_galley.size().x;
-    let badge_width = text_width + 12.0;
+    let badge_right = attention_badge_right(titlebar_rect, close_rect, has_history_meter, has_ssh_badge);
+    let badge_left_limit = titlebar_rect.min.x + TITLEBAR_LEADING_CONTROL_SPACE;
+    let max_badge_width = (badge_right - badge_left_limit).clamp(0.0, ATTENTION_BADGE_RESERVED_WIDTH);
+    if max_badge_width <= 0.0 {
+        return;
+    }
+    let max_text_width = (max_badge_width - ATTENTION_BADGE_HORIZONTAL_PADDING).max(0.0);
+    let text_galley = painter.layout_job(attention_badge_layout_job(severity, summary, color, max_text_width));
+    let badge_width = (text_galley.size().x + ATTENTION_BADGE_HORIZONTAL_PADDING).min(max_badge_width);
     let badge_height: f32 = 18.0;
-    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
+    let badge_left = badge_right - badge_width;
     let badge_rect = Rect::from_min_size(
         Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
-        Vec2::new(badge_right - badge_left, badge_height),
+        Vec2::new(badge_width, badge_height),
     );
 
     paint_badge_background(
@@ -473,15 +479,15 @@ fn paint_attention_badge(
         badge_rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
-        Stroke::NONE,
-        StrokeKind::Inside,
+        None,
     );
-    painter.text(
-        Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        badge_text,
-        font,
-        color,
+    painter.with_clip_rect(badge_rect).galley(
+        Pos2::new(
+            badge_left + ATTENTION_BADGE_HORIZONTAL_PADDING * 0.5,
+            titlebar_rect.center().y - text_galley.size().y * 0.5,
+        ),
+        text_galley,
+        Color32::TRANSPARENT,
     );
 }
 
@@ -489,6 +495,20 @@ fn attention_badge_text(severity: AttentionSeverity, summary: &str) -> String {
     let icon = attention_severity_icon(severity);
     let display_text = truncate_chars(summary, 30);
     format!("{icon} {display_text}")
+}
+
+fn attention_badge_layout_job(
+    severity: AttentionSeverity,
+    summary: &str,
+    color: Color32,
+    max_width: f32,
+) -> egui::text::LayoutJob {
+    single_line_label_job(
+        &attention_badge_text(severity, summary),
+        &egui::FontId::proportional(10.0),
+        color,
+        max_width,
+    )
 }
 
 #[profiling::function]
@@ -502,11 +522,7 @@ fn paint_ssh_status_badge(
     let color = ssh_status_color(status);
     let badge_text = status.label();
     let font = egui::FontId::proportional(10.0);
-    let badge_right = if has_history_meter {
-        panel_history_badge_rect(titlebar_rect, close_rect).min.x - 6.0
-    } else {
-        close_rect.min.x - 8.0
-    };
+    let badge_right = trailing_status_badge_right(titlebar_rect, close_rect, has_history_meter);
     let text_width = painter
         .layout_no_wrap(badge_text.to_string(), font.clone(), color)
         .size()
@@ -519,16 +535,12 @@ fn paint_ssh_status_badge(
         Vec2::new(badge_right - badge_left, badge_height),
     );
 
-    painter.rect_filled(
+    paint_badge_background(
+        painter,
         badge_rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 72),
-    );
-    painter.rect_stroke(
-        badge_rect,
-        CornerRadius::same(4),
-        Stroke::new(1.0_f32, theme::alpha(color, 140)),
-        StrokeKind::Inside,
+        Some((Stroke::new(1.0_f32, theme::alpha(color, 140)), StrokeKind::Inside)),
     );
     painter.text(
         badge_rect.center(),
@@ -569,6 +581,19 @@ fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
         Pos2::new(close_rect.min.x - (badge_size.x * 0.5) - 10.0, titlebar_rect.center().y),
         badge_size,
     )
+}
+
+fn trailing_status_badge_right(titlebar_rect: Rect, close_rect: Rect, has_history_meter: bool) -> f32 {
+    if has_history_meter {
+        panel_history_badge_rect(titlebar_rect, close_rect).min.x - 6.0
+    } else {
+        close_rect.min.x - 8.0
+    }
+}
+
+fn attention_badge_right(titlebar_rect: Rect, close_rect: Rect, has_history_meter: bool, has_ssh_badge: bool) -> f32 {
+    trailing_status_badge_right(titlebar_rect, close_rect, has_history_meter)
+        - if has_ssh_badge { SSH_BADGE_RESERVED_WIDTH } else { 0.0 }
 }
 
 pub(super) fn panel_title_content_rect(titlebar_rect: Rect, close_rect: Rect, has_workspace_accent: bool) -> Rect {
@@ -626,10 +651,15 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        attention_badge_text, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        SSH_BADGE_RESERVED_WIDTH, attention_badge_layout_job, attention_badge_right, attention_badge_text,
+        focus_ring_stroke, panel_border_stroke, panel_fill, panel_history_badge_rect, panel_title_color,
         panel_titlebar_fill, title_focus_indicator_rect,
     };
     use horizon_core::AttentionSeverity;
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() <= 0.001, "expected {expected}, got {actual}");
+    }
 
     #[test]
     fn attention_badge_truncates_utf8_summary_without_slicing_bytes() {
@@ -639,6 +669,40 @@ mod tests {
             attention_badge_text(AttentionSeverity::Low, summary),
             "ℹ aaaaaaaaaaaaaaaaaaaaaaaaaaaaå…"
         );
+    }
+
+    #[test]
+    fn attention_badge_layout_is_single_line_and_pixel_bounded() {
+        let job = attention_badge_layout_job(
+            AttentionSeverity::Low,
+            "first\r\nsecond 二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二",
+            Color32::WHITE,
+            98.0,
+        );
+
+        assert!(!job.text.contains(['\r', '\n']));
+        assert!(!job.break_on_newline);
+        assert!((job.wrap.max_width - 98.0).abs() <= 0.001);
+        assert_eq!(job.wrap.max_rows, 1);
+        assert_eq!(job.wrap.overflow_character, Some('…'));
+    }
+
+    #[test]
+    fn attention_badge_uses_the_visible_trailing_anchor_and_stacks_left_of_ssh() {
+        let titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(410.0, 54.0));
+        let controls_rect = Rect::from_min_max(Pos2::new(370.0, 20.0), Pos2::new(390.0, 54.0));
+
+        let without_history = attention_badge_right(titlebar_rect, controls_rect, false, false);
+        assert_near(without_history, controls_rect.min.x - 8.0);
+
+        let with_history = attention_badge_right(titlebar_rect, controls_rect, true, false);
+        assert_near(
+            with_history,
+            panel_history_badge_rect(titlebar_rect, controls_rect).min.x - 6.0,
+        );
+
+        let with_ssh = attention_badge_right(titlebar_rect, controls_rect, false, true);
+        assert_near(with_ssh, without_history - SSH_BADGE_RESERVED_WIDTH);
     }
 
     #[test]
