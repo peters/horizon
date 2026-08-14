@@ -85,6 +85,8 @@ fn apply_wrapped_constraints(job: &mut LayoutJob, max_width: f32) {
     job.break_on_newline = true;
     job.wrap.max_width = max_width.max(0.0);
     job.wrap.max_rows = usize::MAX;
+    // egui prefers word boundaries when this is false, then falls back to the
+    // last fitting glyph so an individual overlong token still hard-wraps.
     job.wrap.break_anywhere = false;
     job.wrap.overflow_character = None;
 }
@@ -217,6 +219,26 @@ mod tests {
         let rows = rows.borrow();
         let normalized: Vec<_> = rows.iter().map(|row| row.trim()).collect();
         assert_eq!(normalized, ["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn wrapped_tooltip_layout_hard_wraps_an_overlong_token() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let row_widths = std::cell::RefCell::new(Vec::<f32>::new());
+
+        let _ = ctx.run(RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut job = LayoutJob::simple_singleline("x".repeat(128), FontId::proportional(14.0), Color32::WHITE);
+                apply_wrapped_constraints(&mut job, 50.0);
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                row_widths.replace(galley.rows.iter().map(|row| row.rect().width()).collect());
+            });
+        });
+
+        let row_widths = row_widths.borrow();
+        assert!(row_widths.len() > 1);
+        assert!(row_widths.iter().all(|width| *width <= 50.0));
     }
 
     #[test]
