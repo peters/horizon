@@ -1,17 +1,120 @@
 use std::{borrow::Cow, sync::Arc};
 
-use egui::{Color32, Context, FontId, Galley, Painter, Pos2, Rect, Ui, Vec2, text::LayoutJob};
+use egui::{
+    Color32, Context, FontId, Galley, Painter, Pos2, Rect, Ui, Vec2,
+    text::{LayoutJob, TextFormat},
+};
 use horizon_core::flatten_line_separators;
 
-use super::single_line_label_job;
+use super::{append_flattened_single_line_text, single_line_job, single_line_label_job_from_flattened};
 
 const MAX_UNSCANNED_TEXT_BYTES: usize = 512;
 const MAX_SHAPING_VISIBLE_SCALARS: usize = 512;
 const MAX_SHAPING_SCANNED_SCALARS: usize = 4_096;
+const MAX_SHAPING_SECTIONS: usize = 512;
 const SHAPING_WIDTH_BUDGET_MULTIPLIER: f32 = 4.0;
 
-/// Lays out painter text once so callers can use its exact glyph width and
-/// reuse the same galley for painting.
+/// Builds a styled single-line job while enforcing one shaping budget across
+/// every section appended to it.
+pub(crate) struct BoundedSingleLineJob<'a> {
+    ctx: &'a Context,
+    job: LayoutJob,
+    shaping_width_budget: f32,
+    measured_width: f32,
+    scanned_scalars: usize,
+    visible_scalars: usize,
+    sections: usize,
+    capped: bool,
+}
+
+impl<'a> BoundedSingleLineJob<'a> {
+    pub(crate) fn new(ctx: &'a Context, max_width: f32) -> Self {
+        let shaping_width_budget = if max_width.is_nan() {
+            0.0
+        } else {
+            max_width.max(0.0) * SHAPING_WIDTH_BUDGET_MULTIPLIER
+        };
+        Self {
+            ctx,
+            job: single_line_job(max_width),
+            shaping_width_budget,
+            measured_width: 0.0,
+            scanned_scalars: 0,
+            visible_scalars: 0,
+            sections: 0,
+            capped: false,
+        }
+    }
+
+    /// Appends a styled section. Returns `false` once later sections can no
+    /// longer contribute visible text within the shared shaping budget.
+    pub(crate) fn append(&mut self, text: &str, leading_space: f32, format: TextFormat) -> bool {
+        if self.capped || self.sections == MAX_SHAPING_SECTIONS {
+            self.capped = true;
+            return false;
+        }
+        self.sections += 1;
+        if text.is_empty() {
+            return true;
+        }
+
+        let flattened = flatten_line_separators(text);
+        let mut cut_at = flattened.len();
+        let mut append_ellipsis = false;
+        self.ctx.fonts_mut(|fonts| {
+            for (byte_index, character) in flattened.char_indices() {
+                if self.scanned_scalars == MAX_SHAPING_SCANNED_SCALARS {
+                    cut_at = byte_index;
+                    append_ellipsis = true;
+                    self.capped = true;
+                    break;
+                }
+                self.scanned_scalars += 1;
+
+                let glyph_width = fonts.glyph_width(&format.font_id, character).max(0.0);
+                if glyph_width == 0.0 {
+                    continue;
+                }
+                if self.visible_scalars == MAX_SHAPING_VISIBLE_SCALARS {
+                    cut_at = byte_index;
+                    append_ellipsis = true;
+                    self.capped = true;
+                    break;
+                }
+                if self.measured_width + glyph_width > self.shaping_width_budget {
+                    cut_at = if self.visible_scalars == 0 {
+                        byte_index + character.len_utf8()
+                    } else {
+                        byte_index
+                    };
+                    self.capped = true;
+                    break;
+                }
+                self.measured_width += glyph_width;
+                self.visible_scalars += 1;
+            }
+        });
+
+        let bounded = if append_ellipsis {
+            let mut bounded = String::with_capacity(cut_at + '…'.len_utf8());
+            bounded.push_str(&flattened[..cut_at]);
+            bounded.push('…');
+            Cow::Owned(bounded)
+        } else {
+            Cow::Borrowed(&flattened[..cut_at])
+        };
+        append_flattened_single_line_text(&mut self.job, bounded.as_ref(), leading_space, format);
+        !self.capped
+    }
+
+    pub(crate) fn finish(self) -> LayoutJob {
+        self.job
+    }
+}
+
+/// Lays out the bounded display text once so callers can reuse the painted
+/// galley and its exact post-cap glyph width. Pathological inputs may be
+/// shortened even when `max_width` is infinite.
 pub(crate) fn painter_text_galley(
     painter: &Painter,
     text: &str,
@@ -37,7 +140,7 @@ pub(crate) fn context_text_galley(
 fn bounded_single_line_job(ctx: &Context, text: &str, font: &FontId, color: Color32, max_width: f32) -> LayoutJob {
     let flattened = flatten_line_separators(text);
     let display_text = precut_text_for_shaping(ctx, flattened.as_ref(), font, max_width);
-    single_line_label_job(display_text.as_ref(), font, color, max_width)
+    single_line_label_job_from_flattened(display_text.as_ref(), font, color, max_width)
 }
 
 /// Conservatively bounds the prefix sent to the text shaper while keeping
@@ -108,9 +211,9 @@ pub(crate) fn paint_section_header(ui: &mut Ui, width: f32, height: f32, title: 
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use egui::{Color32, FontId};
+    use egui::{Color32, FontId, text::TextFormat};
 
-    use super::{context_text_galley, painter_text_galley};
+    use super::{BoundedSingleLineJob, context_text_galley, painter_text_galley};
 
     fn context_job_text(source: &str, max_width: f32) -> String {
         let ctx = egui::Context::default();
@@ -213,5 +316,38 @@ mod tests {
         let job_text = context_job_text(&source, f32::NAN);
 
         assert!(job_text.chars().count() <= 1);
+    }
+
+    #[test]
+    fn styled_sections_share_one_visible_scalar_budget() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut job_text = String::new();
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let mut job = BoundedSingleLineJob::new(ctx, f32::INFINITY);
+            assert!(job.append(
+                &"a".repeat(400),
+                0.0,
+                TextFormat {
+                    font_id: FontId::proportional(12.0),
+                    color: Color32::WHITE,
+                    ..Default::default()
+                },
+            ));
+            assert!(!job.append(
+                &"b".repeat(400),
+                0.0,
+                TextFormat {
+                    font_id: FontId::monospace(10.0),
+                    color: Color32::GRAY,
+                    ..Default::default()
+                },
+            ));
+            job_text = job.finish().text;
+        });
+
+        assert_eq!(job_text.chars().count(), 513);
+        assert!(job_text.ends_with('…'));
     }
 }

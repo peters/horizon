@@ -3,15 +3,15 @@ mod toolbar;
 use std::collections::HashMap;
 
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, UiBuilder,
-    Vec2,
+    Align, Button, Color32, Context, CornerRadius, CursorIcon, FontId, Id, Layout, Order, Pos2, Rect, Sense, Stroke,
+    UiBuilder, Vec2,
 };
 use horizon_core::{
     AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
     flatten_line_separators,
 };
 
-use crate::text::{stable_hover_text, stable_hover_text_lazy};
+use crate::text::{painter_text_galley, stable_hover_text, stable_hover_text_lazy};
 use crate::theme;
 
 use super::panels::panel_kind_icon;
@@ -19,7 +19,6 @@ use super::root_chrome::effective_sidebar_width;
 use super::util;
 use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
-const DETACHED_WORKSPACE_LABEL_RESERVATION: f32 = 68.0;
 const PANEL_CONTEXT_MENU_WIDTH: f32 = 220.0;
 
 struct WorkspaceSidebarEntry {
@@ -75,6 +74,25 @@ struct SidebarWorkspaceDragState {
     active_this_frame: bool,
     drop_requested: bool,
     drop_action: Option<SidebarWorkspaceDropAction>,
+}
+
+fn truncated_label_with_hover(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    full_text: &str,
+    text: egui::RichText,
+    sense: Sense,
+) -> egui::Response {
+    stable_hover_text(
+        ui.add_sized(
+            size,
+            egui::Label::new(text)
+                .truncate()
+                .show_tooltip_when_elided(false)
+                .sense(sense),
+        ),
+        full_text,
+    )
 }
 
 impl HorizonApp {
@@ -285,25 +303,32 @@ impl HorizonApp {
 
                 ui.add_space(8.0);
                 let detached_reservation = if workspace.detached {
-                    DETACHED_WORKSPACE_LABEL_RESERVATION
+                    painter_text_galley(
+                        ui.painter(),
+                        "NEW WINDOW",
+                        &FontId::proportional(8.5),
+                        theme::FG_DIM(),
+                        f32::INFINITY,
+                    )
+                    .size()
+                    .x + 4.0
                 } else {
                     0.0
                 };
                 let name_width = (ui.available_width() - detached_reservation).max(0.0);
-                let name_response = ui.add_sized(
+                let name_response = truncated_label_with_hover(
+                    ui,
                     Vec2::new(name_width, 18.0),
-                    egui::Label::new(
-                        egui::RichText::new(&workspace.name)
-                            .color(if workspace.is_active {
-                                theme::FG()
-                            } else {
-                                theme::FG_SOFT()
-                            })
-                            .size(13.0)
-                            .strong(),
-                    )
-                    .truncate()
-                    .sense(Sense::click()),
+                    &workspace.name,
+                    egui::RichText::new(&workspace.name)
+                        .color(if workspace.is_active {
+                            theme::FG()
+                        } else {
+                            theme::FG_SOFT()
+                        })
+                        .size(13.0)
+                        .strong(),
+                    Sense::click(),
                 );
                 click_target_hovered |= name_response.hovered();
                 row_clicked |= name_response.clicked();
@@ -491,19 +516,18 @@ impl HorizonApp {
 
                     let title_width = (ui.available_width() - 28.0).max(48.0);
                     let title = flatten_line_separators(&panel.title);
-                    let title_response = ui.add_sized(
+                    let title_response = truncated_label_with_hover(
+                        ui,
                         Vec2::new(title_width, 18.0),
-                        egui::Label::new(
-                            egui::RichText::new(title.as_ref())
-                                .color(if panel.is_focused {
-                                    theme::FG()
-                                } else {
-                                    theme::FG_SOFT()
-                                })
-                                .size(12.5),
-                        )
-                        .truncate()
-                        .sense(Sense::click()),
+                        title.as_ref(),
+                        egui::RichText::new(title.as_ref())
+                            .color(if panel.is_focused {
+                                theme::FG()
+                            } else {
+                                theme::FG_SOFT()
+                            })
+                            .size(12.5),
+                        Sense::click(),
                     );
                     click_target_hovered |= title_response.hovered();
                     row_clicked |= title_response.clicked();
@@ -528,15 +552,14 @@ impl HorizonApp {
                         row_clicked |= tag_response.clicked();
                         ui.add_space(4.0);
                         let summary = flatten_line_separators(&attention_item.summary);
-                        let summary_response = ui.add_sized(
+                        let summary_response = truncated_label_with_hover(
+                            ui,
                             Vec2::new(ui.available_width(), 14.0),
-                            egui::Label::new(
-                                egui::RichText::new(summary.as_ref())
-                                    .size(9.0)
-                                    .color(theme::alpha(color, 180)),
-                            )
-                            .truncate()
-                            .sense(Sense::click()),
+                            summary.as_ref(),
+                            egui::RichText::new(summary.as_ref())
+                                .size(9.0)
+                                .color(theme::alpha(color, 180)),
+                            Sense::click(),
                         );
                         click_target_hovered |= summary_response.hovered();
                         row_clicked |= summary_response.clicked();
@@ -595,13 +618,9 @@ impl HorizonApp {
                 let text = egui::RichText::new(&other_workspace.name)
                     .size(12.0)
                     .color(theme::FG_SOFT());
-                if ui
-                    .add_sized(
-                        Vec2::new(PANEL_CONTEXT_MENU_WIDTH, 22.0),
-                        Button::new(text).frame(false).truncate(),
-                    )
-                    .clicked()
-                {
+                let response =
+                    stable_hover_text(ui.add(Button::new(text).frame(false).truncate()), &other_workspace.name);
+                if response.clicked() {
                     self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
                     self.mark_runtime_dirty();
                     ui.close();

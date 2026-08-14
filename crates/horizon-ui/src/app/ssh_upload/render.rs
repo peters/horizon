@@ -1,7 +1,7 @@
 use egui::{
     Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, Rect, RichText, Stroke, StrokeKind, Vec2,
 };
-use horizon_core::truncate_chars;
+use horizon_core::{flatten_line_separators, truncate_chars};
 
 use crate::{loading_spinner, theme};
 
@@ -256,11 +256,16 @@ fn render_single_file_pill(ui: &mut egui::Ui, name: &str, size_bytes: u64) {
                 let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(6.0, 14.0), egui::Sense::hover());
                 ui.painter_at(dot_rect)
                     .circle_filled(dot_rect.center(), 3.0, theme::PALETTE_CYAN());
-                let display_name = truncate_chars(name, 20);
+                let display_name = single_file_display_name(name);
                 ui.label(RichText::new(display_name).size(11.0).color(theme::FG_SOFT()));
                 ui.label(RichText::new(human_bytes(size_bytes)).size(10.0).color(theme::FG_DIM()));
             });
         });
+}
+
+fn single_file_display_name(name: &str) -> String {
+    let single_line_name = flatten_line_separators(name);
+    truncate_chars(single_line_name.as_ref(), 20).into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -778,3 +783,6 @@ fn render_bytes_summary(ui: &mut egui::Ui, completed_bytes: u64, total_bytes: u6
         .color(theme::FG_DIM()),
     );
 }
+
+#[cfg(test)]
+mod tests;

@@ -161,31 +161,29 @@ fn layout_status_badge(
         .max(spec.minimum_available_width.unwrap_or(0.0));
     let text_width = (available_width - spec.horizontal_padding).max(0.0);
     let bounded_galley = painter_text_galley(painter, spec.text, &spec.font, spec.color, text_width);
+    let compact_galley = spec.compact_galley.as_ref().map_or_else(
+        || painter_text_galley(painter, spec.compact_text, &spec.font, spec.color, f32::INFINITY),
+        Arc::clone,
+    );
     let use_compact = bounded_galley.elided && {
-        let compact_width = spec.compact_galley.as_ref().map_or_else(
-            || {
-                spec.compact_text.chars().next().map_or(0.0, |character| {
-                    painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, character))
-                })
-            },
-            |galley| galley.size().x,
-        );
         let ellipsis_width = painter.fonts_mut(|fonts| fonts.glyph_width(&spec.font, '…'));
-        text_width < compact_width + ellipsis_width
+        text_width < compact_galley.size().x + ellipsis_width
     };
-    let galley = if use_compact {
-        let compact_galley = spec.compact_galley.as_ref().map_or_else(
-            || painter_text_galley(painter, spec.compact_text, &spec.font, spec.color, f32::INFINITY),
-            Arc::clone,
-        );
+    let (galley, horizontal_padding) = if use_compact {
         if compact_galley.size().x + spec.horizontal_padding > available_width {
-            return None;
+            let fallback_padding = 2.0;
+            let fallback_galley = painter_text_galley(painter, "•", &spec.font, spec.color, f32::INFINITY);
+            if fallback_galley.size().x + fallback_padding > available_width {
+                return None;
+            }
+            (fallback_galley, fallback_padding)
+        } else {
+            (compact_galley, spec.horizontal_padding)
         }
-        compact_galley
     } else {
-        bounded_galley
+        (bounded_galley, spec.horizontal_padding)
     };
-    let badge_width = (galley.size().x + spec.horizontal_padding).min(available_width);
+    let badge_width = (galley.size().x + horizontal_padding).min(available_width);
     let badge_height = 18.0;
     let badge_left = (spec.right - badge_width).max(spec.left_limit);
     let rect = Rect::from_min_size(
@@ -195,7 +193,7 @@ fn layout_status_badge(
     let text_x = if spec.center_text {
         rect.center().x - galley.size().x * 0.5
     } else {
-        rect.min.x + spec.horizontal_padding * 0.5
+        rect.min.x + horizontal_padding * 0.5
     };
     let text_position = Pos2::new(text_x, rect.center().y - galley.size().y * 0.5);
 
@@ -521,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_badge_is_omitted_when_reserved_space_cannot_hold_its_icon() {
+    fn compact_badge_degrades_to_a_bare_status_dot() {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
         let mut result = None;
@@ -539,7 +537,7 @@ mod tests {
                         fill: Color32::BLACK,
                         stroke: None,
                         horizontal_padding: 16.0,
-                        right: 50.0,
+                        right: 55.0,
                         left_limit: 45.0,
                         minimum_available_width: None,
                         center_text: true,
@@ -548,7 +546,10 @@ mod tests {
             });
         });
 
-        assert!(matches!(result, Some(None)));
+        let Some(Some(badge)) = result else {
+            panic!("status dot was not laid out");
+        };
+        assert_eq!(badge.galley.job.text, "•");
     }
 
     #[test]

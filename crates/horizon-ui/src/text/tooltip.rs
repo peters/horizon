@@ -94,13 +94,19 @@ fn flatten_layout_job_newlines(job: &mut LayoutJob) {
     let Cow::Owned(flattened) = flattened else {
         return;
     };
-    if job.sections.len() > 1 {
-        return;
-    }
 
+    let ranges = job
+        .sections
+        .iter()
+        .map(|section| {
+            let start = flatten_line_separators(&job.text[..section.byte_range.start]).len();
+            let end = flatten_line_separators(&job.text[..section.byte_range.end]).len();
+            start..end
+        })
+        .collect::<Vec<_>>();
     job.text = flattened;
-    if let Some(section) = job.sections.first_mut() {
-        section.byte_range = 0..job.text.len();
+    for (section, range) in job.sections.iter_mut().zip(ranges) {
+        section.byte_range = range;
     }
 }
 
@@ -146,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_section_tooltip_constraints_preserve_valid_section_ranges() {
+    fn multi_section_tooltip_constraints_flatten_and_remap_section_ranges() {
         let mut job = LayoutJob {
             text: "a\r\nb".to_string(),
             sections: vec![
@@ -166,8 +172,9 @@ mod tests {
 
         apply_single_line_constraints(&mut job, 96.0);
 
-        assert_eq!(job.text, "a\r\nb");
-        assert_eq!(job.sections[1].byte_range, 1..4);
+        assert_eq!(job.text, "a b");
+        assert_eq!(job.sections[0].byte_range, 0..1);
+        assert_eq!(job.sections[1].byte_range, 1..3);
         let ctx = egui::Context::default();
         let _ = ctx.run(RawInput::default(), |ctx| {
             let _ = ctx.fonts_mut(|fonts| fonts.layout_job(job.clone()));

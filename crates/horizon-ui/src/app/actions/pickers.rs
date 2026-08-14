@@ -10,13 +10,10 @@ use crate::theme;
 use super::PresetPickerAction;
 use super::support::{preset_picker_heading, render_grouped_preset_rows};
 
-const PRESET_PICKER_MIN_WIDTH: f32 = 160.0;
 const PRESET_PICKER_MAX_WIDTH: f32 = 320.0;
 
 fn preset_picker_width(content_width: f32) -> f32 {
-    let maximum = (content_width - 32.0).clamp(0.0, PRESET_PICKER_MAX_WIDTH);
-    let minimum = PRESET_PICKER_MIN_WIDTH.min(maximum);
-    maximum.clamp(minimum, PRESET_PICKER_MAX_WIDTH)
+    (content_width - 32.0).clamp(0.0, PRESET_PICKER_MAX_WIDTH)
 }
 
 impl HorizonApp {

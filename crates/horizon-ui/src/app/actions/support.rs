@@ -5,13 +5,14 @@ use egui::{Button, Color32, FontId, Ui, WidgetText};
 use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
-use crate::text::{append_single_line_text, painter_text_galley, single_line_job};
+use crate::text::{BoundedSingleLineJob, painter_text_galley};
 use crate::theme;
 
 use super::PresetPickerAction;
 use crate::app::DetachedWorkspaceViewportState;
 
 const PRESET_LABEL_RESERVATION_TOLERANCE: f32 = 0.5;
+const PRESET_ALIAS_MAX_WIDTH_FRACTION: f32 = 0.4;
 
 pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'static str {
     if target_workspace.is_some() {
@@ -117,9 +118,8 @@ fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> L
     let alias_font = FontId::monospace(10.0);
     let alias_color = theme::FG_DIM();
     let Some(alias) = &preset.alias else {
-        let mut job = single_line_job(max_width);
-        append_single_line_text(
-            &mut job,
+        let mut job = BoundedSingleLineJob::new(ui.ctx(), max_width);
+        let _ = job.append(
             &preset.name,
             0.0,
             TextFormat {
@@ -128,13 +128,14 @@ fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> L
                 ..Default::default()
             },
         );
-        return job;
+        return job.finish();
     };
 
     let alias_text = format!("  {alias}");
-    let alias_width = painter_text_galley(ui.painter(), &alias_text, &alias_font, alias_color, f32::INFINITY)
-        .size()
-        .x;
+    let alias_budget = (max_width.max(0.0) * PRESET_ALIAS_MAX_WIDTH_FRACTION).max(0.0);
+    let alias_galley = painter_text_galley(ui.painter(), &alias_text, &alias_font, alias_color, alias_budget);
+    let display_alias = alias_galley.rows.first().map_or_else(String::new, |row| row.text());
+    let alias_width = alias_galley.size().x;
     let name_width = (max_width - alias_width - PRESET_LABEL_RESERVATION_TOLERANCE).max(0.0);
     let display_name = if name_width > 0.0 {
         painter_text_galley(ui.painter(), &preset.name, &name_font, name_color, name_width)
@@ -145,9 +146,8 @@ fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> L
         String::new()
     };
 
-    let mut job = single_line_job(max_width);
-    append_single_line_text(
-        &mut job,
+    let mut job = BoundedSingleLineJob::new(ui.ctx(), max_width);
+    if job.append(
         &display_name,
         0.0,
         TextFormat {
@@ -155,18 +155,18 @@ fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> L
             color: name_color,
             ..Default::default()
         },
-    );
-    append_single_line_text(
-        &mut job,
-        &alias_text,
-        0.0,
-        TextFormat {
-            font_id: alias_font,
-            color: alias_color,
-            ..Default::default()
-        },
-    );
-    job
+    ) {
+        let _ = job.append(
+            &display_alias,
+            0.0,
+            TextFormat {
+                font_id: alias_font,
+                color: alias_color,
+                ..Default::default()
+            },
+        );
+    }
+    job.finish()
 }
 
 fn preset_button_label(ui: &Ui, preset: &PresetConfig, max_width: f32) -> WidgetText {
@@ -411,7 +411,8 @@ mod tests {
         };
 
         assert!(job.text.contains('…'));
-        assert!(job.text.ends_with("  alias next"));
+        assert!(job.text.contains("al"), "alias was erased from {:?}", job.text);
+        assert!(job.text.ends_with('…'));
         assert!(!job.break_on_newline);
         assert_eq!(job.wrap.max_rows, 1);
         assert_eq!(job.wrap.overflow_character, Some('…'));
@@ -462,6 +463,49 @@ mod tests {
 
         assert!(rendered.contains('…'));
         assert!(rendered.ends_with("  ccp"), "alias was elided from {rendered:?}");
+    }
+
+    #[test]
+    fn pathological_preset_sections_share_one_shaping_budget() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "n".repeat(10_000);
+        preset.alias = Some("a".repeat(10_000));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut job = None;
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                job = Some(preset_button_layout_job(ui, &preset, 320.0));
+            });
+        });
+        let Some(job) = job else {
+            panic!("preset job was not built");
+        };
+
+        assert!(job.text.chars().count() <= 513);
+    }
+
+    #[test]
+    fn long_alias_keeps_the_preset_name_visible() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "Production deploy".to_string();
+        preset.alias = Some("alias-with-deliberately-excessive-detail".to_string());
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut rendered = String::new();
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let egui::WidgetText::Galley(galley) = preset_button_label(ui, &preset, 160.0) else {
+                    panic!("preset label did not retain its precomputed galley");
+                };
+                rendered = galley.rows.first().map_or_else(String::new, |row| row.text());
+            });
+        });
+
+        assert!(rendered.starts_with("Production"), "name was erased from {rendered:?}");
+        assert!(rendered.contains('…'), "long alias was not elided in {rendered:?}");
     }
 
     #[test]

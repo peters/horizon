@@ -7,7 +7,7 @@ use horizon_core::{
 };
 
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
-use crate::text::{append_single_line_text, single_line_job};
+use crate::text::BoundedSingleLineJob;
 use crate::theme;
 
 const COLUMN_GUTTER: f32 = 18.0;
@@ -173,7 +173,7 @@ fn render_tags(painter: &egui::Painter, pos: Pos2, tags: &[String], font: &FontI
         return;
     }
 
-    render_layout_job(painter, pos, tags_layout_job(tags, font, max_x - pos.x));
+    render_layout_job(painter, pos, tags_layout_job(painter.ctx(), tags, font, max_x - pos.x));
 }
 
 fn host_row_layout(ui: &mut Ui, width: f32, columns: &Columns) -> HostRowLayout {
@@ -259,12 +259,13 @@ fn paint_host_row_contents(ui: &mut Ui, layout: &HostRowLayout, row: &HostRowRen
 
 fn paint_row_columns(painter: &egui::Painter, x: f32, y: f32, mono_sm: &FontId, row: &HostRowRenderContext<'_>) {
     let ip = row.host.ips.first().map_or("-", String::as_str);
-    painter.text(
+    render_truncated_text(
+        painter,
         Pos2::new(x + row.columns.ipv4, y),
-        egui::Align2::LEFT_CENTER,
         ip,
-        mono_sm.clone(),
+        mono_sm,
         theme::FG_SOFT(),
+        x + row.columns.tags - COLUMN_GUTTER,
     );
 
     render_tags(
@@ -372,14 +373,19 @@ fn render_truncated_text(painter: &egui::Painter, pos: Pos2, text: &str, font: &
     render_layout_job(
         painter,
         pos,
-        truncated_text_layout_job(text, font, color, max_x - pos.x),
+        truncated_text_layout_job(painter.ctx(), text, font, color, max_x - pos.x),
     );
 }
 
-fn truncated_text_layout_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> LayoutJob {
-    let mut job = single_line_job(max_width);
-    append_single_line_text(
-        &mut job,
+fn truncated_text_layout_job(
+    ctx: &egui::Context,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+) -> LayoutJob {
+    let mut job = BoundedSingleLineJob::new(ctx, max_width);
+    let _ = job.append(
         text,
         0.0,
         TextFormat {
@@ -388,7 +394,7 @@ fn truncated_text_layout_job(text: &str, font: &FontId, color: Color32, max_widt
             ..Default::default()
         },
     );
-    job
+    job.finish()
 }
 
 fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
@@ -402,13 +408,12 @@ fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
     painter.galley(text_pos, galley, Color32::TRANSPARENT);
 }
 
-fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob {
-    let mut job = single_line_job(max_width);
+fn tags_layout_job(ctx: &egui::Context, tags: &[String], font: &FontId, max_width: f32) -> LayoutJob {
+    let mut job = BoundedSingleLineJob::new(ctx, max_width);
 
     for (index, tag) in tags.iter().enumerate() {
-        if index > 0 {
-            append_single_line_text(
-                &mut job,
+        if index > 0
+            && !job.append(
                 ",",
                 0.0,
                 TextFormat {
@@ -416,10 +421,11 @@ fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob 
                     color: theme::FG_DIM(),
                     ..Default::default()
                 },
-            );
+            )
+        {
+            break;
         }
-        append_single_line_text(
-            &mut job,
+        if !job.append(
             tag,
             0.0,
             TextFormat {
@@ -427,10 +433,12 @@ fn tags_layout_job(tags: &[String], font: &FontId, max_width: f32) -> LayoutJob 
                 color: tag_color(tag),
                 ..Default::default()
             },
-        );
+        ) {
+            break;
+        }
     }
 
-    job
+    job.finish()
 }
 
 fn format_relative_time(epoch_secs: i64, now_secs: i64) -> String {
@@ -550,41 +558,4 @@ fn details_stroke() -> Color32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tags_layout_job_uses_single_line_ellipsis_and_preserves_tag_colors() {
-        let tags = vec!["tag:cuda\r\nprod".to_string(), "tag:node\u{2028}gpu".to_string()];
-        let font = FontId::monospace(11.0);
-
-        let job = tags_layout_job(&tags, &font, 120.0);
-
-        assert_eq!(job.text, "tag:cuda prod,tag:node gpu");
-        assert_eq!(job.sections.len(), 3);
-        assert_eq!(job.sections[0].format.color, tag_color(&tags[0]));
-        assert_eq!(job.sections[1].format.color, theme::FG_DIM());
-        assert_eq!(job.sections[2].format.color, tag_color(&tags[1]));
-        assert!(!job.break_on_newline);
-        assert!((job.wrap.max_width - 120.0).abs() < f32::EPSILON);
-        assert_eq!(job.wrap.max_rows, 1);
-        assert!(job.wrap.break_anywhere);
-        assert_eq!(job.wrap.overflow_character, Some('\u{2026}'));
-    }
-
-    #[test]
-    fn host_alias_layout_flattens_newlines_and_honors_its_column_width() {
-        let font = FontId::monospace(12.0);
-        let job = truncated_text_layout_job(
-            "production\r\nwith a deliberately long alias",
-            &font,
-            Color32::WHITE,
-            90.0,
-        );
-
-        assert_eq!(job.text, "production with a deliberately long alias");
-        assert_eq!(job.wrap.max_rows, 1);
-        assert_eq!(job.wrap.overflow_character, Some('…'));
-        assert!((job.wrap.max_width - 90.0).abs() < f32::EPSILON);
-    }
-}
+mod tests;
