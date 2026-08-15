@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Button, Color32, FontId, Ui, WidgetText};
-use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
+use egui::{Button, Color32, FontId, Response, Ui, WidgetText};
+use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId, flatten_line_separators};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
-use crate::text::{BoundedSingleLineJob, painter_text_galley};
+use crate::text::{BoundedSingleLineJob, painter_text_galley, stable_wrapped_hover_text_lazy};
 use crate::theme;
 
 use super::PresetPickerAction;
@@ -173,6 +173,33 @@ fn preset_button_label(ui: &Ui, preset: &PresetConfig, max_width: f32) -> Widget
     WidgetText::Galley(ui.painter().layout_job(preset_button_layout_job(ui, preset, max_width)))
 }
 
+fn preset_button(ui: &mut Ui, preset: &PresetConfig, max_width: f32) -> Response {
+    let label = preset_button_label(ui, preset, max_width);
+    let hover_text = preset_hover_text(preset);
+    let elided = preset_button_needs_tooltip(&label, &hover_text);
+    let response = ui.add(Button::new(label).frame(false));
+    if elided {
+        stable_wrapped_hover_text_lazy(response, || hover_text)
+    } else {
+        response
+    }
+}
+
+fn preset_button_needs_tooltip(label: &WidgetText, full_text: &str) -> bool {
+    matches!(
+        label,
+        WidgetText::Galley(galley) if galley.elided || galley.job.text != full_text
+    )
+}
+
+fn preset_hover_text(preset: &PresetConfig) -> String {
+    let name = flatten_line_separators(&preset.name);
+    match &preset.alias {
+        Some(alias) => format!("{}  {}", name.as_ref(), flatten_line_separators(alias)),
+        None => name.into_owned(),
+    }
+}
+
 fn render_preset_picker_row(
     ui: &mut Ui,
     target_workspace: Option<WorkspaceId>,
@@ -196,10 +223,7 @@ fn render_panel_preset_picker_row(
     let mut selected_action = None;
     ui.horizontal(|ui| {
         let label_width = (row_width - 44.0).max(0.0);
-        if ui
-            .add(Button::new(preset_button_label(ui, preset, label_width)).frame(false))
-            .clicked()
-        {
+        if preset_button(ui, preset, label_width).clicked() {
             selected_action = Some(PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset: preset.clone(),
@@ -225,10 +249,7 @@ fn render_workspace_preset_picker_row(
     preset: &PresetConfig,
     row_width: f32,
 ) -> Option<PresetPickerAction> {
-    if !ui
-        .add(Button::new(preset_button_label(ui, preset, row_width)).frame(false))
-        .clicked()
-    {
+    if !preset_button(ui, preset, row_width).clicked() {
         return None;
     }
 
@@ -354,8 +375,8 @@ mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
     use super::{
-        PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job, preset_category,
-        render_grouped_preset_rows,
+        PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job,
+        preset_button_needs_tooltip, preset_category, preset_hover_text, render_grouped_preset_rows,
     };
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
@@ -390,6 +411,15 @@ mod tests {
         assert_eq!(entries[0].detail, "Shell");
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "prod-api"));
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "deploy"));
+    }
+
+    #[test]
+    fn preset_hover_text_preserves_full_flattened_name_and_alias() {
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "Deploy first\r\nsecond".to_string();
+        preset.alias = Some("alias\u{2028}detail".to_string());
+
+        assert_eq!(preset_hover_text(&preset), "Deploy first second  alias detail");
     }
 
     #[test]
@@ -451,10 +481,13 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::app::configure_fonts());
         let mut rendered = String::new();
+        let mut needs_tooltip = false;
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let egui::WidgetText::Galley(galley) = preset_button_label(ui, &preset, 160.0) else {
+                let label = preset_button_label(ui, &preset, 160.0);
+                needs_tooltip = preset_button_needs_tooltip(&label, &preset_hover_text(&preset));
+                let egui::WidgetText::Galley(galley) = label else {
                     panic!("preset label did not retain its precomputed galley");
                 };
                 rendered = galley.rows.first().map_or_else(String::new, |row| row.text());
@@ -463,6 +496,7 @@ mod tests {
 
         assert!(rendered.contains('…'));
         assert!(rendered.ends_with("  ccp"), "alias was elided from {rendered:?}");
+        assert!(needs_tooltip);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use egui::{
-    Color32, Context, FontId, Galley, Painter, Pos2, Rect, Ui, Vec2,
+    Color32, Context, FontId, Galley, Painter,
     text::{LayoutJob, TextFormat},
 };
 use horizon_core::{flatten_line_separators, is_line_separator};
@@ -145,20 +145,25 @@ impl<'a> BoundedSingleLineJob<'a> {
     /// Appends a styled section. Returns `false` once later sections can no
     /// longer contribute visible text within the shared shaping budget.
     pub(crate) fn append(&mut self, text: &str, leading_space: f32, format: TextFormat) -> bool {
-        if self.budget.capped || self.sections == MAX_SHAPING_SECTIONS {
+        if self.budget.capped {
+            return false;
+        }
+        if text.is_empty() {
+            return true;
+        }
+        if self.sections == MAX_SHAPING_SECTIONS {
             self.budget.capped = true;
             return false;
         }
         self.sections += 1;
-        if text.is_empty() {
-            return true;
-        }
 
         let budget = &mut self.budget;
         let bounded = self.ctx.fonts_mut(|fonts| {
             budget.flatten_and_bound(text, |character| fonts.glyph_width(&format.font_id, character))
         });
-        append_flattened_single_line_text(&mut self.job, bounded.as_ref(), leading_space, format);
+        if !bounded.is_empty() {
+            append_flattened_single_line_text(&mut self.job, bounded.as_ref(), leading_space, format);
+        }
         !self.budget.capped
     }
 
@@ -207,20 +212,6 @@ fn bounded_flattened_text_for_shaping<'a>(ctx: &Context, text: &'a str, font: &F
 
     let mut budget = ShapingBudget::new(max_width);
     ctx.fonts_mut(|fonts| budget.flatten_and_bound(text, |character| fonts.glyph_width(font, character)))
-}
-
-pub(crate) fn paint_section_header(ui: &mut Ui, width: f32, height: f32, title: &str, font: &FontId, color: Color32) {
-    let rect = ui.allocate_space(Vec2::new(width, height)).1;
-    let painter = ui.painter_at(rect);
-    let text_x = rect.min.x + 4.0;
-    let max_x = (rect.max.x - 4.0).max(text_x);
-    let galley = painter_text_galley(&painter, title, font, color, (max_x - text_x).max(0.0));
-    let text_rect = Rect::from_min_max(Pos2::new(text_x, rect.min.y), Pos2::new(max_x, rect.max.y));
-    painter.with_clip_rect(text_rect).galley(
-        Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
-        galley,
-        Color32::TRANSPARENT,
-    );
 }
 
 #[cfg(test)]
@@ -385,5 +376,32 @@ mod tests {
 
         assert_eq!(job_text.chars().count(), 513);
         assert!(job_text.ends_with('…'));
+    }
+
+    #[test]
+    fn empty_sections_do_not_consume_the_section_budget() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut job = None;
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let mut builder = BoundedSingleLineJob::new(ctx, f32::INFINITY);
+            let format = TextFormat {
+                font_id: FontId::proportional(12.0),
+                color: Color32::WHITE,
+                ..Default::default()
+            };
+            for _ in 0..600 {
+                assert!(builder.append("", 0.0, format.clone()));
+            }
+            assert!(builder.append("visible", 0.0, format));
+            job = Some(builder.finish());
+        });
+
+        let Some(job) = job else {
+            panic!("bounded job was not built");
+        };
+        assert_eq!(job.text, "visible");
+        assert_eq!(job.sections.len(), 1);
     }
 }

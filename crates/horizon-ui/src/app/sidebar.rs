@@ -11,7 +11,7 @@ use horizon_core::{
     flatten_line_separators,
 };
 
-use crate::text::{painter_text_galley, stable_hover_text, stable_hover_text_lazy};
+use crate::text::{painter_text_galley, stable_hover_text, stable_hover_text_lazy, stable_wrapped_hover_text};
 use crate::theme;
 
 use super::panels::panel_kind_icon;
@@ -83,16 +83,21 @@ fn truncated_label_with_hover(
     text: egui::RichText,
     sense: Sense,
 ) -> egui::Response {
-    stable_hover_text(
-        ui.add_sized(
-            size,
-            egui::Label::new(text)
-                .truncate()
-                .show_tooltip_when_elided(false)
-                .sense(sense),
-        ),
-        full_text,
-    )
+    let response = ui.add_sized(
+        size,
+        egui::Label::new(text)
+            .truncate()
+            .show_tooltip_when_elided(false)
+            .sense(sense),
+    );
+    let elided = response
+        .intrinsic_size
+        .is_some_and(|intrinsic_size| intrinsic_size.x > response.rect.width());
+    if elided {
+        stable_wrapped_hover_text(response, full_text)
+    } else {
+        response
+    }
 }
 
 impl HorizonApp {
@@ -311,7 +316,8 @@ impl HorizonApp {
                         f32::INFINITY,
                     )
                     .size()
-                    .x + 4.0
+                    .x + ui.spacing().item_spacing.x
+                        + 4.0
                 } else {
                     0.0
                 };

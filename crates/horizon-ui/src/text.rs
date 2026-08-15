@@ -1,5 +1,6 @@
 //! Shared bounded text layout primitives.
 
+mod section_header;
 mod shaping;
 mod tooltip;
 
@@ -8,7 +9,8 @@ use egui::{
     text::{LayoutJob, LayoutSection, TextFormat, TextWrapping},
 };
 
-pub(crate) use shaping::{BoundedSingleLineJob, context_text_galley, paint_section_header, painter_text_galley};
+pub(crate) use section_header::paint_section_header;
+pub(crate) use shaping::{BoundedSingleLineJob, context_text_galley, painter_text_galley};
 pub(crate) use tooltip::{
     single_line_tooltip, stable_hover_text, stable_hover_text_lazy, stable_wrapped_hover_text,
     stable_wrapped_hover_text_lazy,

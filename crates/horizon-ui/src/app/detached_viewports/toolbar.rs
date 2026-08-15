@@ -8,6 +8,8 @@ use super::{HorizonApp, TOOLBAR_HEIGHT, detached_canvas_rect};
 use crate::app::util::{chrome_button, primary_shortcut_label};
 
 const STATUS_LABEL: &str = "Detached Workspace";
+const SHOW_MINIMAP_LABEL: &str = "Show Minimap";
+const HIDE_MINIMAP_LABEL: &str = "Hide Minimap";
 
 #[derive(Clone, Copy)]
 struct ControlWidths {
@@ -30,9 +32,9 @@ pub(super) fn render(
         .display_label(primary_shortcut_label());
     let minimap_shortcut = app.shortcuts.toggle_minimap.display_label(primary_shortcut_label());
     let minimap_label = if app.minimap_visible {
-        "Hide Minimap"
+        HIDE_MINIMAP_LABEL
     } else {
-        "Show Minimap"
+        SHOW_MINIMAP_LABEL
     };
 
     TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
@@ -50,7 +52,7 @@ pub(super) fn render(
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             let spacing = ui.spacing().item_spacing.x;
-            let widths = control_widths(ui, minimap_label);
+            let widths = control_widths(ui);
             let (name_width, status_width) = label_widths(ui.available_width(), spacing, widths);
             let workspace_name = flatten_line_separators(workspace_name);
             let _ = stable_hover_text(
@@ -115,7 +117,7 @@ pub(super) fn render(
     });
 }
 
-fn control_widths(ui: &egui::Ui, minimap_label: &str) -> ControlWidths {
+fn control_widths(ui: &egui::Ui) -> ControlWidths {
     let button_padding = ui.spacing().button_padding.x * 2.0;
     let minimum = ui.spacing().interact_size.x;
     let measure = |text: &str, font_size: f32| {
@@ -133,7 +135,7 @@ fn control_widths(ui: &egui::Ui, minimap_label: &str) -> ControlWidths {
     ControlWidths {
         attach: measure("Attach to Main Window", 11.5),
         fit: measure("Fit Workspace", 11.0),
-        minimap: measure(minimap_label, 11.0),
+        minimap: measure(SHOW_MINIMAP_LABEL, 11.0).max(measure(HIDE_MINIMAP_LABEL, 11.0)),
         status: painter_text_galley(
             ui.painter(),
             STATUS_LABEL,

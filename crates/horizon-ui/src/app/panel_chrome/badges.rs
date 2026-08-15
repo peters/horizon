@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, FontId, Galley, Id, Pos2, Rect, Stroke, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, SshConnectionStatus, truncate_chars};
+use horizon_core::{AttentionSeverity, PanelId, SshConnectionStatus, flatten_line_separators, truncate_chars};
 
 use crate::badge::{BadgeStroke, paint_badge_background};
 use crate::text::painter_text_galley;
@@ -288,7 +288,8 @@ pub(super) fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter:
 
 fn attention_badge_text(severity: AttentionSeverity, summary: &str) -> String {
     let icon = attention_severity_icon(severity);
-    let display_text = truncate_chars(summary, 30);
+    let summary = flatten_line_separators(summary);
+    let display_text = truncate_chars(summary.as_ref(), 30);
     format!("{icon} {display_text}")
 }
 
@@ -379,6 +380,14 @@ mod tests {
         assert_eq!(
             attention_badge_text(AttentionSeverity::Low, summary),
             "ℹ aaaaaaaaaaaaaaaaaaaaaaaaaaaaå…"
+        );
+    }
+
+    #[test]
+    fn attention_badge_flattens_line_separators_before_truncating() {
+        assert_eq!(
+            attention_badge_text(AttentionSeverity::High, "Approve\r\ndeploy\u{2028}now"),
+            "⚠ Approve deploy now"
         );
     }
 

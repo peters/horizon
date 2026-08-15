@@ -36,8 +36,9 @@ back into large multi-purpose modules.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - Crate-level `text.rs` orchestrates shared bounded layout jobs, with shaping
-  guards and tooltip behavior split into `text/shaping.rs` and
-  `text/tooltip.rs`; `badge.rs` owns shared badge-painting primitives.
+  guards, section-header painting, and tooltip behavior split into
+  `text/shaping.rs`, `text/section_header.rs`, and `text/tooltip.rs`;
+  `badge.rs` owns shared badge-painting primitives.
 - `app/mod.rs` orchestrates frame flow only.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
