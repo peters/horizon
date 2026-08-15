@@ -131,7 +131,7 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 - Prefer small module trees over large flat files: `mod.rs` should orchestrate, leaf modules should do one job
 - UI modules render or collect UI actions; domain state mutation belongs in `horizon-core` unless it is purely presentational state
-- When editing a file that is already large, split it as part of the change instead of adding another responsibility
+- When editing a file that is already large, land any purely mechanical split in a focused prerequisite PR before adding another responsibility
 - When an inline test block starts dominating a source file, move it into a colocated `module/tests/` tree split by behavior instead of letting the parent file keep growing
 - Keep architecture notes current in [`docs/architecture/maintainability.md`](docs/architecture/maintainability.md) when module boundaries or guardrails change
 
@@ -149,16 +149,27 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 - One logical change per commit
 - Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
-- Always fix pre-existing clippy warnings in touched files before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
+- Fix Clippy warnings introduced or worsened by the PR and any warnings that block required tiers before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
+
+### Pull Request Scope
+
+- Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
+- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Temporary smoke-test plans do not count toward these limits.
+- Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
+- Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
+- Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
+- After two material fix rounds, or once the source/test file count or changed-line count grows by more than 25 percent from the first locally reviewed candidate diff, stop and propose a new split before continuing.
+- Put purely mechanical module moves in a separate prerequisite PR.
+- Request cross-machine smoke testing only after local review is complete and CI has stabilized on the candidate head.
 
 ### Pull Request Review and Merge Strategy
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
-- Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke before opening the PR. Cross-machine smoke that requires an open PR may start after the ready-for-review PR is opened, but it must finish on the current head before reporting the PR ready to merge.
-- Before opening the PR, review the full diff and run an independent local code review. Fix all actionable findings on the branch.
+- Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
+- Before opening the PR, review the full diff and run an independent local code review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
 - Every PR gets an independent Copilot review. Request `copilot-pull-request-reviewer` after the PR exists; if `gh pr view` is ambiguous, verify requested-reviewer state through the GitHub API.
-- Wait for the requested Copilot review and all repository-mandated checks on the current head. Address every actionable comment and unresolved review thread on the same PR. Before every push, rerun the repository-mandated local validation for that exact head as defined by the pre-push section above. After the push, refresh the review and checks for the new head and rerun affected smoke lanes. A behavior-affecting push invalidates smoke evidence from an older head.
+- Wait for the requested Copilot review and all repository-mandated checks on the current head. Triage every actionable comment against the PR scope: fix in-scope findings on the same PR, explicitly disposition valid out-of-scope findings as follow-up candidates, and leave no actionable thread unresolved. Before every push, rerun the repository-mandated local validation for that exact head as defined by the pre-push section above. After the push, refresh the review and checks for the new head and rerun affected smoke lanes. A behavior-affecting push invalidates smoke evidence from an older head.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
 - Do not merge unless the user explicitly requests that specific merge. Immediately before merging, establish a stable exact head and inspect thread-aware `reviewThreads`; a flat comment list is not enough.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.

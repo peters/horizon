@@ -77,5 +77,7 @@ Use these checks during implementation and review:
   action instead?
 - Is a module tree clearer than one more helper stuffed into the current file?
 
-If the answer to any of those is "yes", split or move the code in the same
-change.
+If the answer to any of those is "yes", follow the
+[pull-request scope rules](../../AGENTS.md#pull-request-scope): land purely
+mechanical moves in a focused prerequisite PR and keep each semantic change to
+one independently testable outcome.
