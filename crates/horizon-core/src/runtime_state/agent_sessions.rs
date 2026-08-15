@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::local_store::open_read_only_sqlite;
 use crate::opencode_paths::opencode_db_path;
-use crate::text::truncate_chars;
+use crate::text::flatten_and_truncate_chars;
 
 use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 
@@ -450,7 +450,7 @@ fn scan_claude_session_tail(file: &mut std::fs::File, summary: &mut ClaudeSessio
 fn truncate_discovered_session_label(value: &str) -> String {
     const MAX_CHARS: usize = 64;
 
-    truncate_chars(value.trim(), MAX_CHARS).into_owned()
+    flatten_and_truncate_chars(value.trim(), MAX_CHARS).into_owned()
 }
 
 fn file_updated_at_millis(path: &Path) -> Result<i64> {

@@ -1,7 +1,9 @@
-use egui::{Align, Button, Context, CornerRadius, FontId, Layout, Pos2, Stroke, TopBottomPanel, Vec2, ViewportId};
-use horizon_core::{WorkspaceId, flatten_line_separators};
+use egui::{
+    Align, Button, Context, CornerRadius, FontId, Layout, Pos2, Stroke, TopBottomPanel, Vec2, ViewportId, WidgetText,
+};
+use horizon_core::{WorkspaceId, flatten_and_truncate_chars};
 
-use crate::text::{painter_text_galley, stable_hover_text};
+use crate::text::{painter_text_galley, stable_hover_text, stable_wrapped_hover_text};
 use crate::theme;
 
 use super::{HorizonApp, TOOLBAR_HEIGHT, detached_canvas_rect};
@@ -10,6 +12,10 @@ use crate::app::util::{chrome_button, primary_shortcut_label};
 const STATUS_LABEL: &str = "Detached Workspace";
 const SHOW_MINIMAP_LABEL: &str = "Show Minimap";
 const HIDE_MINIMAP_LABEL: &str = "Hide Minimap";
+const ATTACH_MIN_WIDTH: f32 = 154.0;
+const FIT_MIN_WIDTH: f32 = 126.0;
+const MINIMAP_MIN_WIDTH: f32 = 124.0;
+const MAX_WORKSPACE_NAME_SCALARS: usize = 4_096;
 
 #[derive(Clone, Copy)]
 struct ControlWidths {
@@ -54,30 +60,31 @@ pub(super) fn render(
             let spacing = ui.spacing().item_spacing.x;
             let widths = control_widths(ui);
             let (name_width, status_width) = label_widths(ui.available_width(), spacing, widths);
-            let workspace_name = flatten_line_separators(workspace_name);
-            let _ = stable_hover_text(
-                ui.add_sized(
-                    [name_width, 30.0],
-                    egui::Label::new(
-                        egui::RichText::new(workspace_name.as_ref())
-                            .color(theme::FG())
-                            .size(13.5)
-                            .strong(),
-                    )
+            let workspace_name = flatten_and_truncate_chars(workspace_name, MAX_WORKSPACE_NAME_SCALARS);
+            let name_galley = painter_text_galley(
+                ui.painter(),
+                workspace_name.as_ref(),
+                &FontId::proportional(13.5),
+                theme::FG(),
+                name_width,
+            );
+            let name_elided = name_galley.elided || name_galley.job.text != workspace_name.as_ref();
+            let name_response = ui.add_sized(
+                [name_width, 30.0],
+                egui::Label::new(WidgetText::Galley(name_galley)).show_tooltip_when_elided(false),
+            );
+            if name_elided {
+                let _ = stable_wrapped_hover_text(name_response, workspace_name.as_ref());
+            }
+            let status_response = ui.add_sized(
+                [status_width, 30.0],
+                egui::Label::new(egui::RichText::new(STATUS_LABEL).color(theme::FG_DIM()).size(10.5))
                     .truncate()
                     .show_tooltip_when_elided(false),
-                ),
-                workspace_name.as_ref(),
             );
-            let _ = stable_hover_text(
-                ui.add_sized(
-                    [status_width, 30.0],
-                    egui::Label::new(egui::RichText::new(STATUS_LABEL).color(theme::FG_DIM()).size(10.5))
-                        .truncate()
-                        .show_tooltip_when_elided(false),
-                ),
-                STATUS_LABEL,
-            );
+            if status_width < widths.status {
+                let _ = stable_hover_text(status_response, STATUS_LABEL);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
@@ -133,9 +140,11 @@ fn control_widths(ui: &egui::Ui) -> ControlWidths {
             .max(minimum)
     };
     ControlWidths {
-        attach: measure("Attach to Main Window", 11.5),
-        fit: measure("Fit Workspace", 11.0),
-        minimap: measure(SHOW_MINIMAP_LABEL, 11.0).max(measure(HIDE_MINIMAP_LABEL, 11.0)),
+        attach: measure("Attach to Main Window", 11.5).max(ATTACH_MIN_WIDTH),
+        fit: measure("Fit Workspace", 11.0).max(FIT_MIN_WIDTH),
+        minimap: measure(SHOW_MINIMAP_LABEL, 11.0)
+            .max(measure(HIDE_MINIMAP_LABEL, 11.0))
+            .max(MINIMAP_MIN_WIDTH),
         status: painter_text_galley(
             ui.painter(),
             STATUS_LABEL,

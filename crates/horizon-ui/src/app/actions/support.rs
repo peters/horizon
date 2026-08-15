@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, HashSet};
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Button, Color32, FontId, Response, Ui, WidgetText};
-use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId, flatten_line_separators};
+use egui::{Button, Color32, FontId, Response, Ui, WidgetText, epaint::text::FontsView};
+use horizon_core::{
+    PanelId, PanelKind, PresetConfig, WorkspaceId, flatten_and_truncate_chars, flatten_line_separators,
+};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
-use crate::text::{BoundedSingleLineJob, painter_text_galley, stable_wrapped_hover_text_lazy};
+use crate::text::{BoundedSingleLineJob, stable_wrapped_hover_text_lazy};
 use crate::theme;
 
 use super::PresetPickerAction;
@@ -13,6 +15,7 @@ use crate::app::DetachedWorkspaceViewportState;
 
 const PRESET_LABEL_RESERVATION_TOLERANCE: f32 = 0.5;
 const PRESET_ALIAS_MAX_WIDTH_FRACTION: f32 = 0.4;
+const MAX_PRESET_SECTION_SCALARS: usize = 512;
 
 pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'static str {
     if target_workspace.is_some() {
@@ -112,84 +115,113 @@ fn preset_category(preset: &PresetConfig) -> PresetCategory {
     }
 }
 
-fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> LayoutJob {
+fn preset_button_layout_job(ui: &Ui, preset: &PresetConfig, max_width: f32) -> (LayoutJob, bool) {
     let name_font = FontId::proportional(12.5);
     let name_color = theme::FG_SOFT();
     let alias_font = FontId::monospace(10.0);
     let alias_color = theme::FG_DIM();
-    let Some(alias) = &preset.alias else {
-        let mut job = BoundedSingleLineJob::new(ui.ctx(), max_width);
-        let _ = job.append(
-            &preset.name,
+    ui.fonts_mut(|fonts| {
+        let Some(alias) = &preset.alias else {
+            let mut job = BoundedSingleLineJob::new(max_width);
+            let _ = job.append(
+                fonts,
+                &preset.name,
+                0.0,
+                TextFormat {
+                    font_id: name_font,
+                    color: name_color,
+                    ..Default::default()
+                },
+            );
+            let capped = job.was_capped();
+            return (job.finish(), capped);
+        };
+
+        let alias_budget = (max_width.max(0.0) * PRESET_ALIAS_MAX_WIDTH_FRACTION).max(0.0);
+        let spacer_width = fonts.glyph_width(&alias_font, ' ') * 2.0;
+        let (display_alias_body, alias_body_width, alias_elided) =
+            elide_preset_section(fonts, alias, &alias_font, (alias_budget - spacer_width).max(0.0));
+        let display_alias = format!("  {display_alias_body}");
+        let alias_width = spacer_width + alias_body_width;
+        let name_width = (max_width - alias_width - PRESET_LABEL_RESERVATION_TOLERANCE).max(0.0);
+        let (display_name, _, name_elided) = elide_preset_section(fonts, &preset.name, &name_font, name_width);
+
+        let mut job = BoundedSingleLineJob::new(max_width);
+        if job.append(
+            fonts,
+            &display_name,
             0.0,
             TextFormat {
                 font_id: name_font,
                 color: name_color,
                 ..Default::default()
             },
-        );
-        return job.finish();
-    };
-
-    let alias_text = format!("  {alias}");
-    let alias_budget = (max_width.max(0.0) * PRESET_ALIAS_MAX_WIDTH_FRACTION).max(0.0);
-    let alias_galley = painter_text_galley(ui.painter(), &alias_text, &alias_font, alias_color, alias_budget);
-    let display_alias = alias_galley.rows.first().map_or_else(String::new, |row| row.text());
-    let alias_width = alias_galley.size().x;
-    let name_width = (max_width - alias_width - PRESET_LABEL_RESERVATION_TOLERANCE).max(0.0);
-    let display_name = if name_width > 0.0 {
-        painter_text_galley(ui.painter(), &preset.name, &name_font, name_color, name_width)
-            .rows
-            .first()
-            .map_or_else(String::new, |row| row.text())
-    } else {
-        String::new()
-    };
-
-    let mut job = BoundedSingleLineJob::new(ui.ctx(), max_width);
-    if job.append(
-        &display_name,
-        0.0,
-        TextFormat {
-            font_id: name_font,
-            color: name_color,
-            ..Default::default()
-        },
-    ) {
-        let _ = job.append(
-            &display_alias,
-            0.0,
-            TextFormat {
-                font_id: alias_font,
-                color: alias_color,
-                ..Default::default()
-            },
-        );
-    }
-    job.finish()
+        ) {
+            let _ = job.append(
+                fonts,
+                &display_alias,
+                0.0,
+                TextFormat {
+                    font_id: alias_font,
+                    color: alias_color,
+                    ..Default::default()
+                },
+            );
+        }
+        let capped = job.was_capped();
+        (job.finish(), alias_elided || name_elided || capped)
+    })
 }
 
-fn preset_button_label(ui: &Ui, preset: &PresetConfig, max_width: f32) -> WidgetText {
-    WidgetText::Galley(ui.painter().layout_job(preset_button_layout_job(ui, preset, max_width)))
+fn elide_preset_section(fonts: &mut FontsView<'_>, text: &str, font: &FontId, max_width: f32) -> (String, f32, bool) {
+    let bounded = flatten_and_truncate_chars(text, MAX_PRESET_SECTION_SCALARS);
+    let mut output = String::with_capacity(bounded.len().min(MAX_PRESET_SECTION_SCALARS * 4));
+    let mut width = 0.0_f32;
+    let mut pixel_elided = false;
+
+    for character in bounded.chars() {
+        let character_width = fonts.glyph_width(font, character).max(0.0);
+        if width + character_width > max_width.max(0.0) {
+            pixel_elided = true;
+            break;
+        }
+        output.push(character);
+        width += character_width;
+    }
+
+    if pixel_elided {
+        let ellipsis_width = fonts.glyph_width(font, '…').max(0.0);
+        while width + ellipsis_width > max_width.max(0.0) {
+            let Some(last) = output.pop() else {
+                break;
+            };
+            width = (width - fonts.glyph_width(font, last).max(0.0)).max(0.0);
+        }
+        if ellipsis_width <= max_width.max(0.0) {
+            output.push('…');
+            width += ellipsis_width;
+        }
+    }
+
+    let normalized_or_capped = bounded.as_ref() != text;
+    (output, width, pixel_elided || normalized_or_capped)
+}
+
+fn preset_button_label(ui: &Ui, preset: &PresetConfig, max_width: f32) -> (WidgetText, bool) {
+    let (job, pre_elided) = preset_button_layout_job(ui, preset, max_width);
+    let galley = ui.painter().layout_job(job);
+    let elided = pre_elided || galley.elided;
+    (WidgetText::Galley(galley), elided)
 }
 
 fn preset_button(ui: &mut Ui, preset: &PresetConfig, max_width: f32) -> Response {
-    let label = preset_button_label(ui, preset, max_width);
-    let hover_text = preset_hover_text(preset);
-    let elided = preset_button_needs_tooltip(&label, &hover_text);
+    let (label, elided) = preset_button_label(ui, preset, max_width);
     let response = ui.add(Button::new(label).frame(false));
     if elided {
-        stable_wrapped_hover_text_lazy(response, || hover_text)
+        stable_wrapped_hover_text_lazy(response, || preset_hover_text(preset))
     } else {
         response
     }
-}
-
-fn preset_button_needs_tooltip(label: &WidgetText, full_text: &str) -> bool {
-    matches!(
-        label,
-        WidgetText::Galley(galley) if galley.elided || galley.job.text != full_text
-    )
 }
 
 fn preset_hover_text(preset: &PresetConfig) -> String {
@@ -375,8 +407,8 @@ mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
     use super::{
-        PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job,
-        preset_button_needs_tooltip, preset_category, preset_hover_text, render_grouped_preset_rows,
+        PresetCategory, command_palette_preset_entries, preset_button_label, preset_button_layout_job, preset_category,
+        preset_hover_text, render_grouped_preset_rows,
     };
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
@@ -433,7 +465,7 @@ mod tests {
         let mut job = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                job = Some(preset_button_layout_job(ui, &preset, 80.0));
+                job = Some(preset_button_layout_job(ui, &preset, 80.0).0);
             });
         });
         let Some(job) = job else {
@@ -459,10 +491,10 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let egui::WidgetText::Galley(galley) = preset_button_label(ui, &preset, 80.0) else {
+                let (egui::WidgetText::Galley(galley), elided) = preset_button_label(ui, &preset, 80.0) else {
                     panic!("preset label did not retain its precomputed galley");
                 };
-                measured = Some((galley.size().x, galley.elided));
+                measured = Some((galley.size().x, elided));
             });
         });
 
@@ -485,8 +517,8 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let label = preset_button_label(ui, &preset, 160.0);
-                needs_tooltip = preset_button_needs_tooltip(&label, &preset_hover_text(&preset));
+                let (label, elided) = preset_button_label(ui, &preset, 160.0);
+                needs_tooltip = elided;
                 let egui::WidgetText::Galley(galley) = label else {
                     panic!("preset label did not retain its precomputed galley");
                 };
@@ -510,7 +542,7 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                job = Some(preset_button_layout_job(ui, &preset, 320.0));
+                job = Some(preset_button_layout_job(ui, &preset, 320.0).0);
             });
         });
         let Some(job) = job else {
@@ -531,7 +563,7 @@ mod tests {
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let egui::WidgetText::Galley(galley) = preset_button_label(ui, &preset, 160.0) else {
+                let (egui::WidgetText::Galley(galley), _) = preset_button_label(ui, &preset, 160.0) else {
                     panic!("preset label did not retain its precomputed galley");
                 };
                 rendered = galley.rows.first().map_or_else(String::new, |row| row.text());

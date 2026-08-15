@@ -2,6 +2,7 @@ use std::{borrow::Cow, sync::Arc};
 
 use egui::{
     Color32, Context, FontId, Galley, Painter,
+    epaint::text::FontsView,
     text::{LayoutJob, TextFormat},
 };
 use horizon_core::{flatten_line_separators, is_line_separator};
@@ -125,17 +126,15 @@ impl ShapingBudget {
 
 /// Builds a styled single-line job while enforcing one shaping budget across
 /// every section appended to it.
-pub(crate) struct BoundedSingleLineJob<'a> {
-    ctx: &'a Context,
+pub(crate) struct BoundedSingleLineJob {
     job: LayoutJob,
     budget: ShapingBudget,
     sections: usize,
 }
 
-impl<'a> BoundedSingleLineJob<'a> {
-    pub(crate) fn new(ctx: &'a Context, max_width: f32) -> Self {
+impl BoundedSingleLineJob {
+    pub(crate) fn new(max_width: f32) -> Self {
         Self {
-            ctx,
             job: single_line_job(max_width),
             budget: ShapingBudget::new(max_width),
             sections: 0,
@@ -144,7 +143,13 @@ impl<'a> BoundedSingleLineJob<'a> {
 
     /// Appends a styled section. Returns `false` once later sections can no
     /// longer contribute visible text within the shared shaping budget.
-    pub(crate) fn append(&mut self, text: &str, leading_space: f32, format: TextFormat) -> bool {
+    pub(crate) fn append(
+        &mut self,
+        fonts: &mut FontsView<'_>,
+        text: &str,
+        leading_space: f32,
+        format: TextFormat,
+    ) -> bool {
         if self.budget.capped {
             return false;
         }
@@ -153,18 +158,26 @@ impl<'a> BoundedSingleLineJob<'a> {
         }
         if self.sections == MAX_SHAPING_SECTIONS {
             self.budget.capped = true;
+            if !self.job.text.ends_with('…') {
+                self.job.text.push('…');
+                if let Some(section) = self.job.sections.last_mut() {
+                    section.byte_range.end = self.job.text.len();
+                }
+            }
             return false;
         }
         self.sections += 1;
 
         let budget = &mut self.budget;
-        let bounded = self.ctx.fonts_mut(|fonts| {
-            budget.flatten_and_bound(text, |character| fonts.glyph_width(&format.font_id, character))
-        });
+        let bounded = budget.flatten_and_bound(text, |character| fonts.glyph_width(&format.font_id, character));
         if !bounded.is_empty() {
             append_flattened_single_line_text(&mut self.job, bounded.as_ref(), leading_space, format);
         }
         !self.budget.capped
+    }
+
+    pub(crate) fn was_capped(&self) -> bool {
+        self.budget.capped
     }
 
     pub(crate) fn finish(self) -> LayoutJob {
@@ -220,7 +233,7 @@ mod tests {
 
     use egui::{Color32, FontId, text::TextFormat};
 
-    use super::{BoundedSingleLineJob, ShapingBudget, context_text_galley, painter_text_galley};
+    use super::{BoundedSingleLineJob, MAX_SHAPING_SECTIONS, ShapingBudget, context_text_galley, painter_text_galley};
 
     fn context_job_text(source: &str, max_width: f32) -> String {
         let ctx = egui::Context::default();
@@ -352,26 +365,30 @@ mod tests {
         let mut job_text = String::new();
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            let mut job = BoundedSingleLineJob::new(ctx, f32::INFINITY);
-            assert!(job.append(
-                &"a".repeat(400),
-                0.0,
-                TextFormat {
-                    font_id: FontId::proportional(12.0),
-                    color: Color32::WHITE,
-                    ..Default::default()
-                },
-            ));
-            assert!(!job.append(
-                &"b".repeat(400),
-                0.0,
-                TextFormat {
-                    font_id: FontId::monospace(10.0),
-                    color: Color32::GRAY,
-                    ..Default::default()
-                },
-            ));
-            job_text = job.finish().text;
+            job_text = ctx.fonts_mut(|fonts| {
+                let mut job = BoundedSingleLineJob::new(f32::INFINITY);
+                assert!(job.append(
+                    fonts,
+                    &"a".repeat(400),
+                    0.0,
+                    TextFormat {
+                        font_id: FontId::proportional(12.0),
+                        color: Color32::WHITE,
+                        ..Default::default()
+                    },
+                ));
+                assert!(!job.append(
+                    fonts,
+                    &"b".repeat(400),
+                    0.0,
+                    TextFormat {
+                        font_id: FontId::monospace(10.0),
+                        color: Color32::GRAY,
+                        ..Default::default()
+                    },
+                ));
+                job.finish().text
+            });
         });
 
         assert_eq!(job_text.chars().count(), 513);
@@ -385,17 +402,19 @@ mod tests {
         let mut job = None;
 
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            let mut builder = BoundedSingleLineJob::new(ctx, f32::INFINITY);
-            let format = TextFormat {
-                font_id: FontId::proportional(12.0),
-                color: Color32::WHITE,
-                ..Default::default()
-            };
-            for _ in 0..600 {
-                assert!(builder.append("", 0.0, format.clone()));
-            }
-            assert!(builder.append("visible", 0.0, format));
-            job = Some(builder.finish());
+            job = Some(ctx.fonts_mut(|fonts| {
+                let mut builder = BoundedSingleLineJob::new(f32::INFINITY);
+                let format = TextFormat {
+                    font_id: FontId::proportional(12.0),
+                    color: Color32::WHITE,
+                    ..Default::default()
+                };
+                for _ in 0..600 {
+                    assert!(builder.append(fonts, "", 0.0, format.clone()));
+                }
+                assert!(builder.append(fonts, "visible", 0.0, format));
+                builder.finish()
+            }));
         });
 
         let Some(job) = job else {
@@ -403,5 +422,39 @@ mod tests {
         };
         assert_eq!(job.text, "visible");
         assert_eq!(job.sections.len(), 1);
+    }
+
+    #[test]
+    fn section_budget_marks_omitted_sections_with_an_ellipsis() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::configure_fonts());
+        let mut job = None;
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            job = Some(ctx.fonts_mut(|fonts| {
+                let mut builder = BoundedSingleLineJob::new(f32::INFINITY);
+                let format = TextFormat {
+                    font_id: FontId::proportional(12.0),
+                    color: Color32::WHITE,
+                    ..Default::default()
+                };
+                for _ in 0..MAX_SHAPING_SECTIONS {
+                    assert!(builder.append(fonts, "x", 0.0, format.clone()));
+                }
+                assert!(!builder.append(fonts, "omitted", 0.0, format));
+                assert!(builder.was_capped());
+                builder.finish()
+            }));
+        });
+
+        let Some(job) = job else {
+            panic!("bounded job was not built");
+        };
+        assert!(job.text.ends_with('…'));
+        assert_eq!(job.sections.len(), MAX_SHAPING_SECTIONS);
+        assert_eq!(
+            job.sections.last().map(|section| section.byte_range.end),
+            Some(job.text.len())
+        );
     }
 }

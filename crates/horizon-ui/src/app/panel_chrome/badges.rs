@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, FontId, Galley, Id, Pos2, Rect, Stroke, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, SshConnectionStatus, flatten_line_separators, truncate_chars};
+use horizon_core::{AttentionSeverity, PanelId, SshConnectionStatus, flatten_and_truncate_chars};
 
 use crate::badge::{BadgeStroke, paint_badge_background};
 use crate::text::painter_text_galley;
@@ -90,7 +90,7 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
         0.0
     };
 
-    let ssh = chrome.ssh_status.and_then(|status| {
+    let ssh = chrome.ssh_status.map(|status| {
         let color = ssh_status_color(status);
         layout_status_badge(
             painter,
@@ -115,7 +115,7 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
     let attention_right = ssh
         .as_ref()
         .map_or(trailing_right, |badge| badge.rect.min.x - STATUS_BADGE_GAP);
-    let attention = chrome.attention_badge.and_then(|(severity, summary)| {
+    let attention = chrome.attention_badge.map(|(severity, summary)| {
         let color = attention_severity_color(*severity);
         let text = attention_badge_text(*severity, summary);
         layout_status_badge(
@@ -151,11 +151,7 @@ pub(in crate::app) fn layout_status_badges(painter: &egui::Painter, chrome: &Pan
 }
 
 #[profiling::function]
-fn layout_status_badge(
-    painter: &egui::Painter,
-    titlebar_rect: Rect,
-    spec: &StatusBadgeSpec<'_>,
-) -> Option<StatusBadge> {
+fn layout_status_badge(painter: &egui::Painter, titlebar_rect: Rect, spec: &StatusBadgeSpec<'_>) -> StatusBadge {
     let available_width = (spec.right - spec.left_limit)
         .max(0.0)
         .max(spec.minimum_available_width.unwrap_or(0.0));
@@ -173,9 +169,6 @@ fn layout_status_badge(
         if compact_galley.size().x + spec.horizontal_padding > available_width {
             let fallback_padding = 2.0;
             let fallback_galley = painter_text_galley(painter, "•", &spec.font, spec.color, f32::INFINITY);
-            if fallback_galley.size().x + fallback_padding > available_width {
-                return None;
-            }
             (fallback_galley, fallback_padding)
         } else {
             (compact_galley, spec.horizontal_padding)
@@ -197,13 +190,13 @@ fn layout_status_badge(
     };
     let text_position = Pos2::new(text_x, rect.center().y - galley.size().y * 0.5);
 
-    Some(StatusBadge {
+    StatusBadge {
         rect,
         galley,
         text_position,
         fill: spec.fill,
         stroke: spec.stroke,
-    })
+    }
 }
 
 #[profiling::function]
@@ -288,8 +281,7 @@ pub(super) fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter:
 
 fn attention_badge_text(severity: AttentionSeverity, summary: &str) -> String {
     let icon = attention_severity_icon(severity);
-    let summary = flatten_line_separators(summary);
-    let display_text = truncate_chars(summary.as_ref(), 30);
+    let display_text = flatten_and_truncate_chars(summary, 30);
     format!("{icon} {display_text}")
 }
 
@@ -555,7 +547,7 @@ mod tests {
             });
         });
 
-        let Some(Some(badge)) = result else {
+        let Some(badge) = result else {
             panic!("status dot was not laid out");
         };
         assert_eq!(badge.galley.job.text, "•");

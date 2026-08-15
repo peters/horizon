@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 
 use egui::{FontSelection, Label, Response, Ui, WidgetText, text::LayoutJob};
-use horizon_core::flatten_line_separators;
+use horizon_core::{flatten_and_truncate_chars, normalize_wrapped_line_separators};
 
 use super::single_line_wrapping;
 
 const TOOLTIP_MIN_WIDTH: f32 = 80.0;
 const TOOLTIP_VIEWPORT_MARGIN: f32 = 24.0;
+const MAX_TOOLTIP_SCALARS: usize = 4_096;
 
 /// Adds a single-line, width-bounded tooltip to `response`.
 #[must_use]
@@ -76,12 +77,13 @@ fn tooltip_max_width(content_width: f32, configured_width: f32) -> f32 {
 }
 
 fn apply_single_line_constraints(job: &mut LayoutJob, max_width: f32) {
-    flatten_layout_job_newlines(job);
+    normalize_layout_job_text(job, flatten_and_truncate_chars);
     job.break_on_newline = false;
     job.wrap = single_line_wrapping(max_width);
 }
 
 fn apply_wrapped_constraints(job: &mut LayoutJob, max_width: f32) {
+    normalize_layout_job_text(job, normalize_wrapped_line_separators);
     job.break_on_newline = true;
     job.wrap.max_width = max_width.max(0.0);
     job.wrap.max_rows = usize::MAX;
@@ -91,22 +93,27 @@ fn apply_wrapped_constraints(job: &mut LayoutJob, max_width: f32) {
     job.wrap.overflow_character = None;
 }
 
-fn flatten_layout_job_newlines(job: &mut LayoutJob) {
-    let flattened = flatten_line_separators(&job.text);
-    let Cow::Owned(flattened) = flattened else {
-        return;
-    };
-
+fn normalize_layout_job_text(job: &mut LayoutJob, normalize: for<'a> fn(&'a str, usize) -> Cow<'a, str>) {
+    let original = std::mem::take(&mut job.text);
+    let normalized = normalize(&original, MAX_TOOLTIP_SCALARS);
+    let normalized_len = normalized.len();
     let ranges = job
         .sections
         .iter()
         .map(|section| {
-            let start = flatten_line_separators(&job.text[..section.byte_range.start]).len();
-            let end = flatten_line_separators(&job.text[..section.byte_range.end]).len();
+            let start = normalize(&original[..section.byte_range.start], MAX_TOOLTIP_SCALARS)
+                .len()
+                .min(normalized_len);
+            let end = normalize(&original[..section.byte_range.end], MAX_TOOLTIP_SCALARS)
+                .len()
+                .min(normalized_len);
             start..end
         })
         .collect::<Vec<_>>();
-    job.text = flattened;
+    job.text = match normalized {
+        Cow::Borrowed(_) => original,
+        Cow::Owned(normalized) => normalized,
+    };
     for (section, range) in job.sections.iter_mut().zip(ranges) {
         section.byte_range = range;
     }
@@ -122,7 +129,7 @@ mod tests {
     };
 
     use super::{
-        apply_single_line_constraints, apply_wrapped_constraints, stable_hover_text_lazy,
+        MAX_TOOLTIP_SCALARS, apply_single_line_constraints, apply_wrapped_constraints, stable_hover_text_lazy,
         stable_wrapped_hover_text_lazy, tooltip_max_width,
     };
 
@@ -185,16 +192,33 @@ mod tests {
 
     #[test]
     fn wrapped_tooltip_constraints_preserve_lines_and_wrap_at_words() {
-        let mut job =
-            LayoutJob::simple_singleline("first line\nsecond line".to_string(), FontId::default(), Color32::WHITE);
+        let mut job = LayoutJob::simple_singleline(
+            "first line\r\nsecond line\u{2028}third line".to_string(),
+            FontId::default(),
+            Color32::WHITE,
+        );
 
         apply_wrapped_constraints(&mut job, 96.0);
 
+        assert_eq!(job.text, "first line\nsecond line\nthird line");
         assert!(job.break_on_newline);
         assert_ne!(job.wrap.max_rows, 1);
         assert!(!job.wrap.break_anywhere);
         assert_eq!(job.wrap.overflow_character, None);
         assert_near(job.wrap.max_width, 96.0);
+    }
+
+    #[test]
+    fn tooltip_constraints_cap_text_before_glyph_shaping() {
+        let mut single = LayoutJob::simple_singleline("x".repeat(8_192), FontId::default(), Color32::WHITE);
+        apply_single_line_constraints(&mut single, 96.0);
+        assert_eq!(single.text.chars().count(), MAX_TOOLTIP_SCALARS);
+        assert!(single.text.ends_with('…'));
+
+        let mut wrapped = LayoutJob::simple_singleline("x".repeat(8_192), FontId::default(), Color32::WHITE);
+        apply_wrapped_constraints(&mut wrapped, 96.0);
+        assert_eq!(wrapped.text.chars().count(), MAX_TOOLTIP_SCALARS);
+        assert!(wrapped.text.ends_with('…'));
     }
 
     #[test]

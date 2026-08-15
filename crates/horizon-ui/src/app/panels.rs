@@ -589,9 +589,7 @@ impl HorizonApp {
                     }),
                 };
                 let status_badges = layout_status_badges(&ui.painter_at(chrome.panel_rect), &chrome);
-                let rename_rect = snapshot
-                    .is_renaming
-                    .then(|| panel_title_content_rect(&chrome, &status_badges));
+                let rename_rect = snapshot.is_renaming.then(|| panel_title_content_rect(&chrome));
                 paint_panel_chrome(ui, chrome, &status_badges);
 
                 // Release the shared board borrow before the mutable borrow below.

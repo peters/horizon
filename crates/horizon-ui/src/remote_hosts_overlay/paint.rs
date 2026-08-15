@@ -384,17 +384,20 @@ fn truncated_text_layout_job(
     color: Color32,
     max_width: f32,
 ) -> LayoutJob {
-    let mut job = BoundedSingleLineJob::new(ctx, max_width);
-    let _ = job.append(
-        text,
-        0.0,
-        TextFormat {
-            font_id: font.clone(),
-            color,
-            ..Default::default()
-        },
-    );
-    job.finish()
+    ctx.fonts_mut(|fonts| {
+        let mut job = BoundedSingleLineJob::new(max_width);
+        let _ = job.append(
+            fonts,
+            text,
+            0.0,
+            TextFormat {
+                font_id: font.clone(),
+                color,
+                ..Default::default()
+            },
+        );
+        job.finish()
+    })
 }
 
 fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
@@ -409,36 +412,40 @@ fn render_layout_job(painter: &egui::Painter, pos: Pos2, job: LayoutJob) {
 }
 
 fn tags_layout_job(ctx: &egui::Context, tags: &[String], font: &FontId, max_width: f32) -> LayoutJob {
-    let mut job = BoundedSingleLineJob::new(ctx, max_width);
+    ctx.fonts_mut(|fonts| {
+        let mut job = BoundedSingleLineJob::new(max_width);
 
-    for (index, tag) in tags.iter().enumerate() {
-        if index > 0
-            && !job.append(
-                ",",
+        for (index, tag) in tags.iter().enumerate() {
+            if index > 0
+                && !job.append(
+                    fonts,
+                    ",",
+                    0.0,
+                    TextFormat {
+                        font_id: font.clone(),
+                        color: theme::FG_DIM(),
+                        ..Default::default()
+                    },
+                )
+            {
+                break;
+            }
+            if !job.append(
+                fonts,
+                tag,
                 0.0,
                 TextFormat {
                     font_id: font.clone(),
-                    color: theme::FG_DIM(),
+                    color: tag_color(tag),
                     ..Default::default()
                 },
-            )
-        {
-            break;
+            ) {
+                break;
+            }
         }
-        if !job.append(
-            tag,
-            0.0,
-            TextFormat {
-                font_id: font.clone(),
-                color: tag_color(tag),
-                ..Default::default()
-            },
-        ) {
-            break;
-        }
-    }
 
-    job.finish()
+        job.finish()
+    })
 }
 
 fn format_relative_time(epoch_secs: i64, now_secs: i64) -> String {

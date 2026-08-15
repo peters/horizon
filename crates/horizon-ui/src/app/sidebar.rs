@@ -4,14 +4,16 @@ use std::collections::HashMap;
 
 use egui::{
     Align, Button, Color32, Context, CornerRadius, CursorIcon, FontId, Id, Layout, Order, Pos2, Rect, Sense, Stroke,
-    UiBuilder, Vec2,
+    UiBuilder, Vec2, WidgetText, text::TextFormat,
 };
 use horizon_core::{
     AttentionItem, AttentionSeverity, PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout,
-    flatten_line_separators,
+    flatten_and_truncate_chars,
 };
 
-use crate::text::{painter_text_galley, stable_hover_text, stable_hover_text_lazy, stable_wrapped_hover_text};
+use crate::text::{
+    BoundedSingleLineJob, painter_text_galley, stable_hover_text, stable_hover_text_lazy, stable_wrapped_hover_text,
+};
 use crate::theme;
 
 use super::panels::panel_kind_icon;
@@ -20,6 +22,7 @@ use super::util;
 use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 const PANEL_CONTEXT_MENU_WIDTH: f32 = 220.0;
+const MAX_SIDEBAR_RECOVERY_SCALARS: usize = 4_096;
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
@@ -80,19 +83,32 @@ fn truncated_label_with_hover(
     ui: &mut egui::Ui,
     size: Vec2,
     full_text: &str,
-    text: egui::RichText,
+    font: FontId,
+    color: Color32,
     sense: Sense,
 ) -> egui::Response {
+    let (galley, shaping_capped) = ui.fonts_mut(|fonts| {
+        let mut builder = BoundedSingleLineJob::new(size.x);
+        let _ = builder.append(
+            fonts,
+            full_text,
+            0.0,
+            TextFormat {
+                font_id: font,
+                color,
+                ..Default::default()
+            },
+        );
+        let shaping_capped = builder.was_capped();
+        (fonts.layout_job(builder.finish()), shaping_capped)
+    });
+    let elided = shaping_capped || galley.elided;
     let response = ui.add_sized(
         size,
-        egui::Label::new(text)
-            .truncate()
+        egui::Label::new(WidgetText::Galley(galley))
             .show_tooltip_when_elided(false)
             .sense(sense),
     );
-    let elided = response
-        .intrinsic_size
-        .is_some_and(|intrinsic_size| intrinsic_size.x > response.rect.width());
     if elided {
         stable_wrapped_hover_text(response, full_text)
     } else {
@@ -171,7 +187,7 @@ impl HorizonApp {
 
                 WorkspaceSidebarEntry {
                     id: workspace.id,
-                    name: flatten_line_separators(&workspace.name).into_owned(),
+                    name: flatten_and_truncate_chars(&workspace.name, MAX_SIDEBAR_RECOVERY_SCALARS).into_owned(),
                     color: Color32::from_rgb(r, g, b),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),
@@ -326,14 +342,12 @@ impl HorizonApp {
                     ui,
                     Vec2::new(name_width, 18.0),
                     &workspace.name,
-                    egui::RichText::new(&workspace.name)
-                        .color(if workspace.is_active {
-                            theme::FG()
-                        } else {
-                            theme::FG_SOFT()
-                        })
-                        .size(13.0)
-                        .strong(),
+                    FontId::proportional(13.0),
+                    if workspace.is_active {
+                        theme::FG()
+                    } else {
+                        theme::FG_SOFT()
+                    },
                     Sense::click(),
                 );
                 click_target_hovered |= name_response.hovered();
@@ -521,18 +535,16 @@ impl HorizonApp {
                     ui.add_space(4.0);
 
                     let title_width = (ui.available_width() - 28.0).max(48.0);
-                    let title = flatten_line_separators(&panel.title);
                     let title_response = truncated_label_with_hover(
                         ui,
                         Vec2::new(title_width, 18.0),
-                        title.as_ref(),
-                        egui::RichText::new(title.as_ref())
-                            .color(if panel.is_focused {
-                                theme::FG()
-                            } else {
-                                theme::FG_SOFT()
-                            })
-                            .size(12.5),
+                        &panel.title,
+                        FontId::proportional(12.5),
+                        if panel.is_focused {
+                            theme::FG()
+                        } else {
+                            theme::FG_SOFT()
+                        },
                         Sense::click(),
                     );
                     click_target_hovered |= title_response.hovered();
@@ -557,14 +569,12 @@ impl HorizonApp {
                         click_target_hovered |= tag_response.hovered();
                         row_clicked |= tag_response.clicked();
                         ui.add_space(4.0);
-                        let summary = flatten_line_separators(&attention_item.summary);
                         let summary_response = truncated_label_with_hover(
                             ui,
                             Vec2::new(ui.available_width(), 14.0),
-                            summary.as_ref(),
-                            egui::RichText::new(summary.as_ref())
-                                .size(9.0)
-                                .color(theme::alpha(color, 180)),
+                            &attention_item.summary,
+                            FontId::proportional(9.0),
+                            theme::alpha(color, 180),
                             Sense::click(),
                         );
                         click_target_hovered |= summary_response.hovered();
@@ -625,7 +635,7 @@ impl HorizonApp {
                     .size(12.0)
                     .color(theme::FG_SOFT());
                 let response =
-                    stable_hover_text(ui.add(Button::new(text).frame(false).truncate()), &other_workspace.name);
+                    stable_wrapped_hover_text(ui.add(Button::new(text).frame(false).truncate()), &other_workspace.name);
                 if response.clicked() {
                     self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
                     self.mark_runtime_dirty();

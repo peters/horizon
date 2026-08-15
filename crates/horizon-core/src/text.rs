@@ -30,6 +30,89 @@ pub fn flatten_line_separators(text: &str) -> Cow<'_, str> {
     Cow::Owned(flattened)
 }
 
+/// Replaces mandatory line separators with spaces while capping the output at
+/// `max_chars` Unicode scalar values. The bounded scan never visits an unseen
+/// suffix once truncation is known.
+#[must_use]
+pub fn flatten_and_truncate_chars(text: &str, max_chars: usize) -> Cow<'_, str> {
+    normalize_and_truncate_chars(text, max_chars, ' ')
+}
+
+/// Normalizes mandatory line separators to newlines while capping the output
+/// at `max_chars` Unicode scalar values. This keeps wrapped text portable
+/// across renderers that only treat `\n` as a line break.
+#[must_use]
+pub fn normalize_wrapped_line_separators(text: &str, max_chars: usize) -> Cow<'_, str> {
+    normalize_and_truncate_chars(text, max_chars, '\n')
+}
+
+fn normalize_and_truncate_chars(text: &str, max_chars: usize, separator: char) -> Cow<'_, str> {
+    if max_chars == 0 {
+        return Cow::Borrowed("");
+    }
+
+    let mut normalized = None::<String>;
+    let mut characters = text.char_indices().peekable();
+    let mut output_chars = 0_usize;
+    let mut kept_original_end = 0_usize;
+    let mut pending_last = None::<char>;
+
+    while let Some((byte_index, character)) = characters.next() {
+        let is_separator = is_line_separator(character);
+        let output = if is_separator { separator } else { character };
+        let mut source_end = byte_index + character.len_utf8();
+        if character == '\r'
+            && characters.peek().is_some_and(|(_, next)| *next == '\n')
+            && let Some((next_index, next)) = characters.next()
+        {
+            source_end = next_index + next.len_utf8();
+        }
+
+        output_chars += 1;
+        match output_chars.cmp(&max_chars) {
+            std::cmp::Ordering::Less => {
+                kept_original_end = source_end;
+                if is_separator {
+                    let buffer = normalized.get_or_insert_with(|| {
+                        let mut buffer = String::with_capacity(text.len().min(max_chars.saturating_mul(4)));
+                        buffer.push_str(&text[..byte_index]);
+                        buffer
+                    });
+                    buffer.push(output);
+                } else if let Some(buffer) = normalized.as_mut() {
+                    buffer.push(character);
+                }
+            }
+            std::cmp::Ordering::Equal => {
+                if is_separator && normalized.is_none() {
+                    let mut buffer = String::with_capacity(text.len().min(max_chars.saturating_mul(4)));
+                    buffer.push_str(&text[..byte_index]);
+                    normalized = Some(buffer);
+                }
+                pending_last = Some(output);
+            }
+            std::cmp::Ordering::Greater => {
+                let mut truncated = normalized.unwrap_or_else(|| {
+                    let mut truncated = String::with_capacity(kept_original_end + '…'.len_utf8());
+                    truncated.push_str(&text[..kept_original_end]);
+                    truncated
+                });
+                truncated.push('…');
+                return Cow::Owned(truncated);
+            }
+        }
+    }
+
+    if let Some(mut normalized) = normalized {
+        if let Some(last) = pending_last {
+            normalized.push(last);
+        }
+        Cow::Owned(normalized)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// Returns whether `character` forces a new line in plain text.
 #[must_use]
 pub fn is_line_separator(character: char) -> bool {
@@ -68,7 +151,9 @@ pub fn truncate_chars(text: &str, max_chars: usize) -> Cow<'_, str> {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{flatten_line_separators, truncate_chars};
+    use super::{
+        flatten_and_truncate_chars, flatten_line_separators, normalize_wrapped_line_separators, truncate_chars,
+    };
 
     #[test]
     fn line_separator_flattening_borrows_plain_text_and_normalizes_crlf() {
@@ -77,6 +162,19 @@ mod tests {
             flatten_line_separators("build\r\nserver\u{2028}ready\u{0085}now"),
             "build server ready now"
         );
+    }
+
+    #[test]
+    fn bounded_flattening_collapses_crlf_before_counting_the_budget() {
+        assert_eq!(flatten_and_truncate_chars("a\r\nb\u{2028}c", 4), "a b…");
+        assert_eq!(flatten_and_truncate_chars("plain", 8), "plain");
+        assert!(matches!(flatten_and_truncate_chars("plain", 8), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn wrapped_normalization_preserves_lines_without_renderer_specific_separators() {
+        assert_eq!(normalize_wrapped_line_separators("a\r\nb\u{2028}c", 8), "a\nb\nc");
+        assert_eq!(normalize_wrapped_line_separators("abcdef", 4), "abc…");
     }
 
     #[test]

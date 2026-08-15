@@ -1,10 +1,11 @@
 use std::sync::mpsc;
 use std::time::Instant;
 
-use egui::{Align2, Context, CornerRadius, Rect, Sense, Vec2};
+use egui::{Context, CornerRadius, Rect, Sense, Vec2};
 use horizon_core::SshConnection;
 
 use crate::dir_picker::{PickerEmptyState, PickerModalAction, PickerModalConfig, PickerModalState};
+use crate::text::painter_text_galley;
 use crate::theme;
 
 use super::join_remote_browser_path;
@@ -331,12 +332,18 @@ fn render_remote_result_row(
     } else {
         theme::FG_SOFT()
     };
-    ui.painter_at(row_rect).text(
-        egui::pos2(row_rect.min.x + 30.0, row_rect.center().y),
-        Align2::LEFT_CENTER,
+    let text_x = row_rect.min.x + 30.0;
+    let galley = painter_text_galley(
+        &ui.painter_at(row_rect),
         &entry.name,
-        egui::FontId::proportional(12.0),
+        &egui::FontId::proportional(12.0),
         if is_selected { theme::FG() } else { text_color },
+        (row_rect.max.x - text_x - 8.0).max(0.0),
+    );
+    ui.painter_at(row_rect).galley(
+        egui::pos2(text_x, row_rect.center().y - galley.size().y * 0.5),
+        galley,
+        egui::Color32::TRANSPARENT,
     );
 
     clicked

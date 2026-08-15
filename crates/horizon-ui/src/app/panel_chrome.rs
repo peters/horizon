@@ -332,13 +332,17 @@ fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focus
     panel_accent(workspace_accent, focused)
 }
 
-pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>, status_badges: &StatusBadgeStrip) -> Rect {
+pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>) -> Rect {
     let left = if chrome.workspace_accent.is_some() {
         chrome.titlebar_rect.min.x + 26.0
     } else {
         chrome.titlebar_rect.min.x + 12.0
     };
-    let right = status_badges.title_right.max(left + 1.0);
+    let right = (badges::panel_history_badge_rect(chrome.titlebar_rect, chrome.close_rect)
+        .min
+        .x
+        - 12.0)
+        .max(left + 1.0);
 
     Rect::from_min_max(
         Pos2::new(left, chrome.titlebar_rect.min.y + 2.0),

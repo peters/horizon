@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
-use egui::{Context, CornerRadius, Pos2, Sense, Vec2};
+use egui::{Context, CornerRadius, Pos2, Sense, Vec2, text::TextFormat};
 use horizon_core::dir_search;
 use horizon_core::{PresetConfig, WorkspaceId};
 
 use super::{PickerEmptyState, PickerModalAction, PickerModalConfig, PickerModalState, split_path_display};
+use crate::text::BoundedSingleLineJob;
 use crate::theme;
 
 const DEBOUNCE_MS: u64 = 60;
@@ -210,31 +211,50 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
 
     let (dir_part, name_part) = split_path_display(&display);
     let text_x = row_rect.min.x + 26.0;
-
-    if dir_part.is_empty() {
-        ui.painter_at(row_rect).text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_CENTER,
-            &display,
-            egui::FontId::monospace(12.5),
-            if is_selected { theme::FG() } else { theme::FG_SOFT() },
-        );
-    } else {
-        let dir_end = ui.painter_at(row_rect).text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_CENTER,
+    let font = egui::FontId::monospace(12.5);
+    let name_color = if is_selected { theme::FG() } else { theme::FG_SOFT() };
+    let max_width = (row_rect.max.x - text_x - 8.0).max(0.0);
+    let galley = ui.fonts_mut(|fonts| {
+        let mut job = BoundedSingleLineJob::new(max_width);
+        if dir_part.is_empty() {
+            let _ = job.append(
+                fonts,
+                &display,
+                0.0,
+                TextFormat {
+                    font_id: font,
+                    color: name_color,
+                    ..Default::default()
+                },
+            );
+        } else if job.append(
+            fonts,
             &dir_part,
-            egui::FontId::monospace(12.5),
-            theme::FG_DIM(),
-        );
-        ui.painter_at(row_rect).text(
-            Pos2::new(dir_end.max.x, text_y),
-            egui::Align2::LEFT_CENTER,
-            &name_part,
-            egui::FontId::monospace(12.5),
-            if is_selected { theme::FG() } else { theme::FG_SOFT() },
-        );
-    }
+            0.0,
+            TextFormat {
+                font_id: font.clone(),
+                color: theme::FG_DIM(),
+                ..Default::default()
+            },
+        ) {
+            let _ = job.append(
+                fonts,
+                &name_part,
+                0.0,
+                TextFormat {
+                    font_id: font,
+                    color: name_color,
+                    ..Default::default()
+                },
+            );
+        }
+        fonts.layout_job(job.finish())
+    });
+    ui.painter_at(row_rect).galley(
+        Pos2::new(text_x, text_y - galley.size().y * 0.5),
+        galley,
+        egui::Color32::TRANSPARENT,
+    );
 
     clicked
 }
