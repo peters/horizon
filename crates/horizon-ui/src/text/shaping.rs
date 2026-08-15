@@ -4,7 +4,7 @@ use egui::{
     Color32, Context, FontId, Galley, Painter, Pos2, Rect, Ui, Vec2,
     text::{LayoutJob, TextFormat},
 };
-use horizon_core::flatten_line_separators;
+use horizon_core::{flatten_line_separators, is_line_separator};
 
 use super::{append_flattened_single_line_text, single_line_job, single_line_label_job_from_flattened};
 
@@ -14,43 +14,139 @@ const MAX_SHAPING_SCANNED_SCALARS: usize = 4_096;
 const MAX_SHAPING_SECTIONS: usize = 512;
 const SHAPING_WIDTH_BUDGET_MULTIPLIER: f32 = 4.0;
 
-/// Builds a styled single-line job while enforcing one shaping budget across
-/// every section appended to it.
-pub(crate) struct BoundedSingleLineJob<'a> {
-    ctx: &'a Context,
-    job: LayoutJob,
-    shaping_width_budget: f32,
+struct ShapingBudget {
+    width: f32,
     measured_width: f32,
     scanned_scalars: usize,
     visible_scalars: usize,
-    sections: usize,
     capped: bool,
 }
 
-impl<'a> BoundedSingleLineJob<'a> {
-    pub(crate) fn new(ctx: &'a Context, max_width: f32) -> Self {
-        let shaping_width_budget = if max_width.is_nan() {
+impl ShapingBudget {
+    fn new(max_width: f32) -> Self {
+        let width = if max_width.is_nan() {
             0.0
         } else {
             max_width.max(0.0) * SHAPING_WIDTH_BUDGET_MULTIPLIER
         };
         Self {
-            ctx,
-            job: single_line_job(max_width),
-            shaping_width_budget,
+            width,
             measured_width: 0.0,
             scanned_scalars: 0,
             visible_scalars: 0,
-            sections: 0,
             capped: false,
+        }
+    }
+
+    fn flatten_and_bound<'a>(&mut self, text: &'a str, mut glyph_width: impl FnMut(char) -> f32) -> Cow<'a, str> {
+        let mut flattened = None;
+        let mut characters = text.char_indices().peekable();
+        let mut cut_at = None;
+        let mut append_ellipsis = false;
+
+        while let Some((byte_index, character)) = characters.next() {
+            if self.scanned_scalars == MAX_SHAPING_SCANNED_SCALARS {
+                cut_at = Some(byte_index);
+                append_ellipsis = true;
+                self.capped = true;
+                break;
+            }
+            self.scanned_scalars += 1;
+
+            let mut source_end = byte_index + character.len_utf8();
+            let separator = is_line_separator(character);
+            let normalized = if separator { ' ' } else { character };
+            if character == '\r'
+                && characters.peek().is_some_and(|(_, next)| *next == '\n')
+                && self.scanned_scalars < MAX_SHAPING_SCANNED_SCALARS
+                && let Some((next_index, next)) = characters.next()
+            {
+                self.scanned_scalars += 1;
+                source_end = next_index + next.len_utf8();
+            }
+
+            let width = glyph_width(normalized).max(0.0);
+            if width > 0.0 {
+                if self.visible_scalars == MAX_SHAPING_VISIBLE_SCALARS {
+                    cut_at = Some(byte_index);
+                    append_ellipsis = true;
+                    self.capped = true;
+                    break;
+                }
+                if self.measured_width + width > self.width && self.visible_scalars > 0 {
+                    cut_at = Some(byte_index);
+                    self.capped = true;
+                    break;
+                }
+            }
+
+            if separator {
+                let output = flattened.get_or_insert_with(|| {
+                    let capacity = text.len().min(MAX_SHAPING_SCANNED_SCALARS * 4 + '…'.len_utf8());
+                    let mut output = String::with_capacity(capacity);
+                    output.push_str(&text[..byte_index]);
+                    output
+                });
+                output.push(normalized);
+            } else if let Some(output) = flattened.as_mut() {
+                output.push(character);
+            }
+
+            if width > 0.0 {
+                let exceeds_width = self.measured_width + width > self.width;
+                self.measured_width += width;
+                self.visible_scalars += 1;
+                if exceeds_width {
+                    cut_at = Some(source_end);
+                    self.capped = true;
+                    break;
+                }
+            }
+        }
+
+        if let Some(mut output) = flattened {
+            if append_ellipsis {
+                output.push('…');
+            }
+            Cow::Owned(output)
+        } else {
+            let cut_at = cut_at.unwrap_or(text.len());
+            if append_ellipsis {
+                let mut output = String::with_capacity(cut_at + '…'.len_utf8());
+                output.push_str(&text[..cut_at]);
+                output.push('…');
+                Cow::Owned(output)
+            } else {
+                Cow::Borrowed(&text[..cut_at])
+            }
+        }
+    }
+}
+
+/// Builds a styled single-line job while enforcing one shaping budget across
+/// every section appended to it.
+pub(crate) struct BoundedSingleLineJob<'a> {
+    ctx: &'a Context,
+    job: LayoutJob,
+    budget: ShapingBudget,
+    sections: usize,
+}
+
+impl<'a> BoundedSingleLineJob<'a> {
+    pub(crate) fn new(ctx: &'a Context, max_width: f32) -> Self {
+        Self {
+            ctx,
+            job: single_line_job(max_width),
+            budget: ShapingBudget::new(max_width),
+            sections: 0,
         }
     }
 
     /// Appends a styled section. Returns `false` once later sections can no
     /// longer contribute visible text within the shared shaping budget.
     pub(crate) fn append(&mut self, text: &str, leading_space: f32, format: TextFormat) -> bool {
-        if self.capped || self.sections == MAX_SHAPING_SECTIONS {
-            self.capped = true;
+        if self.budget.capped || self.sections == MAX_SHAPING_SECTIONS {
+            self.budget.capped = true;
             return false;
         }
         self.sections += 1;
@@ -58,53 +154,12 @@ impl<'a> BoundedSingleLineJob<'a> {
             return true;
         }
 
-        let flattened = flatten_line_separators(text);
-        let mut cut_at = flattened.len();
-        let mut append_ellipsis = false;
-        self.ctx.fonts_mut(|fonts| {
-            for (byte_index, character) in flattened.char_indices() {
-                if self.scanned_scalars == MAX_SHAPING_SCANNED_SCALARS {
-                    cut_at = byte_index;
-                    append_ellipsis = true;
-                    self.capped = true;
-                    break;
-                }
-                self.scanned_scalars += 1;
-
-                let glyph_width = fonts.glyph_width(&format.font_id, character).max(0.0);
-                if glyph_width == 0.0 {
-                    continue;
-                }
-                if self.visible_scalars == MAX_SHAPING_VISIBLE_SCALARS {
-                    cut_at = byte_index;
-                    append_ellipsis = true;
-                    self.capped = true;
-                    break;
-                }
-                if self.measured_width + glyph_width > self.shaping_width_budget {
-                    cut_at = if self.visible_scalars == 0 {
-                        byte_index + character.len_utf8()
-                    } else {
-                        byte_index
-                    };
-                    self.capped = true;
-                    break;
-                }
-                self.measured_width += glyph_width;
-                self.visible_scalars += 1;
-            }
+        let budget = &mut self.budget;
+        let bounded = self.ctx.fonts_mut(|fonts| {
+            budget.flatten_and_bound(text, |character| fonts.glyph_width(&format.font_id, character))
         });
-
-        let bounded = if append_ellipsis {
-            let mut bounded = String::with_capacity(cut_at + '…'.len_utf8());
-            bounded.push_str(&flattened[..cut_at]);
-            bounded.push('…');
-            Cow::Owned(bounded)
-        } else {
-            Cow::Borrowed(&flattened[..cut_at])
-        };
         append_flattened_single_line_text(&mut self.job, bounded.as_ref(), leading_space, format);
-        !self.capped
+        !self.budget.capped
     }
 
     pub(crate) fn finish(self) -> LayoutJob {
@@ -138,59 +193,20 @@ pub(crate) fn context_text_galley(
 }
 
 fn bounded_single_line_job(ctx: &Context, text: &str, font: &FontId, color: Color32, max_width: f32) -> LayoutJob {
-    let flattened = flatten_line_separators(text);
-    let display_text = precut_text_for_shaping(ctx, flattened.as_ref(), font, max_width);
+    let display_text = bounded_flattened_text_for_shaping(ctx, text, font, max_width);
     single_line_label_job_from_flattened(display_text.as_ref(), font, color, max_width)
 }
 
 /// Conservatively bounds the prefix sent to the text shaper while keeping
-/// zero-width scalars from consuming the visible-content budget.
-fn precut_text_for_shaping<'a>(ctx: &Context, text: &'a str, font: &FontId, max_width: f32) -> Cow<'a, str> {
+/// zero-width scalars from consuming the visible-content budget. Long input
+/// is normalized during the bounded scan so unseen suffixes are never visited.
+fn bounded_flattened_text_for_shaping<'a>(ctx: &Context, text: &'a str, font: &FontId, max_width: f32) -> Cow<'a, str> {
     if text.is_empty() || text.len() <= MAX_UNSCANNED_TEXT_BYTES {
-        return Cow::Borrowed(text);
+        return flatten_line_separators(text);
     }
 
-    let shaping_width_budget = if max_width.is_nan() {
-        0.0
-    } else {
-        max_width.max(0.0) * SHAPING_WIDTH_BUDGET_MULTIPLIER
-    };
-    let (cut_at, append_ellipsis) = ctx.fonts_mut(|fonts| {
-        let mut measured_width = 0.0;
-        let mut visible_scalars = 0;
-        for (scanned_scalars, (byte_index, character)) in text.char_indices().enumerate() {
-            if scanned_scalars == MAX_SHAPING_SCANNED_SCALARS {
-                return (byte_index, true);
-            }
-
-            let glyph_width = fonts.glyph_width(font, character).max(0.0);
-            if glyph_width == 0.0 {
-                continue;
-            }
-            if visible_scalars == MAX_SHAPING_VISIBLE_SCALARS {
-                return (byte_index, true);
-            }
-            if measured_width + glyph_width > shaping_width_budget {
-                let cut_at = if visible_scalars == 0 {
-                    byte_index + character.len_utf8()
-                } else {
-                    byte_index
-                };
-                return (cut_at, false);
-            }
-            measured_width += glyph_width;
-            visible_scalars += 1;
-        }
-        (text.len(), false)
-    });
-    if append_ellipsis {
-        let mut bounded = String::with_capacity(cut_at + '…'.len_utf8());
-        bounded.push_str(&text[..cut_at]);
-        bounded.push('…');
-        Cow::Owned(bounded)
-    } else {
-        Cow::Borrowed(&text[..cut_at])
-    }
+    let mut budget = ShapingBudget::new(max_width);
+    ctx.fonts_mut(|fonts| budget.flatten_and_bound(text, |character| fonts.glyph_width(font, character)))
 }
 
 pub(crate) fn paint_section_header(ui: &mut Ui, width: f32, height: f32, title: &str, font: &FontId, color: Color32) {
@@ -213,7 +229,7 @@ mod tests {
 
     use egui::{Color32, FontId, text::TextFormat};
 
-    use super::{BoundedSingleLineJob, context_text_galley, painter_text_galley};
+    use super::{BoundedSingleLineJob, ShapingBudget, context_text_galley, painter_text_galley};
 
     fn context_job_text(source: &str, max_width: f32) -> String {
         let ctx = egui::Context::default();
@@ -290,6 +306,26 @@ mod tests {
 
         assert!(job_text.borrow().ends_with('…'));
         assert!(!job_text.borrow().contains("visible suffix"));
+    }
+
+    #[test]
+    fn separator_normalization_stops_at_the_original_input_scan_cap() {
+        let source = format!("{}unvisited suffix", "\r\n".repeat(4_096));
+        let measured_characters = Cell::new(0_usize);
+        let mut budget = ShapingBudget::new(f32::INFINITY);
+
+        let bounded = budget.flatten_and_bound(&source, |_| {
+            measured_characters.set(measured_characters.get() + 1);
+            0.0
+        });
+
+        assert!(budget.capped);
+        assert_eq!(budget.scanned_scalars, 4_096);
+        assert_eq!(measured_characters.get(), 2_048);
+        assert_eq!(bounded.chars().count(), 2_049);
+        assert!(bounded.chars().take(2_048).all(|character| character == ' '));
+        assert!(bounded.ends_with('…'));
+        assert!(!bounded.contains("unvisited suffix"));
     }
 
     #[test]

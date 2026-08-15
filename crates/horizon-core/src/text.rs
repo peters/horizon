@@ -30,7 +30,9 @@ pub fn flatten_line_separators(text: &str) -> Cow<'_, str> {
     Cow::Owned(flattened)
 }
 
-fn is_line_separator(character: char) -> bool {
+/// Returns whether `character` forces a new line in plain text.
+#[must_use]
+pub fn is_line_separator(character: char) -> bool {
     matches!(
         character,
         '\r' | '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
