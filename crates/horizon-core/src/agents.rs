@@ -136,13 +136,33 @@ const PI: AgentDefinition = AgentDefinition {
     kitty_keyboard: true,
 };
 
-pub const BUILTIN_AGENT_KINDS: [PanelKind; 6] = [
+/// xAI's Grok Build CLI (`grok`). Resumes by exact session id via
+/// `--resume <session-id>`; it has no flag to pre-assign ids for fresh
+/// sessions, and its ratatui TUI is driven without the kitty keyboard
+/// protocol (same posture as Codex).
+const GROK: AgentDefinition = AgentDefinition {
+    id: "grok",
+    display_name: "Grok",
+    icon_label: "GB",
+    accent_rgb: [249, 249, 249],
+    default_command: "grok",
+    resume_mode: AgentResumeMode::ExactFlag {
+        flag: "--resume",
+        fresh_session_flag: None,
+    },
+    session_validation: AgentSessionValidationMode::None,
+    integration: AgentIntegrationKind::None,
+    kitty_keyboard: false,
+};
+
+pub const BUILTIN_AGENT_KINDS: [PanelKind; 7] = [
     PanelKind::Codex,
     PanelKind::Claude,
     PanelKind::OpenCode,
     PanelKind::Gemini,
     PanelKind::KiloCode,
     PanelKind::Pi,
+    PanelKind::Grok,
 ];
 
 #[must_use]
@@ -159,6 +179,7 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         PanelKind::Gemini => Some(GEMINI),
         PanelKind::KiloCode => Some(KILO_CODE),
         PanelKind::Pi => Some(PI),
+        PanelKind::Grok => Some(GROK),
         PanelKind::Shell
         | PanelKind::Ssh
         | PanelKind::Command
@@ -195,6 +216,11 @@ mod tests {
                 .supports_session_binding()
         );
         assert!(
+            agent_definition(PanelKind::Grok)
+                .expect("grok agent")
+                .supports_session_binding()
+        );
+        assert!(
             !agent_definition(PanelKind::Gemini)
                 .expect("gemini agent")
                 .supports_session_binding()
@@ -221,7 +247,7 @@ mod tests {
                 .expect("codex agent")
                 .requires_exact_session_validation()
         );
-        for kind in [PanelKind::Claude, PanelKind::OpenCode, PanelKind::Pi] {
+        for kind in [PanelKind::Claude, PanelKind::OpenCode, PanelKind::Pi, PanelKind::Grok] {
             assert!(
                 !agent_definition(kind)
                     .expect("catalog-backed agent")
@@ -246,5 +272,23 @@ mod tests {
             }
         );
         assert!(definition.kitty_keyboard);
+    }
+
+    #[test]
+    fn grok_definition_uses_exact_resume_flag() {
+        let definition = agent_definition(PanelKind::Grok).expect("grok agent");
+
+        assert_eq!(definition.id, "grok");
+        assert_eq!(definition.display_name, "Grok");
+        assert_eq!(definition.icon_label, "GB");
+        assert_eq!(definition.default_command, "grok");
+        assert_eq!(
+            definition.resume_mode,
+            AgentResumeMode::ExactFlag {
+                flag: "--resume",
+                fresh_session_flag: None,
+            }
+        );
+        assert!(!definition.kitty_keyboard);
     }
 }

@@ -13,6 +13,7 @@ use super::{
 };
 use crate::error::Error;
 
+mod grok;
 mod provider_scoping;
 
 #[test]
@@ -21,6 +22,7 @@ fn strict_catalog_load_propagates_provider_errors() {
         || Ok(Vec::new()),
         || Ok(CodexSessions::default()),
         || Err(Error::State("OpenCode store unavailable".to_string())),
+        || Ok(Vec::new()),
         || Ok(Vec::new()),
     );
 
