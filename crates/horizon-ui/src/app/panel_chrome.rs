@@ -110,7 +110,8 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         | PanelKind::OpenCode
         | PanelKind::Gemini
         | PanelKind::KiloCode
-        | PanelKind::Pi => {
+        | PanelKind::Pi
+        | PanelKind::Grok => {
             unreachable!()
         }
     }

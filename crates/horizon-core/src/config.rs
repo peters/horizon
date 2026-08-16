@@ -189,6 +189,25 @@ pub(crate) fn default_pi_preset() -> PresetConfig {
     }
 }
 
+/// Single Grok Build preset. The CLI starts a fresh session on every launch
+/// unless `--resume` is passed, so menu launches always start fresh like the
+/// other coding-agent defaults.
+pub(crate) fn default_grok_preset() -> PresetConfig {
+    PresetConfig {
+        name: "Grok".to_string(),
+        alias: Some("gb".to_string()),
+        kind: PanelKind::Grok,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }
+}
+
+pub(crate) fn default_grok_presets() -> [PresetConfig; 1] {
+    [default_grok_preset()]
+}
+
 fn insert_missing_agent_presets(presets: &mut Vec<PresetConfig>, defaults: impl IntoIterator<Item = PresetConfig>) {
     for default_preset in defaults {
         let expected_name = default_preset.name.to_ascii_lowercase();
@@ -231,6 +250,22 @@ pub(crate) fn insert_missing_pi_presets(presets: &mut Vec<PresetConfig>) {
                 .as_deref()
                 .is_some_and(|alias| alias.eq_ignore_ascii_case("pi"))
             || preset.kind == PanelKind::Pi
+    });
+
+    if !exists {
+        presets.push(default_preset);
+    }
+}
+
+pub(crate) fn insert_missing_grok_presets(presets: &mut Vec<PresetConfig>) {
+    let default_preset = default_grok_preset();
+    let exists = presets.iter().any(|preset| {
+        preset.name.eq_ignore_ascii_case(&default_preset.name)
+            || preset
+                .alias
+                .as_deref()
+                .is_some_and(|alias| alias.eq_ignore_ascii_case("gb"))
+            || preset.kind == PanelKind::Grok
     });
 
     if !exists {
@@ -288,6 +323,7 @@ fn default_presets() -> Vec<PresetConfig> {
     presets.extend(default_gemini_presets());
     presets.extend(default_kilo_presets());
     insert_missing_pi_presets(&mut presets);
+    presets.extend(default_grok_presets());
     presets.extend([
         PresetConfig {
             name: "Git Changes".to_string(),

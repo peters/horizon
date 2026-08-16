@@ -18,6 +18,10 @@ pub(crate) fn codex_home_dir() -> Option<PathBuf> {
     codex_home_dir_from_env(env_path("CODEX_HOME"), user_home_dir())
 }
 
+pub(crate) fn grok_home_dir() -> Option<PathBuf> {
+    grok_home_dir_from_env(env_path("GROK_HOME"), user_home_dir())
+}
+
 fn user_home_dir_from_env(home: Option<PathBuf>, user_profile: Option<PathBuf>) -> Option<PathBuf> {
     home.or(user_profile)
 }
@@ -26,8 +30,19 @@ fn codex_home_dir_from_env(codex_home: Option<PathBuf>, user_home: Option<PathBu
     codex_home.or_else(|| user_home.map(|home| home.join(".codex")))
 }
 
+fn grok_home_dir_from_env(grok_home: Option<PathBuf>, user_home: Option<PathBuf>) -> Option<PathBuf> {
+    grok_home.or_else(|| user_home.map(|home| home.join(".grok")))
+}
+
 pub(crate) fn codex_db_path() -> Option<PathBuf> {
     codex_db_path_in(&codex_home_dir()?)
+}
+
+/// Local session index maintained by the Grok CLI (`session_search.sqlite`
+/// lives next to the on-disk session tree, unlike every other provider's
+/// store). Missing file is not an error: the CLI creates it on first run.
+pub(crate) fn grok_sessions_db_path() -> Option<PathBuf> {
+    grok_home_dir().map(|home| home.join("sessions").join("session_search.sqlite"))
 }
 
 fn codex_db_path_in(codex_home: &Path) -> Option<PathBuf> {
@@ -44,7 +59,7 @@ pub(crate) fn open_read_only_sqlite(path: &Path) -> Result<Connection> {
 mod tests {
     use tempfile::TempDir;
 
-    use super::{codex_db_path_in, codex_home_dir_from_env, user_home_dir_from_env};
+    use super::{codex_db_path_in, codex_home_dir_from_env, grok_home_dir_from_env, user_home_dir_from_env};
 
     #[test]
     fn codex_store_uses_the_supported_state_database() {
@@ -87,6 +102,27 @@ mod tests {
         assert_eq!(
             codex_home_dir_from_env(Some(codex_home.clone()), Some(user_home)),
             Some(codex_home)
+        );
+    }
+
+    #[test]
+    fn grok_home_honors_the_explicit_override() {
+        let grok_home = std::path::PathBuf::from("/stores/grok");
+        let user_home = std::path::PathBuf::from("/Users/tester");
+
+        assert_eq!(
+            grok_home_dir_from_env(Some(grok_home.clone()), Some(user_home)),
+            Some(grok_home)
+        );
+    }
+
+    #[test]
+    fn grok_home_falls_back_to_the_dot_directory() {
+        let user_home = std::path::PathBuf::from("/Users/tester");
+
+        assert_eq!(
+            grok_home_dir_from_env(None, Some(user_home)),
+            Some(std::path::PathBuf::from("/Users/tester/.grok"))
         );
     }
 }

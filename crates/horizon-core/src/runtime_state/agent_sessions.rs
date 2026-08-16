@@ -13,6 +13,7 @@ use crate::opencode_paths::opencode_db_path;
 use super::{AgentSessionBinding, PanelKind, RuntimeState, normalize_cwd};
 
 mod codex;
+mod grok;
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentSessionCatalog {
@@ -34,7 +35,7 @@ pub struct AgentSessionBootstrapCatalog {
 }
 
 impl AgentSessionCatalog {
-    /// Load recent Claude, Codex, `OpenCode`, and Pi sessions from their local stores.
+    /// Load recent Claude, Codex, `OpenCode`, Pi, and Grok sessions from their local stores.
     ///
     /// # Errors
     ///
@@ -45,6 +46,7 @@ impl AgentSessionCatalog {
             || codex::load_sessions(&HashSet::new(), true),
             load_opencode_sessions,
             load_pi_sessions,
+            grok::load_grok_sessions,
         )
     }
 
@@ -73,6 +75,7 @@ impl AgentSessionCatalog {
         let has_codex_panels = Self::has_provider_panel(runtime_state, PanelKind::Codex);
         let has_opencode_panels = Self::has_provider_panel(runtime_state, PanelKind::OpenCode);
         let has_pi_panels = Self::has_provider_panel(runtime_state, PanelKind::Pi);
+        let has_grok_panels = Self::has_provider_panel(runtime_state, PanelKind::Grok);
 
         let mut sessions = Vec::new();
         if has_claude_panels {
@@ -83,6 +86,9 @@ impl AgentSessionCatalog {
         }
         if has_pi_panels {
             extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
+        }
+        if has_grok_panels {
+            extend_best_effort(&mut sessions, "Grok", grok::load_grok_sessions());
         }
         let mut codex_binding_ids = HashSet::new();
         for (kind, binding_ids) in exact_binding_ids {
@@ -123,11 +129,13 @@ impl AgentSessionCatalog {
         codex: impl FnOnce() -> Result<codex::CodexSessions>,
         opencode: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
         pi: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
+        grok: impl FnOnce() -> Result<Vec<AgentSessionRecord>>,
     ) -> Result<Self> {
         let mut sessions = claude()?;
         let codex = codex()?;
         sessions.extend(opencode()?);
         sessions.extend(pi()?);
+        sessions.extend(grok()?);
         Ok(Self::from_provider_sessions(sessions, &codex))
     }
 

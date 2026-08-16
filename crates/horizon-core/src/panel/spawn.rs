@@ -643,7 +643,8 @@ pub(super) fn resolve_launch_command(
         | PanelKind::OpenCode
         | PanelKind::Gemini
         | PanelKind::KiloCode
-        | PanelKind::Pi => resolve_agent_launch_command(command, args, kind, launch),
+        | PanelKind::Pi
+        | PanelKind::Grok => resolve_agent_launch_command(command, args, kind, launch),
     }
 }
 
@@ -879,7 +880,8 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
             | PanelKind::OpenCode
             | PanelKind::Gemini
             | PanelKind::KiloCode
-            | PanelKind::Pi => unreachable!(),
+            | PanelKind::Pi
+            | PanelKind::Grok => unreachable!(),
         }
     }
 }

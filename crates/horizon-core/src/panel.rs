@@ -46,6 +46,7 @@ pub enum PanelKind {
     Gemini,
     KiloCode,
     Pi,
+    Grok,
     Command,
     Editor,
     GitChanges,
@@ -81,7 +82,7 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
-            Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi => {
+            Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
         }
@@ -916,6 +917,47 @@ mod tests {
     }
 
     #[test]
+    fn grok_fresh_without_binding_starts_without_resume_flag() {
+        let (_program, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Grok,
+            AgentLaunchContext {
+                resume: &PanelResume::Fresh,
+                session_binding: None,
+                should_resume_binding: false,
+                is_restore: false,
+            },
+        );
+
+        assert_eq!(args, vec!["-ic".to_string(), "grok".to_string()]);
+    }
+
+    #[test]
+    fn grok_session_resume_uses_resume_flag_before_custom_args() {
+        let binding = AgentSessionBinding::new(PanelKind::Grok, "session-42".to_string(), None, None, None);
+        let (_program, args) = resolve_launch_command(
+            None,
+            vec!["-m".to_string(), "grok-build".to_string()],
+            None,
+            PanelKind::Grok,
+            AgentLaunchContext {
+                resume: &PanelResume::Session {
+                    session_id: "session-42".to_string(),
+                },
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: false,
+            },
+        );
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-ic");
+        assert_eq!(args[1], "grok --resume session-42 -m grok-build");
+    }
+
+    #[test]
     fn gemini_panels_start_without_implicit_resume_flags() {
         let (_program, args) = resolve_launch_command(
             None,
@@ -1032,6 +1074,7 @@ mod tests {
             AGENT_PANEL_SCROLLBACK_LIMIT
         );
         assert_eq!(scrollback_limit_for_kind(PanelKind::Pi), AGENT_PANEL_SCROLLBACK_LIMIT);
+        assert_eq!(scrollback_limit_for_kind(PanelKind::Grok), AGENT_PANEL_SCROLLBACK_LIMIT);
     }
 
     #[test]
@@ -1042,6 +1085,7 @@ mod tests {
         assert!(!kitty_keyboard_for_kind(PanelKind::Gemini));
         assert!(kitty_keyboard_for_kind(PanelKind::KiloCode));
         assert!(kitty_keyboard_for_kind(PanelKind::Pi));
+        assert!(!kitty_keyboard_for_kind(PanelKind::Grok));
         assert!(kitty_keyboard_for_kind(PanelKind::Shell));
         assert!(kitty_keyboard_for_kind(PanelKind::Ssh));
     }

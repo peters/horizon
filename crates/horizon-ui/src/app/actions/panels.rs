@@ -152,7 +152,13 @@ mod tests {
 
     #[test]
     fn new_agent_panels_always_start_fresh_sessions() {
-        for kind in [PanelKind::Claude, PanelKind::Codex, PanelKind::OpenCode, PanelKind::Pi] {
+        for kind in [
+            PanelKind::Claude,
+            PanelKind::Codex,
+            PanelKind::OpenCode,
+            PanelKind::Pi,
+            PanelKind::Grok,
+        ] {
             let mut options = PanelOptions {
                 kind,
                 resume: PanelResume::Last,
