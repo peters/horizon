@@ -206,20 +206,16 @@ impl SequenceBuilder {
     }
 
     fn try_build_named_normal(&self, key: Key, has_associated_text: bool) -> Option<SequenceBase> {
+        // The kitty keyboard protocol (and legacy functional-key encoding) only
+        // carries the explicit key number "1" when modifiers, an event type, or
+        // associated text are present; unmodified presses omit it. Keeping
+        // Home/End on the same rule as the arrow keys and F1-F4 is required
+        // because spec-conformant parsers (e.g. pi-tui) match `CSI H` but not
+        // the non-standard `CSI 1 H`.
         let one_based = if self.modifiers.is_empty() && !self.kitty_event_type && !has_associated_text {
             ""
         } else {
             "1"
-        };
-
-        // In kitty disambiguate mode, Home (CSI H) and End (CSI F) clash
-        // with cursor-movement commands (CUP / CPL). Always include the
-        // explicit key number "1" so kitty-aware programs can distinguish
-        // them from cursor-movement sequences.
-        let one_based_or_kitty = if one_based.is_empty() && self.kitty_mode.enabled() {
-            "1"
-        } else {
-            one_based
         };
 
         let (base, terminator) = match key {
@@ -227,8 +223,8 @@ impl SequenceBuilder {
             Key::PageDown => ("6", SequenceTerminator::Normal('~')),
             Key::Insert => ("2", SequenceTerminator::Normal('~')),
             Key::Delete => ("3", SequenceTerminator::Normal('~')),
-            Key::Home => (one_based_or_kitty, SequenceTerminator::Normal('H')),
-            Key::End => (one_based_or_kitty, SequenceTerminator::Normal('F')),
+            Key::Home => (one_based, SequenceTerminator::Normal('H')),
+            Key::End => (one_based, SequenceTerminator::Normal('F')),
             Key::ArrowLeft => (one_based, SequenceTerminator::Normal('D')),
             Key::ArrowRight => (one_based, SequenceTerminator::Normal('C')),
             Key::ArrowUp => (one_based, SequenceTerminator::Normal('A')),

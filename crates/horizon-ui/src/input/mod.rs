@@ -172,11 +172,13 @@ mod tests {
         assert_eq!(end.bytes, b"\x1bOF");
     }
 
-    /// Regression: in kitty disambiguate mode, Home/End must include the
-    /// explicit key number "1" so programs can distinguish CSI 1 H (Home)
-    /// from CSI H (CUP cursor position).
+    /// Regression: the kitty keyboard protocol only carries the explicit key
+    /// number "1" when modifiers, an event type, or associated text are
+    /// present. Unmodified Home/End must therefore be plain `CSI H` / `CSI F`
+    /// (like the arrow keys), because spec-conformant parsers such as pi-tui
+    /// match `CSI H` but not the non-standard `CSI 1 H`.
     #[test]
-    fn home_end_include_explicit_key_number_in_kitty_mode() {
+    fn home_end_omit_key_number_without_modifiers_in_kitty_mode() {
         let home = translate_key_event(
             Key::Home,
             true,
@@ -185,11 +187,34 @@ mod tests {
             TermMode::DISAMBIGUATE_ESC_CODES,
         )
         .expect("Home kitty");
-        assert_eq!(home.bytes, b"\x1b[1H", "Home must be CSI 1 H in kitty mode");
+        assert_eq!(home.bytes, b"\x1b[H", "unmodified Home must be CSI H in kitty mode");
 
         let end = translate_key_event(Key::End, true, false, Modifiers::NONE, TermMode::DISAMBIGUATE_ESC_CODES)
             .expect("End kitty");
-        assert_eq!(end.bytes, b"\x1b[1F", "End must be CSI 1 F in kitty mode");
+        assert_eq!(end.bytes, b"\x1b[F", "unmodified End must be CSI F in kitty mode");
+    }
+
+    #[test]
+    fn home_end_keep_key_number_with_modifiers_in_kitty_mode() {
+        let home = translate_key_event(
+            Key::Home,
+            true,
+            false,
+            Modifiers::SHIFT,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        )
+        .expect("shift Home kitty");
+        assert_eq!(home.bytes, b"\x1b[1;2H", "shift+Home must be CSI 1;2 H in kitty mode");
+
+        let end = translate_key_event(
+            Key::End,
+            true,
+            false,
+            Modifiers::SHIFT,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        )
+        .expect("shift End kitty");
+        assert_eq!(end.bytes, b"\x1b[1;2F", "shift+End must be CSI 1;2 F in kitty mode");
     }
 
     #[test]
