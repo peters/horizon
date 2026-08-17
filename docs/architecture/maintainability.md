@@ -10,8 +10,9 @@ back into large multi-purpose modules.
 - Owns board state, workspace metadata, panel lifecycle, persistence
   projections, and shared layout math.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
-  attention flows, workspace and panel membership changes, arrangement/collision
-  logic, geometry queries, and shutdown state.
+  attention flows, agent working-status detection, workspace and panel
+  membership changes, arrangement/collision logic, geometry queries, and
+  shutdown state.
 - Large board test surfaces should live in `board/tests/` topic files so
   `board.rs` can stay focused on production orchestration.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,

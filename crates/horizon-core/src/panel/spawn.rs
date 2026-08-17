@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
+use crate::agents::AgentStatus;
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
@@ -129,6 +130,7 @@ impl StaticPanelSeed {
             launched_at_millis: current_unix_millis(),
             has_custom_name,
             had_recent_output: false,
+            agent_status: AgentStatus::default(),
             last_output_at_millis: None,
             launch_command,
             launch_args: Vec::new(),
@@ -514,6 +516,7 @@ fn build_terminal_panel(
         launched_at_millis: current_unix_millis(),
         has_custom_name,
         had_recent_output: false,
+        agent_status: AgentStatus::default(),
         last_output_at_millis: None,
         terminal_title: String::new(),
         launch_command,

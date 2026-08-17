@@ -34,8 +34,8 @@ mod view;
 mod workspace;
 
 pub use agents::{
-    AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, agent_definition,
-    all_agent_kinds,
+    AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, AgentStatus, agent_definition,
+    all_agent_kinds, is_agent_working_line,
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;

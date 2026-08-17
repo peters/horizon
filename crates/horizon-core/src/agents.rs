@@ -1,5 +1,64 @@
 use crate::panel::PanelKind;
 
+/// Coarse activity state of an agent panel, derived from what the agent TUI
+/// renders in the terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentStatus {
+    /// No working indicator visible; the agent is at its prompt (or the panel
+    /// is not an agent panel).
+    #[default]
+    Idle,
+    /// The agent TUI is rendering its working indicator (streaming a response,
+    /// running a command, compacting, retrying, ...).
+    Working,
+}
+
+/// Number of visible bottom screen rows scanned for agent working indicators.
+/// Agent TUIs pin their status line a few rows above the bottom input/footer
+/// area, so a small bottom window catches the line without scanning the whole
+/// screen.
+pub const AGENT_WORKING_SCAN_ROWS: usize = 6;
+
+/// Status words agent TUIs print next to their working spinner. Covers the
+/// working/thinking labels of the built-in agents (Pi, Codex, Claude Code,
+/// Gemini, `OpenCode`, Grok) plus the retry/reuse/compaction variants.
+const WORKING_KEYWORDS: [&str; 7] = [
+    "Working",
+    "Thinking",
+    "Compacting",
+    "Retrying",
+    "Reusing",
+    "Summarizing",
+    "Context overflow",
+];
+
+/// Interrupt/stop hints the working status line always carries, so custom
+/// working messages without a status word still count.
+const WORKING_HINTS: [&str; 3] = ["to interrupt", "to stop", "to cancel"];
+
+fn is_spinner_glyph(ch: char) -> bool {
+    // Braille spinner frames (pi-tui, ink, codex) and star spinners (Claude
+    // Code uses \u{273B}).
+    ('\u{2800}'..='\u{28FF}').contains(&ch) || ('\u{2737}'..='\u{273B}').contains(&ch)
+}
+
+/// A terminal line counts as a working indicator when it starts with an
+/// animated spinner glyph and carries a working keyword or the usual
+/// interrupt/stop/cancel hint. Requiring the spinner prefix keeps ordinary
+/// output text that merely mentions "Working" from flipping the status.
+#[must_use]
+pub fn is_agent_working_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(first) = trimmed.chars().next() else {
+        return false;
+    };
+    if !is_spinner_glyph(first) {
+        return false;
+    }
+    WORKING_KEYWORDS.iter().any(|keyword| trimmed.contains(keyword))
+        || WORKING_HINTS.iter().any(|hint| trimmed.contains(hint))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentResumeMode {
     ExactSubcommand {
@@ -191,7 +250,7 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentResumeMode, PanelKind, agent_definition};
+    use super::{AgentResumeMode, PanelKind, agent_definition, is_agent_working_line};
 
     #[test]
     fn exact_session_binding_support_is_reserved_for_catalog_backed_agents() {
@@ -254,6 +313,35 @@ mod tests {
                     .requires_exact_session_validation()
             );
         }
+    }
+
+    #[test]
+    fn working_line_requires_spinner_glyph_and_working_marker() {
+        // Pi: braille spinner + default working message.
+        assert!(is_agent_working_line("\u{280b} Working... (esc to interrupt)"));
+        // Codex-style: braille spinner + elapsed time.
+        assert!(is_agent_working_line("\u{2809} Working (5s) · esc to stop"));
+        // Claude Code star spinner + unicode ellipsis.
+        assert!(is_agent_working_line("\u{273B} Working…"));
+        // Thinking / compaction / retry variants.
+        assert!(is_agent_working_line("\u{2801} Thinking..."));
+        assert!(is_agent_working_line("\u{280F} Compacting context..."));
+        // Retrying / reusing variants.
+        assert!(is_agent_working_line(
+            "\u{2808} Retrying (1/5) in 3s... (esc to cancel)"
+        ));
+        assert!(is_agent_working_line("\u{280b} Reusing context..."));
+        // Custom working message: no keyword, but the interrupt hint remains.
+        assert!(is_agent_working_line("\u{2808} Deploying to prod (esc to interrupt)"));
+        // Leading whitespace is fine.
+        assert!(is_agent_working_line("  \u{280b} Working..."));
+
+        // Plain output text mentioning "Working" has no spinner prefix.
+        assert!(!is_agent_working_line("Working on the fix"));
+        // Spinner glyph without a working marker (prompt line, done line).
+        assert!(!is_agent_working_line("\u{280b} > ready"));
+        assert!(!is_agent_working_line("\u{2713} Done"));
+        assert!(!is_agent_working_line(""));
     }
 
     #[test]

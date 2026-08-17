@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::agent_definition;
+use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
@@ -178,6 +179,9 @@ pub struct Panel {
     /// Set by `process_output` each frame; read by attention detection to skip
     /// the expensive `last_lines_text` scan for panels without new content.
     pub(crate) had_recent_output: bool,
+    /// Working/idle state of the agent TUI, refreshed by
+    /// `Board::update_agent_status` from the terminal's working indicator.
+    pub(crate) agent_status: AgentStatus,
     last_output_at_millis: Option<i64>,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
@@ -224,6 +228,11 @@ impl Panel {
         let window_millis = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
         self.last_output_at_millis
             .is_some_and(|last_output| current_unix_millis().saturating_sub(last_output) <= window_millis)
+    }
+
+    #[must_use]
+    pub const fn agent_status(&self) -> AgentStatus {
+        self.agent_status
     }
 
     /// Convenience accessor for the editor content (if this panel holds one).
@@ -587,6 +596,28 @@ impl Panel {
         None
     }
 
+    /// Check whether this panel's agent TUI is rendering its working
+    /// indicator (animated spinner plus a working status line pinned near the
+    /// bottom of the screen, as Pi, Codex, Claude Code & co. do while busy).
+    #[must_use]
+    pub fn detect_agent_status(&self) -> AgentStatus {
+        if !self.kind.is_agent() {
+            return AgentStatus::Idle;
+        }
+        let Some(terminal) = self.content.terminal() else {
+            return AgentStatus::Idle;
+        };
+        if terminal
+            .bottom_lines_text(AGENT_WORKING_SCAN_ROWS)
+            .iter()
+            .any(|line| is_agent_working_line(line))
+        {
+            AgentStatus::Working
+        } else {
+            AgentStatus::Idle
+        }
+    }
+
     fn should_track_live_cwd(&self) -> bool {
         matches!(self.kind, PanelKind::Shell | PanelKind::Command)
     }
@@ -613,9 +644,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel,
-        PanelContent, PanelId, PanelKind, PanelLayout, PanelResume, UsageDashboard, WorkspaceId,
-        kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command, scrollback_limit_for_kind,
+        AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, AgentStatus,
+        DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent, PanelId, PanelKind, PanelLayout, PanelResume,
+        UsageDashboard, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command,
+        scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
 
@@ -635,6 +667,7 @@ mod tests {
             launched_at_millis: 0,
             has_custom_name,
             had_recent_output: false,
+            agent_status: AgentStatus::default(),
             last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),

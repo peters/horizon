@@ -1,7 +1,7 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding, SshConnectionStatus,
-    WorkspaceId,
+    AgentSessionBinding, AgentStatus, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
+    SshConnectionStatus, WorkspaceId,
 };
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
@@ -34,6 +34,7 @@ struct PanelSnapshot {
     canvas_size: Vec2,
     current_workspace_id: WorkspaceId,
     kind: PanelKind,
+    agent_status: AgentStatus,
     history_size: usize,
     scrollback_limit: usize,
     workspace_accent: Option<Color32>,
@@ -423,6 +424,7 @@ impl HorizonApp {
                 canvas_size,
                 current_workspace_id: panel.workspace_id,
                 kind: panel.kind,
+                agent_status: panel.agent_status(),
                 history_size: terminal.map_or(0, horizon_core::Terminal::history_size),
                 scrollback_limit: terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
                 workspace_accent,
@@ -573,6 +575,7 @@ impl HorizonApp {
                     PanelChrome {
                         panel_id,
                         kind: snapshot.kind,
+                        agent_status: snapshot.agent_status,
                         panel_rect: rects.panel,
                         titlebar_rect: rects.titlebar,
                         close_rect: rects.close,
