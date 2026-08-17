@@ -1,8 +1,8 @@
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 use super::{
-    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, current_cwd_for_pid,
-    find_file_path_at_column, find_url_at_column, viewport_to_point,
+    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, TerminalEventProxy,
+    current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
 };
 
 impl Terminal {
@@ -81,6 +81,15 @@ impl Terminal {
         }
         let start = lines.len().saturating_sub(max_lines);
         lines[start..].join("\n")
+    }
+
+    /// Extract the text of the bottom `max_rows` visible rows of the screen
+    /// (empty rows omitted), for detecting status lines that agent TUIs pin
+    /// near the bottom of the screen.
+    #[must_use]
+    pub fn bottom_lines_text(&self, max_rows: usize) -> Vec<String> {
+        let term = self.term.lock();
+        bottom_row_texts(&term, usize::from(self.rows), max_rows)
     }
 
     /// Extract all text from the terminal grid including scrollback history.
@@ -246,6 +255,46 @@ fn wrapped_line_chars_at_viewport_point<T>(
     Some((line_chars, logical_col))
 }
 
+/// Text of the non-empty rows within the bottom `max_rows` rows of a visible
+/// screen, in top-to-bottom order.
+#[must_use]
+fn bottom_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usize) -> Vec<String> {
+    let content = term.renderable_content();
+    let start_row = rows.saturating_sub(max_rows);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut current_line_columns = 0;
+    let mut current_row: Option<usize> = None;
+
+    for indexed in content.display_iter {
+        let Ok(row) = usize::try_from(indexed.point.line.0) else {
+            continue;
+        };
+        if row < start_row || row >= rows {
+            continue;
+        }
+        if current_row != Some(row) {
+            if current_row.is_some() && !current_line.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+            }
+            current_row = Some(row);
+            current_line.clear();
+            current_line_columns = 0;
+        }
+        append_cell_text(
+            &mut current_line,
+            &mut current_line_columns,
+            indexed.point.column.0,
+            indexed.cell,
+        );
+    }
+    if current_row.is_some() && !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    lines
+}
+
 fn append_cell_text(line: &mut String, occupied_columns: &mut usize, target_column: usize, cell: &Cell) {
     if cell
         .flags
@@ -280,7 +329,7 @@ mod tests {
     use alacritty_terminal::term::{self, Term};
     use alacritty_terminal::vte::ansi;
 
-    use super::{append_cell_text, wrapped_line_chars_at_viewport_point};
+    use super::{append_cell_text, bottom_row_texts, wrapped_line_chars_at_viewport_point};
     use crate::terminal::{TerminalDimensions, TerminalEventProxy, find_url_at_column};
 
     fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
@@ -371,6 +420,35 @@ mod tests {
         };
 
         Term::new(config, &dimensions, TerminalEventProxy { event_tx })
+    }
+
+    #[test]
+    fn bottom_row_texts_only_includes_the_bottom_window() {
+        let mut term = test_term(6, 20);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(
+            &mut term,
+            b"top-one\r\ntop-two\r\nmid-one\r\nmid-two\r\nmid-three\r\nworking-line",
+        );
+
+        let lines = bottom_row_texts(&term, 6, 3);
+
+        assert_eq!(lines, vec!["mid-two", "mid-three", "working-line"]);
+    }
+
+    #[test]
+    fn bottom_row_texts_omits_empty_rows_and_accepts_wide_window() {
+        let mut term = test_term(8, 20);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        // Row 0 carries text, rows 1-5 are empty, row 6 has the status line.
+        parser.advance(&mut term, b"alpha\r\n\r\n\r\n\r\n\r\n\r\n\xe2\xa0\x8b Working...\n");
+
+        let lines = bottom_row_texts(&term, 8, 4);
+
+        assert_eq!(lines, vec!["\u{280b} Working..."]);
+
+        let all = bottom_row_texts(&term, 8, 16);
+        assert_eq!(all, vec!["alpha", "\u{280b} Working..."]);
     }
 
     #[test]

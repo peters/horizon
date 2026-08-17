@@ -1,5 +1,5 @@
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
-use horizon_core::{AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
+use horizon_core::{AgentStatus, AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
 
 use crate::theme;
 
@@ -11,6 +11,7 @@ use super::util::{format_compact_count, usize_to_f32};
 pub(super) struct PanelChrome<'a> {
     pub panel_id: PanelId,
     pub kind: PanelKind,
+    pub agent_status: AgentStatus,
     pub panel_rect: Rect,
     pub titlebar_rect: Rect,
     pub close_rect: Rect,
@@ -241,6 +242,16 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     if let Some(mic) = chrome.mic {
         paint_mic_control(ui, &painter, mic);
     }
+    if chrome.agent_status == AgentStatus::Working {
+        paint_working_indicator(
+            ui,
+            &painter,
+            chrome.titlebar_rect,
+            badges_left_boundary(&chrome),
+            chrome.kind,
+            chrome.focused,
+        );
+    }
     paint_close_and_resize_controls(&painter, chrome.close_rect, chrome.resize_rect, chrome.close_hovered);
 }
 
@@ -337,8 +348,20 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 }
 
 /// Compute the right x boundary where the title text must stop, accounting
-/// for all badges (history meter, SSH status, attention) that sit to its right.
+/// for all badges (history meter, SSH status, attention) that sit to its
+/// right, plus the working indicator when the agent is busy.
 fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
+    let badges_left = badges_left_boundary(chrome);
+    if chrome.agent_status == AgentStatus::Working {
+        badges_left - working_indicator_reserve()
+    } else {
+        badges_left
+    }
+}
+
+/// Left edge of the titlebar's right-side badge cluster (history meter,
+/// SSH status, attention).
+fn badges_left_boundary(chrome: &PanelChrome<'_>) -> f32 {
     let anchor = chrome.controls_anchor();
     let mut right = anchor.min.x - 12.0;
     if chrome.scrollback_limit > 0 {
@@ -353,6 +376,68 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
         right -= 110.0;
     }
     right
+}
+
+/// Three-dot "working" indicator mirroring the agent TUI's own busy
+/// spinner, pulsing left-to-right while the agent executes.
+const WORKING_DOT_RADIUS: f32 = 2.0;
+const WORKING_DOT_SPACING: f32 = 6.0;
+const WORKING_BADGE_GAP: f32 = 6.0;
+const WORKING_TITLE_GAP: f32 = 8.0;
+const WORKING_PULSE_HZ: f32 = 1.0;
+
+const fn working_indicator_width() -> f32 {
+    WORKING_DOT_RADIUS * 6.0 + WORKING_DOT_SPACING * 2.0
+}
+
+const fn working_indicator_reserve() -> f32 {
+    working_indicator_width() + WORKING_BADGE_GAP + WORKING_TITLE_GAP
+}
+
+fn working_indicator_base_color(kind: PanelKind, focused: bool) -> Color32 {
+    let base = match agent_definition(kind) {
+        Some(definition) => {
+            let [r, g, b] = definition.accent_rgb;
+            Color32::from_rgb(r, g, b)
+        }
+        None => theme::ACCENT(),
+    };
+    let base = match theme::current_theme() {
+        theme::ResolvedTheme::Dark => base,
+        theme::ResolvedTheme::Light => theme::ensure_terminal_text_contrast(base, theme::PANEL_BG_ALT()),
+    };
+    theme::alpha(base, if focused { 235 } else { 175 })
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "time-to-f32 and wave-scaled alpha both stay within representable range"
+)]
+#[profiling::function]
+fn paint_working_indicator(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    titlebar_rect: Rect,
+    badges_left: f32,
+    kind: PanelKind,
+    focused: bool,
+) {
+    let time = ui.input(|input| input.time as f32);
+    let base = working_indicator_base_color(kind, focused);
+    let base_alpha = f32::from(base.a());
+    let left = badges_left - WORKING_BADGE_GAP - working_indicator_width();
+    let step = WORKING_DOT_RADIUS * 2.0 + WORKING_DOT_SPACING;
+    let center_y = titlebar_rect.center().y;
+
+    for dot in [0.0_f32, 1.0, 2.0] {
+        // A wave travelling left to right, like the agent's typing dots.
+        let phase = time * WORKING_PULSE_HZ - dot / 3.0;
+        let wave = (0.5 + 0.5 * (phase * std::f32::consts::TAU).sin()).clamp(0.0, 1.0);
+        let alpha = (base_alpha * (0.30 + 0.70 * wave)) as u8;
+        let x = left + WORKING_DOT_RADIUS + dot * step;
+        painter.circle_filled(Pos2::new(x, center_y), WORKING_DOT_RADIUS, theme::alpha(base, alpha));
+    }
 }
 
 #[profiling::function]
@@ -636,9 +721,64 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color, panel_titlebar_fill,
-        title_focus_indicator_rect,
+        AgentStatus, PanelChrome, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill,
+        panel_title_color, panel_titlebar_fill, title_focus_indicator_rect, title_right_boundary,
+        working_indicator_reserve,
     };
+
+    /// The boundary math is exact constant arithmetic, so an epsilon of one
+    /// ULP keeps `assert_eq!`-level strictness without tripping `float_cmp`.
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() <= f32::EPSILON
+    }
+
+    fn test_chrome(agent_status: AgentStatus) -> PanelChrome<'static> {
+        let panel_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(600.0, 400.0));
+        let titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(600.0, 54.0));
+        let close_rect = Rect::from_center_size(Pos2::new(582.0, 37.0), egui::Vec2::splat(16.0));
+        PanelChrome {
+            panel_id: horizon_core::PanelId(1),
+            kind: horizon_core::PanelKind::Pi,
+            agent_status,
+            panel_rect,
+            titlebar_rect,
+            close_rect,
+            resize_rect: panel_rect,
+            title: Some("Smoke"),
+            history_size: 100,
+            scrollback_limit: 24_000,
+            focused: true,
+            close_hovered: false,
+            workspace_accent: Some(Color32::from_rgb(137, 180, 250)),
+            attention_badge: None,
+            ssh_status: None,
+            mic: None,
+        }
+    }
+
+    #[test]
+    fn working_indicator_reserves_titlebar_space() {
+        let idle = test_chrome(AgentStatus::Idle);
+        let working = test_chrome(AgentStatus::Working);
+
+        assert!(approx_eq(title_right_boundary(&idle), badges_left_boundary(&idle)));
+        assert!(approx_eq(
+            title_right_boundary(&working),
+            badges_left_boundary(&working) - working_indicator_reserve()
+        ));
+        assert!(title_right_boundary(&working) < title_right_boundary(&idle));
+    }
+
+    #[test]
+    fn working_indicator_reserve_covers_three_dots_and_gaps() {
+        // Three dots of radius 2 (width 4) plus two 6px gaps, plus the
+        // badge gap (6) and the title gap (8).
+        assert!(approx_eq(
+            working_indicator_reserve(),
+            4.0 * 3.0 + 6.0 * 2.0 + 6.0 + 8.0
+        ));
+        assert!(working_indicator_reserve() > 0.0);
+    }
 
     #[test]
     fn focused_panel_style_is_more_prominent() {

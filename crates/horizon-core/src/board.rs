@@ -1,3 +1,4 @@
+mod agent_status;
 mod arrangement;
 mod attention;
 mod geometry;
@@ -302,6 +303,11 @@ impl Board {
         if self.attention_enabled && output.had_terminal_output {
             self.update_attention();
         }
+        // Working-status refresh runs every frame: the per-panel check is a
+        // cheap timestamp compare for quiet panels, and the screen scan only
+        // happens for panels with new output this frame. It is independent of
+        // the attention-feed feature flag.
+        self.update_agent_status();
         output
     }
 
