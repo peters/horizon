@@ -131,17 +131,6 @@ fn panel_uses_dynamic_binding(panel: &horizon_core::Panel) -> bool {
     panel.kind.supports_session_binding() && !matches!(panel.resume, PanelResume::Session { .. })
 }
 
-fn panel_session_id(panel: &horizon_core::Panel) -> Option<&str> {
-    panel
-        .session_binding
-        .as_ref()
-        .map(|binding| binding.session_id.as_str())
-        .or(match &panel.resume {
-            PanelResume::Session { session_id } => Some(session_id.as_str()),
-            PanelResume::Fresh | PanelResume::Last => None,
-        })
-}
-
 impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
         self.release_active_session_lease();
@@ -594,7 +583,7 @@ impl HorizonApp {
             .panels
             .iter()
             .filter(|candidate| candidate.id != panel_id && candidate.kind == panel.kind)
-            .filter_map(panel_session_id)
+            .filter_map(horizon_core::Panel::session_id)
             .collect();
         self.session_catalog
             .recent_for(panel.kind, cwd.as_deref())
@@ -625,7 +614,7 @@ impl HorizonApp {
             || self.board.panels.iter().any(|candidate| {
                 candidate.id != panel_id
                     && candidate.kind == binding.kind
-                    && panel_session_id(candidate) == Some(binding.session_id.as_str())
+                    && candidate.session_id() == Some(binding.session_id.as_str())
             })
         {
             return false;

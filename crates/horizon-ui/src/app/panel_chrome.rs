@@ -5,7 +5,7 @@ use crate::theme;
 
 use super::RenameEditAction;
 use super::speech::MicState;
-use super::util::{format_compact_count, usize_to_f32};
+use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
@@ -24,6 +24,9 @@ pub(super) struct PanelChrome<'a> {
     pub workspace_accent: Option<Color32>,
     pub attention_badge: Option<&'a (AttentionSeverity, String)>,
     pub ssh_status: Option<SshConnectionStatus>,
+    /// Current agent session id; when `Some` a short-id badge is painted in
+    /// the titlebar so the panel can be matched against rebind/resume lists.
+    pub session_id: Option<&'a str>,
     /// Speech mic control; `None` when speech input is not enabled.
     pub mic: Option<MicControl>,
 }
@@ -181,17 +184,19 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    // Measured once per frame: drives the session badge's overlap guard
+    // and the attention paint, so the two can never diverge.
+    let attention_geom = attention_badge_geometry(&painter, &chrome);
+
     if let Some(title) = chrome.title {
-        let title_x = if let Some(color) = chrome.workspace_accent {
+        if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
                 Pos2::new(chrome.titlebar_rect.min.x + 14.0, chrome.titlebar_rect.center().y),
                 if chrome.focused { 5.0 } else { 4.5 },
                 theme::alpha(color, if chrome.focused { 240 } else { 180 }),
             );
-            chrome.titlebar_rect.min.x + 26.0
-        } else {
-            chrome.titlebar_rect.min.x + 12.0
-        };
+        }
+        let title_x = title_start_x(&chrome);
         let title_right = title_right_boundary(&chrome);
         let max_width = (title_right - title_x).max(0.0);
         paint_truncated_title(
@@ -204,14 +209,25 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
-    if let Some((severity, summary)) = chrome.attention_badge {
-        paint_attention_badge(
+    if let Some(session_id) = chrome.session_id
+        && let Some(badge_rect) = session_badge_rect(&chrome)
+        // A long notification summary measures wider than the fixed titlebar
+        // reserve; the attention badge would paint over the session pill.
+        && attention_geom.as_ref().is_none_or(|(rect, ..)| {
+            session_badge_clears_attention_badge(badge_rect, rect.min.x)
+        })
+    {
+        paint_session_badge(
             &painter,
-            chrome.titlebar_rect,
-            chrome.controls_anchor(),
-            *severity,
-            summary,
+            badge_rect,
+            accent,
+            short_session_id(session_id),
+            chrome.focused,
         );
+    }
+
+    if let Some(geometry) = &attention_geom {
+        paint_attention_badge(&painter, geometry);
     }
     if let Some(status) = chrome.ssh_status {
         paint_ssh_status_badge(
@@ -349,14 +365,55 @@ fn paint_close_and_resize_controls(painter: &egui::Painter, close_rect: Rect, re
 
 /// Compute the right x boundary where the title text must stop, accounting
 /// for all badges (history meter, SSH status, attention) that sit to its
-/// right, plus the working indicator when the agent is busy.
+/// right, the working slot, and the session badge when one is shown.
 fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
-    let badges_left = badges_left_boundary(chrome);
-    if chrome.agent_status == AgentStatus::Working {
-        badges_left - working_indicator_reserve()
+    let right = if chrome.agent_status == AgentStatus::Working {
+        badges_left_boundary(chrome) - working_indicator_reserve()
     } else {
-        badges_left
+        badges_left_boundary(chrome)
+    };
+    match session_badge_rect(chrome) {
+        Some(badge) => badge.min.x.min(right),
+        None => right,
     }
+}
+
+/// Fixed-width pill showing the short session id, positioned left of the
+/// (always reserved) working slot so it does not shift when the agent starts
+/// working.
+const SESSION_BADGE_WIDTH: f32 = 64.0;
+const SESSION_BADGE_HEIGHT: f32 = 18.0;
+const SESSION_BADGE_TITLE_GAP: f32 = 8.0;
+/// Minimum title text space kept to the left of the badge, measured from the
+/// title's start (behind the workspace accent dot when one is painted);
+/// panels that cannot spare it hide the badge instead of covering the dot.
+const SESSION_BADGE_MIN_TITLE_SPACE: f32 = 12.0;
+
+/// X position where the title text begins — behind the workspace accent dot
+/// when one is painted.
+fn title_start_x(chrome: &PanelChrome<'_>) -> f32 {
+    if chrome.workspace_accent.is_some() {
+        chrome.titlebar_rect.min.x + 26.0
+    } else {
+        chrome.titlebar_rect.min.x + 12.0
+    }
+}
+
+fn session_badge_left(chrome: &PanelChrome<'_>) -> f32 {
+    badges_left_boundary(chrome) - working_indicator_reserve() - SESSION_BADGE_TITLE_GAP - SESSION_BADGE_WIDTH
+}
+
+fn session_badge_rect(chrome: &PanelChrome<'_>) -> Option<Rect> {
+    let fits = chrome.session_id.is_some()
+        && session_badge_left(chrome) >= title_start_x(chrome) + SESSION_BADGE_MIN_TITLE_SPACE;
+    fits.then(|| {
+        let left = session_badge_left(chrome);
+        let center_y = chrome.titlebar_rect.center().y;
+        Rect::from_min_max(
+            Pos2::new(left, center_y - SESSION_BADGE_HEIGHT * 0.5),
+            Pos2::new(left + SESSION_BADGE_WIDTH, center_y + SESSION_BADGE_HEIGHT * 0.5),
+        )
+    })
 }
 
 /// Left edge of the titlebar's right-side badge cluster (history meter,
@@ -463,6 +520,36 @@ fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y:
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
 }
 
+/// Painter-drawn pill showing the short session id of the agent bound to the
+/// panel, styled after the history meter badge.
+#[profiling::function]
+fn paint_session_badge(painter: &egui::Painter, badge_rect: Rect, accent: Color32, session_id: &str, focused: bool) {
+    painter.rect_filled(
+        badge_rect,
+        CornerRadius::same(4),
+        theme::alpha(
+            theme::blend(theme::BG_ELEVATED(), accent, 0.10),
+            if focused { 200 } else { 160 },
+        ),
+    );
+    painter.rect_stroke(
+        badge_rect,
+        CornerRadius::same(4),
+        Stroke::new(
+            1.0_f32,
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), accent, 0.34), 150),
+        ),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        badge_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        session_id,
+        egui::FontId::monospace(10.5),
+        if focused { theme::FG_SOFT() } else { theme::FG_DIM() },
+    );
+}
+
 fn panel_chrome_accent(kind: PanelKind, workspace_accent: Option<Color32>, focused: bool) -> Color32 {
     if kind == PanelKind::Ssh {
         return theme::alpha(Color32::from_rgb(250, 179, 135), if focused { 220 } else { 170 });
@@ -538,15 +625,14 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
 }
 
 #[profiling::function]
-fn paint_attention_badge(
+fn attention_badge_geometry(
     painter: &egui::Painter,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    severity: AttentionSeverity,
-    summary: &str,
-) {
-    let color = attention_severity_color(severity);
-    let icon = attention_severity_icon(severity);
+    chrome: &PanelChrome<'_>,
+) -> Option<(Rect, String, egui::FontId, Color32)> {
+    let (severity, summary) = chrome.attention_badge?;
+    let summary: &str = summary;
+    let color = attention_severity_color(*severity);
+    let icon = attention_severity_icon(*severity);
 
     // Truncate the summary for display.
     let display_text = if summary.len() > 30 {
@@ -560,29 +646,41 @@ fn paint_attention_badge(
     let font = egui::FontId::proportional(10.0);
 
     // Position the badge left of the history meter area.
-    let history_badge = panel_history_badge_rect(titlebar_rect, close_rect);
+    let history_badge = panel_history_badge_rect(chrome.titlebar_rect, chrome.controls_anchor());
     let badge_right = history_badge.min.x - 6.0;
     let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
     let text_width = text_galley.size().x;
     let badge_width = text_width + 12.0;
     let badge_height: f32 = 18.0;
-    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
-    let badge_rect = Rect::from_min_size(
-        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
+    let badge_left = (badge_right - badge_width).max(chrome.titlebar_rect.min.x + 60.0);
+    let rect = Rect::from_min_size(
+        Pos2::new(badge_left, chrome.titlebar_rect.center().y - badge_height * 0.5),
         Vec2::new(badge_right - badge_left, badge_height),
     );
+    Some((rect, badge_text, font, color))
+}
+
+/// The session badge is hidden when the painted attention badge would cover
+/// it — long summaries measure wider than the fixed titlebar reserve.
+fn session_badge_clears_attention_badge(session_badge: Rect, attention_left: f32) -> bool {
+    session_badge.max.x <= attention_left
+}
+
+#[profiling::function]
+fn paint_attention_badge(painter: &egui::Painter, geometry: &(Rect, String, egui::FontId, Color32)) {
+    let (rect, badge_text, font, color) = geometry;
 
     painter.rect_filled(
-        badge_rect,
+        *rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
     );
     painter.text(
-        Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
+        Pos2::new(rect.min.x + 6.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        badge_text,
-        font,
-        color,
+        badge_text.clone(),
+        font.clone(),
+        *color,
     );
 }
 
@@ -666,18 +764,21 @@ fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
     )
 }
 
-pub(super) fn panel_title_content_rect(titlebar_rect: Rect, close_rect: Rect, has_workspace_accent: bool) -> Rect {
-    let left = if has_workspace_accent {
-        titlebar_rect.min.x + 26.0
-    } else {
-        titlebar_rect.min.x + 12.0
-    };
-    let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
-    let right = (badge_rect.min.x - 12.0).max(left + 1.0);
+pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>) -> Rect {
+    let titlebar = chrome.titlebar_rect;
+    let left = title_start_x(chrome);
+    // Same right-side boundary as the painted title: the badge cluster (history
+    // meter, SSH, attention, mic) narrowed to the session badge's left edge
+    // when the badge is painted.
+    let mut right = badges_left_boundary(chrome);
+    if let Some(badge) = session_badge_rect(chrome) {
+        right = badge.min.x;
+    }
+    let right = right.max(left + 1.0);
 
     Rect::from_min_max(
-        Pos2::new(left, titlebar_rect.min.y + 2.0),
-        Pos2::new(right, titlebar_rect.max.y - 2.0),
+        Pos2::new(left, titlebar.min.y + 2.0),
+        Pos2::new(right, titlebar.max.y - 2.0),
     )
 }
 
@@ -721,9 +822,10 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        AgentStatus, PanelChrome, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill,
-        panel_title_color, panel_titlebar_fill, title_focus_indicator_rect, title_right_boundary,
-        working_indicator_reserve,
+        AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
+        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_clears_attention_badge, session_badge_rect,
+        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -752,8 +854,35 @@ mod tests {
             workspace_accent: Some(Color32::from_rgb(137, 180, 250)),
             attention_badge: None,
             ssh_status: None,
+            session_id: None,
             mic: None,
         }
+    }
+
+    fn test_chrome_with_session(agent_status: AgentStatus, session_id: Option<&'static str>) -> PanelChrome<'static> {
+        let mut chrome = test_chrome(agent_status);
+        chrome.session_id = session_id;
+        chrome
+    }
+
+    /// Panel at a given titlebar width with the session badge and, optionally,
+    /// an attention badge — 320 px is the supported minimum panel width.
+    fn chrome_at_width_with_session(
+        agent_status: AgentStatus,
+        titlebar_width: f32,
+        with_attention: bool,
+    ) -> PanelChrome<'static> {
+        let mut chrome = test_chrome_with_session(agent_status, Some("session-42"));
+        let right = 10.0 + titlebar_width;
+        chrome.panel_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 400.0));
+        chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 54.0));
+        chrome.close_rect = Rect::from_center_size(Pos2::new(right - 18.0, 37.0), egui::Vec2::splat(16.0));
+        if with_attention {
+            static ATTENTION: std::sync::OnceLock<(super::AttentionSeverity, String)> = std::sync::OnceLock::new();
+            chrome.attention_badge =
+                Some(ATTENTION.get_or_init(|| (super::AttentionSeverity::Low, "Waiting for input".to_string())));
+        }
+        chrome
     }
 
     #[test]
@@ -767,6 +896,121 @@ mod tests {
             badges_left_boundary(&working) - working_indicator_reserve()
         ));
         assert!(title_right_boundary(&working) < title_right_boundary(&idle));
+    }
+
+    #[test]
+    fn session_badge_reserves_titlebar_space_left_of_working_slot() {
+        let plain = test_chrome(AgentStatus::Idle);
+        let idle = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        let working = test_chrome_with_session(AgentStatus::Working, Some("session-42"));
+
+        let expected =
+            badges_left_boundary(&idle) - working_indicator_reserve() - SESSION_BADGE_TITLE_GAP - SESSION_BADGE_WIDTH;
+        assert!(approx_eq(title_right_boundary(&idle), expected));
+        assert!(approx_eq(title_right_boundary(&working), expected));
+        assert!(title_right_boundary(&idle) < title_right_boundary(&plain));
+    }
+
+    #[test]
+    fn session_badge_rect_sits_left_of_working_slot_and_stays_stable() {
+        let idle = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        let working = test_chrome_with_session(AgentStatus::Working, Some("session-42"));
+        let Some(idle_badge) = session_badge_rect(&idle) else {
+            panic!("expected session badge rect");
+        };
+        let Some(working_badge) = session_badge_rect(&working) else {
+            panic!("expected session badge rect while working");
+        };
+
+        assert!(
+            idle_badge == working_badge,
+            "badge must not shift while the agent works"
+        );
+        let badges_left = badges_left_boundary(&idle);
+        let working_left = badges_left - WORKING_BADGE_GAP - working_indicator_width();
+        assert!(
+            idle_badge.max.x < working_left,
+            "badge must sit left of the working slot"
+        );
+        assert!(approx_eq(idle_badge.width(), SESSION_BADGE_WIDTH));
+        assert!(idle.titlebar_rect.contains(idle_badge.center()));
+        assert!(session_badge_rect(&test_chrome(AgentStatus::Idle)).is_none());
+    }
+
+    #[test]
+    fn session_badge_hides_when_titlebar_is_too_narrow() {
+        let idle = chrome_at_width_with_session(AgentStatus::Idle, 320.0, true);
+        let working = chrome_at_width_with_session(AgentStatus::Working, 320.0, true);
+
+        assert!(session_badge_rect(&idle).is_none());
+        // Without the badge, the title falls back to the working-slot math.
+        assert!(approx_eq(title_right_boundary(&idle), badges_left_boundary(&idle)));
+        assert!(approx_eq(
+            title_right_boundary(&working),
+            badges_left_boundary(&working) - working_indicator_reserve()
+        ));
+    }
+
+    #[test]
+    fn session_badge_shows_on_wide_titlebars_but_hides_on_narrow_ones() {
+        let wide = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        let Some(wide_badge) = session_badge_rect(&wide) else {
+            panic!("expected badge on wide titlebar");
+        };
+
+        assert!(wide_badge.min.x >= wide.titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE);
+        assert!(session_badge_rect(&chrome_at_width_with_session(AgentStatus::Idle, 320.0, true)).is_none());
+        // Without the attention badge the 320 px titlebar still fits the badge.
+        assert!(session_badge_rect(&chrome_at_width_with_session(AgentStatus::Idle, 320.0, false)).is_some());
+    }
+
+    #[test]
+    fn session_badge_protects_the_accent_dot_at_intermediate_widths() {
+        // 372 px titlebar with history meter and a short attention badge:
+        // the badge slot lands 12 px from the panel edge, where the focused
+        // accent dot (centered at 14, radius 5) still extends to 19 px.
+        let overlapping = chrome_at_width_with_session(AgentStatus::Idle, 372.0, true);
+        assert!(session_badge_rect(&overlapping).is_none());
+
+        // Same width without attention: the badge fits with real title room.
+        let without_attention = chrome_at_width_with_session(AgentStatus::Idle, 372.0, false);
+        let rect = session_badge_rect(&without_attention).expect("badge fits at 372 px");
+        assert!(rect.min.x >= without_attention.titlebar_rect.min.x + 26.0 + SESSION_BADGE_MIN_TITLE_SPACE);
+    }
+
+    #[test]
+    fn rename_editor_stops_at_painted_badge_or_full_width_when_hidden() {
+        // Wide titlebar: the badge fits and the editor stops at its left edge.
+        let wide = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        let badge = session_badge_rect(&wide).expect("badge on wide titlebar");
+        let editor_wide = panel_title_content_rect(&wide);
+        assert!(approx_eq(editor_wide.right(), badge.min.x));
+
+        // Narrow titlebar with attention: the badge is hidden and the editor
+        // keeps the full titlebar width (down to the badge cluster).
+        let narrow = chrome_at_width_with_session(AgentStatus::Idle, 320.0, true);
+        assert!(session_badge_rect(&narrow).is_none());
+        let editor_narrow = panel_title_content_rect(&narrow);
+        assert!(approx_eq(editor_narrow.right(), badges_left_boundary(&narrow)));
+
+        // Without a session at all the editor always keeps the full width.
+        let plain = test_chrome(AgentStatus::Idle);
+        let editor_plain = panel_title_content_rect(&plain);
+        assert!(approx_eq(editor_plain.right(), badges_left_boundary(&plain)));
+    }
+
+    #[test]
+    fn session_badge_skipped_when_attention_badge_would_cover_it() {
+        let session = Rect::from_min_max(Pos2::new(100.0, 30.0), Pos2::new(164.0, 48.0));
+
+        // No attention badge: always shown.
+        assert!(session_badge_clears_attention_badge(session, f32::INFINITY));
+        // Attention starts right of the session badge: shown.
+        assert!(session_badge_clears_attention_badge(session, 164.0));
+        assert!(session_badge_clears_attention_badge(session, 200.0));
+        // Wide attention summary extends over the session badge: hidden.
+        assert!(!session_badge_clears_attention_badge(session, 150.0));
+        assert!(!session_badge_clears_attention_badge(session, 90.0));
     }
 
     #[test]
