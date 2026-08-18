@@ -109,10 +109,10 @@ mod status_semantics {
     use super::*;
 
     #[test]
-    fn replaced_and_done_satisfy_dependency_edges() {
+    fn only_done_satisfies_dependency_edges_without_plan_context() {
         assert!(TaskStatus::Done.satisfies_deps());
         assert!(
-            TaskStatus::Replaced {
+            !TaskStatus::Replaced {
                 by: TaskId::new("T2").expect("valid")
             }
             .satisfies_deps()
@@ -120,6 +120,27 @@ mod status_semantics {
         assert!(!TaskStatus::Failed.satisfies_deps());
         assert!(!TaskStatus::Queued.satisfies_deps());
         assert!(!TaskStatus::Running.satisfies_deps());
+    }
+
+    #[test]
+    fn dependency_satisfaction_follows_replacement_chain() {
+        let mut t1 = task("T1", &[]);
+        t1.status = TaskStatus::Replaced {
+            by: TaskId::new("T1b").expect("valid"),
+        };
+        let mut t1b = task("T1b", &[]);
+        t1b.status = TaskStatus::Queued;
+        let mut p = plan(vec![t1, t1b]);
+        assert!(
+            !p.dependency_satisfied(&TaskId::new("T1").expect("valid"))
+                .expect("resolves")
+        );
+
+        p.tasks[1].status = TaskStatus::Done;
+        assert!(
+            p.dependency_satisfied(&TaskId::new("T1").expect("valid"))
+                .expect("resolves")
+        );
     }
 
     #[test]

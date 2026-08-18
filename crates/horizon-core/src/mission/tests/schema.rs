@@ -1,4 +1,4 @@
-use crate::mission::{TaskSize, ThinkingLevel};
+use crate::mission::{TaskId, TaskSize, ThinkingLevel};
 
 #[test]
 fn thinking_level_serde_is_lowercase() {
@@ -71,4 +71,11 @@ fn plan_file_shape_round_trips_verbatim_fields() {
     let back: crate::mission::MissionPlan = serde_json::from_str(&raw).expect("serde");
     assert_eq!(back.version, 2);
     assert_eq!(back.tasks.len(), 1);
+}
+
+#[test]
+fn task_id_deserialize_enforces_format() {
+    let parsed: TaskId = serde_json::from_str("\"T1\"").expect("valid id");
+    assert_eq!(parsed.as_str(), "T1");
+    assert!(serde_json::from_str::<TaskId>("\"1bad\"").is_err());
 }

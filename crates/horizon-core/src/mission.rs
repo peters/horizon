@@ -9,7 +9,7 @@
 use std::fmt;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Result;
 
@@ -22,7 +22,7 @@ pub const MAX_MISSION_TASKS: usize = 32;
 /// Minimum plan revision. Refines bump it monotonically.
 pub const FIRST_PLAN_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct TaskId(String);
 
@@ -41,6 +41,16 @@ impl TaskId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::new(raw).map_err(serde::de::Error::custom)
     }
 }
 
@@ -179,10 +189,14 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    /// Terminal statuses that satisfy dependency edges.
+    /// Statuses that satisfy dependency edges without replacement indirection.
+    ///
+    /// Replaced tasks require plan-level resolution via
+    /// [`MissionPlan::dependency_satisfied`], because the replacement task may
+    /// still be queued or running.
     #[must_use]
-    pub fn satisfies_deps(self) -> bool {
-        matches!(self, Self::Done | Self::Replaced { .. })
+    pub fn satisfies_deps(&self) -> bool {
+        matches!(self, Self::Done)
     }
 
     /// Terminal statuses that count toward mission completion.
@@ -301,7 +315,38 @@ impl MissionPlan {
             }
         }
 
+        ensure_replacement_acyclic(&self.tasks)?;
         ensure_acyclic(&self.tasks)
+    }
+
+    /// Resolve a dependency through replacement chains and report whether the
+    /// effective task has completed.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the dependency references an unknown task id or the plan has
+    /// a replacement cycle.
+    pub fn dependency_satisfied(&self, dep: &TaskId) -> Result<bool> {
+        let index: std::collections::HashMap<&TaskId, usize> =
+            self.tasks.iter().enumerate().map(|(i, task)| (&task.id, i)).collect();
+        let mut current = dep;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            if !seen.insert(current.clone()) {
+                return Err(crate::Error::Mission(format!(
+                    "replacement cycle involving `{current}`"
+                )));
+            }
+            let Some(&task_idx) = index.get(current) else {
+                return Err(crate::Error::Mission(format!(
+                    "dependency references unknown task `{current}`"
+                )));
+            };
+            match &self.tasks[task_idx].status {
+                TaskStatus::Replaced { by } => current = by,
+                status => return Ok(status.satisfies_deps()),
+            }
+        }
     }
 }
 
@@ -368,6 +413,28 @@ fn ensure_acyclic(tasks: &[PlanTask]) -> Result<()> {
     for start in 0..tasks.len() {
         if color[start] == 0 {
             dfs_acyclic(start, tasks, &index, &mut color)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_replacement_acyclic(tasks: &[PlanTask]) -> Result<()> {
+    let index: std::collections::HashMap<&TaskId, usize> =
+        tasks.iter().enumerate().map(|(i, task)| (&task.id, i)).collect();
+    for start in 0..tasks.len() {
+        let mut current = start;
+        let mut seen = std::collections::HashSet::new();
+        while let TaskStatus::Replaced { by } = &tasks[current].status {
+            if !seen.insert(current) {
+                return Err(crate::Error::Mission(format!(
+                    "replacement cycle involving `{}`",
+                    tasks[current].id
+                )));
+            }
+            let Some(&next) = index.get(by) else {
+                break;
+            };
+            current = next;
         }
     }
     Ok(())

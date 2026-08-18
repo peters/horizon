@@ -118,6 +118,20 @@ fn replaced_by_existing_task_passes() {
 }
 
 #[test]
+fn replacement_cycles_are_rejected() {
+    let mut t1 = task("T1", &[]);
+    t1.status = TaskStatus::Replaced {
+        by: TaskId::new("T2").expect("valid"),
+    };
+    let mut t2 = task("T2", &[]);
+    t2.status = TaskStatus::Replaced {
+        by: TaskId::new("T1").expect("valid"),
+    };
+    let err = plan(vec![t1, t2]).validate().expect_err("replacement cycle");
+    assert!(err.to_string().contains("replacement cycle"), "{err}");
+}
+
+#[test]
 fn version_below_first_is_rejected() {
     let mut p = plan(vec![task("T1", &[])]);
     p.version = 0;
