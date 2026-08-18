@@ -371,13 +371,10 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
     } else {
         badges_left_boundary(chrome)
     };
-    if chrome.session_id.is_none() {
-        return right;
+    match session_badge_rect(chrome) {
+        Some(badge) => badge.min.x.min(right),
+        None => right,
     }
-    // The session badge occupies a fixed slot left of the working slot, so
-    // the title stops there in both the idle and working states.
-    let badge_left = session_badge_left(chrome);
-    badge_left.min(right)
 }
 
 /// Fixed-width pill showing the short session id, positioned left of the
@@ -386,13 +383,18 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
 const SESSION_BADGE_WIDTH: f32 = 64.0;
 const SESSION_BADGE_HEIGHT: f32 = 18.0;
 const SESSION_BADGE_TITLE_GAP: f32 = 8.0;
+/// The badge needs at least this much titlebar space left of itself; on
+/// narrower panels it is hidden instead of clipping outside the panel.
+const SESSION_BADGE_MIN_TITLE_SPACE: f32 = 12.0;
 
 fn session_badge_left(chrome: &PanelChrome<'_>) -> f32 {
     badges_left_boundary(chrome) - working_indicator_reserve() - SESSION_BADGE_TITLE_GAP - SESSION_BADGE_WIDTH
 }
 
 fn session_badge_rect(chrome: &PanelChrome<'_>) -> Option<Rect> {
-    chrome.session_id.map(|_| {
+    let fits = chrome.session_id.is_some()
+        && session_badge_left(chrome) >= chrome.titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE;
+    fits.then(|| {
         let left = session_badge_left(chrome);
         let center_y = chrome.titlebar_rect.center().y;
         Rect::from_min_max(
@@ -753,7 +755,10 @@ pub(super) fn panel_title_content_rect(
     let badge_rect = panel_history_badge_rect(titlebar_rect, close_rect);
     let mut right = badge_rect.min.x - 12.0;
     if has_session_badge {
-        right -= working_indicator_reserve() + SESSION_BADGE_TITLE_GAP + SESSION_BADGE_WIDTH;
+        let badge_left = right - working_indicator_reserve() - SESSION_BADGE_TITLE_GAP - SESSION_BADGE_WIDTH;
+        if badge_left >= titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE {
+            right = badge_left;
+        }
     }
     let right = right.max(left + 1.0);
 
@@ -803,10 +808,10 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        AgentStatus, PanelChrome, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH, WORKING_BADGE_GAP,
-        badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_titlebar_fill, session_badge_rect, title_focus_indicator_rect, title_right_boundary,
-        working_indicator_reserve, working_indicator_width,
+        AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
+        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, title_focus_indicator_rect,
+        title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -843,6 +848,21 @@ mod tests {
     fn test_chrome_with_session(agent_status: AgentStatus, session_id: Option<&'static str>) -> PanelChrome<'static> {
         let mut chrome = test_chrome(agent_status);
         chrome.session_id = session_id;
+        chrome
+    }
+
+    /// 320 px panel (the supported minimum) with the titlebar, close button,
+    /// and optionally an attention badge — the narrowest realistic titlebar.
+    fn narrow_chrome_with_session(agent_status: AgentStatus, with_attention: bool) -> PanelChrome<'static> {
+        let mut chrome = test_chrome_with_session(agent_status, Some("session-42"));
+        chrome.panel_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(330.0, 400.0));
+        chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(330.0, 54.0));
+        chrome.close_rect = Rect::from_center_size(Pos2::new(312.0, 37.0), egui::Vec2::splat(16.0));
+        if with_attention {
+            static ATTENTION: std::sync::OnceLock<(super::AttentionSeverity, String)> = std::sync::OnceLock::new();
+            chrome.attention_badge =
+                Some(ATTENTION.get_or_init(|| (super::AttentionSeverity::Low, "Waiting for input".to_string())));
+        }
         chrome
     }
 
@@ -896,6 +916,50 @@ mod tests {
         assert!(approx_eq(idle_badge.width(), SESSION_BADGE_WIDTH));
         assert!(idle.titlebar_rect.contains(idle_badge.center()));
         assert!(session_badge_rect(&test_chrome(AgentStatus::Idle)).is_none());
+    }
+
+    #[test]
+    fn session_badge_hides_when_titlebar_is_too_narrow() {
+        let idle = narrow_chrome_with_session(AgentStatus::Idle, true);
+        let working = narrow_chrome_with_session(AgentStatus::Working, true);
+
+        assert!(session_badge_rect(&idle).is_none());
+        // Without the badge, the title falls back to the working-slot math.
+        assert!(approx_eq(title_right_boundary(&idle), badges_left_boundary(&idle)));
+        assert!(approx_eq(
+            title_right_boundary(&working),
+            badges_left_boundary(&working) - working_indicator_reserve()
+        ));
+    }
+
+    #[test]
+    fn session_badge_shows_on_wide_titlebars_but_hides_on_narrow_ones() {
+        let wide = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        let Some(wide_badge) = session_badge_rect(&wide) else {
+            panic!("expected badge on wide titlebar");
+        };
+
+        assert!(wide_badge.min.x >= wide.titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE);
+        assert!(session_badge_rect(&narrow_chrome_with_session(AgentStatus::Idle, true)).is_none());
+        // Without the attention badge the 320 px titlebar still fits the badge.
+        assert!(session_badge_rect(&narrow_chrome_with_session(AgentStatus::Idle, false)).is_some());
+    }
+
+    #[test]
+    fn rename_editor_keeps_full_width_when_session_badge_cannot_fit() {
+        let titlebar = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(250.0, 54.0));
+        let close_rect = Rect::from_center_size(Pos2::new(232.0, 37.0), egui::Vec2::splat(16.0));
+
+        let without = panel_title_content_rect(titlebar, close_rect, false, false);
+        let hidden = panel_title_content_rect(titlebar, close_rect, false, true);
+        assert!(approx_eq(without.right(), hidden.right()));
+
+        // On a wide titlebar the badge fits and the editor stops left of it.
+        let wide_titlebar = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(600.0, 54.0));
+        let wide_close = Rect::from_center_size(Pos2::new(582.0, 37.0), egui::Vec2::splat(16.0));
+        let without_wide = panel_title_content_rect(wide_titlebar, wide_close, false, false);
+        let with_wide = panel_title_content_rect(wide_titlebar, wide_close, false, true);
+        assert!(with_wide.right() < without_wide.right());
     }
 
     #[test]

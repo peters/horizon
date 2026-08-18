@@ -321,8 +321,13 @@ impl Panel {
 
     /// The agent session this panel is currently bound to, if any — either
     /// the captured session binding or an explicit `resume: session` setting.
+    /// Kinds without exact session binding (`Shell`, `Gemini`, `KiloCode`, …)
+    /// never report one, even when a `resume: session` is configured.
     #[must_use]
     pub fn session_id(&self) -> Option<&str> {
+        if !self.kind.supports_session_binding() {
+            return None;
+        }
         self.session_binding
             .as_ref()
             .map(|binding| binding.session_id.as_str())
@@ -722,6 +727,27 @@ mod tests {
     #[test]
     fn session_id_is_none_without_binding_or_resume() {
         let panel = test_panel("Shell", "", false);
+
+        assert_eq!(panel.session_id(), None);
+    }
+
+    #[test]
+    fn session_id_is_none_for_kinds_without_exact_binding() {
+        for kind in [PanelKind::Shell, PanelKind::Gemini, PanelKind::KiloCode] {
+            let mut panel = test_panel("Agent", "", false);
+            panel.kind = kind;
+            panel.resume = PanelResume::Session {
+                session_id: "resume-1".to_string(),
+            };
+
+            assert_eq!(panel.session_id(), None, "kind {kind:?} must not report a session id");
+        }
+    }
+
+    #[test]
+    fn session_id_is_none_without_binding_or_resume_on_binding_kind() {
+        let mut panel = test_panel("Pi", "", false);
+        panel.kind = PanelKind::Pi;
 
         assert_eq!(panel.session_id(), None);
     }
