@@ -21,11 +21,7 @@ impl HorizonApp {
                 }
                 self.board.focus(panel_id);
                 scroll_to_search_match(&mut self.board, panel_id, line_index, total_lines);
-                if let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
-                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
-                {
-                    self.focus_workspace_bounds(ui.ctx(), min, max, true);
-                }
+                self.reveal_panel_visible(ui.ctx(), panel_id);
             }
         }
     }

@@ -59,8 +59,8 @@ pub(super) fn render_scoped_minimap(
     } else if inner.clicked() {
         match hovered {
             Some(MinimapHitTarget::Panel { panel_id, .. }) => match scope {
-                MinimapScope::Attached => app.focus_panel_visible(ctx, panel_id, false),
-                MinimapScope::Workspace(_) => app.focus_panel_in_rect(panel_id, canvas_rect),
+                MinimapScope::Attached => app.reveal_panel_visible(ctx, panel_id),
+                MinimapScope::Workspace(_) => app.reveal_panel_in_rect(panel_id, canvas_rect),
             },
             Some(MinimapHitTarget::Workspace(workspace_id)) if scope == MinimapScope::Attached => {
                 let _ = app.focus_workspace_visible(ctx, workspace_id, false);

@@ -209,21 +209,22 @@ impl HorizonApp {
         true
     }
 
-    pub(super) fn focus_panel_visible(&mut self, ctx: &Context, panel_id: PanelId, left_align: bool) {
-        self.board.focus(panel_id);
-        if let Some((pos, size)) = self.panel_focus_frame(panel_id) {
-            self.pan_to_canvas_pos_aligned(ctx, pos, size, left_align);
-        }
+    /// Focus a panel and move the view so the panel is visible: zoom out just
+    /// enough for it to fit (never zoom in), or bottom-align it when it stays
+    /// larger than the viewport even at the minimum zoom.
+    pub(super) fn reveal_panel_visible(&mut self, ctx: &Context, panel_id: PanelId) {
+        self.reveal_panel_in_rect(panel_id, self.canvas_rect(ctx));
     }
 
-    pub(super) fn focus_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
+    pub(super) fn reveal_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
         let Some((pos, size)) = self.panel_focus_frame(panel_id) else {
             return;
         };
 
-        let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, false);
+        let (zoom, pan_offset) = reveal_view_state(canvas_rect, pos, size, self.canvas_view.zoom);
         self.board.focus(panel_id);
         self.pan_target = None;
+        self.canvas_view.set_zoom(zoom);
         self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
         self.mark_runtime_dirty();
     }
@@ -344,6 +345,36 @@ fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
     )
 }
 
+/// Inset (px) kept between the revealed panel and the viewport edge.
+const REVEAL_MARGIN: f32 = 40.0;
+
+/// View state that keeps a canvas frame visible: the current zoom is kept while
+/// the frame already fits, otherwise the view zooms out just enough for the
+/// frame to fit (never zooming in).
+fn reveal_view_state(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, current_zoom: f32) -> (f32, Vec2) {
+    let zoom = current_zoom.min(fit_zoom_for_frame(
+        canvas_rect.size(),
+        canvas_size,
+        Vec2::splat(REVEAL_MARGIN),
+    ));
+    (zoom, reveal_pan_offset(canvas_rect, canvas_pos, canvas_size, zoom))
+}
+
+fn reveal_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32) -> Vec2 {
+    let frame_screen_size = canvas_size * zoom;
+    // When the frame is taller than the viewport (oversized panel at the
+    // minimum zoom) it is bottom-aligned so the panel's bottom edge — where a
+    // terminal's active prompt lives — stays visible. It is always centered
+    // horizontally, which keeps the middle visible for overly wide panels.
+    let x = canvas_rect.width() * 0.5 - (canvas_pos.x + canvas_size.x * 0.5) * zoom;
+    let y = if frame_screen_size.y + REVEAL_MARGIN * 2.0 <= canvas_rect.height() {
+        canvas_rect.height() * 0.5 - (canvas_pos.y + canvas_size.y * 0.5) * zoom
+    } else {
+        canvas_rect.height() - REVEAL_MARGIN - (canvas_pos.y + canvas_size.y) * zoom
+    };
+    Vec2::new(x, y)
+}
+
 fn fit_zoom_for_frame(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 {
     if frame_size.x <= f32::EPSILON || frame_size.y <= f32::EPSILON {
         return horizon_core::DEFAULT_CANVAS_ZOOM;
@@ -385,7 +416,7 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
-    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame};
+    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame, reveal_view_state};
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -445,5 +476,46 @@ mod tests {
 
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn reveal_view_state_keeps_zoom_and_centers_fitting_frame() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(500.0, 300.0), Vec2::new(400.0, 300.0), 1.0);
+
+        assert!((zoom - 1.0).abs() <= f32::EPSILON);
+        assert!((pan.x + 100.0).abs() < 0.001);
+        assert!((pan.y + 50.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn reveal_view_state_zooms_out_just_enough_for_oversized_frame() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        // Available (1200-80) x (800-80) vs frame 1600x1200 -> min(0.7, 0.6).
+        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(0.0, 0.0), Vec2::new(1600.0, 1200.0), 1.0);
+
+        assert!((zoom - 0.6).abs() < 0.001);
+        assert!((pan.x - 120.0).abs() < 0.001);
+        assert!((pan.y - 40.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn reveal_view_state_never_zooms_in() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let (zoom, _) = reveal_view_state(canvas, Pos2::new(0.0, 0.0), Vec2::new(100.0, 80.0), 1.5);
+
+        assert!((zoom - 1.5).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn reveal_view_state_bottom_aligns_frame_taller_than_viewport() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        // 4000x4000 frame cannot fit even at the minimum zoom (0.25 -> 1000x1000).
+        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(100.0, 0.0), Vec2::new(4000.0, 4000.0), 1.0);
+
+        assert!((zoom - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
+        // x centered: 600 - (100 + 2000) * 0.25 ; y bottom-aligned: 800 - 40 - (0 + 4000) * 0.25
+        assert!((pan.x - 75.0).abs() < 0.001);
+        assert!((pan.y - (-240.0)).abs() < 0.001);
     }
 }
