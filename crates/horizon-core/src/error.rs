@@ -17,6 +17,9 @@ pub enum Error {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("Mission error: {0}")]
+    Mission(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

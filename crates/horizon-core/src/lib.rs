@@ -15,6 +15,7 @@ mod horizon_home;
 mod layout;
 mod local_store;
 mod managed_install;
+mod mission;
 mod opencode_paths;
 mod panel;
 mod remote_hosts;
@@ -53,6 +54,11 @@ pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, Fil
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use managed_install::ManagedInstall;
+pub use mission::{
+    FIRST_PLAN_VERSION, MAX_MISSION_TASKS, MISSION_PLAN_SCHEMA, MissionMeta, MissionPlan, MissionStatus, PlanTask,
+    PlannerKind, TaskId, TaskModel, TaskSize, TaskStatus, ThinkingLevel, load_mission_file, load_plan_file,
+    save_mission_file, save_plan_file,
+};
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
