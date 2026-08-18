@@ -60,14 +60,7 @@ impl HorizonApp {
             CommandId::SwitchWorkspace(workspace_id) => {
                 let _ = self.focus_workspace_visible(ctx, workspace_id, true);
             }
-            CommandId::FocusPanel(panel_id) => {
-                self.board.focus(panel_id);
-                if let Some(workspace_id) = self.board.panel(panel_id).map(|panel| panel.workspace_id)
-                    && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
-                {
-                    self.focus_workspace_bounds(ctx, min, max, true);
-                }
-            }
+            CommandId::FocusPanel(panel_id) => self.reveal_panel_visible(ctx, panel_id),
             CommandId::FocusActiveWorkspace => {
                 let _ = self.focus_active_workspace(ctx, false);
             }

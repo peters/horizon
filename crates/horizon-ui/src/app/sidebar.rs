@@ -652,10 +652,13 @@ impl HorizonApp {
             self.board.focus(panel_id);
         }
 
+        let pan_to_panel_workspace = actions
+            .pan_to_panel
+            .and_then(|panel_id| self.board.panel(panel_id).map(|panel| panel.workspace_id));
         let pan_workspace_id = if workspace_drop_target.is_some() {
             workspace_drop_target
-        } else if let Some(panel_id) = actions.pan_to_panel {
-            self.board.panel(panel_id).map(|panel| panel.workspace_id)
+        } else if pan_to_panel_workspace.is_some() {
+            pan_to_panel_workspace
         } else {
             actions.pan_to_workspace
         };
@@ -667,6 +670,10 @@ impl HorizonApp {
                 if let Some(panel_id) = actions.focus_panel {
                     self.board.focus(panel_id);
                 }
+            } else if let Some(panel_id) = actions.pan_to_panel {
+                // Attached canvas: reveal the clicked panel (zooming out when
+                // needed) instead of panning to the whole workspace bounds.
+                self.reveal_panel_visible(ctx, panel_id);
             } else if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
                 let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
                 let size = Vec2::new(
