@@ -572,53 +572,43 @@ impl HorizonApp {
                     panel.map(|p| p.display_title())
                 };
                 let session_id = panel.and_then(|p| p.session_id());
-                let has_session_badge = session_id.is_some();
 
-                paint_panel_chrome(
-                    ui,
-                    PanelChrome {
-                        panel_id,
-                        kind: snapshot.kind,
-                        agent_status: snapshot.agent_status,
-                        panel_rect: rects.panel,
-                        titlebar_rect: rects.titlebar,
-                        close_rect: rects.close,
-                        resize_rect: rects.resize,
-                        title: display_title.as_deref(),
-                        history_size: snapshot.history_size,
-                        scrollback_limit: snapshot.scrollback_limit,
-                        focused: snapshot.is_focused,
-                        close_hovered: close_response.hovered(),
-                        workspace_accent: snapshot.workspace_accent,
-                        attention_badge: snapshot.attention_badge.as_ref(),
-                        ssh_status: snapshot.ssh_status,
-                        session_id,
-                        mic: mic_response.as_ref().map(|mic| MicControl {
-                            rect: rects.mic,
-                            hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
-                            state: mic.state,
-                        }),
-                    },
-                );
-
-                // Release the shared board borrow before the mutable borrow below.
-                drop(display_title);
+                let chrome = PanelChrome {
+                    panel_id,
+                    kind: snapshot.kind,
+                    agent_status: snapshot.agent_status,
+                    panel_rect: rects.panel,
+                    titlebar_rect: rects.titlebar,
+                    close_rect: rects.close,
+                    resize_rect: rects.resize,
+                    title: display_title.as_deref(),
+                    history_size: snapshot.history_size,
+                    scrollback_limit: snapshot.scrollback_limit,
+                    focused: snapshot.is_focused,
+                    close_hovered: close_response.hovered(),
+                    workspace_accent: snapshot.workspace_accent,
+                    attention_badge: snapshot.attention_badge.as_ref(),
+                    ssh_status: snapshot.ssh_status,
+                    session_id,
+                    mic: mic_response.as_ref().map(|mic| MicControl {
+                        rect: rects.mic,
+                        hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
+                        state: mic.state,
+                    }),
+                };
+                paint_panel_chrome(ui, chrome);
 
                 if snapshot.is_renaming {
                     outcome.rename_action = show_inline_rename_editor(
                         ui,
-                        panel_title_content_rect(
-                            rects.titlebar,
-                            // The rename editor must stop left of the mic
-                            // control when one is shown.
-                            if mic_eligible { rects.mic } else { rects.close },
-                            snapshot.workspace_accent.is_some(),
-                            has_session_badge,
-                        ),
+                        panel_title_content_rect(&chrome),
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
                     );
                 }
+
+                // Release the shared board borrow before the mutable borrow below.
+                drop(display_title);
 
                 ui.scope_builder(
                     UiBuilder::new()
