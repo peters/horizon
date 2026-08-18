@@ -414,6 +414,15 @@ Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standar
 | [**alacritty_terminal**](https://github.com/alacritty/alacritty) | Battle-tested terminal emulation |
 | [**Catppuccin**](https://catppuccin.com) | Terminal palettes (Mocha dark / Latte light) on a warm editorial UI chrome |
 
+## Server (experimental)
+
+[**horizon-server**](https://github.com/peters/horizon-server) is a
+standalone POC that reuses the same terminal stack to stream PTY-backed
+panels to a browser (xterm.js) over WebSocket: workspaces, per-panel
+terminate/restart, per-panel stream on/off, and token-gated access over a
+tunnel. It is a separate crate and repository — not part of the Horizon
+build.
+
 ---
 
 ## Contributing
