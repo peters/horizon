@@ -189,16 +189,14 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
     let attention_geom = attention_badge_geometry(&painter, &chrome);
 
     if let Some(title) = chrome.title {
-        let title_x = if let Some(color) = chrome.workspace_accent {
+        if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
                 Pos2::new(chrome.titlebar_rect.min.x + 14.0, chrome.titlebar_rect.center().y),
                 if chrome.focused { 5.0 } else { 4.5 },
                 theme::alpha(color, if chrome.focused { 240 } else { 180 }),
             );
-            chrome.titlebar_rect.min.x + 26.0
-        } else {
-            chrome.titlebar_rect.min.x + 12.0
-        };
+        }
+        let title_x = title_start_x(&chrome);
         let title_right = title_right_boundary(&chrome);
         let max_width = (title_right - title_x).max(0.0);
         paint_truncated_title(
@@ -386,9 +384,20 @@ fn title_right_boundary(chrome: &PanelChrome<'_>) -> f32 {
 const SESSION_BADGE_WIDTH: f32 = 64.0;
 const SESSION_BADGE_HEIGHT: f32 = 18.0;
 const SESSION_BADGE_TITLE_GAP: f32 = 8.0;
-/// The badge needs at least this much titlebar space left of itself; on
-/// narrower panels it is hidden instead of clipping outside the panel.
+/// Minimum title text space kept to the left of the badge, measured from the
+/// title's start (behind the workspace accent dot when one is painted);
+/// panels that cannot spare it hide the badge instead of covering the dot.
 const SESSION_BADGE_MIN_TITLE_SPACE: f32 = 12.0;
+
+/// X position where the title text begins — behind the workspace accent dot
+/// when one is painted.
+fn title_start_x(chrome: &PanelChrome<'_>) -> f32 {
+    if chrome.workspace_accent.is_some() {
+        chrome.titlebar_rect.min.x + 26.0
+    } else {
+        chrome.titlebar_rect.min.x + 12.0
+    }
+}
 
 fn session_badge_left(chrome: &PanelChrome<'_>) -> f32 {
     badges_left_boundary(chrome) - working_indicator_reserve() - SESSION_BADGE_TITLE_GAP - SESSION_BADGE_WIDTH
@@ -396,7 +405,7 @@ fn session_badge_left(chrome: &PanelChrome<'_>) -> f32 {
 
 fn session_badge_rect(chrome: &PanelChrome<'_>) -> Option<Rect> {
     let fits = chrome.session_id.is_some()
-        && session_badge_left(chrome) >= chrome.titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE;
+        && session_badge_left(chrome) >= title_start_x(chrome) + SESSION_BADGE_MIN_TITLE_SPACE;
     fits.then(|| {
         let left = session_badge_left(chrome);
         let center_y = chrome.titlebar_rect.center().y;
@@ -757,11 +766,7 @@ fn panel_history_badge_rect(titlebar_rect: Rect, close_rect: Rect) -> Rect {
 
 pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>) -> Rect {
     let titlebar = chrome.titlebar_rect;
-    let left = if chrome.workspace_accent.is_some() {
-        titlebar.min.x + 26.0
-    } else {
-        titlebar.min.x + 12.0
-    };
+    let left = title_start_x(chrome);
     // Same right-side boundary as the painted title: the badge cluster (history
     // meter, SSH, attention, mic) narrowed to the session badge's left edge
     // when the badge is painted.
@@ -860,13 +865,18 @@ mod tests {
         chrome
     }
 
-    /// 320 px panel (the supported minimum) with the titlebar, close button,
-    /// and optionally an attention badge — the narrowest realistic titlebar.
-    fn narrow_chrome_with_session(agent_status: AgentStatus, with_attention: bool) -> PanelChrome<'static> {
+    /// Panel at a given titlebar width with the session badge and, optionally,
+    /// an attention badge — 320 px is the supported minimum panel width.
+    fn chrome_at_width_with_session(
+        agent_status: AgentStatus,
+        titlebar_width: f32,
+        with_attention: bool,
+    ) -> PanelChrome<'static> {
         let mut chrome = test_chrome_with_session(agent_status, Some("session-42"));
-        chrome.panel_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(330.0, 400.0));
-        chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(330.0, 54.0));
-        chrome.close_rect = Rect::from_center_size(Pos2::new(312.0, 37.0), egui::Vec2::splat(16.0));
+        let right = 10.0 + titlebar_width;
+        chrome.panel_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 400.0));
+        chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 54.0));
+        chrome.close_rect = Rect::from_center_size(Pos2::new(right - 18.0, 37.0), egui::Vec2::splat(16.0));
         if with_attention {
             static ATTENTION: std::sync::OnceLock<(super::AttentionSeverity, String)> = std::sync::OnceLock::new();
             chrome.attention_badge =
@@ -929,8 +939,8 @@ mod tests {
 
     #[test]
     fn session_badge_hides_when_titlebar_is_too_narrow() {
-        let idle = narrow_chrome_with_session(AgentStatus::Idle, true);
-        let working = narrow_chrome_with_session(AgentStatus::Working, true);
+        let idle = chrome_at_width_with_session(AgentStatus::Idle, 320.0, true);
+        let working = chrome_at_width_with_session(AgentStatus::Working, 320.0, true);
 
         assert!(session_badge_rect(&idle).is_none());
         // Without the badge, the title falls back to the working-slot math.
@@ -949,9 +959,23 @@ mod tests {
         };
 
         assert!(wide_badge.min.x >= wide.titlebar_rect.min.x + SESSION_BADGE_MIN_TITLE_SPACE);
-        assert!(session_badge_rect(&narrow_chrome_with_session(AgentStatus::Idle, true)).is_none());
+        assert!(session_badge_rect(&chrome_at_width_with_session(AgentStatus::Idle, 320.0, true)).is_none());
         // Without the attention badge the 320 px titlebar still fits the badge.
-        assert!(session_badge_rect(&narrow_chrome_with_session(AgentStatus::Idle, false)).is_some());
+        assert!(session_badge_rect(&chrome_at_width_with_session(AgentStatus::Idle, 320.0, false)).is_some());
+    }
+
+    #[test]
+    fn session_badge_protects_the_accent_dot_at_intermediate_widths() {
+        // 372 px titlebar with history meter and a short attention badge:
+        // the badge slot lands 12 px from the panel edge, where the focused
+        // accent dot (centered at 14, radius 5) still extends to 19 px.
+        let overlapping = chrome_at_width_with_session(AgentStatus::Idle, 372.0, true);
+        assert!(session_badge_rect(&overlapping).is_none());
+
+        // Same width without attention: the badge fits with real title room.
+        let without_attention = chrome_at_width_with_session(AgentStatus::Idle, 372.0, false);
+        let rect = session_badge_rect(&without_attention).expect("badge fits at 372 px");
+        assert!(rect.min.x >= without_attention.titlebar_rect.min.x + 26.0 + SESSION_BADGE_MIN_TITLE_SPACE);
     }
 
     #[test]
@@ -964,7 +988,7 @@ mod tests {
 
         // Narrow titlebar with attention: the badge is hidden and the editor
         // keeps the full titlebar width (down to the badge cluster).
-        let narrow = narrow_chrome_with_session(AgentStatus::Idle, true);
+        let narrow = chrome_at_width_with_session(AgentStatus::Idle, 320.0, true);
         assert!(session_badge_rect(&narrow).is_none());
         let editor_narrow = panel_title_content_rect(&narrow);
         assert!(approx_eq(editor_narrow.right(), badges_left_boundary(&narrow)));
