@@ -319,6 +319,19 @@ impl Panel {
         }
     }
 
+    /// The agent session this panel is currently bound to, if any — either
+    /// the captured session binding or an explicit `resume: session` setting.
+    #[must_use]
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_binding
+            .as_ref()
+            .map(|binding| binding.session_id.as_str())
+            .or(match &self.resume {
+                PanelResume::Session { session_id } => Some(session_id.as_str()),
+                PanelResume::Fresh | PanelResume::Last => None,
+            })
+    }
+
     #[must_use]
     pub fn display_title(&self) -> Cow<'_, str> {
         if self.kind == PanelKind::Ssh {
@@ -675,6 +688,42 @@ mod tests {
             ssh_connection: None,
             ssh_status: None,
         }
+    }
+
+    #[test]
+    fn session_id_prefers_captured_binding_over_explicit_resume() {
+        let mut panel = test_panel("Pi", "", false);
+        panel.kind = PanelKind::Pi;
+        panel.resume = PanelResume::Session {
+            session_id: "resume-1".to_string(),
+        };
+        panel.session_binding = Some(AgentSessionBinding::new(
+            PanelKind::Pi,
+            "bound-2".to_string(),
+            None,
+            None,
+            None,
+        ));
+
+        assert_eq!(panel.session_id(), Some("bound-2"));
+    }
+
+    #[test]
+    fn session_id_falls_back_to_explicit_resume() {
+        let mut panel = test_panel("Pi", "", false);
+        panel.kind = PanelKind::Pi;
+        panel.resume = PanelResume::Session {
+            session_id: "resume-1".to_string(),
+        };
+
+        assert_eq!(panel.session_id(), Some("resume-1"));
+    }
+
+    #[test]
+    fn session_id_is_none_without_binding_or_resume() {
+        let panel = test_panel("Shell", "", false);
+
+        assert_eq!(panel.session_id(), None);
     }
 
     #[test]

@@ -58,10 +58,7 @@ fn failed_bootstrap_recovery_deduplicates_other_provider_bindings() {
         .filter(|panel| panel.kind == PanelKind::OpenCode)
         .collect();
     assert_eq!(opencode_panels.len(), 2);
-    assert_eq!(
-        super::super::panel_session_id(opencode_panels[0]),
-        Some("duplicate-session")
-    );
-    assert_eq!(super::super::panel_session_id(opencode_panels[1]), None);
+    assert_eq!(opencode_panels[0].session_id(), Some("duplicate-session"));
+    assert_eq!(opencode_panels[1].session_id(), None);
     assert!(matches!(opencode_panels[1].resume, PanelResume::Last));
 }

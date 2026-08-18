@@ -560,15 +560,19 @@ impl HorizonApp {
                     );
                 }
 
-                // Compute display_title from the board on demand, avoiding a
-                // per-panel String clone in PanelSnapshot. The Cow is borrowed
-                // when the underlying panel title is sufficient, and only
-                // allocates when a formatted composite title is needed.
+                // Compute display_title and the session badge from the board on
+                // demand, avoiding a per-panel String clone in PanelSnapshot.
+                // The Cow is borrowed when the underlying panel title is
+                // sufficient, and only allocates when a formatted composite
+                // title is needed.
+                let panel = self.board.panel(panel_id);
                 let display_title = if snapshot.is_renaming {
                     None
                 } else {
-                    self.board.panel(panel_id).map(|p| p.display_title())
+                    panel.map(|p| p.display_title())
                 };
+                let session_id = panel.and_then(|p| p.session_id());
+                let has_session_badge = session_id.is_some();
 
                 paint_panel_chrome(
                     ui,
@@ -588,6 +592,7 @@ impl HorizonApp {
                         workspace_accent: snapshot.workspace_accent,
                         attention_badge: snapshot.attention_badge.as_ref(),
                         ssh_status: snapshot.ssh_status,
+                        session_id,
                         mic: mic_response.as_ref().map(|mic| MicControl {
                             rect: rects.mic,
                             hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
@@ -608,6 +613,7 @@ impl HorizonApp {
                             // control when one is shown.
                             if mic_eligible { rects.mic } else { rects.close },
                             snapshot.workspace_accent.is_some(),
+                            has_session_badge,
                         ),
                         &mut self.panel_rename_buffer,
                         egui::FontId::proportional(13.0),
