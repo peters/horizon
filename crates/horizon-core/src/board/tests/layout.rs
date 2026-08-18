@@ -365,3 +365,147 @@ fn clearing_workspace_layout_preserves_current_panel_positions() {
         "expected {arranged_position:?}, got {current_position:?}"
     );
 }
+
+#[test]
+fn switching_from_manual_to_preset_keeps_panel_positions() {
+    for layout in WorkspaceLayout::ALL {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("manual");
+
+        let first = board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("first panel should spawn");
+        let second = board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("second panel should spawn");
+
+        // Placing a panel manually returns the workspace to freeform.
+        assert!(board.move_panel(first, [180.0, 140.0]));
+        assert!(board.move_panel(second, [700.0, 380.0]));
+        assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
+
+        let before: Vec<_> = [first, second]
+            .iter()
+            .map(|id| {
+                let panel = board.panel(*id).expect("panel");
+                (panel.layout.position, panel.layout.size)
+            })
+            .collect();
+
+        board.arrange_workspace(workspace_id, layout);
+
+        assert_eq!(board.workspace(workspace_id).expect("workspace").layout, Some(layout));
+        for (id, (position, size)) in [first, second].into_iter().zip(before) {
+            let panel = board.panel(id).expect("panel");
+            assert!(
+                vec2_eq(panel.layout.position, position),
+                "{layout:?} moved panel {id:?} to {:?}, expected {position:?}",
+                panel.layout.position
+            );
+            assert!(
+                vec2_eq(panel.layout.size, size),
+                "{layout:?} resized panel {id:?} to {:?}, expected {size:?}",
+                panel.layout.size
+            );
+        }
+    }
+}
+
+#[test]
+fn preset_switched_from_manual_applies_on_next_reflow() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("manual");
+    let first = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("first panel should spawn");
+    let second = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("second panel should spawn");
+    assert!(board.move_panel(first, [180.0, 140.0]));
+    assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
+
+    board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
+
+    board.close_panel(second);
+
+    let origin = board.workspace(workspace_id).expect("workspace").position;
+    assert!(vec2_eq(
+        board.panel(first).expect("remaining panel").layout.position,
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+    ));
+    assert_eq!(
+        board.workspace(workspace_id).expect("workspace").layout,
+        Some(WorkspaceLayout::Grid)
+    );
+}
+
+#[test]
+fn preset_switched_from_manual_applies_on_panel_add() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("manual");
+    let first = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("first panel should spawn");
+    board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("second panel should spawn");
+    assert!(board.move_panel(first, [180.0, 140.0]));
+    assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
+
+    board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
+
+    board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("third panel should spawn");
+
+    let workspace = board.workspace(workspace_id).expect("workspace");
+    assert_eq!(workspace.layout, Some(WorkspaceLayout::Grid));
+    let origin = workspace.position;
+    let grid_slots: [[f32; 2]; 3] = [
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD],
+        [
+            origin[0] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[0] + TILE_GAP,
+            origin[1] + WS_INNER_PAD,
+        ],
+        [
+            origin[0] + WS_INNER_PAD,
+            origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
+        ],
+    ];
+    for (panel_id, slot) in workspace.panels.iter().zip(grid_slots.iter()) {
+        assert!(
+            vec2_eq(board.panel(*panel_id).expect("panel").layout.position, *slot),
+            "panel {panel_id:?} should be at grid slot {slot:?}"
+        );
+    }
+}
+
+#[test]
+fn switching_between_presets_still_rearranges() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("switch");
+    let first = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("first panel should spawn");
+    let second = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("second panel should spawn");
+    board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
+
+    board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+
+    let workspace = board.workspace(workspace_id).expect("workspace");
+    assert_eq!(workspace.layout, Some(WorkspaceLayout::Rows));
+    let origin = workspace.position;
+    assert!(vec2_eq(
+        board.panel(first).expect("first panel").layout.position,
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+    ));
+    assert!(vec2_eq(
+        board.panel(second).expect("second panel").layout.position,
+        [
+            origin[0] + WS_INNER_PAD,
+            origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP
+        ]
+    ));
+}
