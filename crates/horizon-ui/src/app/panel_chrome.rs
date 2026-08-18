@@ -184,6 +184,10 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    // Measured once per frame: drives the session badge's overlap guard
+    // and the attention paint, so the two can never diverge.
+    let attention_geom = attention_badge_geometry(&painter, &chrome);
+
     if let Some(title) = chrome.title {
         let title_x = if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
@@ -209,6 +213,11 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
 
     if let Some(session_id) = chrome.session_id
         && let Some(badge_rect) = session_badge_rect(&chrome)
+        // A long notification summary measures wider than the fixed titlebar
+        // reserve; the attention badge would paint over the session pill.
+        && attention_geom.as_ref().is_none_or(|(rect, ..)| {
+            session_badge_clears_attention_badge(badge_rect, rect.min.x)
+        })
     {
         paint_session_badge(
             &painter,
@@ -219,14 +228,8 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
-    if let Some((severity, summary)) = chrome.attention_badge {
-        paint_attention_badge(
-            &painter,
-            chrome.titlebar_rect,
-            chrome.controls_anchor(),
-            *severity,
-            summary,
-        );
+    if let Some(geometry) = &attention_geom {
+        paint_attention_badge(&painter, geometry);
     }
     if let Some(status) = chrome.ssh_status {
         paint_ssh_status_badge(
@@ -613,15 +616,14 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
 }
 
 #[profiling::function]
-fn paint_attention_badge(
+fn attention_badge_geometry(
     painter: &egui::Painter,
-    titlebar_rect: Rect,
-    close_rect: Rect,
-    severity: AttentionSeverity,
-    summary: &str,
-) {
-    let color = attention_severity_color(severity);
-    let icon = attention_severity_icon(severity);
+    chrome: &PanelChrome<'_>,
+) -> Option<(Rect, String, egui::FontId, Color32)> {
+    let (severity, summary) = chrome.attention_badge?;
+    let summary: &str = summary;
+    let color = attention_severity_color(*severity);
+    let icon = attention_severity_icon(*severity);
 
     // Truncate the summary for display.
     let display_text = if summary.len() > 30 {
@@ -635,29 +637,41 @@ fn paint_attention_badge(
     let font = egui::FontId::proportional(10.0);
 
     // Position the badge left of the history meter area.
-    let history_badge = panel_history_badge_rect(titlebar_rect, close_rect);
+    let history_badge = panel_history_badge_rect(chrome.titlebar_rect, chrome.controls_anchor());
     let badge_right = history_badge.min.x - 6.0;
     let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
     let text_width = text_galley.size().x;
     let badge_width = text_width + 12.0;
     let badge_height: f32 = 18.0;
-    let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
-    let badge_rect = Rect::from_min_size(
-        Pos2::new(badge_left, titlebar_rect.center().y - badge_height * 0.5),
+    let badge_left = (badge_right - badge_width).max(chrome.titlebar_rect.min.x + 60.0);
+    let rect = Rect::from_min_size(
+        Pos2::new(badge_left, chrome.titlebar_rect.center().y - badge_height * 0.5),
         Vec2::new(badge_right - badge_left, badge_height),
     );
+    Some((rect, badge_text, font, color))
+}
+
+/// The session badge is hidden when the painted attention badge would cover
+/// it — long summaries measure wider than the fixed titlebar reserve.
+fn session_badge_clears_attention_badge(session_badge: Rect, attention_left: f32) -> bool {
+    session_badge.max.x <= attention_left
+}
+
+#[profiling::function]
+fn paint_attention_badge(painter: &egui::Painter, geometry: &(Rect, String, egui::FontId, Color32)) {
+    let (rect, badge_text, font, color) = geometry;
 
     painter.rect_filled(
-        badge_rect,
+        *rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
     );
     painter.text(
-        Pos2::new(badge_left + 6.0, titlebar_rect.center().y),
+        Pos2::new(rect.min.x + 6.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        badge_text,
-        font,
-        color,
+        badge_text.clone(),
+        font.clone(),
+        *color,
     );
 }
 
@@ -805,8 +819,8 @@ mod tests {
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
         WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, title_focus_indicator_rect,
-        title_right_boundary, working_indicator_reserve, working_indicator_width,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_clears_attention_badge, session_badge_rect,
+        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -959,6 +973,20 @@ mod tests {
         let plain = test_chrome(AgentStatus::Idle);
         let editor_plain = panel_title_content_rect(&plain);
         assert!(approx_eq(editor_plain.right(), badges_left_boundary(&plain)));
+    }
+
+    #[test]
+    fn session_badge_skipped_when_attention_badge_would_cover_it() {
+        let session = Rect::from_min_max(Pos2::new(100.0, 30.0), Pos2::new(164.0, 48.0));
+
+        // No attention badge: always shown.
+        assert!(session_badge_clears_attention_badge(session, f32::INFINITY));
+        // Attention starts right of the session badge: shown.
+        assert!(session_badge_clears_attention_badge(session, 164.0));
+        assert!(session_badge_clears_attention_badge(session, 200.0));
+        // Wide attention summary extends over the session badge: hidden.
+        assert!(!session_badge_clears_attention_badge(session, 150.0));
+        assert!(!session_badge_clears_attention_badge(session, 90.0));
     }
 
     #[test]
