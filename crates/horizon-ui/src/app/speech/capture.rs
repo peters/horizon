@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cpal::Sample;
 use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -547,8 +548,9 @@ fn start_recording(
     // One arm per interleaved sample type, each normalizing to f32 in
     // [-1, 1] before the shared downmix/resample. Covers the formats real
     // capture endpoints report: F32/I16/U16 plus 8-bit, 32-bit (incl. the
-    // I32 that 24-bit WASAPI/ALSA endpoints deliver), the I24 that 24-bit
-    // PulseAudio/PipeWire endpoints deliver, and F64.
+    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64. The I24
+    // arm covers 24-bit PulseAudio/PipeWire endpoints: the s24-32le word
+    // spans the full i32 range, so it normalizes as i32.
     macro_rules! input_stream {
         ($sample:ty, $to_f32:expr) => {{
             let sink = Arc::clone(&samples);
@@ -569,7 +571,7 @@ fn start_recording(
         SampleFormat::F64 => input_stream!(f64, |&sample| f64_to_sample(sample)),
         SampleFormat::I8 => input_stream!(i8, |&sample| f32::from(sample) / 128.0),
         SampleFormat::I16 => input_stream!(i16, |&sample| f32::from(sample) / 32_768.0),
-        SampleFormat::I24 => input_stream!(i32, |&sample| i24_to_sample(sample)),
+        SampleFormat::I24 => input_stream!(cpal::I24, |&sample| i32_to_sample(sample.to_sample())),
         SampleFormat::I32 => input_stream!(i32, |&sample| i32_to_sample(sample)),
         SampleFormat::U8 => input_stream!(u8, |&sample| (f32::from(sample) - 128.0) / 128.0),
         SampleFormat::U16 => input_stream!(u16, |&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
@@ -635,18 +637,12 @@ fn f64_to_sample(sample: f64) -> f32 {
     sample as f32
 }
 
-/// Normalize a 32-bit integer device sample to f32 in [-1, 1).
+/// Normalize a 32-bit integer device sample to f32 in [-1, 1). Also the
+/// right scale for cpal's I24: the s24-32le container holds the 24-bit
+/// value across the full i32 range (left-shifted, sign-extended).
 #[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
 fn i32_to_sample(sample: i32) -> f32 {
     sample as f32 / 2_147_483_648.0
-}
-
-/// Normalize a 24-bit device sample (stored in a 4-byte i32 by cpal's I24
-/// format, as delivered by 24-bit PulseAudio/PipeWire sources) to f32 in
-/// [-1, 1).
-#[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
-fn i24_to_sample(sample: i32) -> f32 {
-    sample as f32 / 8_388_608.0
 }
 
 #[expect(
@@ -703,18 +699,8 @@ mod tests {
 
     use super::{
         CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE,
-        deduplicate_device_names, device_identity_key, i24_to_sample, to_mono_16k,
+        deduplicate_device_names, device_identity_key, to_mono_16k,
     };
-
-    #[test]
-    fn i24_samples_normalize_to_the_f32_pipeline_range() {
-        let full = 1.0 / 8_388_608.0;
-        let close = |a: f32, b: f32| (a - b).abs() <= f32::EPSILON;
-        assert!(close(i24_to_sample(0), 0.0));
-        assert!(close(i24_to_sample(-8_388_608), -1.0));
-        assert!(close(i24_to_sample(8_388_607), 1.0 - full));
-        assert!(close(i24_to_sample(1), full));
-    }
 
     #[test]
     fn device_identity_key_converges_across_backend_namings() {
