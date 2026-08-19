@@ -220,12 +220,11 @@ impl Board {
     /// Arrange all panels in a workspace according to a predefined layout.
     /// Panels are equally sized and positioned with gaps.
     ///
-    /// Switching from manual placement (default) to a preset only records the
-    /// preset; the panels the user already placed keep their positions. The
-    /// preset takes effect on the next reflow: a panel added without an
-    /// explicit position, a panel closed or moved between workspaces, or a
-    /// panel resized. Dragging a panel by hand still returns the workspace to
-    /// manual placement. Switching between two presets always re-arranges.
+    /// Selecting a preset re-arranges immediately, including from manual
+    /// placement (default); panel sizes are fitted to the current content
+    /// area so the arrangement fills the workspace frame instead of jumping
+    /// elsewhere. Dragging a panel by hand returns the workspace to manual
+    /// placement.
     pub fn arrange_workspace(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
         self.apply_workspace_layout(id, layout);
     }
@@ -309,11 +308,6 @@ impl Board {
         }
 
         let current_layout = self.workspace_layout_value(id);
-        if current_layout.is_none() {
-            self.set_workspace_layout(id, Some(layout));
-            return;
-        }
-
         let panel_size = if current_layout == Some(layout) {
             self.workspace_layout_panel_size(id)
                 .or_else(|| layout_panel_size_from_content(layout, count, self.workspace_content_size(id)))
