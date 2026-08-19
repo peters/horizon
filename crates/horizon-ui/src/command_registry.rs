@@ -29,6 +29,9 @@ pub enum CommandId {
     // Settings
     ToggleSettings,
 
+    // Export
+    ExportServerConfig,
+
     // Search
     ToggleSearch,
 }
@@ -66,6 +69,16 @@ fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]
         id,
         label: label.into(),
         shortcut: Some(shortcut),
+        keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
+    }
+}
+
+/// Variant for actions without a keyboard shortcut (still palette-searchable).
+fn command_entry_without_shortcut(id: CommandId, label: &str, keywords: &[&str]) -> CommandEntry {
+    CommandEntry {
+        id,
+        label: label.into(),
+        shortcut: None,
         keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
     }
 }
@@ -187,6 +200,20 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
             shortcuts.search.display_label(primary_label),
             &["find", "search", "grep", "text"],
         ),
+        command_entry_without_shortcut(
+            CommandId::ExportServerConfig,
+            "Export to Horizon Server",
+            &[
+                "export",
+                "horizon-server",
+                "server",
+                "stream",
+                "phone",
+                "ios",
+                "yml",
+                "deploy",
+            ],
+        ),
     ]
 }
 
@@ -207,10 +234,27 @@ mod tests {
     }
 
     #[test]
-    fn action_commands_all_have_shortcuts() {
+    fn action_commands_all_have_shortcuts_except_export() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            let allowed_without = entry.id == CommandId::ExportServerConfig;
+            assert!(
+                entry.shortcut.is_some() || allowed_without,
+                "entry '{}' has no shortcut",
+                entry.label
+            );
         }
+    }
+
+    #[test]
+    fn action_commands_include_server_export() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::ExportServerConfig)
+            .expect("server export command");
+
+        assert_eq!(entry.label, "Export to Horizon Server");
+        assert!(entry.shortcut.is_none());
     }
 
     #[test]

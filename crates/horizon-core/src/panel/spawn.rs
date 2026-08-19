@@ -850,7 +850,7 @@ pub(super) const fn platform_default_shell() -> &'static str {
     }
 }
 
-fn default_shell() -> String {
+pub(crate) fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 

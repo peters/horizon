@@ -525,7 +525,12 @@ impl HorizonApp {
     }
 
     pub(super) fn show_speech_notice(&mut self, message: impl Into<String>, error: bool) {
-        self.speech_notice = Some(super::SpeechNotice {
+        self.show_transient_notice("🎤", message, error);
+    }
+
+    pub(super) fn show_transient_notice(&mut self, icon: &'static str, message: impl Into<String>, error: bool) {
+        self.notice = Some(super::TransientNotice {
+            icon,
             message: message.into(),
             error,
             shown_at: Instant::now(),
@@ -534,26 +539,26 @@ impl HorizonApp {
 
     /// Bottom-center transient feedback for dictation outcomes that would
     /// otherwise be invisible (ignored presses, empty transcripts, errors).
-    pub(super) fn render_speech_notice(&mut self, ctx: &Context) {
+    pub(super) fn render_transient_notice(&mut self, ctx: &Context) {
         const NOTICE_TTL: Duration = Duration::from_secs(5);
         const NOTICE_MAX_WIDTH: f32 = 720.0;
         const NOTICE_VIEWPORT_MARGIN: f32 = 48.0;
-        let Some(notice) = &self.speech_notice else {
+        let Some(notice) = &self.notice else {
             return;
         };
         let elapsed = notice.shown_at.elapsed();
         let Some(remaining) = NOTICE_TTL.checked_sub(elapsed).filter(|left| !left.is_zero()) else {
-            self.speech_notice = None;
+            self.notice = None;
             return;
         };
         ctx.request_repaint_after(remaining);
-        let (icon, tint) = if notice.error {
-            ("⚠", theme::PALETTE_YELLOW())
+        let tint = if notice.error {
+            theme::PALETTE_YELLOW()
         } else {
-            ("🎤", theme::FG())
+            theme::FG()
         };
         let max_width = (ctx.content_rect().width() - NOTICE_VIEWPORT_MARGIN).clamp(1.0, NOTICE_MAX_WIDTH);
-        egui::Area::new(egui::Id::new("speech_notice_overlay"))
+        egui::Area::new(egui::Id::new("transient_notice_overlay"))
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .order(egui::Order::Foreground)
             .interactable(false)
@@ -561,7 +566,7 @@ impl HorizonApp {
                 ui.set_max_width(max_width);
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal_top(|ui| {
-                        ui.label(egui::RichText::new(icon).color(tint).size(12.0));
+                        ui.label(egui::RichText::new(notice.icon).color(tint).size(12.0));
                         ui.add(
                             egui::Label::new(egui::RichText::new(&notice.message).color(theme::FG()).size(12.0)).wrap(),
                         );
@@ -1039,7 +1044,7 @@ mod tests {
         });
 
         assert!(app.startup_chooser.is_some());
-        assert!(app.speech_notice.as_ref().is_some_and(|notice| {
+        assert!(app.notice.as_ref().is_some_and(|notice| {
             notice.error && notice.message.contains("profile 1") && notice.message.contains("model not found")
         }));
         assert!(
@@ -1066,7 +1071,7 @@ mod tests {
         });
 
         assert!(app.startup_receiver.is_some());
-        assert!(app.speech_notice.as_ref().is_some_and(|notice| {
+        assert!(app.notice.as_ref().is_some_and(|notice| {
             notice.error && notice.message.contains("profile 1") && notice.message.contains("invalid model")
         }));
         assert!(
@@ -1092,14 +1097,14 @@ mod tests {
                 screen_rect: Some(screen),
                 ..egui::RawInput::default()
             },
-            |ctx| app.render_speech_notice(ctx),
+            |ctx| app.render_transient_notice(ctx),
         );
         let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(screen),
                 ..egui::RawInput::default()
             },
-            |ctx| app.render_speech_notice(ctx),
+            |ctx| app.render_transient_notice(ctx),
         );
         let bounds = output
             .shapes

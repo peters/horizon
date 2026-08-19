@@ -158,9 +158,10 @@ impl HeldSpeechBinding {
     }
 }
 
-/// Transient dictation feedback shown bottom-center: outcomes that would
-/// otherwise be invisible (ignored presses, empty transcripts, errors).
-struct SpeechNotice {
+/// Transient feedback shown bottom-center: outcomes that would otherwise be
+/// invisible (speech outcomes, export results, errors).
+struct TransientNotice {
+    icon: &'static str,
     message: String,
     error: bool,
     shown_at: Instant,
@@ -201,7 +202,7 @@ pub struct HorizonApp {
     /// kept out of the terminal stream (kitty release reporting).
     speech_escape_release_pending: bool,
     speech_escape_release_deadline: Option<Instant>,
-    speech_notice: Option<SpeechNotice>,
+    notice: Option<TransientNotice>,
     /// Whether any Horizon viewport (root or detached) reported focus this
     /// frame; evaluated at end of frame to cancel unattended recordings.
     any_viewport_focused: bool,
@@ -410,7 +411,7 @@ impl HorizonApp {
             speech_escape_cancelled: false,
             speech_escape_release_pending: false,
             speech_escape_release_deadline: None,
-            speech_notice: None,
+            notice: None,
             any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
@@ -558,14 +559,14 @@ impl eframe::App for HorizonApp {
 
         if !self.prepare_frame(ctx) {
             self.poll_speech_runtime(ctx, Vec::new());
-            self.render_speech_notice(ctx);
+            self.render_transient_notice(ctx);
             return;
         }
 
         if self.startup_chooser.is_some() {
             self.poll_speech_runtime(ctx, Vec::new());
             self.render_startup_chooser(ctx);
-            self.render_speech_notice(ctx);
+            self.render_transient_notice(ctx);
             return;
         }
 
@@ -594,7 +595,7 @@ impl eframe::App for HorizonApp {
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
-        self.render_speech_notice(ctx);
+        self.render_transient_notice(ctx);
         self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
     }
 
