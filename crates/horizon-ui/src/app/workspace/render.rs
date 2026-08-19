@@ -53,7 +53,6 @@ pub(super) fn render_workspace_visual(
     let mut interaction = egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
         .fixed_pos(workspace.label_canvas_rect.min)
         .constrain(false)
-        .interactable(false)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
             apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);

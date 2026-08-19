@@ -448,10 +448,12 @@ impl HorizonApp {
         let interactive = !self.canvas_pan_input_claimed;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
 
+        // The area must stay interactable: since egui 0.36, non-interactable
+        // layers are skipped by hit-testing, which makes every widget inside
+        // (titlebar drag, close, resize handles) click-through.
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
             .constrain(false)
-            .interactable(false)
             .order(if snapshot.is_focused {
                 Order::Foreground
             } else {
