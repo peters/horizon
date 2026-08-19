@@ -34,11 +34,10 @@ pub(crate) fn handle_terminal_keyboard_input(
 
     for event in &events {
         match &event.event {
-            egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_)) => {
-                ime_enabled = true;
-            }
-            egui::Event::Ime(egui::ImeEvent::Disabled) => {
-                ime_enabled = false;
+            // A non-empty preedit marks an active composition; an empty
+            // preedit means the IME was dismissed.
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                ime_enabled = !text.is_empty();
             }
             egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 if matches!(&event.event, egui::Event::Ime(egui::ImeEvent::Commit(_))) {

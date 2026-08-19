@@ -247,6 +247,7 @@ fn function_key(function: u8) -> Option<Key> {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_egui::DiscardTextures;
     use egui::{Event, Key, Modifiers, RawInput};
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
@@ -388,22 +389,20 @@ mod tests {
                 .flatten()
         });
         assert!(pending.is_none());
-        let _ = ctx.end_pass();
+        let _ = ctx.end_pass().discard_textures();
     }
 
     #[test]
     fn plus_shortcuts_accept_equals_keypress() {
         let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus);
-        let mut raw = RawInput {
-            modifiers: Modifiers::COMMAND | Modifiers::SHIFT,
-            ..RawInput::default()
-        };
+        let modifiers = Modifiers::COMMAND | Modifiers::SHIFT;
+        let mut raw = RawInput::default();
         raw.events.push(Event::Key {
             key: Key::Equals,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: raw.modifiers,
+            modifiers,
         });
 
         let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
@@ -414,16 +413,14 @@ mod tests {
     #[test]
     fn primary_shortcuts_use_command_semantics() {
         let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Letter('K'));
-        let mut raw = RawInput {
-            modifiers: Modifiers::COMMAND,
-            ..RawInput::default()
-        };
+        let modifiers = Modifiers::COMMAND;
+        let mut raw = RawInput::default();
         raw.events.push(Event::Key {
             key: Key::K,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: raw.modifiers,
+            modifiers,
         });
 
         let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
@@ -434,16 +431,14 @@ mod tests {
     #[test]
     fn digit_shortcuts_match_physical_digit_keys_when_layout_changes_logical_key() {
         let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0));
-        let mut raw = RawInput {
-            modifiers: Modifiers::COMMAND,
-            ..RawInput::default()
-        };
+        let modifiers = Modifiers::COMMAND;
+        let mut raw = RawInput::default();
         raw.events.push(Event::Key {
             key: Key::Quote,
             physical_key: Some(Key::Num0),
             pressed: true,
             repeat: false,
-            modifiers: raw.modifiers,
+            modifiers,
         });
 
         let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());

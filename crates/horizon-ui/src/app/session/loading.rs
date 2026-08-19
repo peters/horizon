@@ -1,17 +1,15 @@
-use egui::Context;
-
 use crate::{loading_spinner, theme};
 
 use super::{StartupBootstrapFailure, StartupBootstrapFailureAction};
 
 pub(in crate::app) fn render_loading_view(
-    ctx: &Context,
+    ui: &mut egui::Ui,
     failure: Option<&StartupBootstrapFailure>,
 ) -> Option<StartupBootstrapFailureAction> {
     let mut action = None;
     egui::CentralPanel::default()
         .frame(egui::Frame::default().fill(theme::BG()))
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.28);
                 ui.label(egui::RichText::new("Horizon").size(26.0).strong().color(theme::FG()));

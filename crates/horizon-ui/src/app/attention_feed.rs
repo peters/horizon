@@ -429,7 +429,7 @@ mod tests {
         let mut board = Board::new();
         board.attention.push(test_attention_item(
             1,
-            now - Duration::from_secs(60),
+            now - Duration::from_mins(1),
             AttentionState::Resolved,
             Some(now - Duration::from_secs(45)),
         ));

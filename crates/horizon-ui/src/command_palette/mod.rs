@@ -217,7 +217,7 @@ impl CommandPalette {
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::proportional(14.0))
                 .text_color(theme::FG())
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .desired_width(text_rect.width())
                 .hint_text(
                     egui::RichText::new("Type to search...")

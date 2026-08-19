@@ -1,3 +1,4 @@
+use crate::test_egui::DiscardTextures;
 use egui::{Context, Pos2, RawInput, Rect, ViewportId};
 use horizon_core::{
     Config, HorizonHome, PanelKind, PanelState, RuntimeState, SessionStore, StartupDecision, WorkspaceState,
@@ -49,9 +50,27 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
 
 pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
     let mut frame = eframe::Frame::_new_kittest();
-    ctx.run(input, |ctx| {
-        eframe::App::update(app, ctx, &mut frame);
+    ctx.run_ui(input, |ui| {
+        eframe::App::ui(app, ui, &mut frame);
     })
+    .discard_textures()
+}
+
+#[derive(Debug)]
+struct TestDroppedFile(std::path::PathBuf);
+
+impl egui::DroppedFile for TestDroppedFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+
+pub(super) fn dropped_file(path: impl Into<std::path::PathBuf>) -> egui::DroppedFileHandle {
+    std::sync::Arc::new(TestDroppedFile(path.into()))
 }
 
 pub(super) fn raw_input(size: [f32; 2], position: Option<[f32; 2]>) -> RawInput {

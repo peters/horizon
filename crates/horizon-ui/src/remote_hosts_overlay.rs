@@ -224,7 +224,7 @@ impl RemoteHostsOverlay {
             egui::TextEdit::singleline(&mut self.query)
                 .font(FontId::monospace(14.0))
                 .text_color(theme::FG())
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .desired_width(text_rect.width() - 260.0)
                 .hint_text(
                     RichText::new("type to filter, prefix user@ to connect as that user")

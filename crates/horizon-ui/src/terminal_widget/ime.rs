@@ -24,8 +24,10 @@ pub(super) fn publish_terminal_ime_output(
 
     ui.ctx().output_mut(|output| {
         output.ime = Some(egui::output::IMEOutput {
+            purpose: egui::IMEPurpose::Terminal,
             rect: to_global * body_rect,
             cursor_rect: to_global * cursor_rect,
+            should_interrupt_composition: false,
         });
     });
 }

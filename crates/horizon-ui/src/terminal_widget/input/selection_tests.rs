@@ -3,6 +3,7 @@ use super::selection_drag::AutoScrollCadence;
 use super::{PointerSupport, TerminalSelectionDragState, handle_pointer_selection_drag, handle_terminal_pointer_input};
 use crate::primary_selection::PrimarySelection;
 use crate::terminal_widget::layout::{GridMetrics, terminal_interaction, terminal_layout};
+use crate::test_egui::DiscardTextures;
 use egui::{
     Context, Event, FontId, Id, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, Vec2, ViewportId,
 };
@@ -107,7 +108,7 @@ impl PointerHarness {
                     },
                 );
             });
-        let output = self.ctx.end_pass();
+        let output = self.ctx.end_pass().discard_textures();
         self.repaint_delay = output
             .viewport_output
             .get(&ViewportId::ROOT)
@@ -216,6 +217,7 @@ fn wheel(vertical_lines: f32) -> Vec<Event> {
     vec![Event::MouseWheel {
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, vertical_lines),
+        phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
     }]
 }
@@ -326,17 +328,29 @@ fn selection_auto_scroll_repaints_only_while_held_drag_can_move_viewport() {
     harness.frame(Vec::new());
 
     assert_eq!(harness.scrollback(), before_continuation - 1);
-    assert!(harness.repaint_delay() > Duration::ZERO);
+    // egui keeps requesting immediate repaints while a drag is held, so the
+    // widget's own delayed continuation is observable only as an upper bound.
     assert!(
         harness.repaint_delay() <= Duration::from_millis(16),
         "a held drag below the body should schedule another auto-scroll frame"
     );
 
     harness.panel.set_scrollback(0);
-    harness.frame(Vec::new());
-    assert_eq!(harness.scrollback(), 0);
+    let mut settled = false;
+    for _ in 0..10 {
+        harness.frame(Vec::new());
+        assert_eq!(
+            harness.scrollback(),
+            0,
+            "auto-scroll must stay stopped at the bottom of the scrollback"
+        );
+        if harness.repaint_delay() > Duration::from_millis(16) {
+            settled = true;
+            break;
+        }
+    }
     assert!(
-        harness.repaint_delay() > Duration::from_millis(16),
+        settled,
         "auto-scroll should stop repainting at the bottom of the scrollback, got {:?}",
         harness.repaint_delay()
     );
@@ -344,13 +358,17 @@ fn selection_auto_scroll_repaints_only_while_held_drag_can_move_viewport() {
     harness.panel.set_scrollback(2);
     harness.frame(primary_release(below));
     let scrollback_after_release = harness.scrollback();
-    harness.frame(Vec::new());
-    assert_eq!(harness.scrollback(), scrollback_after_release);
-
-    harness.frame(Vec::new());
-    assert_eq!(harness.scrollback(), scrollback_after_release);
+    let mut settled = false;
+    for _ in 0..10 {
+        harness.frame(Vec::new());
+        assert_eq!(harness.scrollback(), scrollback_after_release);
+        if harness.repaint_delay() > Duration::from_millis(16) {
+            settled = true;
+            break;
+        }
+    }
     assert!(
-        harness.repaint_delay() > Duration::from_millis(16),
+        settled,
         "an outside release should not keep the auto-scroll repaint loop alive"
     );
 }

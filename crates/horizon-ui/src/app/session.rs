@@ -319,15 +319,15 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn prepare_startup_bootstrap(&mut self, ctx: &egui::Context) -> bool {
+    pub(super) fn prepare_startup_bootstrap(&mut self, ui: &mut egui::Ui) -> bool {
         if self.poll_startup_bootstrap() {
             return true;
         }
 
         self.refresh_active_session_lease();
-        if let Some(action) = render_loading_view(ctx, self.startup_bootstrap_failure.as_ref()) {
+        if let Some(action) = render_loading_view(ui, self.startup_bootstrap_failure.as_ref()) {
             self.handle_startup_bootstrap_failure(action);
-            ctx.request_repaint();
+            ui.request_repaint();
             return false;
         }
         let repaint_after = if self.startup_bootstrap_failure.is_some() {
@@ -335,7 +335,7 @@ impl HorizonApp {
         } else {
             Duration::from_millis(16)
         };
-        ctx.request_repaint_after(repaint_after);
+        ui.request_repaint_after(repaint_after);
         false
     }
 

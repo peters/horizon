@@ -12,7 +12,7 @@ use surge_core::update::manager::UpdateManager;
 use super::HorizonApp;
 
 const UPDATE_CHANNEL: &str = "stable";
-const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(24);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AvailableUpdate {
@@ -337,6 +337,6 @@ mod tests {
         let now = Instant::now();
         let deadline = next_update_check_deadline(now);
 
-        assert_eq!(deadline.duration_since(now), Duration::from_secs(24 * 60 * 60));
+        assert_eq!(deadline.duration_since(now), Duration::from_hours(24));
     }
 }

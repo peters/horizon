@@ -15,12 +15,13 @@ enum StartupChooserAction {
 }
 
 impl HorizonApp {
-    pub(super) fn render_startup_chooser(&mut self, ctx: &Context) {
+    pub(super) fn render_startup_chooser(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         let action = {
             let Some(state) = self.startup_chooser.as_mut() else {
                 return;
             };
-            render_startup_chooser_panel(ctx, state)
+            render_startup_chooser_panel(ui, state)
         };
 
         match action {
@@ -68,12 +69,12 @@ impl HorizonApp {
     }
 }
 
-fn render_startup_chooser_panel(ctx: &Context, state: &mut StartupChooserState) -> StartupChooserAction {
+fn render_startup_chooser_panel(ui: &mut egui::Ui, state: &mut StartupChooserState) -> StartupChooserAction {
     let mut action = StartupChooserAction::None;
 
     egui::CentralPanel::default()
         .frame(egui::Frame::default().fill(theme::BG()))
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             render_startup_header(ui, state.chooser.reason);
             ui.add_space(24.0);
             ui.centered_and_justified(|ui| {

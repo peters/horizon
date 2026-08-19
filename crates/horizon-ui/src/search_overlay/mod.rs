@@ -140,7 +140,7 @@ impl SearchOverlay {
             input_rect,
             egui::TextEdit::singleline(&mut self.query)
                 .id(text_edit_id)
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .font(egui::FontId::monospace(13.0))
                 .text_color(theme::FG())
                 .hint_text(
@@ -433,6 +433,7 @@ impl SearchOverlay {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_egui::DiscardTextures;
     use std::time::{Duration, Instant};
 
     use egui::{Context, Pos2, Rect, Vec2};
@@ -496,7 +497,7 @@ mod tests {
         input.viewport_id = egui::ViewportId::ROOT;
         ctx.begin_pass(input);
         let show_dropdown = overlay.should_show_dropdown(&ctx, false, dropdown_rect);
-        let _ = ctx.end_pass();
+        let _ = ctx.end_pass().discard_textures();
 
         assert!(show_dropdown);
     }
@@ -518,7 +519,7 @@ mod tests {
         input.viewport_id = egui::ViewportId::ROOT;
         ctx.begin_pass(input);
         let show_dropdown = overlay.should_show_dropdown(&ctx, false, dropdown_rect);
-        let _ = ctx.end_pass();
+        let _ = ctx.end_pass().discard_textures();
 
         assert!(!show_dropdown);
     }
