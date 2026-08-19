@@ -367,7 +367,7 @@ fn clearing_workspace_layout_preserves_current_panel_positions() {
 }
 
 #[test]
-fn switching_from_manual_to_preset_keeps_panel_positions() {
+fn switching_from_manual_to_preset_arranges_immediately() {
     for layout in WorkspaceLayout::ALL {
         let mut board = Board::new();
         let workspace_id = board.create_workspace("manual");
@@ -379,105 +379,105 @@ fn switching_from_manual_to_preset_keeps_panel_positions() {
             .create_panel(editor_panel_options(), workspace_id)
             .expect("second panel should spawn");
 
-        // Placing a panel manually returns the workspace to freeform.
+        // Placing a panel manually returns the workspace to freeform. The
+        // second panel sits far enough out that the fitted sizes below stay
+        // above the default-size clamp on every axis.
         assert!(board.move_panel(first, [180.0, 140.0]));
-        assert!(board.move_panel(second, [700.0, 380.0]));
+        assert!(board.move_panel(second, [700.0, 900.0]));
         assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
 
-        let before: Vec<_> = [first, second]
-            .iter()
-            .map(|id| {
-                let panel = board.panel(*id).expect("panel");
-                (panel.layout.position, panel.layout.size)
-            })
-            .collect();
+        let origin = board.workspace(workspace_id).expect("workspace").position;
+        let content_min = [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD];
+        let mut content = [0.0f32; 2];
+        for id in [first, second] {
+            let panel = board.panel(id).expect("panel");
+            content[0] = content[0].max(panel.layout.position[0] + panel.layout.size[0] - content_min[0]);
+            content[1] = content[1].max(panel.layout.position[1] + panel.layout.size[1] - content_min[1]);
+        }
+        // Two panels: Rows stacks them, Columns and Grid sit them side by side.
+        let expected_size = match layout {
+            WorkspaceLayout::Rows => [content[0], (content[1] - TILE_GAP) / 2.0],
+            WorkspaceLayout::Columns | WorkspaceLayout::Grid => [(content[0] - TILE_GAP) / 2.0, content[1]],
+        };
+        assert!(
+            expected_size[0] > DEFAULT_PANEL_SIZE[0] && expected_size[1] > DEFAULT_PANEL_SIZE[1],
+            "test setup must keep fitted sizes above the default-size clamp, got {expected_size:?}"
+        );
 
         board.arrange_workspace(workspace_id, layout);
 
-        assert_eq!(board.workspace(workspace_id).expect("workspace").layout, Some(layout));
-        for (id, (position, size)) in [first, second].into_iter().zip(before) {
-            let panel = board.panel(id).expect("panel");
+        let workspace = board.workspace(workspace_id).expect("workspace");
+        assert_eq!(workspace.layout, Some(layout));
+        let first_panel = board.panel(first).expect("first panel");
+        let second_panel = board.panel(second).expect("second panel");
+        for (name, panel) in [("first", first_panel), ("second", second_panel)] {
             assert!(
-                vec2_eq(panel.layout.position, position),
-                "{layout:?} moved panel {id:?} to {:?}, expected {position:?}",
-                panel.layout.position
-            );
-            assert!(
-                vec2_eq(panel.layout.size, size),
-                "{layout:?} resized panel {id:?} to {:?}, expected {size:?}",
+                vec2_eq(panel.layout.size, expected_size),
+                "{layout:?} should fit the {name} panel to the content area as {expected_size:?}, got {:?}",
                 panel.layout.size
             );
         }
-    }
-}
-
-#[test]
-fn preset_switched_from_manual_applies_on_next_reflow() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("manual");
-    let first = board
-        .create_panel(editor_panel_options(), workspace_id)
-        .expect("first panel should spawn");
-    let second = board
-        .create_panel(editor_panel_options(), workspace_id)
-        .expect("second panel should spawn");
-    assert!(board.move_panel(first, [180.0, 140.0]));
-    assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
-
-    board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
-
-    board.close_panel(second);
-
-    let origin = board.workspace(workspace_id).expect("workspace").position;
-    assert!(vec2_eq(
-        board.panel(first).expect("remaining panel").layout.position,
-        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
-    ));
-    assert_eq!(
-        board.workspace(workspace_id).expect("workspace").layout,
-        Some(WorkspaceLayout::Grid)
-    );
-}
-
-#[test]
-fn preset_switched_from_manual_applies_on_panel_add() {
-    let mut board = Board::new();
-    let workspace_id = board.create_workspace("manual");
-    let first = board
-        .create_panel(editor_panel_options(), workspace_id)
-        .expect("first panel should spawn");
-    board
-        .create_panel(editor_panel_options(), workspace_id)
-        .expect("second panel should spawn");
-    assert!(board.move_panel(first, [180.0, 140.0]));
-    assert_eq!(board.workspace(workspace_id).expect("workspace").layout, None);
-
-    board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
-
-    board
-        .create_panel(editor_panel_options(), workspace_id)
-        .expect("third panel should spawn");
-
-    let workspace = board.workspace(workspace_id).expect("workspace");
-    assert_eq!(workspace.layout, Some(WorkspaceLayout::Grid));
-    let origin = workspace.position;
-    let grid_slots: [[f32; 2]; 3] = [
-        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD],
-        [
-            origin[0] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[0] + TILE_GAP,
-            origin[1] + WS_INNER_PAD,
-        ],
-        [
-            origin[0] + WS_INNER_PAD,
-            origin[1] + WS_INNER_PAD + DEFAULT_PANEL_SIZE[1] + TILE_GAP,
-        ],
-    ];
-    for (panel_id, slot) in workspace.panels.iter().zip(grid_slots.iter()) {
         assert!(
-            vec2_eq(board.panel(*panel_id).expect("panel").layout.position, *slot),
-            "panel {panel_id:?} should be at grid slot {slot:?}"
+            vec2_eq(first_panel.layout.position, content_min),
+            "{layout:?} should anchor the first panel at the workspace origin, got {:?}",
+            first_panel.layout.position
+        );
+        let expected_second = match layout {
+            WorkspaceLayout::Rows => [content_min[0], content_min[1] + expected_size[1] + TILE_GAP],
+            WorkspaceLayout::Columns | WorkspaceLayout::Grid => {
+                [content_min[0] + expected_size[0] + TILE_GAP, content_min[1]]
+            }
+        };
+        assert!(
+            vec2_eq(second_panel.layout.position, expected_second),
+            "{layout:?} should place the second panel at {expected_second:?}, got {:?}",
+            second_panel.layout.position
         );
     }
+}
+
+#[test]
+fn arranging_preset_pushes_neighbor_workspace_on_frame_growth() {
+    let mut board = Board::new();
+    let left = board.create_workspace_at("left", [0.0, 40.0]);
+
+    let first = board
+        .create_panel(editor_panel_options(), left)
+        .expect("first panel should spawn");
+    let second = board
+        .create_panel(editor_panel_options(), left)
+        .expect("second panel should spawn");
+
+    // Stack both panels on the same spot: the content area is one panel wide,
+    // so the fitted Columns width clamps to the default size and the
+    // arrangement grows the frame toward the neighbor.
+    assert!(board.move_panel(first, [40.0, 80.0]));
+    assert!(board.move_panel(second, [40.0, 80.0]));
+
+    let right = board.create_workspace_at("right", [630.0, 40.0]);
+    board
+        .create_panel(editor_panel_options(), right)
+        .expect("neighbor panel should spawn");
+
+    let right_before = board.workspace(right).expect("right workspace").position;
+    assert!(
+        vec2_eq(right_before, [630.0, 40.0]),
+        "test setup must leave the neighbor at its explicit position, got {right_before:?}"
+    );
+
+    board.arrange_workspace(left, WorkspaceLayout::Columns);
+
+    let right_after = board.workspace(right).expect("right workspace").position;
+    assert!(
+        right_after[0] > right_before[0],
+        "expected the neighbor to be pushed right from {right_before:?}, got {right_after:?}"
+    );
+    assert!(
+        (right_after[1] - right_before[1]).abs() <= f32::EPSILON,
+        "expected the neighbor y to stay at {}, got {}",
+        right_before[1],
+        right_after[1],
+    );
 }
 
 #[test]
