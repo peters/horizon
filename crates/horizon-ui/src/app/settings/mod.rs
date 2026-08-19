@@ -9,7 +9,7 @@ pub(in crate::app) use speech::PendingCapture;
 pub(in crate::app) use speech::SpeechModelInfoCache;
 mod yaml_editor;
 
-use egui::{Color32, Context, Margin, Stroke, Vec2};
+use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
 
 use super::util::{self, atomic_write};
@@ -103,7 +103,7 @@ impl HorizonApp {
         })
     }
 
-    pub(super) fn render_settings(&mut self, ctx: &Context) {
+    pub(super) fn render_settings(&mut self, ui: &mut egui::Ui) {
         let Some((buffer, original)) = self
             .settings
             .as_ref()
@@ -134,12 +134,12 @@ impl HorizonApp {
             return;
         };
         let (status_text, status_color) = settings_status(&editor.status);
-        let action = bar::render(ctx, &status_text, status_color, is_valid, has_changes);
+        let action = bar::render(ui, &status_text, status_color, is_valid, has_changes);
         self.apply_settings_action(action);
 
         let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ctx, &config_path, editor, &mut self.speech_model_info_cache);
+            render_settings_panel(ui, &config_path, editor, &mut self.speech_model_info_cache);
         }
     }
 
@@ -280,25 +280,25 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
 }
 
 fn render_settings_panel(
-    ctx: &Context,
+    ui: &mut egui::Ui,
     config_path: &str,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
 ) {
-    let viewport_width = util::viewport_local_rect(ctx).width();
+    let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
 
-    egui::SidePanel::right(SETTINGS_PANEL_ID)
-        .default_width(default_width)
-        .min_width(viewport_width * 0.15)
-        .max_width(viewport_width * 0.5)
+    egui::Panel::right(SETTINGS_PANEL_ID)
+        .default_size(default_width)
+        .min_size(viewport_width * 0.15)
+        .max_size(viewport_width * 0.5)
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 16))
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
             ui.add_space(16.0);
 

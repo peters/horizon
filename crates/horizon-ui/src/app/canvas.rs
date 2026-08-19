@@ -104,10 +104,10 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_canvas(&mut self, ctx: &Context) {
+    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::BG()))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 paint_canvas_glow(ui);
                 paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
             });

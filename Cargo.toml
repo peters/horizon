@@ -5,7 +5,7 @@ members = ["crates/horizon-core", "crates/horizon-cursor", "crates/horizon-ui"]
 [workspace.package]
 version = "0.2.7"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MIT"
 description = "GPU-accelerated terminal board — a visual workspace for managing multiple terminal sessions"
 repository = "https://github.com/peters/horizon"
@@ -21,34 +21,34 @@ struct_excessive_bools = "allow"
 [workspace.dependencies]
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
-serde_json = "1.0.150"
+serde_json = "1.0.151"
 alacritty_terminal = "0.26.0"
-eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui = "0.33.3"
-# Feature-only dependency: eframe/egui-wgpu keep using wgpu 27, so Horizon must
+eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui = "0.36.1"
+# Feature-only dependency: eframe/egui-wgpu keep using wgpu 30, so Horizon must
 # unify the native backend features here when eframe default features are disabled.
-wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
-egui_commonmark = { version = "0.22.0", default-features = false, features = ["pulldown_cmark"] }
+wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
+egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
-tempfile = "3.20.0"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
-uuid = { version = "1.23.3", features = ["serde", "v4"] }
+tempfile = "3.27.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
-regex = "1.12.4"
+regex = "1.13.1"
 arboard = "3.6.1"
-tokio = { version = "1.52.3", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.52", package = "surge-core" }
+tokio = { version = "1.53.1", features = ["rt", "macros"] }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.53", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
-transcribe-cpp = "0.1.3"
-cpal = "0.18.1"
+transcribe-cpp = "0.2.0"
+cpal = "0.18.2"
 
 [profile.release]
 lto = true

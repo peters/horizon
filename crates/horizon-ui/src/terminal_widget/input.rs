@@ -284,7 +284,9 @@ fn handle_pointer_events(
                     local_selection_claimed,
                 );
             }
-            egui::Event::MouseWheel { delta, unit, modifiers } => {
+            egui::Event::MouseWheel {
+                delta, unit, modifiers, ..
+            } => {
                 if modifiers.ctrl || modifiers.command {
                     continue;
                 }

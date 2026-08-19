@@ -1,3 +1,4 @@
+use crate::test_egui::DiscardTextures;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -254,9 +255,11 @@ fn failed_startup_bootstrap_keeps_a_slow_repaint() {
 
     let mut repaint_delay = Duration::ZERO;
     for _ in 0..8 {
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            assert!(!app.prepare_startup_bootstrap(ctx));
-        });
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(!app.prepare_startup_bootstrap(ui));
+            })
+            .discard_textures();
         repaint_delay = output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -292,9 +295,11 @@ fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
         .last_lease_refresh = None;
     app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
 
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        assert!(!app.prepare_startup_bootstrap(ctx));
-    });
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            assert!(!app.prepare_startup_bootstrap(ui));
+        })
+        .discard_textures();
 
     let after: SessionLease = serde_yaml::from_str(&std::fs::read_to_string(lease_path).expect("read refreshed lease"))
         .expect("parse refreshed lease");

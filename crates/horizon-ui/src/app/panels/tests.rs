@@ -1,3 +1,4 @@
+use crate::test_egui::DiscardTextures;
 use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use horizon_core::{AgentSessionBinding, PanelKind};
 
@@ -23,23 +24,26 @@ fn mic_frame(ctx: &Context, events: Vec<Event>, enabled: bool, request_focus: bo
         ..RawInput::default()
     };
     input.viewport_id = egui::ViewportId::ROOT;
-    ctx.begin_pass(input);
-    let clicked = egui::CentralPanel::default()
-        .show(ctx, |ui| {
-            let response = mic_control_response(
-                ui,
-                Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(24.0)),
-                Id::new("mic_keyboard_test"),
-                enabled,
-                MicState::Idle,
-            );
-            if request_focus {
-                response.request_focus();
-            }
-            response.clicked()
+    let mut clicked = false;
+    let output = ctx
+        .run_ui(input, |ui| {
+            clicked = egui::CentralPanel::default()
+                .show(ui, |ui| {
+                    let response = mic_control_response(
+                        ui,
+                        Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(24.0)),
+                        Id::new("mic_keyboard_test"),
+                        enabled,
+                        MicState::Idle,
+                    );
+                    if request_focus {
+                        response.request_focus();
+                    }
+                    response.clicked()
+                })
+                .inner;
         })
-        .inner;
-    let output = ctx.end_pass();
+        .discard_textures();
     (clicked, output.platform_output.events_description())
 }
 
@@ -53,12 +57,17 @@ fn rebind_options_frame(
         events,
         ..RawInput::default()
     };
-    ctx.begin_pass(input);
-    let outcome = egui::CentralPanel::default()
-        .show(ctx, |ui| render_session_rebind_options(ui, options))
-        .inner;
-    let _ = ctx.end_pass();
-    outcome
+    let mut outcome = None;
+    let _ = ctx
+        .run_ui(input, |ui| {
+            outcome = Some(
+                egui::CentralPanel::default()
+                    .show(ui, |ui| render_session_rebind_options(ui, options))
+                    .inner,
+            );
+        })
+        .discard_textures();
+    outcome.expect("rebind options frame ran")
 }
 
 fn session_binding(session_id: &str) -> AgentSessionBinding {

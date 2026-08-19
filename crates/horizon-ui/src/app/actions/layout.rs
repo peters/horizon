@@ -66,7 +66,7 @@ impl HorizonApp {
         estimated_settings_panel_rect(
             viewport,
             self.settings.is_some(),
-            PanelState::load(ctx, Id::new(SETTINGS_PANEL_ID)).map(|state| state.rect),
+            PanelState::load(ctx, Id::new(SETTINGS_PANEL_ID)).map(|state| state.outer_rect),
         )
     }
 
@@ -74,7 +74,7 @@ impl HorizonApp {
         estimated_settings_bar_rect(
             viewport,
             self.settings.is_some(),
-            PanelState::load(ctx, Id::new(SETTINGS_BAR_ID)).map(|state| state.rect),
+            PanelState::load(ctx, Id::new(SETTINGS_BAR_ID)).map(|state| state.outer_rect),
         )
     }
 

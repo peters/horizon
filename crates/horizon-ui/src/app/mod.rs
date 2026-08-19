@@ -542,7 +542,8 @@ fn resolve_shortcuts(config: &Config) -> AppShortcuts {
 
 impl eframe::App for HorizonApp {
     #[profiling::function]
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         let now = Instant::now();
         self.frame_stats.record_frame(now);
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
@@ -551,12 +552,12 @@ impl eframe::App for HorizonApp {
         self.exit_on_close_request(ctx);
 
         if self.shutdown_progress.is_some() {
-            self.render_shutdown_overlay(ctx);
+            self.render_shutdown_overlay(ui);
             self.poll_shutdown_progress();
             return;
         }
 
-        if !self.prepare_frame(ctx) {
+        if !self.prepare_frame(ui) {
             self.poll_speech_runtime(ctx, Vec::new());
             self.render_speech_notice(ctx);
             return;
@@ -564,7 +565,7 @@ impl eframe::App for HorizonApp {
 
         if self.startup_chooser.is_some() {
             self.poll_speech_runtime(ctx, Vec::new());
-            self.render_startup_chooser(ctx);
+            self.render_startup_chooser(ui);
             self.render_speech_notice(ctx);
             return;
         }
@@ -590,7 +591,7 @@ impl eframe::App for HorizonApp {
                 self.seed_initial_pan(ctx, aligned_leftmost_workspace, preserve_restored_selection);
             }
         }
-        self.render_active_view(ctx, block_root_interaction);
+        self.render_active_view(ui, block_root_interaction);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }

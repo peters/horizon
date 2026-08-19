@@ -61,13 +61,13 @@ pub(super) fn format_relative_time(timestamp_millis: i64) -> String {
     let age = now.saturating_sub(timestamp);
     let age = Duration::from_millis(u64::try_from(age.min(u128::from(u64::MAX))).unwrap_or(u64::MAX));
 
-    if age < Duration::from_secs(60) {
+    if age < Duration::from_mins(1) {
         return "active moments ago".to_string();
     }
-    if age < Duration::from_secs(60 * 60) {
+    if age < Duration::from_hours(1) {
         return format!("active {}m ago", age.as_secs() / 60);
     }
-    if age < Duration::from_secs(60 * 60 * 24) {
+    if age < Duration::from_hours(24) {
         return format!("active {}h ago", age.as_secs() / (60 * 60));
     }
     format!("active {}d ago", age.as_secs() / (60 * 60 * 24))

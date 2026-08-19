@@ -152,7 +152,13 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
         .auto_shrink([false, false])
         .id_salt(("editor_edit", panel.id.0))
         .show_viewport(ui, |ui, viewport| {
-            let response = ui.add(markdown_text_edit(&mut editor.text, viewport.size()));
+            // egui 0.36 sizes a TextEdit from its row count and ignores the
+            // `min_size` height, so fill the visible viewport via rows to keep
+            // the whole pane clickable.
+            let row_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(FONT_SIZE)));
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let desired_rows = (viewport.height() / row_height).ceil().max(1.0) as usize;
+            let response = ui.add(markdown_text_edit(&mut editor.text, viewport.size(), desired_rows));
             if response.changed() {
                 editor.dirty = true;
             }
@@ -162,13 +168,13 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
     Some(output.inner)
 }
 
-fn markdown_text_edit(text: &mut String, min_size: Vec2) -> egui::TextEdit<'_> {
+fn markdown_text_edit(text: &mut String, min_size: Vec2, desired_rows: usize) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text)
         .font(FontId::monospace(FONT_SIZE))
         .desired_width(f32::INFINITY)
-        .desired_rows(1)
+        .desired_rows(desired_rows)
         .min_size(min_size)
-        .frame(false)
+        .frame(egui::Frame::NONE)
         .text_color(theme::FG())
         .lock_focus(true)
 }
@@ -233,6 +239,7 @@ fn forward_scroll_to_scroll_area(ui: &egui::Ui, scroll_id: Id, inner_rect: Rect,
 
 #[cfg(test)]
 mod tests {
+    use crate::test_egui::DiscardTextures;
     use std::path::PathBuf;
 
     use egui::{Align, Context, Layout, Pos2, Rect, UiBuilder, Vec2};
@@ -275,19 +282,25 @@ mod tests {
         let mut panel = test_editor_panel("");
 
         theme::apply(&ctx, AppearanceTheme::Dark);
-        ctx.begin_pass(input);
-        let text_rect = egui::CentralPanel::default()
-            .show(&ctx, |ui| {
-                ui.scope_builder(
-                    UiBuilder::new()
-                        .max_rect(body_rect)
-                        .layout(Layout::top_down(Align::Min)),
-                    |ui| render_edit_pane(ui, &mut panel).expect("editor response"),
-                )
-                .inner
+        let mut text_rect = None;
+        let _ = ctx
+            .run_ui(input, |ui| {
+                text_rect = Some(
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| {
+                            ui.scope_builder(
+                                UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(Layout::top_down(Align::Min)),
+                                |ui| render_edit_pane(ui, &mut panel).expect("editor response"),
+                            )
+                            .inner
+                        })
+                        .inner,
+                );
             })
-            .inner;
-        let _ = ctx.end_pass();
+            .discard_textures();
+        let text_rect = text_rect.expect("editor frame ran");
 
         let probe_points = [
             Pos2::new(body_rect.left() + 8.0, body_rect.top() + 8.0),

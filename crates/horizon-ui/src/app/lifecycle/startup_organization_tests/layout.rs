@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_egui::DiscardTextures;
 
 #[test]
 fn startup_frame_organizes_attached_workspaces_only_once() {
@@ -68,14 +69,16 @@ fn startup_frame_does_not_treat_a_workspace_sliver_as_visible() {
     let (_temp, ctx, mut app) = enabled_test_app(two_workspace_runtime(Some(CanvasViewState::default())));
     app.theme_applied = true;
     let size = [app.window_config.width, app.window_config.height];
-    let _ = ctx.run(raw_input(size, None), |ctx| {
-        let (pos, frame_size) = workspace_frame(&app, "right");
-        let canvas_rect = app.canvas_rect(ctx);
-        app.canvas_view.set_pan_offset([
-            1.0 - (pos.x + frame_size.x),
-            canvas_rect.center().y - canvas_rect.min.y - (pos.y + frame_size.y * 0.5),
-        ]);
-    });
+    let _ = ctx
+        .run_ui(raw_input(size, None), |ui| {
+            let (pos, frame_size) = workspace_frame(&app, "right");
+            let canvas_rect = app.canvas_rect(ui);
+            app.canvas_view.set_pan_offset([
+                1.0 - (pos.x + frame_size.x),
+                canvas_rect.center().y - canvas_rect.min.y - (pos.y + frame_size.y * 0.5),
+            ]);
+        })
+        .discard_textures();
     let sliver_view = app.canvas_view;
 
     run_frame_at_configured_size(&ctx, &mut app);

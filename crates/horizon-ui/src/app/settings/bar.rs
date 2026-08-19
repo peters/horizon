@@ -1,11 +1,11 @@
-use egui::{Align, Button, Color32, Context, Layout, Margin, Stroke};
+use egui::{Align, Button, Color32, Layout, Margin, Stroke};
 
 use super::SettingsAction;
 use crate::app::util::{chrome_button, primary_button};
 use crate::theme;
 
 pub(super) fn render(
-    ctx: &Context,
+    ui: &mut egui::Ui,
     status_text: &str,
     status_color: Color32,
     is_valid: bool,
@@ -13,15 +13,15 @@ pub(super) fn render(
 ) -> SettingsAction {
     let mut action = SettingsAction::None;
 
-    egui::TopBottomPanel::bottom(super::SETTINGS_BAR_ID)
-        .exact_height(super::SETTINGS_BAR_HEIGHT)
+    egui::Panel::bottom(super::SETTINGS_BAR_ID)
+        .exact_size(super::SETTINGS_BAR_HEIGHT)
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
                 .inner_margin(Margin::symmetric(24, 8))
                 .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 100))),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 if !status_text.is_empty() {
                     ui.label(egui::RichText::new(status_text).color(status_color).size(12.0));

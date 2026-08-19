@@ -363,7 +363,7 @@ fn render_destination_editor(ui: &mut egui::Ui, flow: &mut SshUploadFlow, action
                     egui::TextEdit::singleline(&mut flow.destination_input)
                         .desired_width(ui.available_width() - 88.0)
                         .hint_text("~/uploads")
-                        .frame(false)
+                        .frame(egui::Frame::NONE)
                         .text_color(theme::FG()),
                 );
                 if styled_small_button(ui, "Browse") {

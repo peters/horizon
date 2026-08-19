@@ -121,12 +121,10 @@ impl HorizonApp {
             input.raw.events.clear();
             input.raw.hovered_files.clear();
             input.raw.dropped_files.clear();
-            input.raw.modifiers = egui::Modifiers::NONE;
             input.events.clear();
             input.keys_down.clear();
             input.modifiers = egui::Modifiers::NONE;
             input.pointer = egui::PointerState::default();
-            input.raw_scroll_delta = egui::Vec2::ZERO;
             input.smooth_scroll_delta = egui::Vec2::ZERO;
         });
         self.frame_keyboard_events.remove(&ViewportId::ROOT);
