@@ -329,6 +329,8 @@ cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
 cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
 ```
 
+On Linux, capture routes through PulseAudio/PipeWire (pipewire-pulse) whenever that sound server is running, so the microphone is shared with whatever else is using it (Discord, a video call, ...). Without a sound server it falls back to raw ALSA, which claims the device exclusively.
+
 When a GPU backend is compiled in (Metal ships automatically in plain `speech` on macOS), the `auto` backend probes discrete GPUs first and always falls back to CPU; a CPU-only build simply runs on CPU.
 
 ```yaml

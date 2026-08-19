@@ -510,7 +510,8 @@ fn start_recording(
     // One arm per interleaved sample type, each normalizing to f32 in
     // [-1, 1] before the shared downmix/resample. Covers the formats real
     // capture endpoints report: F32/I16/U16 plus 8-bit, 32-bit (incl. the
-    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64.
+    // I32 that 24-bit WASAPI/ALSA endpoints deliver), the I24 that 24-bit
+    // PulseAudio/PipeWire endpoints deliver, and F64.
     macro_rules! input_stream {
         ($sample:ty, $to_f32:expr) => {{
             let sink = Arc::clone(&samples);
@@ -531,6 +532,7 @@ fn start_recording(
         SampleFormat::F64 => input_stream!(f64, |&sample| f64_to_sample(sample)),
         SampleFormat::I8 => input_stream!(i8, |&sample| f32::from(sample) / 128.0),
         SampleFormat::I16 => input_stream!(i16, |&sample| f32::from(sample) / 32_768.0),
+        SampleFormat::I24 => input_stream!(i32, |&sample| i24_to_sample(sample)),
         SampleFormat::I32 => input_stream!(i32, |&sample| i32_to_sample(sample)),
         SampleFormat::U8 => input_stream!(u8, |&sample| (f32::from(sample) - 128.0) / 128.0),
         SampleFormat::U16 => input_stream!(u16, |&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
@@ -602,6 +604,14 @@ fn i32_to_sample(sample: i32) -> f32 {
     sample as f32 / 2_147_483_648.0
 }
 
+/// Normalize a 24-bit device sample (stored in a 4-byte i32 by cpal's I24
+/// format, as delivered by 24-bit PulseAudio/PipeWire sources) to f32 in
+/// [-1, 1).
+#[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
+fn i24_to_sample(sample: i32) -> f32 {
+    sample as f32 / 8_388_608.0
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -656,8 +666,18 @@ mod tests {
 
     use super::{
         CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE,
-        deduplicate_device_names, to_mono_16k,
+        deduplicate_device_names, i24_to_sample, to_mono_16k,
     };
+
+    #[test]
+    fn i24_samples_normalize_to_the_f32_pipeline_range() {
+        let full = 1.0 / 8_388_608.0;
+        let close = |a: f32, b: f32| (a - b).abs() <= f32::EPSILON;
+        assert!(close(i24_to_sample(0), 0.0));
+        assert!(close(i24_to_sample(-8_388_608), -1.0));
+        assert!(close(i24_to_sample(8_388_607), 1.0 - full));
+        assert!(close(i24_to_sample(1), full));
+    }
 
     #[test]
     fn device_names_are_deduplicated_case_insensitively_in_host_order() {

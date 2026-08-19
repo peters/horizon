@@ -48,7 +48,12 @@ surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
 transcribe-cpp = "0.2.0"
-cpal = "0.18.2"
+# The `pulseaudio` feature (Linux-only effect) adds cpal's PulseAudio host, which
+# `default_host()` prefers over raw ALSA when a PulseAudio/PipeWire (pipewire-pulse)
+# server socket exists. Capture then shares the microphone with every other app
+# (Discord, calls, ...) instead of failing with a busy raw-ALSA device; without a
+# sound server it falls back to raw ALSA exactly as before.
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
 
 [profile.release]
 lto = true
