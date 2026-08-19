@@ -209,24 +209,40 @@ impl HorizonApp {
         true
     }
 
-    /// Focus a panel and move the view so the panel is visible: zoom out just
-    /// enough for it to fit (never zoom in), or bottom-align it when it stays
-    /// larger than the viewport even at the minimum zoom.
+    /// Focus a panel and move the view so the panel is visible: its workspace
+    /// is left-aligned next to the canvas edge (close to the sidebar), the
+    /// view zooms out just enough for the panel to fit (never zooms in), or
+    /// bottom-aligns the panel when it stays larger than the viewport even at
+    /// the minimum zoom.
     pub(super) fn reveal_panel_visible(&mut self, ctx: &Context, panel_id: PanelId) {
         self.reveal_panel_in_rect(panel_id, self.canvas_rect(ctx));
     }
 
     pub(super) fn reveal_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
-        let Some((pos, size)) = self.panel_focus_frame(panel_id) else {
+        let Some((panel_frame, workspace_pos)) = self.reveal_frames(panel_id) else {
             return;
         };
 
-        let (zoom, pan_offset) = reveal_view_state(canvas_rect, pos, size, self.canvas_view.zoom);
+        let (zoom, pan_offset) = reveal_view_state(canvas_rect, panel_frame, workspace_pos, self.canvas_view.zoom);
         self.board.focus(panel_id);
         self.pan_target = None;
         self.canvas_view.set_zoom(zoom);
         self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
         self.mark_runtime_dirty();
+    }
+
+    /// The revealed panel's frame plus the left edge of the workspace it
+    /// belongs to (falling back to the panel's own left edge when the
+    /// workspace cannot be resolved).
+    fn reveal_frames(&self, panel_id: PanelId) -> Option<((Pos2, Vec2), Pos2)> {
+        let panel = self.board.panel(panel_id)?;
+        let panel_frame = panel_focus_frame(panel.layout.position, panel.layout.size);
+        let workspace_pos = self
+            .board
+            .panel_workspace_id(panel_id)
+            .and_then(|workspace_id| self.workspace_focus_frame(workspace_id))
+            .map_or(panel_frame.0, |(pos, _size)| pos);
+        Some((panel_frame, workspace_pos))
     }
 
     pub(super) fn focus_workspace_bounds(&mut self, ctx: &Context, min: [f32; 2], max: [f32; 2], left_align: bool) {
@@ -330,12 +346,6 @@ impl HorizonApp {
             )
         })
     }
-
-    fn panel_focus_frame(&self, panel_id: PanelId) -> Option<(Pos2, Vec2)> {
-        self.board
-            .panel(panel_id)
-            .map(|panel| panel_focus_frame(panel.layout.position, panel.layout.size))
-    }
 }
 
 fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
@@ -348,29 +358,37 @@ fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
 /// Inset (px) kept between the revealed panel and the viewport edge.
 const REVEAL_MARGIN: f32 = 40.0;
 
-/// View state that keeps a canvas frame visible: the current zoom is kept while
-/// the frame already fits, otherwise the view zooms out just enough for the
-/// frame to fit (never zooming in).
-fn reveal_view_state(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, current_zoom: f32) -> (f32, Vec2) {
+/// View state that keeps a revealed panel visible: the panel's workspace is
+/// left-aligned next to the canvas edge (close to the sidebar), the current
+/// zoom is kept while the panel already fits from there, otherwise the view
+/// zooms out just enough for the panel to fit (never zooming in).
+fn reveal_view_state(canvas_rect: Rect, panel: (Pos2, Vec2), workspace_pos: Pos2, current_zoom: f32) -> (f32, Vec2) {
+    let (panel_pos, panel_size) = panel;
+    // The horizontal fit spans the workspace's left edge to the panel's right
+    // edge because the view left-aligns the workspace, not the panel.
+    let fit_width = (panel_pos.x + panel_size.x) - workspace_pos.x;
     let zoom = current_zoom.min(fit_zoom_for_frame(
         canvas_rect.size(),
-        canvas_size,
+        Vec2::new(fit_width, panel_size.y),
         Vec2::splat(REVEAL_MARGIN),
     ));
-    (zoom, reveal_pan_offset(canvas_rect, canvas_pos, canvas_size, zoom))
+    (
+        zoom,
+        reveal_pan_offset(canvas_rect, panel_pos, panel_size, workspace_pos, zoom),
+    )
 }
 
-fn reveal_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32) -> Vec2 {
-    let frame_screen_size = canvas_size * zoom;
-    // When the frame is taller than the viewport (oversized panel at the
-    // minimum zoom) it is bottom-aligned so the panel's bottom edge — where a
-    // terminal's active prompt lives — stays visible. It is always centered
-    // horizontally, which keeps the middle visible for overly wide panels.
-    let x = canvas_rect.width() * 0.5 - (canvas_pos.x + canvas_size.x * 0.5) * zoom;
-    let y = if frame_screen_size.y + REVEAL_MARGIN * 2.0 <= canvas_rect.height() {
-        canvas_rect.height() * 0.5 - (canvas_pos.y + canvas_size.y * 0.5) * zoom
+fn reveal_pan_offset(canvas_rect: Rect, panel_pos: Pos2, panel_size: Vec2, workspace_pos: Pos2, zoom: f32) -> Vec2 {
+    // The workspace's left edge is pinned next to the canvas edge (close to the
+    // sidebar) instead of the panel being centered, so the workspace reads from
+    // the left. When the panel is taller than the viewport (oversized panel at
+    // the minimum zoom) it is bottom-aligned so the panel's bottom edge — where
+    // a terminal's active prompt lives — stays visible.
+    let x = REVEAL_MARGIN - workspace_pos.x * zoom;
+    let y = if panel_size.y * zoom + REVEAL_MARGIN * 2.0 <= canvas_rect.height() {
+        canvas_rect.height() * 0.5 - (panel_pos.y + panel_size.y * 0.5) * zoom
     } else {
-        canvas_rect.height() - REVEAL_MARGIN - (canvas_pos.y + canvas_size.y) * zoom
+        canvas_rect.height() - REVEAL_MARGIN - (panel_pos.y + panel_size.y) * zoom
     };
     Vec2::new(x, y)
 }
@@ -479,43 +497,76 @@ mod tests {
     }
 
     #[test]
-    fn reveal_view_state_keeps_zoom_and_centers_fitting_frame() {
+    fn reveal_view_state_left_aligns_workspace_for_fitting_panel() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(500.0, 300.0), Vec2::new(400.0, 300.0), 1.0);
+        let panel = (Pos2::new(500.0, 300.0), Vec2::new(400.0, 300.0));
+        let workspace_pos = Pos2::new(484.0, 254.0);
+
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
 
         assert!((zoom - 1.0).abs() <= f32::EPSILON);
-        assert!((pan.x + 100.0).abs() < 0.001);
-        assert!((pan.y + 50.0).abs() < 0.001);
+        // x: workspace left edge at the margin: 40 - 484 ; y centered on the panel.
+        assert!((pan.x - (-444.0)).abs() < 0.001);
+        assert!((pan.y - (-50.0)).abs() < 0.001);
     }
 
     #[test]
-    fn reveal_view_state_zooms_out_just_enough_for_oversized_frame() {
+    fn reveal_view_state_zooms_out_just_enough_for_oversized_panel() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        // Available (1200-80) x (800-80) vs frame 1600x1200 -> min(0.7, 0.6).
-        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(0.0, 0.0), Vec2::new(1600.0, 1200.0), 1.0);
+        // Span workspace-left -> panel-right is 1300 - 84 = 1216 wide; available
+        // (1200-80) x (800-80) -> min(1120/1216, 720/900) = 0.8.
+        let panel = (Pos2::new(100.0, 50.0), Vec2::new(1200.0, 900.0));
+        let workspace_pos = Pos2::new(84.0, -4.0);
 
-        assert!((zoom - 0.6).abs() < 0.001);
-        assert!((pan.x - 120.0).abs() < 0.001);
-        assert!((pan.y - 40.0).abs() < 0.001);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+
+        assert!((zoom - 0.8).abs() < 0.001);
+        assert!((pan.x - (-27.2)).abs() < 0.001);
+        // 900 * 0.8 = 720 fits exactly -> centered: 400 - (50 + 450) * 0.8.
+        assert!(pan.y.abs() < 0.001);
     }
 
     #[test]
     fn reveal_view_state_never_zooms_in() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        let (zoom, _) = reveal_view_state(canvas, Pos2::new(0.0, 0.0), Vec2::new(100.0, 80.0), 1.5);
+        let panel = (Pos2::new(0.0, 0.0), Vec2::new(100.0, 80.0));
+        let workspace_pos = Pos2::new(-16.0, -44.0);
+
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.5);
 
         assert!((zoom - 1.5).abs() <= f32::EPSILON);
+        assert!((pan.x - 64.0).abs() < 0.001);
     }
 
     #[test]
-    fn reveal_view_state_bottom_aligns_frame_taller_than_viewport() {
+    fn reveal_view_state_bottom_aligns_panel_taller_than_viewport() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        // 4000x4000 frame cannot fit even at the minimum zoom (0.25 -> 1000x1000).
-        let (zoom, pan) = reveal_view_state(canvas, Pos2::new(100.0, 0.0), Vec2::new(4000.0, 4000.0), 1.0);
+        // 4000px panel cannot fit even at the minimum zoom (0.25 -> 1000px).
+        let panel = (Pos2::new(100.0, 0.0), Vec2::new(4000.0, 4000.0));
+        let workspace_pos = Pos2::new(84.0, -44.0);
+
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
 
         assert!((zoom - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
-        // x centered: 600 - (100 + 2000) * 0.25 ; y bottom-aligned: 800 - 40 - (0 + 4000) * 0.25
-        assert!((pan.x - 75.0).abs() < 0.001);
+        // x: workspace left edge at the margin: 40 - 84 * 0.25 ;
+        // y bottom-aligned: 800 - 40 - (0 + 4000) * 0.25.
+        assert!((pan.x - 19.0).abs() < 0.001);
         assert!((pan.y - (-240.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn reveal_view_state_keeps_off_left_panel_visible() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        // Panel sits far right inside its workspace: the fit span runs from the
+        // workspace's left edge (0) to the panel's right edge (1400) -> 1120/1400 = 0.8.
+        let panel = (Pos2::new(1000.0, 0.0), Vec2::new(400.0, 300.0));
+        let workspace_pos = Pos2::new(0.0, -54.0);
+
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+
+        assert!((zoom - 0.8).abs() < 0.001);
+        assert!((pan.x - 40.0).abs() < 0.001);
+        // Panel screen span: 40 + 1000 * 0.8 .. 40 + 1400 * 0.8 = 840 .. 1160 (right margin).
+        assert!((pan.y - 280.0).abs() < 0.001);
     }
 }
