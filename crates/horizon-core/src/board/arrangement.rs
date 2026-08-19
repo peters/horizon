@@ -223,10 +223,14 @@ impl Board {
     /// Selecting a preset re-arranges immediately, including from manual
     /// placement (default); panel sizes are fitted to the current content
     /// area so the arrangement fills the workspace frame instead of jumping
-    /// elsewhere. Dragging a panel by hand returns the workspace to manual
-    /// placement.
+    /// elsewhere. Fitted sizes are clamped to the default panel size, so an
+    /// arrangement can grow the frame; neighboring workspaces are pushed out
+    /// of the way like on panel resize. Dragging a panel by hand returns the
+    /// workspace to manual placement.
     pub fn arrange_workspace(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
+        let previous_frame = self.workspace_frame_rect(id);
         self.apply_workspace_layout(id, layout);
+        self.resolve_workspace_collisions_after_frame_growth(id, previous_frame);
     }
 
     pub fn clear_workspace_layout(&mut self, id: WorkspaceId) -> bool {
