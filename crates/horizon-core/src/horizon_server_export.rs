@@ -129,9 +129,12 @@ fn resolved_server_launch(panel: &Panel) -> Option<(String, Vec<String>)> {
         | PanelKind::KiloCode
         | PanelKind::Pi
         | PanelKind::Grok => {
+            // Always the agent's default command: the server starts a
+            // fresh session of the same agent kind, so a user-configured
+            // wrapper executable (or an injected resume command) must not
+            // leak into the export. The user's saved launch args are kept.
             let definition = agent_definition(panel.kind)?;
-            let program = command.unwrap_or_else(|| definition.default_command.to_string());
-            (program, args)
+            (definition.default_command.to_string(), args)
         }
     };
     Some((program, args))
@@ -215,6 +218,16 @@ fn yaml_scalar(value: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
+            // Control characters (C0 and C1) are not printable inside a
+            // quoted scalar; escape them explicitly or the generated YAML
+            // is invalid (or silently parses to a different value).
+            ch if ch.is_control() => {
+                if (ch as u32) < 0x80 {
+                    let _ = write!(out, "\\x{:02x}", ch as u8);
+                } else {
+                    let _ = write!(out, "\\u{{{:04x}}}", ch as u32);
+                }
+            }
             ch => out.push(ch),
         }
     }
@@ -281,6 +294,9 @@ mod tests {
         assert_eq!(yaml_scalar("say \"hi\""), r#""say \"hi\"""#);
         assert_eq!(yaml_scalar("a\\b"), r#""a\\b""#);
         assert_eq!(yaml_scalar("line\nbreak"), r#""line\nbreak""#);
+        assert_eq!(yaml_scalar("cr\rnl\0"), r#""cr\x0dnl\x00""#);
+        assert_eq!(yaml_scalar("del\u{7f}"), r#""del\x7f""#);
+        assert_eq!(yaml_scalar("c1\u{85}"), r#""c1\u{0085}""#);
         assert_eq!(yaml_scalar("key: value"), r#""key: value""#);
     }
 
@@ -374,6 +390,40 @@ mod tests {
 
         board.close_panel(shell);
         board.close_panel(command);
+    }
+
+    #[test]
+    fn export_of_agent_panel_ignores_custom_wrapper_command() {
+        let mut board = Board::new();
+        let ws = board.create_workspace("agents");
+        let agent = board
+            .create_panel(
+                PanelOptions {
+                    name: Some("codex pane".to_string()),
+                    command: Some("my-wrapper".to_string()),
+                    args: vec!["--keep-me".to_string()],
+                    kind: PanelKind::Codex,
+                    ..PanelOptions::default()
+                },
+                ws,
+            )
+            .expect("agent panel should spawn");
+
+        let yaml = board.to_horizon_server_config().expect("panels exist").yaml;
+        let default = agent_definition(PanelKind::Codex)
+            .expect("codex definition")
+            .default_command;
+        // The wrapper is not exported; the agent's default command is.
+        assert!(!yaml.contains("my-wrapper"), "yaml:\n{yaml}");
+        assert!(
+            yaml.contains(&format!("command: {}", yaml_scalar(default))),
+            "yaml:\n{yaml}"
+        );
+        // The user's saved launch args are retained.
+        assert!(yaml.contains(r#"- "--keep-me""#), "yaml:\n{yaml}");
+        assert!(yaml.contains(r#"- name: "codex-pane""#), "yaml:\n{yaml}");
+
+        board.close_panel(agent);
     }
 
     #[test]

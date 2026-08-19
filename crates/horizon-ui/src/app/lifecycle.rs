@@ -525,7 +525,8 @@ impl HorizonApp {
     }
 
     pub(super) fn show_speech_notice(&mut self, message: impl Into<String>, error: bool) {
-        self.show_transient_notice("🎤", message, error);
+        let icon = if error { "⚠" } else { "🎤" };
+        self.show_transient_notice(icon, message, error);
     }
 
     pub(super) fn show_transient_notice(&mut self, icon: &'static str, message: impl Into<String>, error: bool) {

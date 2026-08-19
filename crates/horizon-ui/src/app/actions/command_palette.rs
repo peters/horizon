@@ -138,7 +138,7 @@ impl HorizonApp {
             return;
         };
         let path = self.config_path.with_file_name("horizon-server.yml");
-        match std::fs::write(&path, &export.yaml) {
+        match crate::app::util::atomic_write(&path, &export.yaml) {
             Ok(()) => {
                 tracing::info!(
                     path = %path.display(),
