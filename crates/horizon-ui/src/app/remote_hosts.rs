@@ -9,7 +9,7 @@ use crate::remote_hosts_overlay::{RemoteHostsOverlay, RemoteHostsOverlayAction};
 
 use super::HorizonApp;
 
-const DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 impl HorizonApp {
     pub(super) fn toggle_remote_hosts_overlay(&mut self, ctx: &egui::Context) {

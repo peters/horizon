@@ -280,7 +280,7 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_fullscreen_panel(&mut self, ctx: &Context) {
+    pub(super) fn render_fullscreen_panel(&mut self, ui: &mut egui::Ui) {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
@@ -288,7 +288,7 @@ impl HorizonApp {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let rect = ui.max_rect();
                 let body_rect = Rect::from_min_max(
                     Pos2::new(rect.min.x + PANEL_PADDING, rect.min.y + PANEL_PADDING),

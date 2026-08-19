@@ -778,6 +778,7 @@ fn captured_binding_string(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_egui::DiscardTextures;
     use egui::{Event, Key, Modifiers};
     use horizon_core::{Config, SpeechTask};
 
@@ -807,11 +808,13 @@ mod tests {
         config.features.speech.task = SpeechTask::Translate;
         config.features.speech.target_language = "de".to_string();
 
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!speech_output_row(ui, &mut config, None, true));
-            });
-        });
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    assert!(!speech_output_row(ui, &mut config, None, true));
+                });
+            })
+            .discard_textures();
 
         assert_eq!(config.features.speech.task, SpeechTask::Translate);
         assert_eq!(config.features.speech.target_language, "de");
@@ -830,17 +833,19 @@ mod tests {
             ctx.data_mut(|data| data.insert_temp(capture_id, true));
             let mut config = Config::default();
 
-            let _ = ctx.run(
-                egui::RawInput {
-                    events: vec![event],
-                    ..egui::RawInput::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!render_hotkey_binder(ui, &mut config));
-                    });
-                },
-            );
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![event],
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            assert!(!render_hotkey_binder(ui, &mut config));
+                        });
+                    },
+                )
+                .discard_textures();
 
             let capturing: bool = ctx.data(|data| data.get_temp(capture_id)).unwrap_or(false);
             let error: Option<String> = ctx.data(|data| data.get_temp(error_id));
@@ -863,28 +868,30 @@ mod tests {
     fn clipboard_error_does_not_expand_the_settings_grid() {
         fn render_panel(ctx: &egui::Context, config: &mut Config) -> f32 {
             let mut panel_width = 0.0_f32;
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_600.0, 900.0))),
-                    ..egui::RawInput::default()
-                },
-                |ctx| {
-                    let panel = egui::SidePanel::right("speech_hotkey_width_test")
-                        .default_width(480.0)
-                        .min_width(240.0)
-                        .max_width(800.0)
-                        .show(ctx, |ui| {
-                            egui::Grid::new("clipboard_error_width_test")
-                                .num_columns(2)
-                                .show(ui, |ui| {
-                                    ui.label("Push-to-talk");
-                                    assert!(!render_hotkey_binder(ui, config));
-                                    ui.end_row();
-                                });
-                        });
-                    panel_width = panel.response.rect.width();
-                },
-            );
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1_600.0, 900.0))),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        let panel = egui::Panel::right("speech_hotkey_width_test")
+                            .default_size(480.0)
+                            .min_size(240.0)
+                            .max_size(800.0)
+                            .show(ui, |ui| {
+                                egui::Grid::new("clipboard_error_width_test")
+                                    .num_columns(2)
+                                    .show(ui, |ui| {
+                                        ui.label("Push-to-talk");
+                                        assert!(!render_hotkey_binder(ui, config));
+                                        ui.end_row();
+                                    });
+                            });
+                        panel_width = panel.response.rect.width();
+                    },
+                )
+                .discard_textures();
             panel_width
         }
 
@@ -909,26 +916,28 @@ mod tests {
         ctx.data_mut(|data| data.insert_temp(capture_id, true));
         let mut config = Config::default();
 
-        let _ = ctx.run(
-            egui::RawInput {
-                events: vec![
-                    Event::Key {
-                        key: Key::C,
-                        physical_key: Some(Key::C),
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::COMMAND,
-                    },
-                    Event::Copy,
-                ],
-                ..egui::RawInput::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!render_hotkey_binder(ui, &mut config));
-                });
-            },
-        );
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![
+                        Event::Key {
+                            key: Key::C,
+                            physical_key: Some(Key::C),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        },
+                        Event::Copy,
+                    ],
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        assert!(!render_hotkey_binder(ui, &mut config));
+                    });
+                },
+            )
+            .discard_textures();
 
         let pending = ctx
             .data(|data| data.get_temp::<Option<super::PendingCapture>>(pending_id))
@@ -1042,25 +1051,27 @@ mod tests {
 
         let mut changed_slot0 = false;
         let mut changed_slot1 = false;
-        let _ = ctx.run(
-            egui::RawInput {
-                events: vec![Event::Key {
-                    key: Key::F5,
-                    physical_key: Some(Key::F5),
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::NONE,
-                }],
-                ..egui::RawInput::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    // The unarmed row must ignore the press entirely.
-                    changed_slot0 = super::render_hotkey_binder_slot(ui, &mut config, Some(0));
-                    changed_slot1 = super::render_hotkey_binder_slot(ui, &mut config, Some(1));
-                });
-            },
-        );
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![Event::Key {
+                        key: Key::F5,
+                        physical_key: Some(Key::F5),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        // The unarmed row must ignore the press entirely.
+                        changed_slot0 = super::render_hotkey_binder_slot(ui, &mut config, Some(0));
+                        changed_slot1 = super::render_hotkey_binder_slot(ui, &mut config, Some(1));
+                    });
+                },
+            )
+            .discard_textures();
 
         assert!(!changed_slot0);
         assert!(changed_slot1);

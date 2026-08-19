@@ -3,7 +3,7 @@ mod shortcut_actions;
 use std::collections::BTreeSet;
 
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, Layout, Pos2, Rect, Stroke, TopBottomPanel, Vec2, ViewportBuilder,
+    Align, Button, Color32, Context, CornerRadius, Layout, Panel, Pos2, Rect, Stroke, Vec2, ViewportBuilder,
     ViewportCommand, ViewportId,
 };
 use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
@@ -122,11 +122,11 @@ impl HorizonApp {
             let builder = detached_viewport_builder(&window_config, &workspace.name, restore_window_position);
             let local_id_for_viewport = local_id.clone();
 
-            ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _class| {
+            ctx.show_viewport_immediate(viewport_id, builder, |viewport_ui, _class| {
                 // Feed the focus aggregate consumed by the end-of-frame
                 // unattended-recording privacy guard.
-                self.any_viewport_focused |= viewport_ctx.input(|input| input.viewport().focused.unwrap_or(false));
-                self.render_detached_workspace_window(viewport_ctx, workspace_id, &local_id_for_viewport);
+                self.any_viewport_focused |= viewport_ui.input(|input| input.viewport().focused.unwrap_or(false));
+                self.render_detached_workspace_window(viewport_ui, workspace_id, &local_id_for_viewport);
             });
         }
 
@@ -139,7 +139,13 @@ impl HorizonApp {
         }
     }
 
-    fn render_detached_workspace_window(&mut self, ctx: &Context, workspace_id: WorkspaceId, workspace_local_id: &str) {
+    fn render_detached_workspace_window(
+        &mut self,
+        ui: &mut egui::Ui,
+        workspace_id: WorkspaceId,
+        workspace_local_id: &str,
+    ) {
+        let ctx = &ui.ctx().clone();
         if ctx.input(|input| input.viewport().close_requested()) {
             // Keep the native window alive for the remainder of this pass.
             // Dropping the viewport immediately can make winit query a dead X11
@@ -186,12 +192,12 @@ impl HorizonApp {
         }
 
         self.handle_detached_shortcuts(ctx, workspace_id);
-        self.render_detached_toolbar(ctx, workspace_id, workspace_local_id, &workspace_name);
+        self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan_in_rect(ctx, canvas_rect, Some(workspace_id));
-        self.render_canvas(ctx);
+        self.render_canvas(ui);
         self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.render_panels_for_workspace(ctx, workspace_id);
         self.render_file_drop_highlight(ctx);
@@ -255,11 +261,12 @@ impl HorizonApp {
 
     fn render_detached_toolbar(
         &mut self,
-        ctx: &Context,
+        ui: &mut egui::Ui,
         workspace_id: WorkspaceId,
         workspace_local_id: &str,
         workspace_name: &str,
     ) {
+        let ctx = &ui.ctx().clone();
         let fit_shortcut = self
             .shortcuts
             .fit_active_workspace
@@ -271,7 +278,7 @@ impl HorizonApp {
             "Show Minimap"
         };
 
-        TopBottomPanel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ctx, |ui| {
+        Panel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ui, |ui| {
             ui.set_height(TOOLBAR_HEIGHT);
             ui.painter()
                 .rect_filled(ui.max_rect(), CornerRadius::ZERO, theme::TITLEBAR_BG());

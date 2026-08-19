@@ -456,6 +456,7 @@ fn append_cell_decoration(
 #[cfg(test)]
 mod tests {
     use super::{GridMetrics, TerminalGridCache, cell_colors, merge_shape_layers, render_grid};
+    use crate::test_egui::DiscardTextures;
     use crate::theme;
     use alacritty_terminal::event::{Event as PtyEvent, EventListener};
     use alacritty_terminal::grid::{Dimensions, Indexed};
@@ -503,19 +504,21 @@ mod tests {
         cache: &mut TerminalGridCache,
         allow_grid_cache: bool,
     ) {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(96.0, 64.0));
-                render_grid(
-                    ui,
-                    rect,
-                    term.renderable_content(),
-                    metrics,
-                    Some(cache),
-                    allow_grid_cache,
-                );
-            });
-        });
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(96.0, 64.0));
+                    render_grid(
+                        ui,
+                        rect,
+                        term.renderable_content(),
+                        metrics,
+                        Some(cache),
+                        allow_grid_cache,
+                    );
+                });
+            })
+            .discard_textures();
     }
 
     #[test]

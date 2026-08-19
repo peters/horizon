@@ -20,11 +20,14 @@ impl ImeCommitNormalizer {
     pub(crate) fn normalize(&mut self, viewport_id: ViewportId, events: &mut [Event]) {
         for event in events {
             match event {
-                Event::Ime(ImeEvent::Enabled | ImeEvent::Preedit(_)) => {
-                    self.composing.insert(viewport_id);
-                }
-                Event::Ime(ImeEvent::Disabled) => {
-                    self.composing.remove(&viewport_id);
+                // A non-empty preedit starts a composition session; an empty
+                // preedit means the IME was dismissed.
+                Event::Ime(ImeEvent::Preedit { text, .. }) => {
+                    if text.is_empty() {
+                        self.composing.remove(&viewport_id);
+                    } else {
+                        self.composing.insert(viewport_id);
+                    }
                 }
                 Event::Ime(ImeEvent::Commit(text)) => {
                     let orphan_commit = !self.composing.remove(&viewport_id);
@@ -48,14 +51,17 @@ mod tests {
         Event::Ime(ImeEvent::Commit(text.to_owned()))
     }
 
+    fn preedit(text: &str) -> Event {
+        Event::Ime(ImeEvent::Preedit {
+            text: text.to_owned(),
+            active_range_chars: None,
+        })
+    }
+
     #[test]
     fn orphan_commit_becomes_text_event() {
         let mut normalizer = ImeCommitNormalizer::default();
-        let mut events = vec![
-            Event::Ime(ImeEvent::Disabled),
-            commit("æ"),
-            Event::Ime(ImeEvent::Disabled),
-        ];
+        let mut events = vec![preedit(""), commit("æ"), preedit("")];
 
         normalizer.normalize(ViewportId::ROOT, &mut events);
 
@@ -65,21 +71,17 @@ mod tests {
     #[test]
     fn commit_after_enabled_stays_a_commit() {
         let mut normalizer = ImeCommitNormalizer::default();
-        let mut events = vec![
-            Event::Ime(ImeEvent::Enabled),
-            Event::Ime(ImeEvent::Preedit("中".to_owned())),
-            commit("中"),
-        ];
+        let mut events = vec![preedit("中"), commit("中")];
 
         normalizer.normalize(ViewportId::ROOT, &mut events);
 
-        assert_eq!(events[2], commit("中"));
+        assert_eq!(events[1], commit("中"));
     }
 
     #[test]
     fn composition_state_spans_frames() {
         let mut normalizer = ImeCommitNormalizer::default();
-        let mut first_frame = vec![Event::Ime(ImeEvent::Enabled)];
+        let mut first_frame = vec![preedit("中")];
         normalizer.normalize(ViewportId::ROOT, &mut first_frame);
 
         let mut second_frame = vec![commit("中")];
@@ -91,7 +93,7 @@ mod tests {
     #[test]
     fn commit_ends_the_composition_session() {
         let mut normalizer = ImeCommitNormalizer::default();
-        let mut events = vec![Event::Ime(ImeEvent::Enabled), commit("中"), commit("ø")];
+        let mut events = vec![preedit("中"), commit("中"), commit("ø")];
 
         normalizer.normalize(ViewportId::ROOT, &mut events);
 
@@ -102,7 +104,7 @@ mod tests {
     #[test]
     fn composition_state_is_tracked_per_viewport() {
         let mut normalizer = ImeCommitNormalizer::default();
-        let mut root_frame = vec![Event::Ime(ImeEvent::Enabled)];
+        let mut root_frame = vec![preedit("中")];
         normalizer.normalize(ViewportId::ROOT, &mut root_frame);
 
         let other = ViewportId::from_hash_of("detached");

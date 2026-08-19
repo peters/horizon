@@ -796,7 +796,7 @@ pub(super) fn show_inline_rename_editor(
     let edit = egui::TextEdit::singleline(buffer)
         .font(font)
         .text_color(theme::FG())
-        .frame(false)
+        .frame(egui::Frame::NONE)
         .desired_width(rect.width())
         .margin(Margin::ZERO);
     let response = ui.add(edit);

@@ -95,7 +95,7 @@ impl HorizonApp {
     pub(super) fn maybe_start_ssh_file_drop(
         &mut self,
         panel_id: PanelId,
-        dropped: &[egui::DroppedFile],
+        dropped: &[egui::DroppedFileHandle],
         viewport_id: ViewportId,
     ) -> bool {
         let Some((panel_kind, host_label, connection)) = self.board.panel(panel_id).map(|panel| {
@@ -118,7 +118,7 @@ impl HorizonApp {
             return true;
         }
 
-        let paths: Vec<PathBuf> = dropped.iter().filter_map(|file| file.path.clone()).collect();
+        let paths: Vec<PathBuf> = dropped.iter().map(|file| file.path().to_path_buf()).collect();
         let files = match build_local_upload_files(paths) {
             Ok(files) => files,
             Err(error) => {

@@ -206,14 +206,14 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_shutdown_overlay(&self, ctx: &Context) {
+    pub(super) fn render_shutdown_overlay(&self, ui: &mut egui::Ui) {
         let Some(progress) = &self.shutdown_progress else {
             return;
         };
         let completed = progress.terminals_completed();
         let total = progress.terminal_count();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if total > 0 {
                 loading_spinner::show_with_detail(
                     ui,
@@ -242,22 +242,22 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn prepare_frame(&mut self, ctx: &Context) -> bool {
-        let resolved_theme = theme::resolve_theme(self.appearance_theme, ctx.system_theme());
+    pub(super) fn prepare_frame(&mut self, ui: &mut egui::Ui) -> bool {
+        let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
         if !self.theme_applied || resolved_theme != self.resolved_theme {
-            self.resolved_theme = theme::apply(ctx, self.appearance_theme);
+            self.resolved_theme = theme::apply(ui, self.appearance_theme);
             self.theme_applied = true;
             self.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
             self.editor_preview_cache.clear();
         }
 
-        if !self.prepare_startup_bootstrap(ctx) {
+        if !self.prepare_startup_bootstrap(ui) {
             return false;
         }
 
         if self.startup_chooser.is_none() && !self.initial_pan_done && !self.startup_workspace_organization_pending {
-            self.seed_initial_pan(ctx, None, false);
+            self.seed_initial_pan(ui, None, false);
         }
 
         true
@@ -819,49 +819,49 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_active_view(&mut self, ctx: &Context, root_interaction_suppressed: bool) {
+    pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         if self.fullscreen_panel.is_some() {
-            self.render_fullscreen_panel(ctx);
+            self.render_fullscreen_panel(ui);
             // Detached windows are immediate viewports: egui closes any child
             // viewport that is not shown during a pass, so they must keep
             // rendering while a panel is fullscreen in the root window.
-            self.render_detached_viewports(ctx);
+            self.render_detached_viewports(ui);
             return;
         }
 
         // Settings side panel renders first so egui reserves the space
         // before the canvas `CentralPanel` claims the remainder.
         if self.settings.is_some() {
-            self.render_settings(ctx);
+            self.render_settings(ui);
         }
 
         let workspace_bounds = self.board.workspace_bounds_map();
         if !root_interaction_suppressed {
-            self.handle_canvas_pan(ctx);
+            self.handle_canvas_pan(ui);
         }
-        self.render_toolbar(ctx);
-        self.render_sidebar(ctx);
-        self.render_canvas(ctx);
-        let overlay_zones = self.overlay_exclusion_zones(ctx);
-        self.render_workspace_backgrounds(ctx, &workspace_bounds, &overlay_zones);
-        self.render_empty_state_card(ctx);
-        self.handle_canvas_double_click(ctx);
-        self.render_panels(ctx);
-        self.render_file_drop_highlight(ctx);
-        self.render_preset_picker(ctx);
-        let minimap_height = self.render_minimap(ctx, &workspace_bounds);
+        self.render_toolbar(ui);
+        self.render_sidebar(ui);
+        self.render_canvas(ui);
+        let overlay_zones = self.overlay_exclusion_zones(ui);
+        self.render_workspace_backgrounds(ui, &workspace_bounds, &overlay_zones);
+        self.render_empty_state_card(ui);
+        self.handle_canvas_double_click(ui);
+        self.render_panels(ui);
+        self.render_file_drop_highlight(ui);
+        self.render_preset_picker(ui);
+        let minimap_height = self.render_minimap(ui, &workspace_bounds);
         if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
             let feed_result =
-                attention_feed::render_attention_feed(ctx, &self.board, minimap_height, &self.template_config.overlays);
+                attention_feed::render_attention_feed(ui, &self.board, minimap_height, &self.template_config.overlays);
             for attention_id in feed_result.dismissed_ids {
                 let _ = self.board.dismiss_attention(attention_id);
             }
             if let Some(panel_id) = feed_result.focus_panel {
-                self.reveal_panel_visible(ctx, panel_id);
+                self.reveal_panel_visible(ui, panel_id);
             }
         }
-        self.render_canvas_hud(ctx);
-        self.render_detached_viewports(ctx);
+        self.render_canvas_hud(ui);
+        self.render_detached_viewports(ui);
     }
 
     #[profiling::function]
@@ -931,6 +931,7 @@ mod startup_organization_tests;
 
 #[cfg(test)]
 mod tests {
+    use crate::test_egui::DiscardTextures;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -979,10 +980,12 @@ mod tests {
         // Honor immediate follow-up passes like an integration backend until
         // the app exposes its next delayed deadline.
         let mut repaint_delay = Duration::ZERO;
-        for _ in 0..8 {
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                eframe::App::update(&mut app, ctx, &mut frame);
-            });
+        for _ in 0..32 {
+            let output = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    eframe::App::ui(&mut app, ui, &mut frame);
+                })
+                .discard_textures();
             repaint_delay = output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
@@ -1002,9 +1005,11 @@ mod tests {
         assert!(repaint_delay <= super::SPEECH_POLL_INTERVAL);
 
         channels.complete_preload("Metal");
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            eframe::App::update(&mut app, ctx, &mut frame);
-        });
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            })
+            .discard_textures();
 
         assert!(
             !app.speech
@@ -1034,9 +1039,11 @@ mod tests {
         channels.fail_preload("model not found");
 
         let mut frame = eframe::Frame::_new_kittest();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            eframe::App::update(&mut app, ctx, &mut frame);
-        });
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            })
+            .discard_textures();
 
         assert!(app.startup_chooser.is_some());
         assert!(app.speech_notice.as_ref().is_some_and(|notice| {
@@ -1061,9 +1068,11 @@ mod tests {
         channels.fail_preload("invalid model");
 
         let mut frame = eframe::Frame::_new_kittest();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            eframe::App::update(&mut app, ctx, &mut frame);
-        });
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            })
+            .discard_textures();
 
         assert!(app.startup_receiver.is_some());
         assert!(app.speech_notice.as_ref().is_some_and(|notice| {
@@ -1087,20 +1096,24 @@ mod tests {
              failed to load a model from a deliberately long temporary path because the file was not found",
             true,
         );
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                ..egui::RawInput::default()
-            },
-            |ctx| app.render_speech_notice(ctx),
-        );
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                ..egui::RawInput::default()
-            },
-            |ctx| app.render_speech_notice(ctx),
-        );
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..egui::RawInput::default()
+                },
+                |ui| app.render_speech_notice(ui),
+            )
+            .discard_textures();
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..egui::RawInput::default()
+                },
+                |ui| app.render_speech_notice(ui),
+            )
+            .discard_textures();
         let bounds = output
             .shapes
             .iter()
@@ -1261,25 +1274,31 @@ mod tests {
         let mut events = Vec::new();
 
         // A key with no profile binding must not engage anything.
-        let _ = ctx.run(frame(vec![press(Key::K)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
-        });
+        let _ = ctx
+            .run_ui(frame(vec![press(Key::K)]), |ui| {
+                engaged = super::handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            })
+            .discard_textures();
         assert_eq!(engaged, None);
         assert_eq!(speech.recording_target(), None);
 
         // F2 engages the second profile and starts capture into the target.
-        let _ = ctx.run(frame(vec![press(Key::F2)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
-        });
+        let _ = ctx
+            .run_ui(frame(vec![press(Key::F2)]), |ui| {
+                engaged = super::handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            })
+            .discard_textures();
         assert_eq!(engaged, Some(1));
         assert_eq!(speech.recording_target(), Some(target));
         assert!(channels.capture_start_requested());
 
         // Releasing the engaged key stops the hold (recording ends, the
         // engine moves on to awaiting the captured PCM).
-        let _ = ctx.run(frame(vec![release(Key::F2)]), |ctx| {
-            engaged = super::handle_profile_hotkeys(ctx, &mut speech, Some(target), true, engaged, &mut events);
-        });
+        let _ = ctx
+            .run_ui(frame(vec![release(Key::F2)]), |ui| {
+                engaged = super::handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            })
+            .discard_textures();
         assert_eq!(engaged, None);
         assert_eq!(speech.recording_target(), None);
         assert!(speech.is_active());

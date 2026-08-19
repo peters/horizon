@@ -1,4 +1,4 @@
-use egui::text::{LayoutJob, LayoutSection};
+use egui::text::{ByteIndex, LayoutJob, LayoutSection};
 use egui::{Color32, FontId, TextFormat};
 
 use crate::theme;
@@ -102,7 +102,7 @@ fn highlight_value(job: &mut LayoutJob, offset: usize, value: &str, font_id: &Fo
 fn push(job: &mut LayoutJob, byte_offset: usize, len: usize, color: Color32, font_id: &FontId) {
     job.sections.push(LayoutSection {
         leading_space: 0.0,
-        byte_range: byte_offset..byte_offset + len,
+        byte_range: ByteIndex(byte_offset)..ByteIndex(byte_offset + len),
         format: TextFormat {
             font_id: font_id.clone(),
             color,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_egui::DiscardTextures;
 
 #[test]
 fn viewport_stabilization_keeps_rendering_without_native_geometry() {
@@ -159,24 +160,28 @@ fn viewport_stabilization_suppresses_raw_root_interaction() {
     input.events.push(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(30.0, 40.0),
+        phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
     });
     input.hovered_files.push(egui::HoveredFile::default());
-    input.dropped_files.push(egui::DroppedFile::default());
+    input
+        .dropped_files
+        .push(crate::app::test_support::dropped_file("/tmp/blocked.txt"));
 
-    let _ = ctx.run(input, |ctx| {
-        app.suppress_root_viewport_interaction(ctx);
-        ctx.input(|input| {
-            assert!(input.raw.events.is_empty());
-            assert!(input.raw.hovered_files.is_empty());
-            assert!(input.raw.dropped_files.is_empty());
-            assert!(input.events.is_empty());
-            assert!(input.keys_down.is_empty());
-            assert!(!input.pointer.primary_down());
-            assert_eq!(input.raw_scroll_delta, egui::Vec2::ZERO);
-            assert_eq!(input.smooth_scroll_delta, egui::Vec2::ZERO);
-        });
-    });
+    let _ = ctx
+        .run_ui(input, |ui| {
+            app.suppress_root_viewport_interaction(ui);
+            ui.input(|input| {
+                assert!(input.raw.events.is_empty());
+                assert!(input.raw.hovered_files.is_empty());
+                assert!(input.raw.dropped_files.is_empty());
+                assert!(input.events.is_empty());
+                assert!(input.keys_down.is_empty());
+                assert!(!input.pointer.primary_down());
+                assert_eq!(input.smooth_scroll_delta, egui::Vec2::ZERO);
+            });
+        })
+        .discard_textures();
 }
 
 #[test]

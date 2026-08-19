@@ -202,7 +202,7 @@ impl PickerModalState {
             egui::TextEdit::singleline(&mut self.query)
                 .font(egui::FontId::monospace(14.0))
                 .text_color(theme::FG())
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .desired_width(text_rect.width())
                 .hint_text(egui::RichText::new(hint_text).color(theme::FG_DIM()).size(13.0))
                 .margin(Margin::ZERO),

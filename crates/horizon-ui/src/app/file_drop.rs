@@ -252,7 +252,7 @@ impl HorizonApp {
         None
     }
 
-    fn paste_dropped_paths_into_terminal(&mut self, panel_id: PanelId, dropped: &[egui::DroppedFile]) -> bool {
+    fn paste_dropped_paths_into_terminal(&mut self, panel_id: PanelId, dropped: &[egui::DroppedFileHandle]) -> bool {
         let Some(payload) = format_dropped_paths_for_terminal(dropped) else {
             return false;
         };
@@ -284,7 +284,7 @@ impl HorizonApp {
         canvas_rect: Rect,
         mut workspace_id: Option<WorkspaceId>,
         screen_pos: Option<Pos2>,
-        dropped: &[egui::DroppedFile],
+        dropped: &[egui::DroppedFileHandle],
     ) {
         if let Some(pos) = screen_pos {
             for &(ws_id, rect) in self.workspace_screen_rects.iter().rev() {
@@ -298,7 +298,7 @@ impl HorizonApp {
         let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
 
         for file in dropped {
-            let Some(path) = file.path.clone() else { continue };
+            let path = file.path().to_path_buf();
             if !is_editor_drop_path(&path) {
                 continue;
             }
@@ -387,24 +387,27 @@ fn select_terminal_drop_target(
         .map(TerminalDropTarget::Fallback)
 }
 
-fn partition_dropped_files(dropped: &[egui::DroppedFile]) -> (Vec<egui::DroppedFile>, Vec<egui::DroppedFile>) {
+fn partition_dropped_files(
+    dropped: &[egui::DroppedFileHandle],
+) -> (Vec<egui::DroppedFileHandle>, Vec<egui::DroppedFileHandle>) {
     let mut editor_drops = Vec::new();
     let mut non_editor_drops = Vec::new();
 
     for file in dropped {
-        match file.path.as_deref() {
-            Some(path) if is_editor_drop_path(path) => editor_drops.push(file.clone()),
-            _ => non_editor_drops.push(file.clone()),
+        if is_editor_drop_path(file.path()) {
+            editor_drops.push(file.clone());
+        } else {
+            non_editor_drops.push(file.clone());
         }
     }
 
     (editor_drops, non_editor_drops)
 }
 
-fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFile]) -> Option<String> {
+fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFileHandle]) -> Option<String> {
     let mut formatted = Vec::new();
 
-    for path in dropped.iter().filter_map(|file| file.path.as_deref()) {
+    for path in dropped.iter().map(|file| file.path()) {
         formatted.push(format_path_for_terminal(path));
     }
 
@@ -486,10 +489,11 @@ fn native_cursor_position() -> Option<Pos2> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     use egui::{Pos2, Rect};
     use horizon_core::PanelId;
+
+    use crate::app::test_support;
 
     use super::{
         TerminalDropHit, TerminalDropRects, TerminalDropTarget, format_dropped_paths_for_terminal, is_editor_drop_path,
@@ -498,10 +502,7 @@ mod tests {
 
     #[test]
     fn formatting_keeps_safe_paths_unquoted() {
-        let dropped = [egui::DroppedFile {
-            path: Some("/tmp/image.png".into()),
-            ..egui::DroppedFile::default()
-        }];
+        let dropped = [test_support::dropped_file("/tmp/image.png")];
 
         let payload = format_dropped_paths_for_terminal(&dropped).expect("payload");
 
@@ -514,10 +515,7 @@ mod tests {
             return;
         }
 
-        let dropped = [egui::DroppedFile {
-            path: Some(PathBuf::from("/tmp/hello world's.png")),
-            ..egui::DroppedFile::default()
-        }];
+        let dropped = [test_support::dropped_file("/tmp/hello world's.png")];
 
         let payload = format_dropped_paths_for_terminal(&dropped).expect("payload");
 
@@ -855,28 +853,16 @@ mod tests {
     #[test]
     fn partitioning_keeps_mixed_drops_available_for_editor_and_terminal_paths() {
         let dropped = [
-            egui::DroppedFile {
-                path: Some(PathBuf::from("/tmp/note.md")),
-                ..egui::DroppedFile::default()
-            },
-            egui::DroppedFile {
-                path: Some(PathBuf::from("/tmp/image.png")),
-                ..egui::DroppedFile::default()
-            },
+            test_support::dropped_file("/tmp/note.md"),
+            test_support::dropped_file("/tmp/image.png"),
         ];
 
         let (editor_drops, non_editor_drops) = partition_dropped_files(&dropped);
 
         assert_eq!(editor_drops.len(), 1);
-        assert_eq!(
-            editor_drops[0].path.as_deref(),
-            Some(std::path::Path::new("/tmp/note.md"))
-        );
+        assert_eq!(editor_drops[0].path(), std::path::Path::new("/tmp/note.md"));
         assert_eq!(non_editor_drops.len(), 1);
-        assert_eq!(
-            non_editor_drops[0].path.as_deref(),
-            Some(std::path::Path::new("/tmp/image.png"))
-        );
+        assert_eq!(non_editor_drops[0].path(), std::path::Path::new("/tmp/image.png"));
     }
 
     #[test]

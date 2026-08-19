@@ -15,6 +15,8 @@ mod primary_selection;
 mod remote_hosts_overlay;
 mod search_overlay;
 mod terminal_widget;
+#[cfg(test)]
+mod test_egui;
 mod text;
 mod theme;
 mod usage_widget;
@@ -72,13 +74,14 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         centered: !has_saved_position,
         run_and_return: false,
-        vsync: false,
         wgpu_options: egui_wgpu::WgpuConfiguration {
-            present_mode: wgpu::PresentMode::AutoNoVsync,
-            desired_maximum_frame_latency: Some(1),
+            surface: egui_wgpu::SurfaceConfig {
+                present_mode: wgpu::PresentMode::AutoNoVsync,
+                desired_maximum_frame_latency: Some(1),
+            },
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
                 native_adapter_selector: Some(Arc::new(select_adapter)),
-                ..Default::default()
+                ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
             }),
             ..Default::default()
         },
@@ -392,10 +395,9 @@ mod tests {
             name: "Apple M3 Max".to_string(),
             vendor: 0x106b,
             device: 0x0001,
-            device_type: wgpu::DeviceType::IntegratedGpu,
             driver: "metal".to_string(),
             driver_info: "Apple GPU".to_string(),
-            backend: wgpu::Backend::Metal,
+            ..wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Metal)
         });
 
         assert!(summary.contains("Apple M3 Max"));
@@ -409,12 +411,9 @@ mod tests {
     fn summarize_adapter_omits_duplicate_driver_info() {
         let summary = summarize_adapter(&wgpu::AdapterInfo {
             name: "Adapter".to_string(),
-            vendor: 0,
-            device: 0,
-            device_type: wgpu::DeviceType::Other,
             driver: "same".to_string(),
             driver_info: "same".to_string(),
-            backend: wgpu::Backend::Metal,
+            ..wgpu::AdapterInfo::new(wgpu::DeviceType::Other, wgpu::Backend::Metal)
         });
 
         assert_eq!(summary.matches("same").count(), 1);

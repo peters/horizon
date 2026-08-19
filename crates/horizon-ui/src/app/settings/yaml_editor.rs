@@ -38,7 +38,7 @@ pub(super) fn render(ui: &mut Ui, config_path: &str, buffer: &mut String, availa
                             .font(font_id)
                             .desired_width(available.x)
                             .desired_rows(40)
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .layouter(&mut layouter),
                     );
                 });
