@@ -27,10 +27,12 @@ pub struct SpeechConfig {
     pub target_language: String,
     pub backend: SpeechBackend,
     /// Microphone to record from, matched case-insensitively against the
-    /// names the audio host reports (exact match first, then substring, so
-    /// `NT-USB` finds `RØDE NT-USB+ Mono`). Empty uses the system default
-    /// input device; a configured name that matches nothing falls back to
-    /// the system default with a warning.
+    /// names the audio host reports: exact match first, then substring (so
+    /// `NT-USB` finds `RØDE NT-USB+ Mono`), then a normalized identity key
+    /// that maps the same physical microphone's ALSA- and pulse-host names
+    /// onto each other. Empty uses the system default input device; a
+    /// configured name that matches nothing falls back to the system
+    /// default with a warning.
     pub input_device: String,
     /// Push-to-talk shortcut in the shared shortcut syntax; empty disables.
     pub hotkey: String,

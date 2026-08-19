@@ -341,7 +341,7 @@ features:
     language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
     task: transcribe     # translate = speak any language, insert English text
     backend: auto        # auto | cpu | cuda | vulkan | metal
-    input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
+    input_device: ""     # microphone name (exact, substring, or cross-backend-normalized, e.g. "NT-USB"); "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
     preload: false       # true = load the model at startup; first dictation becomes instant
