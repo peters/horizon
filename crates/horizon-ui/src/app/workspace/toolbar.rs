@@ -27,7 +27,6 @@ pub(super) fn render_workspace_layout_toolbar(
     egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
         .fixed_pos(workspace.toolbar_canvas_rect.min)
         .constrain(false)
-        .interactable(false)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
             apply_canvas_transform(ui, canvas_transform, canvas_clip_rect);
@@ -238,4 +237,105 @@ fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool 
     )
     .on_hover_text("Open in a separate window")
     .clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Event, Modifiers, PointerButton, RawInput, ViewportId};
+    use horizon_core::AppearanceTheme;
+    use horizon_core::WorkspaceId;
+
+    use super::super::WorkspaceAction;
+    use super::*;
+    use crate::test_egui::DiscardTextures;
+    use crate::theme;
+
+    fn test_workspace_visual(toolbar_canvas_rect: Rect) -> WorkspaceVisual {
+        WorkspaceVisual {
+            id: WorkspaceId(1),
+            name: "manual".to_string(),
+            color: egui::Color32::LIGHT_BLUE,
+            canvas_rect: Rect::from_min_size(Pos2::new(40.0, 100.0), Vec2::new(900.0, 600.0)),
+            screen_rect: Rect::from_min_size(Pos2::new(40.0, 100.0), Vec2::new(900.0, 600.0)),
+            label_canvas_rect: Rect::from_min_size(Pos2::new(60.0, 110.0), Vec2::new(120.0, 26.0)),
+            toolbar_canvas_rect,
+            toolbar_screen_rect: toolbar_canvas_rect,
+            is_active: true,
+            is_empty: false,
+            label_hidden: false,
+            panel_count: 3,
+            layout: None,
+        }
+    }
+
+    /// Regression test for the egui 0.36 upgrade: layers marked
+    /// `interactable(false)` became click-through in hit-testing, which made
+    /// every toolbar button dead. Clicking the Grid button must emit an
+    /// `ArrangeLayout` action.
+    #[test]
+    fn grid_button_click_emits_arrange_action() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, AppearanceTheme::Dark);
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1600.0, 1000.0));
+        let toolbar_rect = Rect::from_min_size(Pos2::new(400.0, 140.0), Vec2::new(260.0, 34.0));
+        let visual = test_workspace_visual(toolbar_rect);
+
+        let grid_center = Pos2::new(
+            toolbar_rect.min.x
+                + f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X)
+                + WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
+                + 2.0 * (WORKSPACE_LAYOUT_BUTTON_SPACING + workspace_layout_button_width(WorkspaceLayout::Rows))
+                + WORKSPACE_LAYOUT_BUTTON_SPACING
+                + workspace_layout_button_width(WorkspaceLayout::Grid) / 2.0,
+            toolbar_rect.min.y + f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y) + WORKSPACE_LAYOUT_BUTTON_HEIGHT / 2.0,
+        );
+
+        let frames: [Vec<Event>; 4] = [
+            Vec::new(),
+            vec![Event::PointerMoved(grid_center)],
+            vec![Event::PointerButton {
+                pos: grid_center,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: grid_center,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        ];
+
+        let mut action = None;
+        for events in frames {
+            let mut input = RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..RawInput::default()
+            };
+            input.viewport_id = ViewportId::ROOT;
+            let _ = ctx
+                .run_ui(input, |ctx| {
+                    if let Some(emitted) = render_workspace_layout_toolbar(ctx, &visual, TSTransform::IDENTITY, screen)
+                    {
+                        action = Some(emitted);
+                    }
+                })
+                .discard_textures();
+        }
+
+        assert!(
+            matches!(action, Some(WorkspaceAction::ArrangeLayout(WorkspaceLayout::Grid))),
+            "clicking the Grid button should emit ArrangeLayout(Grid), got {:?}",
+            action.map(|a| match a {
+                WorkspaceAction::Focus => "Focus",
+                WorkspaceAction::Fit => "Fit",
+                WorkspaceAction::ClearLayout => "ClearLayout",
+                WorkspaceAction::ArrangeLayout(_) => "ArrangeLayout(non-Grid)",
+                WorkspaceAction::CloseAllPanels => "CloseAllPanels",
+                WorkspaceAction::Detach => "Detach",
+            })
+        );
+    }
 }

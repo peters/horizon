@@ -1,5 +1,5 @@
-use egui::containers::scroll_area::{ScrollBarVisibility, State as ScrollAreaState};
-use egui::{Align, Color32, CornerRadius, FontId, Id, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
+use egui::containers::scroll_area::ScrollBarVisibility;
+use egui::{Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use horizon_core::{MarkdownEditor, Panel, PreviewMode, ShortcutBinding};
 
@@ -164,7 +164,6 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
             }
             response.rect
         });
-    forward_scroll_to_scroll_area(ui, output.id, output.inner_rect, output.content_size.y);
     Some(output.inner)
 }
 
@@ -188,7 +187,7 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
     let mut fallback_cache = MarkdownPreviewCache::default();
     let cache = preview_cache.unwrap_or(&mut fallback_cache);
 
-    let output = ScrollArea::vertical()
+    ScrollArea::vertical()
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
         .id_salt(("editor_preview", panel_id))
         .show(ui, |ui| {
@@ -202,39 +201,6 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
             }
             ui.add_space(8.0);
         });
-    forward_scroll_to_scroll_area(ui, output.id, output.inner_rect, output.content_size.y);
-}
-
-/// The panel `Area` uses `interactable(false)`, which makes egui's
-/// `layer_id_at` skip the layer during hover detection. `ScrollArea`
-/// therefore never sees the pointer as hovering and silently ignores
-/// mouse-wheel events. We detect hover ourselves and apply the delta
-/// to the stored scroll state.
-fn forward_scroll_to_scroll_area(ui: &egui::Ui, scroll_id: Id, inner_rect: Rect, content_height: f32) {
-    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
-    let pointer_in_area = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
-        let local = from_global.map_or(pos, |t| t * pos);
-        inner_rect.contains(local)
-    });
-    if !pointer_in_area {
-        return;
-    }
-
-    let scroll_delta = ui.ctx().input(|i| i.smooth_scroll_delta.y);
-    if scroll_delta == 0.0 {
-        return;
-    }
-
-    let max_offset = (content_height - inner_rect.height()).max(0.0);
-    if let Some(mut state) = ScrollAreaState::load(ui.ctx(), scroll_id) {
-        let new_offset = (state.offset.y - scroll_delta).clamp(0.0, max_offset);
-        if (new_offset - state.offset.y).abs() > f32::EPSILON {
-            state.offset.y = new_offset;
-            state.store(ui.ctx(), scroll_id);
-            ui.ctx().input_mut(|i| i.smooth_scroll_delta.y = 0.0);
-            ui.ctx().request_repaint();
-        }
-    }
 }
 
 #[cfg(test)]
