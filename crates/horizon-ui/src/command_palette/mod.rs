@@ -226,7 +226,10 @@ impl CommandPalette {
                 )
                 .margin(Margin::ZERO),
         );
-        if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
+        // The palette owns the keyboard while open. Requesting focus every
+        // frame (not just early) lets a missed grab on a slow frame or late
+        // window activation self-heal instead of silently dropping typed input.
+        if !response.has_focus() {
             response.request_focus();
         }
         if response.changed() {
