@@ -18,6 +18,7 @@ use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
 pub use self::spawn::current_unix_millis;
+pub(crate) use self::spawn::default_shell;
 #[cfg(test)]
 use self::spawn::platform_default_shell;
 use self::spawn::{
@@ -335,6 +336,12 @@ impl Panel {
                 PanelResume::Session { session_id } => Some(session_id.as_str()),
                 PanelResume::Fresh | PanelResume::Last => None,
             })
+    }
+
+    /// The user-set panel name, if any (auto titles are not custom names).
+    #[must_use]
+    pub fn custom_name(&self) -> Option<&str> {
+        (self.has_custom_name && !self.title.is_empty()).then_some(self.title.as_str())
     }
 
     #[must_use]

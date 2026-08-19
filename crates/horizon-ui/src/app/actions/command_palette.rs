@@ -116,6 +116,7 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
+            CommandId::ExportServerConfig => self.export_board_to_horizon_server(),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus
                 // if it doesn't exist yet).
@@ -124,6 +125,41 @@ impl HorizonApp {
                 } else {
                     self.search_overlay = Some(SearchOverlay::new());
                 }
+            }
+        }
+    }
+
+    /// Writes the current board as a horizon-server config next to the
+    /// Horizon config file, so the same panels can be streamed server-side
+    /// (e.g. to a browser on a phone).
+    pub(in crate::app) fn export_board_to_horizon_server(&mut self) {
+        let Some(export) = self.board.to_horizon_server_config() else {
+            self.show_transient_notice("⚠", "Export: no terminal panels to export", true);
+            return;
+        };
+        let path = self.config_path.with_file_name("horizon-server.yml");
+        match crate::app::util::atomic_write(&path, &export.yaml) {
+            Ok(()) => {
+                tracing::info!(
+                    path = %path.display(),
+                    panels = export.panels,
+                    workspaces = export.workspaces,
+                    "wrote horizon-server config"
+                );
+                self.show_transient_notice(
+                    "📤",
+                    format!(
+                        "Exported {} panels in {} workspaces to {}",
+                        export.panels,
+                        export.workspaces,
+                        path.display()
+                    ),
+                    false,
+                );
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "failed to write horizon-server config");
+                self.show_transient_notice("⚠", format!("Export to horizon-server failed: {error}"), true);
             }
         }
     }

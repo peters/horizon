@@ -12,6 +12,7 @@ pub mod git_changes;
 pub mod git_status;
 pub mod git_watcher;
 mod horizon_home;
+mod horizon_server_export;
 mod layout;
 mod local_store;
 mod managed_install;

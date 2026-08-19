@@ -225,6 +225,54 @@ mod tests {
     }
 
     #[test]
+    fn export_board_to_horizon_server_writes_config() {
+        use crate::app::test_support::test_app;
+
+        let (temp, mut app) = test_app();
+        let path = temp.path().join("horizon-server.yml");
+
+        // An empty board has nothing to export: error notice, no file.
+        app.export_board_to_horizon_server();
+        assert!(!path.exists());
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.error && notice.message.contains("no terminal panels"))
+        );
+
+        let workspace_id = app.board.create_workspace("dev");
+        let panel_id = app
+            .board
+            .create_panel(
+                PanelOptions {
+                    name: Some("echo panel".to_string()),
+                    command: Some("echo".to_string()),
+                    args: vec!["hello".to_string()],
+                    kind: PanelKind::Command,
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("command panel should spawn");
+
+        app.export_board_to_horizon_server();
+
+        let yaml = std::fs::read_to_string(&path).expect("export should write the config");
+        assert!(yaml.contains("workspaces:"));
+        assert!(yaml.contains("- name: \"dev\""));
+        assert!(yaml.contains("- name: \"echo-panel\""));
+        assert!(yaml.contains("command: \"echo\""));
+        assert!(yaml.contains("- \"hello\""));
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| !notice.error && notice.message.contains("1 panels"))
+        );
+
+        app.board.close_panel(panel_id);
+    }
+
+    #[test]
     fn estimated_settings_panel_rect_uses_default_wide_fallback() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
 
