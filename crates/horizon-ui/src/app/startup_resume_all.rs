@@ -16,7 +16,7 @@ impl HorizonApp {
     /// Queue the resume-all prompt for a restored session that carries agent
     /// panels; returns true when activation was deferred to the prompt.
     pub(super) fn maybe_queue_resume_all_prompt(&mut self, session: &ResolvedSession) -> bool {
-        if session.runtime_state.resumable_agent_panel_count() == 0 {
+        if session.runtime_state.resume_all_candidate_count() == 0 {
             return false;
         }
         self.pending_resume_all = Some(session.clone());
@@ -31,7 +31,7 @@ impl HorizonApp {
             return true;
         };
 
-        let action = render_resume_all_prompt(ui, session.runtime_state.resumable_agent_panel_count());
+        let action = render_resume_all_prompt(ui, session.runtime_state.resume_all_candidate_count());
         if matches!(action, ResumeAllAction::None) {
             self.pending_resume_all = Some(session);
             return false;

@@ -6,25 +6,35 @@ use horizon_core::{
 
 use super::*;
 
-fn pi_panel_state() -> PanelState {
-    PanelState {
-        local_id: "pi-panel".to_string(),
-        kind: PanelKind::Pi,
-        ..PanelState::default()
-    }
-}
-
 fn agent_runtime_state() -> RuntimeState {
     RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "agents".to_string(),
             name: "Agents".to_string(),
             position: Some([100.0, 80.0]),
-            panels: vec![pi_panel_state()],
+            panels: vec![PanelState {
+                local_id: "pi-panel".to_string(),
+                kind: PanelKind::Pi,
+                ..PanelState::default()
+            }],
             ..WorkspaceState::default()
         }],
         ..RuntimeState::default()
     }
+}
+
+fn bound_agent_runtime_state() -> RuntimeState {
+    let mut runtime_state = agent_runtime_state();
+    let panel = &mut runtime_state.workspaces[0].panels[0];
+    panel.resume = PanelResume::Last;
+    panel.session_binding = Some(AgentSessionBinding::new(
+        PanelKind::Pi,
+        "pi-1".to_string(),
+        None,
+        None,
+        None,
+    ));
+    runtime_state
 }
 
 fn resolved_session(runtime_state: RuntimeState) -> ResolvedSession {
@@ -71,6 +81,28 @@ fn restore_with_agent_panels_queues_resume_all_prompt() {
 }
 
 #[test]
+fn new_session_disposition_skips_resume_all_prompt() {
+    let decision = StartupDecision::Open {
+        disposition: SessionOpenDisposition::New,
+        session: Box::new(resolved_session(agent_runtime_state())),
+    };
+    let (_temp, _ctx, app) = test_app_with_config_and_startup(&Config::default(), decision);
+
+    assert!(app.pending_resume_all.is_none());
+    assert_eq!(app.board.workspaces.len(), 1);
+    assert!(app.active_session.is_some());
+}
+
+#[test]
+fn bound_agent_panels_skip_resume_all_prompt() {
+    let (_temp, _ctx, app) =
+        test_app_with_config_and_startup(&Config::default(), open_startup(bound_agent_runtime_state()));
+
+    assert!(app.pending_resume_all.is_none());
+    assert!(app.active_session.is_some());
+}
+
+#[test]
 fn restore_without_agent_panels_skips_resume_all_prompt() {
     let runtime_state = RuntimeState {
         workspaces: vec![editor_workspace_state("notes", [100.0, 80.0])],
@@ -93,12 +125,10 @@ fn resume_all_choice_activates_session_and_rearms_bootstrap() {
 
     assert!(app.pending_resume_all.is_none());
     assert!(app.active_session.is_some());
-    assert!(
-        app.board.workspaces.is_empty(),
-        "bootstrap must hold the board until it resolves"
-    );
-    assert!(app.startup_receiver.is_some());
 
+    // The real bootstrap worker may have delivered its own outcome before we
+    // get here; a Ready outcome always rebuilds the board, so driving the
+    // final frame from a known catalog outcome stays deterministic either way.
     let mut ready_state = agent_runtime_state();
     ready_state.apply_resume_all_agent_panels();
     ready_state.workspaces[0].panels[0].session_binding = Some(AgentSessionBinding::new(

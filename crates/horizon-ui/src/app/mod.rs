@@ -39,8 +39,8 @@ use std::time::Instant;
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionOpenDisposition,
+    SessionStore, ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -362,8 +362,12 @@ impl HorizonApp {
         let mut app = Self::initial_state(config, bootstrap);
 
         match startup {
-            StartupDecision::Open { session, .. } => {
-                if !app.maybe_queue_resume_all_prompt(&session) {
+            StartupDecision::Open { disposition, session } => {
+                let restoring = matches!(
+                    disposition,
+                    SessionOpenDisposition::Resume | SessionOpenDisposition::Recover
+                );
+                if !restoring || !app.maybe_queue_resume_all_prompt(&session) {
                     app.activate_persistent_session(&session);
                 }
             }

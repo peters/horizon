@@ -24,14 +24,15 @@ impl RuntimeState {
             .any(|panel| panel.kind == kind && panel_needs_agent_binding_bootstrap(panel))
     }
 
-    /// Agent panels that can reattach to a previous provider session at
-    /// startup (bound directly or via a catalog lookup).
+    /// Agent panels that "Resume all" would still change: fresh, unbound
+    /// panels that can be flipped to `resume: last` and reattached to the
+    /// latest catalog session.
     #[must_use]
-    pub fn resumable_agent_panel_count(&self) -> usize {
+    pub fn resume_all_candidate_count(&self) -> usize {
         self.workspaces
             .iter()
             .flat_map(|workspace| &workspace.panels)
-            .filter(|panel| panel.kind.is_agent() && panel.kind.supports_agent_resume())
+            .filter(|panel| panel_is_resume_all_candidate(panel))
             .count()
     }
 

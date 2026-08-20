@@ -14,13 +14,14 @@ fn binding(kind: PanelKind, session_id: &str) -> AgentSessionBinding {
 }
 
 #[test]
-fn resumable_agent_panel_count_ignores_non_agent_and_unresumable_kinds() {
+fn resume_all_candidate_count_only_counts_fresh_unbound_panels() {
     let runtime_state = RuntimeState {
         workspaces: vec![WorkspaceState {
             panels: vec![
                 panel_state(PanelKind::Pi, PanelResume::Fresh, None),
                 panel_state(PanelKind::Pi, PanelResume::Fresh, Some(binding(PanelKind::Pi, "pi-1"))),
                 panel_state(PanelKind::KiloCode, PanelResume::Fresh, None),
+                panel_state(PanelKind::Codex, PanelResume::Last, None),
                 panel_state(PanelKind::Gemini, PanelResume::Fresh, None),
                 panel_state(PanelKind::Shell, PanelResume::Fresh, None),
             ],
@@ -29,7 +30,7 @@ fn resumable_agent_panel_count_ignores_non_agent_and_unresumable_kinds() {
         ..RuntimeState::default()
     };
 
-    assert_eq!(runtime_state.resumable_agent_panel_count(), 3);
+    assert_eq!(runtime_state.resume_all_candidate_count(), 2);
 }
 
 #[test]
