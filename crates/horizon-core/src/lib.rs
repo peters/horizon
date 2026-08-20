@@ -65,7 +65,7 @@ pub use runtime_state::{
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{
-    ResolvedSession, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary, StartupChooser,
+    ResolvedSession, SessionLease, SessionMeta, SessionOpenDisposition, SessionStore, SessionSummary, StartupChooser,
     StartupDecision, StartupPromptReason,
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};

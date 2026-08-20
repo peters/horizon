@@ -15,6 +15,7 @@ use crate::error::Error;
 
 mod grok;
 mod provider_scoping;
+mod resume_all;
 
 #[test]
 fn strict_catalog_load_propagates_provider_errors() {

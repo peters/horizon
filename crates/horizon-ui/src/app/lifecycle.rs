@@ -252,6 +252,10 @@ impl HorizonApp {
             self.editor_preview_cache.clear();
         }
 
+        if !self.prepare_resume_all_prompt(ui) {
+            return false;
+        }
+
         if !self.prepare_startup_bootstrap(ui) {
             return false;
         }
@@ -714,21 +718,22 @@ impl HorizonApp {
         // Check at most every 2 seconds.
         let now = Instant::now();
         if self
-            .config_last_check
+            .config_reload
+            .last_check
             .is_some_and(|t| now.duration_since(t) < Duration::from_secs(2))
         {
             return;
         }
-        self.config_last_check = Some(now);
+        self.config_reload.last_check = Some(now);
 
         let current_mtime = std::fs::metadata(&self.config_path)
             .ok()
             .and_then(|m| m.modified().ok());
 
-        if current_mtime == self.config_last_mtime {
+        if current_mtime == self.config_reload.last_mtime {
             return;
         }
-        self.config_last_mtime = current_mtime;
+        self.config_reload.last_mtime = current_mtime;
 
         if let Ok(config) = Config::load(Some(&self.config_path)) {
             tracing::info!("config file changed, reloading presets");

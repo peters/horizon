@@ -54,6 +54,9 @@ impl HorizonApp {
     }
 
     fn activate_startup_session(&mut self, ctx: &Context, session: &horizon_core::ResolvedSession) {
+        if self.maybe_queue_resume_all_prompt(session) {
+            return;
+        }
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
     }

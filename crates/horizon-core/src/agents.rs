@@ -109,6 +109,11 @@ impl AgentDefinition {
     }
 
     #[must_use]
+    pub const fn supports_resume(self) -> bool {
+        !matches!(self.resume_mode, AgentResumeMode::None)
+    }
+
+    #[must_use]
     pub const fn requires_exact_session_validation(self) -> bool {
         matches!(self.session_validation, AgentSessionValidationMode::ParentThreadRoots)
     }

@@ -124,5 +124,6 @@ fn assert_workspace_center_is_on_canvas(ctx: &Context, app: &HorizonApp, local_i
 }
 
 mod layout;
+mod resume_all_prompt;
 mod session_load;
 mod viewport;

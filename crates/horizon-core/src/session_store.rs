@@ -12,11 +12,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::runtime_state::RuntimeState;
-use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
+use model::{ProfileSnapshot, SessionIndex, StoredSession};
 
 pub use model::{
-    ResolvedSession, SessionLease, SessionOpenDisposition, SessionSummary, StartupChooser, StartupDecision,
-    StartupPromptReason,
+    ResolvedSession, SessionLease, SessionMeta, SessionOpenDisposition, SessionSummary, StartupChooser,
+    StartupDecision, StartupPromptReason,
 };
 
 const SESSION_INDEX_VERSION: u32 = 1;
