@@ -24,6 +24,55 @@ impl RuntimeState {
             .any(|panel| panel.kind == kind && panel_needs_agent_binding_bootstrap(panel))
     }
 
+    /// Agent panels that "Resume all" would still change: fresh, unbound
+    /// panels that can be flipped to `resume: last` and reattached to the
+    /// latest catalog session.
+    #[must_use]
+    pub fn resume_all_candidate_count(&self) -> usize {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| panel_is_resume_all_candidate(panel))
+            .count()
+    }
+
+    /// Switch every fresh, unbound agent panel to `resume: last` so the
+    /// startup binding bootstrap reattaches it to the most recent session
+    /// for its provider. Returns how many panels changed.
+    pub fn apply_resume_all_agent_panels(&mut self) -> usize {
+        let mut changed = 0;
+        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
+            if panel_is_resume_all_candidate(panel) {
+                panel.resume = PanelResume::Last;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Drop every agent panel's binding and resume setting so the board
+    /// relaunches all agent panels fresh; provider conversations are
+    /// untouched.
+    pub fn start_agent_panels_fresh(&mut self) -> usize {
+        let mut changed = 0;
+        for panel in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.panels) {
+            if !panel.kind.is_agent() {
+                continue;
+            }
+            let binding_cleared = neutralize_session_binding(panel);
+            let resume_cleared = if matches!(panel.resume, PanelResume::Last) {
+                panel.resume = PanelResume::Fresh;
+                true
+            } else {
+                false
+            };
+            if binding_cleared || resume_cleared {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     /// Repairs exact bindings that reference parent-controlled threads,
     /// enforces provider-scoped binding uniqueness, then assigns catalog
     /// sessions to legacy `resume: last` panels that were persisted without a
@@ -281,6 +330,13 @@ fn panel_needs_agent_binding_bootstrap(panel: &PanelState) -> bool {
     panel.kind.supports_session_binding()
         && (panel.stored_session_id().is_some()
             || (panel.session_binding.is_none() && matches!(panel.resume, PanelResume::Last)))
+}
+
+fn panel_is_resume_all_candidate(panel: &PanelState) -> bool {
+    panel.kind.is_agent()
+        && panel.kind.supports_agent_resume()
+        && panel.session_binding.is_none()
+        && matches!(panel.resume, PanelResume::Fresh)
 }
 
 fn empty_to_none(value: &str) -> Option<&str> {

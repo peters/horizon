@@ -66,6 +66,11 @@ impl PanelKind {
     }
 
     #[must_use]
+    pub fn supports_agent_resume(self) -> bool {
+        agent_definition(self).is_some_and(crate::AgentDefinition::supports_resume)
+    }
+
+    #[must_use]
     pub fn requires_exact_session_validation(self) -> bool {
         agent_definition(self).is_some_and(crate::AgentDefinition::requires_exact_session_validation)
     }

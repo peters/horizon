@@ -1050,6 +1050,33 @@ mod tests {
     }
 
     #[test]
+    fn pi_bound_restore_launches_with_exact_session_flag() {
+        let binding = AgentSessionBinding::new(
+            PanelKind::Pi,
+            "pi-123".to_string(),
+            Some("/repo".to_string()),
+            None,
+            None,
+        );
+
+        let (_, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Pi,
+            AgentLaunchContext {
+                resume: &PanelResume::Last,
+                session_binding: Some(&binding),
+                should_resume_binding: true,
+                is_restore: true,
+            },
+        );
+
+        let joined = args.join(" ");
+        assert!(joined.contains("--session pi-123"), "{joined}");
+    }
+
+    #[test]
     fn claude_binding_resumes_only_when_transcript_exists() {
         let binding = AgentSessionBinding::new(PanelKind::Claude, "session-1".to_string(), None, None, None);
 

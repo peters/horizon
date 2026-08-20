@@ -21,6 +21,7 @@ pub(crate) mod shortcuts;
 mod sidebar;
 pub(crate) mod speech;
 mod ssh_upload;
+mod startup_resume_all;
 mod startup_session;
 #[cfg(test)]
 mod test_support;
@@ -38,8 +39,8 @@ use std::time::Instant;
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionOpenDisposition,
+    SessionStore, ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -114,6 +115,21 @@ struct DetachedCanvasInteractionState {
     middle_pan_active: bool,
     canvas_pan_input_claimed: bool,
     pending_space_pan_key: CanvasPanSpaceKeyState,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ConfigReloadState {
+    last_mtime: Option<std::time::SystemTime>,
+    last_check: Option<Instant>,
+}
+
+impl ConfigReloadState {
+    const fn new(last_mtime: Option<std::time::SystemTime>) -> Self {
+        Self {
+            last_mtime,
+            last_check: None,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -229,6 +245,7 @@ pub struct HorizonApp {
     session_store: SessionStore,
     active_session: Option<ActiveSession>,
     startup_chooser: Option<StartupChooserState>,
+    pending_resume_all: Option<startup_resume_all::PendingResumeAll>,
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
@@ -273,8 +290,7 @@ pub struct HorizonApp {
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,
-    config_last_mtime: Option<std::time::SystemTime>,
-    config_last_check: Option<Instant>,
+    config_reload: ConfigReloadState,
     shutdown_progress: Option<ShutdownProgress>,
     exit_cleanup_complete: bool,
 }
@@ -346,7 +362,15 @@ impl HorizonApp {
         let mut app = Self::initial_state(config, bootstrap);
 
         match startup {
-            StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
+            StartupDecision::Open { disposition, session } => {
+                let restoring = matches!(
+                    disposition,
+                    SessionOpenDisposition::Resume | SessionOpenDisposition::Recover
+                );
+                if !restoring || !app.maybe_queue_resume_all_prompt(&session) {
+                    app.activate_persistent_session(&session);
+                }
+            }
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
             StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }
@@ -401,6 +425,7 @@ impl HorizonApp {
             session_store,
             active_session: None,
             startup_chooser: None,
+            pending_resume_all: None,
             config_path,
             transcript_root: None,
             template_config: config.clone(),
@@ -466,8 +491,7 @@ impl HorizonApp {
             terminal_body_screen_rects: HashMap::new(),
             primary_selection: PrimarySelection::new(),
             terminal_selection_drag: TerminalSelectionDragState::default(),
-            config_last_mtime,
-            config_last_check: None,
+            config_reload: ConfigReloadState::new(config_last_mtime),
             shutdown_progress: None,
             exit_cleanup_complete: false,
         }

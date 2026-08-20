@@ -28,7 +28,10 @@ impl HorizonApp {
             StartupChooserAction::None => {}
             StartupChooserAction::OpenNewSession => {
                 match self.session_store.create_new_session(&self.template_config) {
-                    Ok(session) => self.activate_startup_session(ctx, &session),
+                    Ok(session) => {
+                        self.activate_persistent_session(&session);
+                        self.restore_window_viewport(ctx);
+                    }
                     Err(error) => self.set_startup_error(format!("Failed to create session: {error}")),
                 }
             }
@@ -54,6 +57,9 @@ impl HorizonApp {
     }
 
     fn activate_startup_session(&mut self, ctx: &Context, session: &horizon_core::ResolvedSession) {
+        if self.maybe_queue_resume_all_prompt(session) {
+            return;
+        }
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
     }
