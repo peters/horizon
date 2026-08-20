@@ -329,6 +329,8 @@ cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
 cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
 ```
 
+On Linux, capture routes through PulseAudio/PipeWire (pipewire-pulse) whenever that sound server is running, so the microphone is shared with whatever else is using it (Discord, a video call, ...). Without a sound server it falls back to raw ALSA, which claims the device exclusively.
+
 When a GPU backend is compiled in (Metal ships automatically in plain `speech` on macOS), the `auto` backend probes discrete GPUs first and always falls back to CPU; a CPU-only build simply runs on CPU.
 
 ```yaml
@@ -339,7 +341,7 @@ features:
     language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
     task: transcribe     # translate = speak any language, insert English text
     backend: auto        # auto | cpu | cuda | vulkan | metal
-    input_device: ""     # microphone name (exact or substring, e.g. "NT-USB"); "" = system default
+    input_device: ""     # microphone name (exact, substring, or cross-backend-normalized, e.g. "NT-USB"); "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
     preload: false       # true = load the model at startup; first dictation becomes instant

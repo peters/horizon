@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cpal::Sample;
 use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -419,8 +420,40 @@ pub fn list_input_devices() -> Vec<String> {
     )
 }
 
+/// Collapse a device name to a cross-backend identity key. The ALSA and
+/// Pulse hosts name the same physical microphone differently ("R\u{d8}DE NT-USB+,
+/// USB Audio" vs "R\u{d8}DE NT-USB+ Mono"): the ALSA name is the card long name
+/// plus a device descriptor, the Pulse name is the source description with a
+/// channel token. Keep the first comma field and drop trailing channel/format
+/// tokens so both converge on the same key.
+fn device_identity_key(name: &str) -> String {
+    const GENERIC_TOKENS: [&str; 5] = ["analog stereo", "digital stereo", "usb audio", "stereo", "mono"];
+    let first = name.split(',').next().unwrap_or("").to_lowercase();
+    let mut key = first.clone();
+    loop {
+        let stripped = GENERIC_TOKENS
+            .iter()
+            .find(|token| key.ends_with(&format!(" {token}")))
+            .map(|token| &key[..key.len() - token.len() - 1]);
+        match stripped {
+            Some(prefix) => key = prefix.to_string(),
+            None => break,
+        }
+    }
+    // An empty or whitespace-only name would produce an empty key, which
+    // would match every device; fall back to the raw (lowercased) name so
+    // it can only ever match itself.
+    if key.trim().is_empty() {
+        first
+    } else {
+        key.trim().to_string()
+    }
+}
+
 /// Resolve the configured device name against the host: exact
-/// case-insensitive match first, then substring, then the system default
+/// case-insensitive match first, then substring, then the normalized
+/// cross-backend identity key (a microphone configured under one host's
+/// naming still resolves under the other), then the system default
 /// (with a warning, so a renamed or unplugged microphone is diagnosable).
 fn resolve_input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cpal::Device, String> {
     let preferred = preferred.map(str::trim).filter(|wanted| !wanted.is_empty());
@@ -440,19 +473,24 @@ fn resolve_input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cp
             },
         );
         let wanted_lower = wanted.to_lowercase();
+        let wanted_key = device_identity_key(&wanted_lower);
         let mut exact = None;
         let mut substring = None;
-        for (name, device) in devices {
+        let mut normalized = None;
+        for (name, device) in &devices {
             let name_lower = name.to_lowercase();
             if name_lower == wanted_lower {
-                exact = Some((name, device));
+                exact = Some((name.clone(), device.clone()));
                 break;
             }
             if substring.is_none() && name_lower.contains(&wanted_lower) {
-                substring = Some((name, device));
+                substring = Some((name.clone(), device.clone()));
+            }
+            if normalized.is_none() && device_identity_key(&name_lower) == wanted_key {
+                normalized = Some((name.clone(), device.clone()));
             }
         }
-        if let Some((name, device)) = exact.or(substring) {
+        if let Some((name, device)) = exact.or(substring).or(normalized) {
             tracing::info!(configured = wanted, device = %name, "using configured speech input device");
             return Ok(device);
         }
@@ -510,7 +548,9 @@ fn start_recording(
     // One arm per interleaved sample type, each normalizing to f32 in
     // [-1, 1] before the shared downmix/resample. Covers the formats real
     // capture endpoints report: F32/I16/U16 plus 8-bit, 32-bit (incl. the
-    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64.
+    // I32 that 24-bit WASAPI/ALSA endpoints deliver), and F64. The I24
+    // arm covers 24-bit PulseAudio/PipeWire endpoints: the s24-32le word
+    // spans the full i32 range, so it normalizes as i32.
     macro_rules! input_stream {
         ($sample:ty, $to_f32:expr) => {{
             let sink = Arc::clone(&samples);
@@ -531,6 +571,7 @@ fn start_recording(
         SampleFormat::F64 => input_stream!(f64, |&sample| f64_to_sample(sample)),
         SampleFormat::I8 => input_stream!(i8, |&sample| f32::from(sample) / 128.0),
         SampleFormat::I16 => input_stream!(i16, |&sample| f32::from(sample) / 32_768.0),
+        SampleFormat::I24 => input_stream!(cpal::I24, |&sample| i32_to_sample(sample.to_sample())),
         SampleFormat::I32 => input_stream!(i32, |&sample| i32_to_sample(sample)),
         SampleFormat::U8 => input_stream!(u8, |&sample| (f32::from(sample) - 128.0) / 128.0),
         SampleFormat::U16 => input_stream!(u16, |&sample| (f32::from(sample) - 32_768.0) / 32_768.0),
@@ -596,7 +637,9 @@ fn f64_to_sample(sample: f64) -> f32 {
     sample as f32
 }
 
-/// Normalize a 32-bit integer device sample to f32 in [-1, 1).
+/// Normalize a 32-bit integer device sample to f32 in [-1, 1). Also the
+/// right scale for cpal's I24: the s24-32le container holds the 24-bit
+/// value across the full i32 range (left-shifted, sign-extended).
 #[expect(clippy::cast_precision_loss, reason = "audio downconvert to the f32 pipeline")]
 fn i32_to_sample(sample: i32) -> f32 {
     sample as f32 / 2_147_483_648.0
@@ -656,8 +699,34 @@ mod tests {
 
     use super::{
         CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE,
-        deduplicate_device_names, to_mono_16k,
+        deduplicate_device_names, device_identity_key, to_mono_16k,
     };
+
+    #[test]
+    fn device_identity_key_converges_across_backend_namings() {
+        // The same physical microphone under the ALSA and Pulse hosts.
+        assert_eq!(
+            device_identity_key("R\u{d8}DE NT-USB+, USB Audio"),
+            device_identity_key("R\u{d8}DE NT-USB+ Mono")
+        );
+        assert_eq!(device_identity_key("R\u{d8}DE NT-USB+ Mono"), "r\u{f8}de nt-usb+");
+        assert_eq!(
+            device_identity_key("BRIO Ultra HD Webcam Analog Stereo"),
+            "brio ultra hd webcam"
+        );
+        // Matching is case-insensitive.
+        assert_eq!(
+            device_identity_key("R\u{d8}DE NT-USB+ mono"),
+            device_identity_key("r\u{f8}de nt-usb+ MONO")
+        );
+        // A name made only of generic tokens must not collapse to an empty key.
+        assert_eq!(device_identity_key("Mono"), "mono");
+        // Unrelated devices keep distinct keys.
+        assert_ne!(
+            device_identity_key("R\u{d8}DE NT-USB+ Mono"),
+            device_identity_key("USB Audio Front Microphone")
+        );
+    }
 
     #[test]
     fn device_names_are_deduplicated_case_insensitively_in_host_order() {
