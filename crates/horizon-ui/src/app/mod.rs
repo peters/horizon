@@ -245,7 +245,7 @@ pub struct HorizonApp {
     session_store: SessionStore,
     active_session: Option<ActiveSession>,
     startup_chooser: Option<StartupChooserState>,
-    pending_resume_all: Option<ResolvedSession>,
+    pending_resume_all: Option<startup_resume_all::PendingResumeAll>,
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,

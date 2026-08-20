@@ -1,9 +1,11 @@
+use std::time::{Duration, Instant};
+
 use egui::{Align2, Color32, Margin, RichText, Stroke, Vec2};
 
 use crate::theme;
 
 use super::util::{chrome_button, primary_button};
-use super::{HorizonApp, ResolvedSession};
+use super::{HorizonApp, ResolvedSession, SessionLease};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResumeAllAction {
@@ -12,14 +14,37 @@ enum ResumeAllAction {
     StartFresh,
 }
 
+/// A restored session waiting on the resume-all prompt. Its session lease
+/// is held here so a second Horizon process sees the session as live while
+/// the prompt is on screen; activation takes the lease over via
+/// `activate_persistent_session`.
+#[derive(Debug)]
+pub(super) struct PendingResumeAll {
+    session: ResolvedSession,
+    lease: Option<SessionLease>,
+    last_lease_refresh: Option<Instant>,
+}
+
 impl HorizonApp {
-    /// Queue the resume-all prompt for a restored session that carries agent
-    /// panels; returns true when activation was deferred to the prompt.
+    /// Queue the resume-all prompt for a restored session that carries
+    /// resumable agent panels; returns true when activation was deferred to
+    /// the prompt (while reserving the session lease).
     pub(super) fn maybe_queue_resume_all_prompt(&mut self, session: &ResolvedSession) -> bool {
         if session.runtime_state.resume_all_candidate_count() == 0 {
             return false;
         }
-        self.pending_resume_all = Some(session.clone());
+        let lease = match self.session_store.acquire_lease(&session.session_id) {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                tracing::warn!("failed to reserve session lease for resume prompt: {error}");
+                None
+            }
+        };
+        self.pending_resume_all = Some(PendingResumeAll {
+            session: session.clone(),
+            lease,
+            last_lease_refresh: None,
+        });
         true
     }
 
@@ -27,17 +52,18 @@ impl HorizonApp {
     /// once the user has chosen (and the session is activating) or no prompt
     /// is pending.
     pub(super) fn prepare_resume_all_prompt(&mut self, ui: &mut egui::Ui) -> bool {
-        let Some(session) = self.pending_resume_all.take() else {
+        let Some(mut pending) = self.pending_resume_all.take() else {
             return true;
         };
 
-        let action = render_resume_all_prompt(ui, session.runtime_state.resume_all_candidate_count());
+        let action = render_resume_all_prompt(ui, pending.session.runtime_state.resume_all_candidate_count());
         if matches!(action, ResumeAllAction::None) {
-            self.pending_resume_all = Some(session);
+            self.refresh_pending_resume_all_lease(&mut pending);
+            self.pending_resume_all = Some(pending);
             return false;
         }
 
-        let mut session = session;
+        let mut session = pending.session;
         if action == ResumeAllAction::StartFresh {
             session.runtime_state.start_agent_panels_fresh();
         } else {
@@ -47,6 +73,25 @@ impl HorizonApp {
         self.activate_persistent_session(&session);
         self.restore_window_viewport(&ctx);
         true
+    }
+
+    /// Keep the reserved lease live while the prompt waits for a choice.
+    fn refresh_pending_resume_all_lease(&mut self, pending: &mut PendingResumeAll) {
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+        let Some(lease) = pending.lease.as_mut() else {
+            return;
+        };
+        if pending
+            .last_lease_refresh
+            .is_some_and(|last_refresh| last_refresh.elapsed() < REFRESH_INTERVAL)
+        {
+            return;
+        }
+        match self.session_store.refresh_lease(lease) {
+            Ok(()) => pending.last_lease_refresh = Some(Instant::now()),
+            Err(error) => tracing::warn!("failed to refresh resume-prompt session lease: {error}"),
+        }
     }
 }
 

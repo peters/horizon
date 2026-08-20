@@ -73,11 +73,13 @@ fn run_key_frame(ctx: &Context, app: &mut HorizonApp, key: Key) {
 
 #[test]
 fn restore_with_agent_panels_queues_resume_all_prompt() {
-    let (_temp, _ctx, app) = test_app_with_config_and_startup(&Config::default(), open_startup(agent_runtime_state()));
+    let (temp, _ctx, app) = test_app_with_config_and_startup(&Config::default(), open_startup(agent_runtime_state()));
 
     assert!(app.pending_resume_all.is_some());
     assert!(app.board.workspaces.is_empty());
     assert!(app.active_session.is_none());
+    let lease = temp.path().join(".horizon/sessions/test-resume-all-session/lease.json");
+    assert!(lease.exists(), "prompt must reserve the session lease while pending");
 }
 
 #[test]
