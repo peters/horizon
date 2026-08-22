@@ -13,6 +13,7 @@ use crate::browser_widget::BrowserUiState;
 /// clicked.
 pub fn show_body(
     ui: &mut Ui,
+    panel_id: horizon_core::PanelId,
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
 ) -> (Option<Rect>, Option<[f32; 2]>, bool) {
@@ -25,7 +26,7 @@ pub fn show_body(
     let slot = browser.frame_slot.latest();
     let Some(data) = &slot.data else {
         drop(slot);
-        return (None, None, placeholder(ui, browser, available));
+        return (None, None, placeholder(ui, panel_id, browser, available));
     };
     let width = data.width as usize;
     let height = data.height as usize;
@@ -41,7 +42,7 @@ pub fn show_body(
         let options = egui::TextureOptions::LINEAR;
         let resize_needed = state.texture.as_ref().is_some_and(|t| t.size() != [width, height]);
         if state.texture.is_none() || resize_needed {
-            let name = format!("browser-{}", browser.panel_local_id);
+            let name = format!("browser-{}-{}", browser.panel_local_id, panel_id.0);
             state.texture = Some(ui.ctx().load_texture(name, image, options));
         } else if let Some(handle) = state.texture.as_mut() {
             handle.set(image, options);
@@ -75,7 +76,7 @@ pub fn show_body(
     (Some(rect), Some(frame_size), false)
 }
 
-fn placeholder(ui: &mut Ui, browser: &BrowserPanelState, available: Rect) -> bool {
+fn placeholder(ui: &mut Ui, panel_id: horizon_core::PanelId, browser: &BrowserPanelState, available: Rect) -> bool {
     let message = match &browser.status {
         BrowserStatus::Starting => "Starting browser…".to_string(),
         BrowserStatus::Ready => "Waiting for frames…".to_string(),
@@ -98,7 +99,11 @@ fn placeholder(ui: &mut Ui, browser: &BrowserPanelState, available: Rect) -> boo
         return false;
     }
     let button_rect = Rect::from_center_size(egui::Pos2::new(center.x, center.y + 26.0), vec2(80.0, 26.0));
-    let response = ui.interact(button_rect, ui.make_persistent_id("browser-retry"), Sense::click());
+    let response = ui.interact(
+        button_rect,
+        ui.make_persistent_id(("browser-retry", panel_id)),
+        Sense::click(),
+    );
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

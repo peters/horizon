@@ -197,6 +197,11 @@ pub fn owner_heartbeat(panel_local_id: &str, name: &str, tty: Option<String>) ->
 
 /// Ask for a human handoff. Returns the manifest path so the caller can
 /// poll for `done`.
+///
+/// The panel driver also rewrites this file (`url`/`title`/`browser_ws`), so a
+/// read-modify-write race can briefly drop a just-written field; the
+/// expected mitigation is on the caller side: re-assert the handoff
+/// (call this again) while it is pending and not yet `done`.
 #[must_use]
 pub fn request_handoff(panel_local_id: &str, reason: &str) -> Option<PathBuf> {
     let path = default_manifest_path(panel_local_id);

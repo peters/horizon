@@ -40,18 +40,19 @@ impl<'a> BrowserView<'a> {
             return false;
         }
         let state = &mut *self.ui_state;
+        let panel_id = self.panel.id;
 
         let url_focused = {
             let Some(browser) = self.panel.browser_mut() else {
                 return false;
             };
-            chrome::show(ui, browser, state, interactive)
+            chrome::show(ui, panel_id, browser, state, interactive)
         };
         let (body_rect, frame_size, retry_clicked) = {
             let Some(browser) = self.panel.browser() else {
                 return false;
             };
-            render::show_body(ui, browser, state)
+            render::show_body(ui, panel_id, browser, state)
         };
         if let Some(browser) = self.panel.browser_mut() {
             if retry_clicked {

@@ -117,20 +117,7 @@ fn pointer_events(
         state.last_mouse = Some(pos);
         return;
     }
-    // Movement dedup: only forward real movement.
-    if let Some(last) = state.last_mouse
-        && (last - pos).length() < 0.5
-    {
-        return;
-    }
-    state.last_mouse = Some(pos);
-    browser.send(BrowserCommand::Input(BrowserInput::MouseMove {
-        x: page_x,
-        y: page_y,
-        buttons,
-    }));
-
-    // Wheel: egui delivers MouseWheel events in the frame's event list.
+    // Wheel first: a wheel turn with a stationary pointer must work.
     let wheel_events = ctx.input(|i| i.events.clone());
     for event in wheel_events {
         if let Event::MouseWheel { unit, delta, .. } = event
@@ -150,15 +137,46 @@ fn pointer_events(
             }));
         }
     }
+
+    // Movement dedup: only forward real movement.
+    if let Some(last) = state.last_mouse
+        && (last - pos).length() < 0.5
+    {
+        return;
+    }
+    state.last_mouse = Some(pos);
+    browser.send(BrowserCommand::Input(BrowserInput::MouseMove {
+        x: page_x,
+        y: page_y,
+        buttons,
+    }));
 }
 
 fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
     let ctx = ui.ctx();
     let events = ctx.input(|i| i.events.clone());
+    // Single characters already delivered as Key `char` events this frame;
+    // egui may also deliver them as `Event::Text`, so skip the duplicate.
+    let mut key_chars: Vec<char> = Vec::new();
+    for event in &events {
+        if let Event::Key {
+            key, pressed, repeat, ..
+        } = event
+            && *pressed
+            && !*repeat
+            && let Some(c) = key_to_browser_key(*key).and_then(BrowserKey::printable_char)
+        {
+            key_chars.push(c);
+        }
+    }
     for event in events {
         match event {
             Event::Text(text) if !text.is_empty() => {
-                browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
+                let duplicate =
+                    text.chars().count() == 1 && text.chars().next().is_some_and(|c| key_chars.contains(&c));
+                if !duplicate {
+                    browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
+                }
             }
             Event::Key {
                 key,
@@ -187,14 +205,53 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                 let Some(browser_key) = key_to_browser_key(key) else {
                     continue;
                 };
+                let modifiers = to_browser_modifiers(modifiers);
+                // Shortcut chords (Ctrl/Cmd/Alt + key) go out as raw key
+                // events so the page sees them; plain or Shift chords
+                // deliver the (shift-adjusted) character.
+                let text = browser_key
+                    .printable_char()
+                    .map(shift_char)
+                    .map(|c| c.to_string())
+                    .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
                 browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
                     key: browser_key,
-                    text: browser_key.printable_char().map(|c| c.to_string()),
-                    modifiers: to_browser_modifiers(modifiers),
+                    text,
+                    modifiers,
                 }));
             }
             _ => {}
         }
+    }
+}
+
+/// Shift-adjusted character for the US layout (letters + the symbols the
+/// key map covers).
+fn shift_char(c: char) -> char {
+    match c {
+        'a'..='z' => c.to_ascii_uppercase(),
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        '`' => '~',
+        other => other,
     }
 }
 

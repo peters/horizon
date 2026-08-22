@@ -48,6 +48,9 @@ pub struct ChromeLaunch {
 /// A running headless `Chrome` process plus its captured `DevTools` endpoint.
 pub struct ChromeProcess {
     child: Child,
+    /// Cached once the child has been reaped, so repeated
+    /// [`ChromeProcess::child_status`]/[`ChromeProcess::kill`] calls stay cheap.
+    exit_status: Option<std::process::ExitStatus>,
     ws_url_rx: mpsc::Receiver<String>,
     ws_url: Option<String>,
     stderr_tail: std::sync::Arc<std::sync::Mutex<String>>,
@@ -122,6 +125,7 @@ impl ChromeProcess {
 
         Ok(Self {
             child,
+            exit_status: None,
             ws_url_rx,
             ws_url: None,
             stderr_tail,
@@ -159,22 +163,29 @@ impl ChromeProcess {
     /// Poll the child for exit without blocking.
     #[must_use]
     pub fn child_status(&mut self) -> Option<std::process::ExitStatus> {
-        self.child.try_wait().ok().flatten()
+        if self.exit_status.is_some() {
+            return self.exit_status;
+        }
+        let status = self.child.try_wait().ok().flatten();
+        self.exit_status = status;
+        status
     }
 
     /// Kill the browser. Chrome's child processes (zygotes, GPU, network
     /// service) exit with their parent; a short reap wait follows.
-    /// Kill the browser and reap it (bounded wait).
     pub fn kill(&mut self) {
-        if self.child_status().is_none() {
-            let _ = self.child.kill();
+        if self.child_status().is_some() {
+            return;
         }
+        let _ = self.child.kill();
         let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline && self.child.try_wait().ok().flatten().is_none() {
+        while self.child_status().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
         }
-        // Final reap (ignored if it still refuses).
-        let _ = self.child.wait();
+        // Final reap in case it exited between our last poll and now.
+        if self.child_status().is_none() {
+            self.exit_status = self.child.wait().ok();
+        }
     }
 
     fn stderr_tail_snapshot(&self) -> String {

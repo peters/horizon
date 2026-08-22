@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 /// CDP modifier bitmask (matches `protocol::Input.Modifier`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // the four CDP modifier bits
 pub struct BrowserModifiers {
     pub alt: bool,
     pub ctrl: bool,

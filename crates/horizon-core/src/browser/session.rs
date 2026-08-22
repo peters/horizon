@@ -188,7 +188,7 @@ fn run_driver(
 
     loop {
         // 1. Commands from the UI.
-        if state.drain_commands(&mut link, command_rx, event_tx) {
+        if state.drain_commands(&mut link, command_rx, event_tx, frame_slot) {
             chrome.kill();
             state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -213,7 +213,7 @@ fn run_driver(
         }
 
         // 3. Backoff-retried screencast restart / re-attach.
-        state.pending_restart_tick(&mut link);
+        state.pending_restart_tick(&mut link, event_tx, frame_slot);
 
         // 4. Ownership / handoff signals from the manifest (`hb` side).
         state.tick_signals(event_tx);
@@ -228,6 +228,29 @@ fn run_driver(
         std::thread::sleep(Duration::from_millis(5));
     }
     chrome.kill();
+}
+
+/// `call_and_drain` plus screencast-frame acking for any frames it
+/// drains: a `Page.screencastFrame` without an ack stops the stream until
+/// the next navigation restarts the screencast, so frames received while a
+/// page command is in flight must be acked and stored, not dropped.
+fn call_and_ack_frames(
+    link: &mut CdpLink,
+    event_tx: &mpsc::Sender<BrowserEvent>,
+    frame_slot: &Arc<FrameSlot>,
+    method: &str,
+    params: &serde_json::Value,
+    session: Option<&str>,
+) -> Result<serde_json::Value, crate::browser::cdp::CdpError> {
+    let (result, drained) = link.call_and_drain(CALL_TIMEOUT, method, params, session)?;
+    for message in drained {
+        if let Some(event) = message.event()
+            && event.method == "Page.screencastFrame"
+        {
+            DriverState::handle_screencast_frame(link, event_tx, frame_slot, event);
+        }
+    }
+    Ok(result)
 }
 
 fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process::ChromeLaunch, String> {
@@ -251,6 +274,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
 
 /// Driver-side state machine for one page session.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // intentional: per-concern state flags
 struct DriverState {
     config: BrowserSessionConfig,
     browser_ws: String,
@@ -303,9 +327,16 @@ impl DriverState {
         }
     }
 
-    fn send_page_command(&self, link: &mut CdpLink, method: &str, params: &serde_json::Value) {
+    fn send_page_command(
+        &self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+        method: &str,
+        params: &serde_json::Value,
+    ) {
         if let Some(ref session) = self.session_id
-            && let Err(error) = link.call_and_drain(CALL_TIMEOUT, method, params, Some(session))
+            && let Err(error) = call_and_ack_frames(link, event_tx, frame_slot, method, params, Some(session))
         {
             tracing::debug!(target: "browser", "cdp {method} failed: {error}");
         }
@@ -326,12 +357,28 @@ impl DriverState {
         })
     }
 
-    fn attach_setup(&mut self, link: &mut CdpLink, session: &str, target: &str) {
+    fn attach_setup(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+        target: &str,
+    ) {
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
-        let _ = link.call_and_drain(CALL_TIMEOUT, "Page.enable", &serde_json::json!({}), Some(session));
-        let _ = link.call_and_drain(
-            CALL_TIMEOUT,
+        let _ = call_and_ack_frames(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.enable",
+            &serde_json::json!({}),
+            Some(session),
+        );
+        let _ = call_and_ack_frames(
+            link,
+            event_tx,
+            frame_slot,
             "Emulation.setDeviceMetricsOverride",
             &serde_json::json!({
                 "width": self.viewport_w,
@@ -341,15 +388,22 @@ impl DriverState {
             }),
             Some(session),
         );
-        self.start_screencast(link);
+        self.start_screencast(link, event_tx, frame_slot);
     }
 
-    fn start_screencast(&mut self, link: &mut CdpLink) {
+    fn start_screencast(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
         let Some(ref session) = self.session_id else {
             return;
         };
-        match link.call_and_drain(
-            CALL_TIMEOUT,
+        match call_and_ack_frames(
+            link,
+            event_tx,
+            frame_slot,
             "Page.startScreencast",
             &self.screencast_params(),
             Some(session),
@@ -381,7 +435,12 @@ impl DriverState {
         }
     }
 
-    fn pending_restart_tick(&mut self, link: &mut CdpLink) {
+    fn pending_restart_tick(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
         if self.pending_reattach && !self.reattach_in_flight {
             self.pending_reattach = false;
             if let Some(ref target) = self.target_id {
@@ -407,7 +466,7 @@ impl DriverState {
         }
         self.pending_restart_at = None;
         if self.session_id.is_some() {
-            self.start_screencast(link);
+            self.start_screencast(link, event_tx, frame_slot);
         }
     }
 
@@ -433,13 +492,16 @@ impl DriverState {
                     self.pending_restart_at = Some(Instant::now() + RESTART_BACKOFF);
                 }
                 None => {
-                    if let Some(session) = result
-                        .as_ref()
-                        .and_then(|r| r.get("sessionId"))
-                        .and_then(|s| s.as_str())
+                    // The auto-attach event may already have re-bound us;
+                    // only the first binder sets up the page.
+                    if self.session_id.is_none()
+                        && let Some(session) = result
+                            .as_ref()
+                            .and_then(|r| r.get("sessionId"))
+                            .and_then(|s| s.as_str())
                         && let Some(target) = self.target_id.clone()
                     {
-                        self.attach_setup(link, session, &target);
+                        self.attach_setup(link, event_tx, frame_slot, session, &target);
                     }
                 }
             }
@@ -454,12 +516,19 @@ impl DriverState {
         &mut self,
         link: &mut CdpLink,
         event_tx: &mpsc::Sender<BrowserEvent>,
-        frame_slot: &FrameSlot,
+        frame_slot: &Arc<FrameSlot>,
         event: CdpEvent<'_>,
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         match event.method {
             "Target.attachedToTarget" => {
+                // Already driving a page: ignore further page targets
+                // (popups, agent-opened tabs). The binding is only
+                // replaced after it dies (detach/destroy) or a forced
+                // re-attach clears it.
+                if self.session_id.is_some() {
+                    return;
+                }
                 let Some(session) = event.session_id else {
                     return;
                 };
@@ -474,7 +543,7 @@ impl DriverState {
                 if target_type != "page" {
                     return;
                 }
-                self.attach_setup(link, session, target_id);
+                self.attach_setup(link, event_tx, frame_slot, session, target_id);
                 self.write_manifest(true);
                 let _ = event_tx.send(BrowserEvent::Ready);
                 if let Some(ref initial) = self.config.initial_url
@@ -482,7 +551,13 @@ impl DriverState {
                     && !self.initial_navigated
                 {
                     self.initial_navigated = true;
-                    self.send_page_command(link, "Page.navigate", &serde_json::json!({ "url": initial }));
+                    self.send_page_command(
+                        link,
+                        event_tx,
+                        frame_slot,
+                        "Page.navigate",
+                        &serde_json::json!({ "url": initial }),
+                    );
                     self.pending_restart_at = Some(Instant::now());
                 }
             }
@@ -544,6 +619,7 @@ impl DriverState {
         link: &mut CdpLink,
         command_rx: &mpsc::Receiver<BrowserCommand>,
         event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
     ) -> bool {
         while let Ok(command) = command_rx.try_recv() {
             match command {
@@ -551,22 +627,28 @@ impl DriverState {
                 BrowserCommand::Navigate(url) => {
                     self.url.clone_from(&url);
                     self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, "Page.navigate", &serde_json::json!({ "url": url }));
+                    self.send_page_command(
+                        link,
+                        event_tx,
+                        frame_slot,
+                        "Page.navigate",
+                        &serde_json::json!({ "url": url }),
+                    );
                     self.write_manifest(false);
                     let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
                     let _ = event_tx.send(BrowserEvent::Loading(true));
                 }
                 BrowserCommand::Reload => {
                     self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, "Page.reload", &serde_json::json!({}));
+                    self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
                 }
                 BrowserCommand::Back => {
                     self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, "History.back", &serde_json::json!({}));
+                    self.send_page_command(link, event_tx, frame_slot, "History.back", &serde_json::json!({}));
                 }
                 BrowserCommand::Forward => {
                     self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, "History.forward", &serde_json::json!({}));
+                    self.send_page_command(link, event_tx, frame_slot, "History.forward", &serde_json::json!({}));
                 }
                 BrowserCommand::SetViewport { width, height } => {
                     if width > 0 && height > 0 && (width, height) != (self.viewport_w, self.viewport_h) {
@@ -574,6 +656,8 @@ impl DriverState {
                         self.viewport_h = height;
                         self.send_page_command(
                             link,
+                            event_tx,
+                            frame_slot,
                             "Emulation.setDeviceMetricsOverride",
                             &serde_json::json!({
                                 "width": width,

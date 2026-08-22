@@ -166,7 +166,6 @@ struct SpeechNotice {
     shown_at: Instant,
 }
 
-#[allow(clippy::struct_excessive_bools)]
 /// Per-panel UI caches that survive across frames.
 #[derive(Default)]
 pub struct PanelRenderCaches {
@@ -175,6 +174,7 @@ pub struct PanelRenderCaches {
     pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
     panels_to_close: Vec<PanelId>,

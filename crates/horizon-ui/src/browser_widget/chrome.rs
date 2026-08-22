@@ -10,14 +10,20 @@ use crate::theme;
 const CHROME_HEIGHT: f32 = 30.0;
 
 /// Draw the top strip. Returns `true` while the URL bar has focus.
-pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, state: &mut BrowserUiState, interactive: bool) -> bool {
+pub fn show(
+    ui: &mut Ui,
+    panel_id: horizon_core::PanelId,
+    browser: &mut BrowserPanelState,
+    state: &mut BrowserUiState,
+    interactive: bool,
+) -> bool {
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
         nav_button(ui, "←", "Back", browser, BrowserCommand::Back, interactive);
         nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
-        let url_focused = url_bar(ui, browser, state, interactive);
+        let url_focused = url_bar(ui, panel_id, browser, state, interactive);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ownership_chip(ui, browser);
         });
@@ -56,8 +62,14 @@ fn nav_button(
     }
 }
 
-fn url_bar(ui: &mut Ui, browser: &BrowserPanelState, state: &mut BrowserUiState, interactive: bool) -> bool {
-    let id = ui.make_persistent_id("browser-url-bar");
+fn url_bar(
+    ui: &mut Ui,
+    panel_id: horizon_core::PanelId,
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    interactive: bool,
+) -> bool {
+    let id = ui.make_persistent_id(("browser-url-bar", panel_id));
     // Keep the buffer in sync with the live URL while unfocused.
     if ui.memory(|m| m.focused() != Some(id)) && state.url_buffer != browser.url {
         state.url_buffer.clone_from(&browser.url);
@@ -70,7 +82,9 @@ fn url_bar(ui: &mut Ui, browser: &BrowserPanelState, state: &mut BrowserUiState,
             .desired_width(f32::INFINITY)
             .font(egui::FontId::monospace(11.5)),
     );
-    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    // Enter submits while the bar is focused (egui singleline edits do
+    // not consume it).
+    if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         let url = state.url_buffer.trim().to_string();
         if !url.is_empty() && url != browser.url {
             browser.send(BrowserCommand::Navigate(url));

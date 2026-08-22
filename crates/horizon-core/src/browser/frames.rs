@@ -48,8 +48,14 @@ impl FrameSlot {
         Self::default()
     }
 
-    /// Decode a JPEG frame into the slot (reusing buffers) and bump `seq`.
-    /// Returns the new sequence number, or `None` on decode failure.
+    /// Decode a JPEG frame into the slot and bump `seq`.
+    ///
+    /// Steady state allocates nothing: the decode target is the previous
+    /// frame's pixel buffer, which becomes free the moment the new frame
+    /// replaces it.
+    ///
+    /// Returns the new sequence number, or `None` on decode failure (the
+    /// previous frame is kept).
     pub fn store_jpeg(&self, jpeg: &[u8]) -> Option<u64> {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut decoder = JpegDecoder::new(std::io::Cursor::new(jpeg));
@@ -57,14 +63,20 @@ impl FrameSlot {
             decoder.decode_headers().ok()?;
             decoder.output_buffer_size()
         })?;
-        inner.decode_buffer.resize(output_size, 0);
-        decoder.decode_into(&mut inner.decode_buffer).ok()?;
+        let mut buffer = std::mem::take(&mut inner.decode_buffer);
+        buffer.resize(output_size, 0);
+        if decoder.decode_into(&mut buffer).is_err() {
+            inner.decode_buffer = buffer;
+            return None;
+        }
         let info = decoder.info()?;
         inner.next_seq += 1;
+        // The old frame's buffer becomes the next decode target.
+        inner.decode_buffer = inner.data.take().map_or_else(Vec::new, |old| old.rgb);
         inner.data = Some(FrameData {
             width: u32::from(info.width),
             height: u32::from(info.height),
-            rgb: std::mem::take(&mut inner.decode_buffer),
+            rgb: buffer,
             seq: inner.next_seq,
         });
         Some(inner.next_seq)

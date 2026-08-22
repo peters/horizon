@@ -236,11 +236,9 @@ impl CdpLink {
     }
 
     /// Send a request and return its id for later matching.
-    /// Send a request and return its id for later matching.
     ///
     /// # Errors
     /// Fails on socket write errors.
-    ///
     pub fn send_request(&mut self, method: &str, params: &Value, session_id: Option<&str>) -> Result<u64> {
         let id = self.next_id;
         self.next_id += 1;
