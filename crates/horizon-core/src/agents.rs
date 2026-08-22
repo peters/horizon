@@ -244,7 +244,8 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         | PanelKind::Command
         | PanelKind::Editor
         | PanelKind::GitChanges
-        | PanelKind::Usage => None,
+        | PanelKind::Usage
+        | PanelKind::Browser => None,
     }
 }
 

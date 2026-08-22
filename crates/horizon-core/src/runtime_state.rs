@@ -175,8 +175,7 @@ impl RuntimeState {
                             name: panel.title.clone(),
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
-                            args: panel.launch_args.clone(),
-                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
+                            args: panel.launch_args.clone(),                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
                                 panel.launch_cwd.clone()
                             } else {
                                 terminal
@@ -195,6 +194,10 @@ impl RuntimeState {
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
+                            browser_url: panel
+                                .browser()
+                                .map(|browser| browser.url.clone())
+                                .filter(|url| !url.is_empty()),
                         }
                     })
                     .collect();
@@ -356,6 +359,9 @@ pub struct PanelState {
     /// Scratch editor buffer content (persisted for file-less editors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_content: Option<String>,
+    /// Current URL of browser panels, restored as the navigation target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
 }
 
 impl PanelState {
@@ -445,18 +451,24 @@ impl PanelState {
                 ssh_connection,
             }),
             editor_content: None,
+            browser_url: None,
         }
     }
 
     #[must_use]
     pub fn to_panel_options(&self) -> PanelOptions {
+        let command = if self.kind == PanelKind::Browser {
+            self.browser_url.clone().or_else(|| self.command.clone())
+        } else {
+            self.command.clone()
+        };
         PanelOptions {
             name: if self.name.is_empty() {
                 None
             } else {
                 Some(self.name.clone())
             },
-            command: self.command.clone(),
+            command,
             args: self.args.clone(),
             cwd: self.cwd.as_deref().map(Config::expand_tilde),
             ssh_connection: self.ssh_connection.clone(),
@@ -494,6 +506,7 @@ impl Default for PanelState {
             session_binding: None,
             template: None,
             editor_content: None,
+            browser_url: None,
         }
     }
 }

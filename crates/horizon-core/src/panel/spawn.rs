@@ -180,6 +180,18 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
             Ok(spawn_usage(seed))
         }
+        PanelKind::Browser => {
+            let PanelOptions {
+                name,
+                command,
+                position,
+                size,
+                template,
+                ..
+            } = opts;
+            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            spawn_browser(seed, command)
+        }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
 }
@@ -616,6 +628,30 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     )
 }
 
+/// Spawn a browser panel. The generic `command` field carries the optional
+/// initial URL (same convention as the editor's file path).
+fn spawn_browser(mut seed: StaticPanelSeed, initial_url: Option<String>) -> Result<Panel> {
+    let initial_url = initial_url.filter(|url| !url.trim().is_empty());
+    let (title, has_custom_name) = seed.take_title(|| {
+        initial_url
+            .as_deref()
+            .map(|url| crate::browser::panel_title_for_url(url))
+            .unwrap_or_else(|| "Browser".to_string())
+    });
+    let browser_config = crate::config::Config::load(None).map(|c| c.browser).unwrap_or_default();
+    let browser = crate::browser::BrowserPanelState::start(seed.local_id.clone(), &browser_config, initial_url.clone());
+    tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
+
+    Ok(seed.into_panel(
+        title,
+        PanelKind::Browser,
+        PanelContent::Browser(browser),
+        initial_url,
+        None,
+        has_custom_name,
+    ))
+}
+
 pub(super) fn resolve_launch_command(
     command: Option<String>,
     args: Vec<String>,
@@ -624,7 +660,9 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => {
+            (String::new(), Vec::new())
+        }
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -877,7 +915,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
+            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

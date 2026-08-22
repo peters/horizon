@@ -52,6 +52,7 @@ pub enum PanelKind {
     Editor,
     GitChanges,
     Usage,
+    Browser,
 }
 
 impl PanelKind {
@@ -83,6 +84,7 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
+            Self::Browser => "Browser",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
@@ -246,6 +248,17 @@ impl Panel {
         self.content.editor_mut()
     }
 
+    /// Convenience accessor for the browser content (if this panel holds one).
+    #[must_use]
+    pub fn browser(&self) -> Option<&crate::browser::BrowserPanelState> {
+        self.content.browser()
+    }
+
+    /// Mutable accessor for the browser content.
+    pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
+        self.content.browser_mut()
+    }
+
     /// Convenience accessor for the git changes content (if this panel holds one).
     #[must_use]
     pub fn git_changes(&self) -> Option<&DiffViewer> {
@@ -285,6 +298,18 @@ impl Panel {
     /// Drain pending terminal events. Returns `true` if any output was processed.
     #[profiling::function]
     pub fn process_output(&mut self) -> PanelProcessOutput {
+        if let Some(browser) = self.content.browser_mut() {
+            let had_output = browser.drain_events();
+            self.had_recent_output = had_output;
+            if had_output {
+                self.last_output_at_millis = Some(current_unix_millis());
+            }
+            return PanelProcessOutput {
+                had_output,
+                cwd_changed: false,
+            };
+        }
+
         let should_track_live_cwd = matches!(self.kind, PanelKind::Shell | PanelKind::Command);
         let Some(terminal) = self.content.terminal_mut() else {
             self.had_recent_output = false;
@@ -411,6 +436,7 @@ impl Panel {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
+            PanelContent::Browser(browser) => browser.stop(),
         }
     }
 
@@ -423,6 +449,14 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::Browser(browser) => {
+                browser.stop();
+                // The driver tears down Chrome asynchronously; waiting here
+                // only matters for the UI to stop painting, which is
+                // immediate once the session is dropped.
+                let _ = timeout;
+                true
+            }
         }
     }
 
@@ -435,6 +469,11 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::Browser(browser) => {
+                browser.stop();
+                let _ = timeout;
+                true
+            }
         }
     }
 
@@ -455,6 +494,11 @@ impl Panel {
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart(&mut self) -> Result<()> {
         if let PanelContent::GitChanges(_) = &self.content {
+            return Ok(());
+        }
+
+        if let PanelContent::Browser(browser) = &mut self.content {
+            browser.relaunch();
             return Ok(());
         }
 

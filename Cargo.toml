@@ -23,6 +23,12 @@ horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
 thiserror = "2.0.20"
 tracing = "0.1.44"
+# Chrome DevTools Protocol transport for browser panels. Plain ws:// to
+# 127.0.0.1, so no TLS features are needed.
+tungstenite = "0.27.0"
+# JPEG decoder for CDP screencast frames (change-driven video stream).
+zune-jpeg = "0.5.15"
+base64 = "0.22.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }

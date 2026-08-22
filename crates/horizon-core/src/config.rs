@@ -24,6 +24,8 @@ pub struct Config {
     pub overlays: OverlaysConfig,
     #[serde(default)]
     pub features: FeaturesConfig,
+    #[serde(default)]
+    pub browser: crate::browser::BrowserConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -46,6 +48,7 @@ impl Default for Config {
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
             features: FeaturesConfig::default(),
+            browser: crate::browser::BrowserConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }

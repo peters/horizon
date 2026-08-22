@@ -83,6 +83,16 @@ impl HorizonHome {
     pub fn codex_skill_dir(&self) -> PathBuf {
         self.codex_integrations_dir().join("horizon-notify")
     }
+
+    #[must_use]
+    pub fn browsers_manifest_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("browsers")
+    }
+
+    #[must_use]
+    pub fn browser_profile_dir(&self, local_id: &str) -> PathBuf {
+        self.root.join("browser-profiles").join(local_id)
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +121,14 @@ mod tests {
         assert_eq!(
             home.claude_plugin_dir(),
             PathBuf::from("/tmp/horizon-home/plugins/claude-code")
+        );
+        assert_eq!(
+            home.browsers_manifest_dir(),
+            PathBuf::from("/tmp/horizon-home/runtime/browsers")
+        );
+        assert_eq!(
+            home.browser_profile_dir("panel-1"),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/panel-1")
         );
     }
 }
