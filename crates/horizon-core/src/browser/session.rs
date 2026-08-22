@@ -47,6 +47,12 @@ pub enum BrowserEvent {
     Warning(String),
     /// The driver stopped.
     Stopped { code: Option<i32> },
+    /// An agent (via `hb`) asked the user for the wheel.
+    HandoffRequested(String),
+    /// The handoff was resolved (user handed back or agent cancelled).
+    HandoffCleared,
+    /// The agent owning this panel changed (`None` = no live owner).
+    OwnerChanged(Option<String>),
 }
 
 /// What the panel/UI asks the driver to do.
@@ -58,6 +64,8 @@ pub enum BrowserCommand {
     Forward,
     SetViewport { width: u32, height: u32 },
     Input(BrowserInput),
+    /// The user clicked "hand back to agent" in the panel.
+    HandoffDone,
     Stop,
 }
 
@@ -89,6 +97,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
 const MANIFEST_MIN_INTERVAL: Duration = Duration::from_millis(200);
+const SIGNAL_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Spawn the driver thread. Chrome startup problems are reported through
 /// the event channel rather than failing here.
@@ -213,6 +222,10 @@ fn run_driver(
                 BrowserCommand::Input(input) => {
                     let (method, params) = input.cdp();
                     state.send_page_command_fire(&mut link, method, params);
+                    state.stamp_user_active();
+                }
+                BrowserCommand::HandoffDone => {
+                    state.resolve_handoff();
                 }
             }
         }
@@ -237,7 +250,10 @@ fn run_driver(
         // 3. Backoff-retried screencast restart / re-attach.
         state.pending_restart_tick(&mut link);
 
-        // 4. Chrome process liveness.
+        // 4. Ownership / handoff signals from the manifest (`hb` side).
+        state.tick_signals(&event_tx);
+
+        // 5. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
             state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
@@ -287,6 +303,9 @@ struct DriverState {
     reattach_in_flight: bool,
     last_manifest_write: Instant,
     manifest_dirty: bool,
+    last_signal_check: Instant,
+    owner_seen: Option<String>,
+    handoff_seen: Option<i64>,
 }
 
 impl DriverState {
@@ -313,6 +332,9 @@ impl DriverState {
             reattach_in_flight: false,
             last_manifest_write: Instant::now() - MANIFEST_MIN_INTERVAL,
             manifest_dirty: true,
+            last_signal_check: Instant::now(),
+            owner_seen: None,
+            handoff_seen: None,
         }
     }
 
@@ -570,6 +592,61 @@ impl DriverState {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Stamp the manifest so `hb` can tell the user is driving right now.
+    fn stamp_user_active(&mut self) {
+        let Some(mut manifest) = manifest::read(&self.config.panel_local_id) else {
+            return;
+        };
+        manifest.user_active = true;
+        manifest.user_active_at = manifest::now_millis();
+        let _ = manifest::write(&manifest);
+    }
+
+    /// User clicked "hand back": mark the pending handoff done so the
+    /// blocked `hb` process can continue.
+    fn resolve_handoff(&mut self) {
+        let Some(mut manifest) = manifest::read(&self.config.panel_local_id) else {
+            return;
+        };
+        if let Some(handoff) = manifest.handoff.as_mut() {
+            handoff.done = true;
+        }
+        let _ = manifest::write(&manifest);
+        self.handoff_seen = None;
+    }
+
+    /// Poll the manifest for agent-side signals (owner heartbeat, handoff
+    /// requests). Cheap file read, throttled.
+    fn tick_signals(&mut self, tx: &mpsc::Sender<BrowserEvent>) {
+        if self.last_signal_check.elapsed() < SIGNAL_MIN_INTERVAL {
+            return;
+        }
+        self.last_signal_check = Instant::now();
+        let Some(manifest) = manifest::read(&self.config.panel_local_id) else {
+            return;
+        };
+        let now = manifest::now_millis();
+        let owner = manifest.live_owner(now).map(|owner| owner.name.clone());
+        if owner != self.owner_seen {
+            self.owner_seen = owner.clone();
+            let _ = tx.send(BrowserEvent::OwnerChanged(owner));
+        }
+        match manifest.handoff_pending() {
+            Some(handoff) => {
+                if self.handoff_seen != Some(handoff.requested_at) {
+                    self.handoff_seen = Some(handoff.requested_at);
+                    let _ = tx.send(BrowserEvent::HandoffRequested(handoff.reason.clone()));
+                }
+            }
+            None => {
+                if self.handoff_seen.is_some() {
+                    self.handoff_seen = None;
+                    let _ = tx.send(BrowserEvent::HandoffCleared);
+                }
+            }
         }
     }
 

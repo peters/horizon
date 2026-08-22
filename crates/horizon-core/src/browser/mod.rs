@@ -113,6 +113,10 @@ pub struct BrowserPanelState {
     pub panel_local_id: String,
     /// Initial URL requested at (re)start, for the URL bar.
     pub requested_url: Option<String>,
+    /// Agent currently driving this panel (from manifest heartbeats).
+    pub owner: Option<String>,
+    /// Pending handoff request from the agent, with its reason.
+    pub handoff_reason: Option<String>,
     config: BrowserConfig,
 }
 
@@ -136,6 +140,8 @@ impl BrowserPanelState {
             session: None,
             requested_url: initial_url.clone(),
             panel_local_id: panel_local_id.clone(),
+            owner: None,
+            handoff_reason: None,
             config: config.clone(),
         };
         state.launch_session(initial_url);
@@ -177,6 +183,14 @@ impl BrowserPanelState {
         if let Some(session) = &self.session {
             session.send(command);
         }
+    }
+
+    /// Tell the driver the user handed the panel back to the agent.
+    pub fn hand_back(&mut self) {
+        if let Some(session) = &self.session {
+            let _ = session.send(BrowserCommand::HandoffDone);
+        }
+        self.handoff_reason = None;
     }
 
     pub fn stop(&mut self) {
@@ -231,6 +245,22 @@ impl BrowserPanelState {
                     self.session = None;
                     self.status = BrowserStatus::Stopped { code };
                     active = true;
+                }
+                BrowserEvent::HandoffRequested(reason) => {
+                    self.handoff_reason = Some(reason);
+                    active = true;
+                }
+                BrowserEvent::HandoffCleared => {
+                    if self.handoff_reason.is_some() {
+                        self.handoff_reason = None;
+                        active = true;
+                    }
+                }
+                BrowserEvent::OwnerChanged(owner) => {
+                    if self.owner != owner {
+                        self.owner = owner;
+                        active = true;
+                    }
                 }
             }
         }

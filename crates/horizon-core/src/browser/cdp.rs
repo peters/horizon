@@ -147,25 +147,35 @@ impl CdpLink {
     /// Read at most one message, waiting up to the configured read timeout.
     /// Returns `Ok(None)` on timeout so callers can keep doing other work.
     pub fn read_one(&mut self) -> Result<Option<CdpMsg>> {
-        match self.ws.read() {
-            Ok(Message::Text(text)) => {
-                let value: Value = serde_json::from_str(text.as_str())?;
-                Ok(Some(Self::decode_message(value)))
+        loop {
+            match self.ws.read() {
+                Ok(Message::Text(text)) => {
+                    let value: Value = serde_json::from_str(text.as_str())?;
+                    return Ok(Some(Self::decode_message(value)));
+                }
+                Ok(Message::Ping(_))
+                | Ok(Message::Pong(_))
+                | Ok(Message::Binary(_))
+                | Ok(Message::Frame(_)) => {
+                    // tungstenite answers pings; binary/raw frames are not expected.
+                    return Ok(None);
+                }
+                Ok(Message::Close(_)) => {
+                    return Err(CdpError::Closed {
+                        method: "<close>".to_string(),
+                    })
+                }
+                // A signal can interrupt the blocking read (EINTR); the
+                // deadline is re-armed by the OS, so just try again.
+                Err(tungstenite::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(tungstenite::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.into()),
             }
-            Ok(Message::Ping(_))
-            | Ok(Message::Pong(_))
-            | Ok(Message::Binary(_))
-            | Ok(Message::Frame(_)) => {
-                // tungstenite answers pings; binary/raw frames are not expected.
-                Ok(None)
-            }
-            Ok(Message::Close(_)) => Err(CdpError::Closed {
-                method: "<close>".to_string(),
-            }),
-            Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                Ok(None)
-            }
-            Err(error) => Err(error.into()),
         }
     }
 
@@ -565,11 +575,13 @@ mod tests {
             event.method == "Page.titleUpdated" && event.session_id == Some("S1")
         };
         let mut got_title = drained.iter().find_map(|msg| msg.event()).is_some_and(is_title);
-        while !got_title {
-            let Ok(Some(msg)) = link.read_one() else {
-                break;
-            };
-            got_title = msg.event().is_some_and(is_title);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !got_title && Instant::now() < deadline {
+            match link.read_one() {
+                Ok(Some(msg)) => got_title = msg.event().is_some_and(is_title),
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => break,
+            }
         }
         assert!(got_title, "title event");
 
