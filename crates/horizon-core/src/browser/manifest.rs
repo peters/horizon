@@ -44,7 +44,7 @@ pub struct ManifestHandoff {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct BrowserManifest {
     pub panel_local_id: String,
-    /// Browser-level DevTools ws endpoint (what `hb` connects to).
+    /// Browser-level `DevTools` ws endpoint (what `hb` connects to).
     pub browser_ws: String,
     /// The page target the panel is driving.
     pub target_id: String,
@@ -70,8 +70,7 @@ impl BrowserManifest {
 
     #[must_use]
     pub fn user_is_active(&self, now_millis: i64) -> bool {
-        self.user_active
-            && now_millis.saturating_sub(self.user_active_at) <= USER_ACTIVE_TTL_MILLIS
+        self.user_active && now_millis.saturating_sub(self.user_active_at) <= USER_ACTIVE_TTL_MILLIS
     }
 
     #[must_use]
@@ -80,20 +79,27 @@ impl BrowserManifest {
     }
 }
 
+#[must_use]
 pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+#[must_use]
 pub fn manifest_path_for_root(root: &Path, panel_local_id: &str) -> PathBuf {
     let base = root.join("runtime").join("browsers");
     // Sanitize: local ids are ours, but a hostile file name must not escape
     // the manifest directory.
     let safe: String = panel_local_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     base.join(format!("{safe}.json"))
 }
@@ -143,16 +149,22 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
 }
 
 /// Write the manifest atomically (temp file + rename), mode 0600.
+///
+/// # Errors
+/// Fails on filesystem errors.
 pub fn write(manifest: &BrowserManifest) -> std::io::Result<()> {
     write_at(&default_manifest_path(&manifest.panel_local_id), manifest)
 }
 
+/// Write to an explicit path (used by tests).
+///
+/// # Errors
+/// Fails on filesystem errors.
 pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let raw = serde_json::to_string_pretty(manifest)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, raw.as_bytes())?;
     #[cfg(unix)]
@@ -169,6 +181,7 @@ pub fn remove(panel_local_id: &str) {
 }
 
 /// Refresh the agent owner heartbeat (called by `hb` on every command).
+#[must_use]
 pub fn owner_heartbeat(panel_local_id: &str, name: &str, tty: Option<String>) -> Option<()> {
     let path = default_manifest_path(panel_local_id);
     let mut manifest = read_at(&path)?;
@@ -184,6 +197,7 @@ pub fn owner_heartbeat(panel_local_id: &str, name: &str, tty: Option<String>) ->
 
 /// Ask for a human handoff. Returns the manifest path so the caller can
 /// poll for `done`.
+#[must_use]
 pub fn request_handoff(panel_local_id: &str, reason: &str) -> Option<PathBuf> {
     let path = default_manifest_path(panel_local_id);
     let mut manifest = read_at(&path)?;
@@ -225,13 +239,11 @@ pub fn mark_handoff_done(panel_local_id: &str) {
 }
 
 /// Poll until the handoff is marked done or the timeout elapses.
+#[must_use]
 pub fn wait_handoff_done(panel_local_id: &str, timeout: std::time::Duration) -> bool {
     let started = std::time::Instant::now();
     loop {
-        if read(panel_local_id)
-            .and_then(|m| m.handoff)
-            .is_some_and(|h| h.done)
-        {
+        if read(panel_local_id).and_then(|m| m.handoff).is_some_and(|h| h.done) {
             return true;
         }
         if started.elapsed() > timeout {
@@ -250,7 +262,9 @@ mod tests {
 
     fn test_root() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("horizon-browser-mani{}", std::process::id())).join(format!("t{n}"));
+        let dir = std::env::temp_dir()
+            .join(format!("horizon-browser-mani{}", std::process::id()))
+            .join(format!("t{n}"));
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -278,8 +292,7 @@ mod tests {
         write_at(&path, &m).unwrap();
         let back = read_at(&path).unwrap();
         assert_eq!(back, m);
-        assert!(list_panels_in(&root.join("runtime").join("browsers"))
-            .contains(&"abc-123".to_string()));
+        assert!(list_panels_in(&root.join("runtime").join("browsers")).contains(&"abc-123".to_string()));
         let _ = std::fs::remove_dir_all(&root);
     }
 

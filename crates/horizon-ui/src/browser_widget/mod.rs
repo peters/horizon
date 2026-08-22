@@ -1,0 +1,75 @@
+//! Body of `PanelKind::Browser` panels: chrome strip, live screencast
+//! frames, and egui→CDP input routing.
+//!
+//! Perf notes: the texture is only updated when the frame `seq` changes
+//! (screencasts are change-driven, so idle pages cost nothing), and mouse
+//! moves are deduplicated to actual movement.
+
+mod chrome;
+mod input;
+mod render;
+
+use egui::{Pos2, TextureHandle, Ui};
+use horizon_core::Panel;
+
+/// Per-panel UI state that must survive across frames.
+#[derive(Default)]
+pub struct BrowserUiState {
+    texture: Option<TextureHandle>,
+    seq: u64,
+    /// Last mouse position forwarded to the page (movement dedup).
+    last_mouse: Option<Pos2>,
+    /// URL bar buffer (follows the panel URL while unfocused).
+    url_buffer: String,
+}
+
+pub struct BrowserView<'a> {
+    panel: &'a mut Panel,
+    ui_state: &'a mut BrowserUiState,
+}
+
+impl<'a> BrowserView<'a> {
+    #[must_use]
+    pub fn new(panel: &'a mut Panel, ui_state: &'a mut BrowserUiState) -> BrowserView<'a> {
+        Self { panel, ui_state }
+    }
+
+    pub fn show(&mut self, ui: &mut Ui, is_focused: bool, interactive: bool) -> bool {
+        if self.panel.browser().is_none() {
+            ui.centered_and_justified(|ui| ui.label("Browser content missing"));
+            return false;
+        }
+        let state = &mut *self.ui_state;
+
+        let url_focused = {
+            let Some(browser) = self.panel.browser_mut() else {
+                return false;
+            };
+            chrome::show(ui, browser, state, interactive)
+        };
+        let (body_rect, frame_size, retry_clicked) = {
+            let Some(browser) = self.panel.browser() else {
+                return false;
+            };
+            render::show_body(ui, browser, state)
+        };
+        if let Some(browser) = self.panel.browser_mut() {
+            if retry_clicked {
+                browser.relaunch();
+            }
+            input::handle(
+                ui,
+                browser,
+                state,
+                body_rect,
+                frame_size,
+                input::InputFlags {
+                    is_focused,
+                    interactive,
+                    url_focused,
+                },
+            );
+        }
+        true
+    }
+}

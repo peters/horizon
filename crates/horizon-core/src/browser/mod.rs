@@ -1,10 +1,10 @@
-//! Browser panels: headless Chrome driven over the Chrome DevTools
+//! Browser panels: headless `Chrome` driven over the `CDP`
 //! Protocol, rendered inside Horizon as first-class panels.
 //!
 //! Layout follows the module-boundary rules in
 //! `docs/architecture/maintainability.md`:
 //!
-//! - `cdp` — DevTools Protocol transport (WebSocket JSON-RPC)
+//! - `cdp` — `CDP` transport (websocket JSON-RPC)
 //! - `process` — Chrome binary discovery, spawn, kill
 //! - `frames` — JPEG decode + shared frame slot
 //! - `input` — core input model + CDP parameter mapping
@@ -28,9 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub use frames::FrameSlot;
-pub use input::{
-    BrowserButton, BrowserInput, BrowserKey, BrowserModifiers,
-};
+pub use input::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
 pub use session::{BrowserCommand, BrowserEvent, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
@@ -47,7 +45,7 @@ pub fn panel_title_for_url(url: &str) -> String {
         .next()
         .unwrap_or(url)
         .split('@')
-        .last()
+        .next_back()
         .unwrap_or(url)
         .split(':')
         .next()
@@ -91,8 +89,12 @@ pub enum BrowserStatus {
     #[default]
     Starting,
     Ready,
-    Error { message: String },
-    Stopped { code: Option<i32> },
+    Error {
+        message: String,
+    },
+    Stopped {
+        code: Option<i32>,
+    },
 }
 
 impl BrowserStatus {
@@ -122,18 +124,11 @@ pub struct BrowserPanelState {
 
 impl BrowserPanelState {
     /// Create the state and start the driver thread.
-    pub fn start(
-        panel_local_id: impl Into<String>,
-        config: &BrowserConfig,
-        initial_url: Option<String>,
-    ) -> Self {
+    pub fn start(panel_local_id: impl Into<String>, config: &BrowserConfig, initial_url: Option<String>) -> Self {
         let panel_local_id = panel_local_id.into();
         let mut state = Self {
             status: BrowserStatus::Starting,
-            url: initial_url
-                .clone()
-                .filter(|u| u != "about:blank")
-                .unwrap_or_default(),
+            url: initial_url.clone().filter(|u| u != "about:blank").unwrap_or_default(),
             title: String::new(),
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
@@ -181,7 +176,7 @@ impl BrowserPanelState {
 
     pub fn send(&self, command: BrowserCommand) {
         if let Some(session) = &self.session {
-            session.send(command);
+            let _ = session.send(command);
         }
     }
 
@@ -297,9 +292,11 @@ mod tests {
         assert!(BrowserStatus::default().is_alive());
         assert!(BrowserStatus::Ready.is_alive());
         assert!(!BrowserStatus::Stopped { code: None }.is_alive());
-        assert!(!BrowserStatus::Error {
-            message: "x".to_string()
-        }
-        .is_alive());
+        assert!(
+            !BrowserStatus::Error {
+                message: "x".to_string()
+            }
+            .is_alive()
+        );
     }
 }

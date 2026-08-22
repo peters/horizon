@@ -167,6 +167,14 @@ struct SpeechNotice {
 }
 
 #[allow(clippy::struct_excessive_bools)]
+/// Per-panel UI caches that survive across frames.
+#[derive(Default)]
+pub struct PanelRenderCaches {
+    pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
+    pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
+    pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
+}
+
 pub struct HorizonApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
@@ -212,8 +220,7 @@ pub struct HorizonApp {
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
     terminal_selection_drag: TerminalSelectionDragState,
-    terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
-    editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
+    panel_render_caches: PanelRenderCaches,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
@@ -384,8 +391,7 @@ impl HorizonApp {
             panel_screen_order: Vec::new(),
             panel_render_order: Vec::new(),
             workspace_colors: Vec::new(),
-            terminal_grid_cache: HashMap::new(),
-            editor_preview_cache: HashMap::new(),
+            panel_render_caches: PanelRenderCaches::default(),
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),

@@ -175,7 +175,8 @@ impl RuntimeState {
                             name: panel.title.clone(),
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
-                            args: panel.launch_args.clone(),                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
+                            args: panel.launch_args.clone(),
+                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
                                 panel.launch_cwd.clone()
                             } else {
                                 terminal

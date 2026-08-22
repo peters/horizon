@@ -247,9 +247,10 @@ impl HorizonApp {
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ui, self.appearance_theme);
             self.theme_applied = true;
-            self.terminal_grid_cache.clear();
+            self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
-            self.editor_preview_cache.clear();
+            self.panel_render_caches.editor_preview_cache.clear();
+            self.panel_render_caches.browser_ui_state.clear();
         }
 
         if !self.prepare_startup_bootstrap(ui) {
@@ -276,7 +277,8 @@ impl HorizonApp {
         if panel_output.cwd_changed {
             self.mark_runtime_dirty();
         }
-        let had_terminal_output = panel_output.had_terminal_output;
+        let had_browser_output = self.board.drain_browser_events();
+        let had_terminal_output = panel_output.had_terminal_output || had_browser_output;
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -753,8 +755,9 @@ impl HorizonApp {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
             self.terminal_body_screen_rects.remove(&panel_id);
-            self.terminal_grid_cache.remove(&panel_id);
-            self.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+            self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.browser_ui_state.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -764,8 +767,9 @@ impl HorizonApp {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
             } else {
-                self.terminal_grid_cache.remove(&panel_id);
-                self.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+                self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.browser_ui_state.remove(&panel_id);
             }
         }
     }

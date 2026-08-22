@@ -355,6 +355,15 @@ fn default_presets() -> Vec<PresetConfig> {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         },
+        PresetConfig {
+            name: "Browser".to_string(),
+            alias: Some("web".to_string()),
+            kind: PanelKind::Browser,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        },
     ]);
     presets
 }

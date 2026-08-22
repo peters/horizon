@@ -190,7 +190,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 ..
             } = opts;
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
-            spawn_browser(seed, command)
+            Ok(spawn_browser(seed, command))
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -630,26 +630,31 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
 
 /// Spawn a browser panel. The generic `command` field carries the optional
 /// initial URL (same convention as the editor's file path).
-fn spawn_browser(mut seed: StaticPanelSeed, initial_url: Option<String>) -> Result<Panel> {
+fn spawn_browser(mut seed: StaticPanelSeed, initial_url: Option<String>) -> Panel {
     let initial_url = initial_url.filter(|url| !url.trim().is_empty());
     let (title, has_custom_name) = seed.take_title(|| {
         initial_url
             .as_deref()
-            .map(|url| crate::browser::panel_title_for_url(url))
-            .unwrap_or_else(|| "Browser".to_string())
+            .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
     });
-    let browser_config = crate::config::Config::load(None).map(|c| c.browser).unwrap_or_default();
+    let browser_config = match crate::config::Config::load(None) {
+        Ok(config) => config.browser,
+        Err(error) => {
+            tracing::warn!(target: "browser", "config load failed, using defaults: {error}");
+            crate::browser::BrowserConfig::default()
+        }
+    };
     let browser = crate::browser::BrowserPanelState::start(seed.local_id.clone(), &browser_config, initial_url.clone());
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
 
-    Ok(seed.into_panel(
+    seed.into_panel(
         title,
         PanelKind::Browser,
         PanelContent::Browser(browser),
         initial_url,
         None,
         has_custom_name,
-    ))
+    )
 }
 
 pub(super) fn resolve_launch_command(

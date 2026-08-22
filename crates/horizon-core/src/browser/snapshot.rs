@@ -49,7 +49,11 @@ pub const SNAPSHOT_JS: &str = r#"(() => {
 /// Extract the text snapshot from a `Runtime.evaluate` result value.
 #[must_use]
 pub fn snapshot_text(result: &serde_json::Value) -> String {
-    if let Some(value) = result.get("result").and_then(|r| r.get("value")).and_then(|v| v.as_str()) {
+    if let Some(value) = result
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(|v| v.as_str())
+    {
         return value.to_string();
     }
     if let Some(exception) = result

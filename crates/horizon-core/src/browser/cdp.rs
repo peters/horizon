@@ -1,4 +1,4 @@
-//! Chrome DevTools Protocol transport over a WebSocket.
+//! `CDP` (`Chrome` `DevTools` Protocol) transport over a plain websocket.
 //!
 //! Horizon talks CDP to a local headless Chrome. Two topologies are in play:
 //!
@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use thiserror::Error;
+use tungstenite::Message;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::WebSocket;
-use tungstenite::Message;
 
 /// Default per-read timeout. Keeps the driver loop responsive so command
 /// handling, process-liveness checks, and deadlines always run.
@@ -32,9 +32,9 @@ pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(250);
 #[derive(Error, Debug)]
 pub enum CdpError {
     #[error("websocket i/o: {0}")]
-    Io(#[from] std::io::Error),
+    Io(Box<std::io::Error>),
     #[error("websocket: {0}")]
-    Ws(#[from] tungstenite::Error),
+    Ws(Box<tungstenite::Error>),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("websocket handshake: {0}")]
@@ -47,6 +47,18 @@ pub enum CdpError {
     Timeout { method: String },
     #[error("websocket connection closed while waiting for {method}")]
     Closed { method: String },
+}
+
+impl From<std::io::Error> for CdpError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(Box::new(error))
+    }
+}
+
+impl From<tungstenite::Error> for CdpError {
+    fn from(error: tungstenite::Error) -> Self {
+        Self::Ws(Box::new(error))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CdpError>;
@@ -88,7 +100,8 @@ impl From<CdpErrorInfo> for CdpError {
     }
 }
 
-#[derive(Debug)]
+/// A CDP event (decoded). `Copy` because every field borrows.
+#[derive(Clone, Copy, Debug)]
 pub struct CdpEvent<'a> {
     pub method: &'a str,
     pub params: &'a Value,
@@ -96,6 +109,7 @@ pub struct CdpEvent<'a> {
 }
 
 impl CdpMsg {
+    #[must_use]
     pub fn event(&self) -> Option<CdpEvent<'_>> {
         match self {
             Self::Event {
@@ -111,6 +125,7 @@ impl CdpMsg {
         }
     }
 
+    #[must_use]
     pub fn response_id(&self) -> Option<u64> {
         match self {
             Self::Response { id, .. } => Some(*id),
@@ -129,49 +144,53 @@ pub struct CdpLink {
 
 impl CdpLink {
     /// Connect to a `ws://host:port/path` CDP endpoint.
+    ///
+    /// # Errors
+    /// Fails when the URL, TCP connect, or the websocket handshake fails.
     pub fn connect(ws_url: &str) -> Result<Self> {
         Self::connect_with_timeout(ws_url, DEFAULT_READ_TIMEOUT)
     }
 
+    /// Like [`CdpLink::connect`] with an explicit per-read timeout.
+    ///
+    /// # Errors
+    /// Fails when the URL, TCP connect, or the websocket handshake fails.
     pub fn connect_with_timeout(ws_url: &str, read_timeout: Duration) -> Result<Self> {
         let request = ws_url.into_client_request()?;
         let host_port = host_port_from_ws_url(ws_url)?;
         let tcp = TcpStream::connect(host_port)?;
         tcp.set_read_timeout(Some(read_timeout))?;
         tcp.set_nodelay(true)?;
-        let (ws, _response) = tungstenite::client::client(request, tcp)
-            .map_err(|e| CdpError::Handshake(e.to_string()))?;
+        let (ws, _response) =
+            tungstenite::client::client(request, tcp).map_err(|e| CdpError::Handshake(e.to_string()))?;
         Ok(Self { ws, next_id: 1 })
     }
 
     /// Read at most one message, waiting up to the configured read timeout.
     /// Returns `Ok(None)` on timeout so callers can keep doing other work.
+    ///
+    /// # Errors
+    /// Fails on websocket errors (a closed connection is an error, not `None`).
     pub fn read_one(&mut self) -> Result<Option<CdpMsg>> {
         loop {
             match self.ws.read() {
                 Ok(Message::Text(text)) => {
                     let value: Value = serde_json::from_str(text.as_str())?;
-                    return Ok(Some(Self::decode_message(value)));
+                    return Ok(Some(Self::decode_message(&value)));
                 }
-                Ok(Message::Ping(_))
-                | Ok(Message::Pong(_))
-                | Ok(Message::Binary(_))
-                | Ok(Message::Frame(_)) => {
+                Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_)) => {
                     // tungstenite answers pings; binary/raw frames are not expected.
                     return Ok(None);
                 }
                 Ok(Message::Close(_)) => {
                     return Err(CdpError::Closed {
                         method: "<close>".to_string(),
-                    })
+                    });
                 }
                 // A signal can interrupt the blocking read (EINTR); the
                 // deadline is re-armed by the OS, so just try again.
-                Err(tungstenite::Error::Io(error))
-                    if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(tungstenite::Error::Io(error))
-                    if error.kind() == std::io::ErrorKind::WouldBlock =>
-                {
+                Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     return Ok(None);
                 }
                 Err(error) => return Err(error.into()),
@@ -179,7 +198,7 @@ impl CdpLink {
         }
     }
 
-    fn decode_message(value: Value) -> CdpMsg {
+    fn decode_message(value: &Value) -> CdpMsg {
         let is_event = value.get("id").is_none();
         if is_event {
             let method = value
@@ -202,20 +221,11 @@ impl CdpLink {
         } else {
             let id = value.get("id").and_then(Value::as_u64).unwrap_or(0);
             let result = value.get("result").cloned();
-            let error = value
-                .get("error")
-                .map(|e| CdpErrorInfo {
-                    code: e.get("code").and_then(Value::as_i64).unwrap_or(-1),
-                    message: e
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                });
-            let session_id = value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let error = value.get("error").map(|e| CdpErrorInfo {
+                code: e.get("code").and_then(Value::as_i64).unwrap_or(-1),
+                message: e.get("message").and_then(Value::as_str).unwrap_or_default().to_string(),
+            });
+            let session_id = value.get("sessionId").and_then(Value::as_str).map(str::to_string);
             CdpMsg::Response {
                 id,
                 result,
@@ -226,46 +236,51 @@ impl CdpLink {
     }
 
     /// Send a request and return its id for later matching.
-    pub fn send_request(
-        &mut self,
-        method: &str,
-        params: Value,
-        session_id: Option<&str>,
-    ) -> Result<u64> {
+    /// Send a request and return its id for later matching.
+    ///
+    /// # Errors
+    /// Fails on socket write errors.
+    ///
+    pub fn send_request(&mut self, method: &str, params: &Value, session_id: Option<&str>) -> Result<u64> {
         let id = self.next_id;
         self.next_id += 1;
         let mut message = json!({ "id": id, "method": method, "params": params });
-        if let Some(session) = session_id {
-            message
-                .as_object_mut()
-                .unwrap()
-                .insert("sessionId".to_string(), json!(session));
+        if let Some(session) = session_id
+            && let Some(object) = message.as_object_mut()
+        {
+            object.insert("sessionId".to_string(), json!(session));
         }
-        let _ = self.send_raw(message);
+        let _ = self.send_raw(&message);
         Ok(id)
     }
 
     /// Send a fire-and-forget method call (events like acks).
-    pub fn send_fire(&mut self, method: &str, params: Value, session_id: Option<&str>) -> Result<()> {
+    ///
+    /// # Errors
+    /// Fails on socket write errors.
+    ///
+    pub fn send_fire(&mut self, method: &str, params: &Value, session_id: Option<&str>) -> Result<()> {
         let mut message = json!({ "method": method, "params": params });
-        if let Some(session) = session_id {
-            message
-                .as_object_mut()
-                .unwrap()
-                .insert("sessionId".to_string(), json!(session));
+        if let Some(session) = session_id
+            && let Some(object) = message.as_object_mut()
+        {
+            object.insert("sessionId".to_string(), json!(session));
         }
-        let _ = self.send_raw(message);
+        let _ = self.send_raw(&message);
         Ok(())
     }
 
     /// Send a request and block (bounded by `timeout`) until its response.
     /// Any events received in the meantime are returned so the caller can
     /// fold them into its state machine.
+    ///
+    /// # Errors
+    /// Fails on socket errors, CDP error responses, or timeout.
     pub fn call_and_drain(
         &mut self,
         timeout: Duration,
         method: &str,
-        params: Value,
+        params: &Value,
         session_id: Option<&str>,
     ) -> Result<(Value, Vec<CdpMsg>)> {
         let id = self.send_request(method, params, session_id)?;
@@ -273,32 +288,33 @@ impl CdpLink {
         let mut drained = Vec::new();
         loop {
             if started.elapsed() > timeout {
-                return Err(CdpError::Timeout { method: method.to_string() });
+                return Err(CdpError::Timeout {
+                    method: method.to_string(),
+                });
             }
-            match self.read_one()? {
-                Some(msg) => match msg.response_id() {
-                    Some(response_id) if response_id == id => {
-                        return match (msg.response_error(), msg.response_result()) {
-                            (Some(error), _) => Err(CdpError::from(error)),
-                            (None, Some(result)) => Ok((result.clone(), drained)),
-                            (None, None) => Err(CdpError::Response {
-                                code: -1,
-                                message: "empty CDP response".to_string(),
-                            }),
-                        };
-                    }
-                    _ => drained.push(msg),
-                },
-                None => {}
+            if let Some(msg) = self.read_one()? {
+                if msg.response_id() == Some(id) {
+                    return match (msg.response_error(), msg.response_result()) {
+                        (Some(error), _) => Err(CdpError::from(error)),
+                        (None, Some(result)) => Ok((result.clone(), drained)),
+                        (None, None) => Err(CdpError::Response {
+                            code: -1,
+                            message: "empty CDP response".to_string(),
+                        }),
+                    };
+                }
+                drained.push(msg);
             }
         }
     }
 
-    fn send_raw(&mut self, message: Value) -> Result<()> {
+    /// Write one CDP message to the socket.
+    ///
+    /// # Errors
+    /// Fails on websocket write errors.
+    fn send_raw(&mut self, message: &Value) -> Result<()> {
         self.ws
-            .send(Message::Text(tungstenite::Utf8Bytes::from(
-                message.to_string(),
-            )))?;
+            .send(Message::Text(tungstenite::Utf8Bytes::from(message.to_string())))?;
         Ok(())
     }
 
@@ -308,17 +324,19 @@ impl CdpLink {
 }
 
 impl CdpMsg {
+    #[must_use]
     fn response_error(&self) -> Option<CdpErrorInfo> {
         match self {
             Self::Response { error, .. } => error.clone(),
-            _ => None,
+            Self::Event { .. } => None,
         }
     }
 
+    #[must_use]
     fn response_result(&self) -> Option<&Value> {
         match self {
             Self::Response { result, .. } => result.as_ref(),
-            _ => None,
+            Self::Event { .. } => None,
         }
     }
 }
@@ -334,10 +352,16 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
         .ok_or_else(|| CdpError::InvalidUrl(format!("no host in {ws_url}")))
 }
 
-/// Fetch a JSON document from Chrome's DevTools HTTP endpoint.
+/// Fetch a JSON document from the `DevTools` HTTP endpoint.
 ///
-/// Chrome never closes these connections even with `Connection: close`, so
+/// The browser never closes these connections even with `Connection: close`, so
 /// this reads exactly `Content-Length` bytes instead of to EOF.
+///
+/// # Errors
+/// Fails on any network or framing error.
+///
+/// # Panics
+/// Panics if the response header block exceeds the 64 KB bound.
 pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
     let mut stream = TcpStream::connect(host_port)?;
     let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
@@ -362,16 +386,19 @@ pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
             ));
         }
     }
-    let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "devtools http: malformed header",
+        ));
+    };
+    let header_end = pos + 4;
     let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let Some(length) = headers
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Content-Length:")
-                .or_else(|| line.strip_prefix("content-length:"))
-                .and_then(|v| v.trim().parse::<usize>().ok())
-        })
-    else {
+    let Some(length) = headers.lines().find_map(|line| {
+        line.strip_prefix("Content-Length:")
+            .or_else(|| line.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse::<usize>().ok())
+    }) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "devtools http: missing Content-Length",
@@ -389,12 +416,11 @@ pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
         }
         got += n;
     }
-    serde_json::from_slice(&body).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
-    })
+    serde_json::from_slice(&body).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Parse the `DevTools listening on ws://...` line from Chrome stderr.
+/// Parse the `DevTools listening on ws://...` line from browser stderr.
+#[must_use]
 pub fn parse_devtools_ws_url(line: &str) -> Option<String> {
     let rest = line.trim().strip_prefix("DevTools listening on ")?;
     let url = rest.split_whitespace().next()?;
@@ -452,10 +478,12 @@ impl PendingRequests {
         expired
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_id.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.by_id.len()
     }
@@ -482,7 +510,7 @@ mod tests {
             "params": { "data": "x" },
             "sessionId": "ABC123"
         });
-        let msg = CdpLink::decode_message(value);
+        let msg = CdpLink::decode_message(&value);
         let event = msg.event().unwrap();
         assert_eq!(event.method, "Page.screencastFrame");
         assert_eq!(event.session_id, Some("ABC123"));
@@ -494,7 +522,7 @@ mod tests {
             "id": 7,
             "error": { "code": -32000, "message": "boom" }
         });
-        let msg = CdpLink::decode_message(value);
+        let msg = CdpLink::decode_message(&value);
         assert_eq!(msg.response_id(), Some(7));
         let error = msg.response_error().unwrap();
         assert_eq!(error.code, -32000);
@@ -514,8 +542,8 @@ mod tests {
     fn pending_requests_expire() {
         let mut pending = PendingRequests::default();
         pending.insert(1, "Page.enable", None);
-        assert!(pending.len() == 1);
-        assert!(pending.expired(Duration::from_secs(60)).is_empty());
+        assert_eq!(pending.len(), 1);
+        assert!(pending.expired(Duration::from_mins(1)).is_empty());
         pending.insert(2, "Page.navigate", Some("S".to_string()));
         let expired = pending.expired(Duration::from_nanos(1));
         assert_eq!(expired.len(), 2);
@@ -536,45 +564,38 @@ mod tests {
             let mut ws = accept(tcp).unwrap();
             // respond to the first request, push an event, then ack the ping
             let mut got_request = false;
-            loop {
-                match ws.read() {
-                    Ok(Message::Text(text)) => {
-                        let value: Value = serde_json::from_str(text.as_str()).unwrap();
-                        if value.get("method").and_then(Value::as_str) == Some("Page.screencastFrameAck") {
-                            let ack = json!({ "id": value.get("id"), "result": {} });
-                            ws.send(Message::Text(tungstenite::Utf8Bytes::from(ack.to_string())))
-                                .unwrap();
-                            break;
-                        } else if let Some(id) = value.get("id") {
-                            if !got_request {
-                                got_request = true;
-                                let resp = json!({ "id": id, "result": { "ok": true } });
-                                ws.send(Message::Text(tungstenite::Utf8Bytes::from(resp.to_string())))
-                                    .unwrap();
-                                let event = json!({ "method": "Page.titleUpdated", "params": { "title": "hi" }, "sessionId": "S1" });
-                                ws.send(Message::Text(tungstenite::Utf8Bytes::from(event.to_string())))
-                                    .unwrap();
-                            }
-                        }
-                    }
-                    _ => break,
+            while let Ok(message) = ws.read()
+                && let Message::Text(text) = message
+            {
+                let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                if value.get("method").and_then(Value::as_str) == Some("Page.screencastFrameAck") {
+                    let ack = json!({ "id": value.get("id"), "result": {} });
+                    ws.send(Message::Text(tungstenite::Utf8Bytes::from(ack.to_string())))
+                        .unwrap();
+                    break;
+                } else if !got_request && let Some(id) = value.get("id") {
+                    got_request = true;
+                    let resp = json!({ "id": id, "result": { "ok": true } });
+                    ws.send(Message::Text(tungstenite::Utf8Bytes::from(resp.to_string())))
+                        .unwrap();
+                    let event =
+                        json!({ "method": "Page.titleUpdated", "params": { "title": "hi" }, "sessionId": "S1" });
+                    ws.send(Message::Text(tungstenite::Utf8Bytes::from(event.to_string())))
+                        .unwrap();
                 }
             }
         });
 
         let mut link =
-            CdpLink::connect_with_timeout(&format!("ws://{addr}/devtools/page/x"), Duration::from_secs(2))
-                .unwrap();
+            CdpLink::connect_with_timeout(&format!("ws://{addr}/devtools/page/x"), Duration::from_secs(2)).unwrap();
         let (result, drained) = link
-            .call_and_drain(Duration::from_secs(5), "Page.enable", json!({}), None)
+            .call_and_drain(Duration::from_secs(5), "Page.enable", &json!({}), None)
             .unwrap();
         assert_eq!(result, json!({ "ok": true }));
         // The title event rides right behind the response; it is either in
         // `drained` (read before the match) or still buffered in the link.
-        let is_title = |event: CdpEvent| {
-            event.method == "Page.titleUpdated" && event.session_id == Some("S1")
-        };
-        let mut got_title = drained.iter().find_map(|msg| msg.event()).is_some_and(is_title);
+        let is_title = |event: CdpEvent| event.method == "Page.titleUpdated" && event.session_id == Some("S1");
+        let mut got_title = drained.iter().find_map(CdpMsg::event).is_some_and(is_title);
         let deadline = Instant::now() + Duration::from_secs(2);
         while !got_title && Instant::now() < deadline {
             match link.read_one() {
@@ -586,7 +607,12 @@ mod tests {
         assert!(got_title, "title event");
 
         let (ack, _) = link
-            .call_and_drain(Duration::from_secs(5), "Page.screencastFrameAck", json!({ "sessionId": 1 }), Some("S1"))
+            .call_and_drain(
+                Duration::from_secs(5),
+                "Page.screencastFrameAck",
+                &json!({ "sessionId": 1 }),
+                Some("S1"),
+            )
             .unwrap();
         assert_eq!(ack, json!({}));
         let _ = server.join();

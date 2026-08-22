@@ -164,7 +164,11 @@ fn vk_for_char(c: char) -> u32 {
 /// of the emulated viewport.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BrowserInput {
-    MouseMove { x: f64, y: f64, buttons: u32 },
+    MouseMove {
+        x: f64,
+        y: f64,
+        buttons: u32,
+    },
     MousePress {
         x: f64,
         y: f64,
@@ -181,7 +185,13 @@ pub enum BrowserInput {
         buttons: u32,
         modifiers: BrowserModifiers,
     },
-    Wheel { x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: BrowserModifiers },
+    Wheel {
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        modifiers: BrowserModifiers,
+    },
     /// Key press. `text` (for `char`-style delivery) is derived from
     /// `key`/`text` at the call site.
     KeyDown {
@@ -189,9 +199,14 @@ pub enum BrowserInput {
         text: Option<String>,
         modifiers: BrowserModifiers,
     },
-    KeyUp { key: BrowserKey, modifiers: BrowserModifiers },
+    KeyUp {
+        key: BrowserKey,
+        modifiers: BrowserModifiers,
+    },
     /// Paste-style raw text insertion (IME path; also used for pasting).
-    InsertText { text: String },
+    InsertText {
+        text: String,
+    },
 }
 
 impl BrowserInput {
@@ -208,7 +223,14 @@ impl BrowserInput {
                     "buttons": buttons,
                 }),
             ),
-            Self::MousePress { x, y, button, click_count, buttons, modifiers } => (
+            Self::MousePress {
+                x,
+                y,
+                button,
+                click_count,
+                buttons,
+                modifiers,
+            } => (
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": "mousePressed",
@@ -220,7 +242,14 @@ impl BrowserInput {
                     "modifiers": modifiers.cdp_bits(),
                 }),
             ),
-            Self::MouseRelease { x, y, button, click_count, buttons, modifiers } => (
+            Self::MouseRelease {
+                x,
+                y,
+                button,
+                click_count,
+                buttons,
+                modifiers,
+            } => (
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": "mouseReleased",
@@ -232,7 +261,13 @@ impl BrowserInput {
                     "modifiers": modifiers.cdp_bits(),
                 }),
             ),
-            Self::Wheel { x, y, delta_x, delta_y, modifiers } => (
+            Self::Wheel {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                modifiers,
+            } => (
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": "mouseWheel",
@@ -274,10 +309,7 @@ impl BrowserInput {
                     "modifiers": modifiers.cdp_bits(),
                 }),
             ),
-            Self::InsertText { text } => (
-                "Input.insertText",
-                json!({ "text": text }),
-            ),
+            Self::InsertText { text } => ("Input.insertText", json!({ "text": text })),
         }
     }
 

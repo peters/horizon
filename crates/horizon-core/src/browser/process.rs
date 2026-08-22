@@ -45,7 +45,7 @@ pub struct ChromeLaunch {
     pub extra_args: Vec<String>,
 }
 
-/// A running headless Chrome process plus its captured DevTools endpoint.
+/// A running headless `Chrome` process plus its captured `DevTools` endpoint.
 pub struct ChromeProcess {
     child: Child,
     ws_url_rx: mpsc::Receiver<String>,
@@ -54,6 +54,10 @@ pub struct ChromeProcess {
 }
 
 impl ChromeProcess {
+    /// Spawn the configured browser with a private profile dir.
+    ///
+    /// # Errors
+    /// Fails when the binary is missing or the process cannot start.
     pub fn spawn(launch: &ChromeLaunch) -> Result<Self> {
         let command = resolve_binary(&launch.command)?;
         std::fs::create_dir_all(&launch.profile_dir)?;
@@ -81,9 +85,10 @@ impl ChromeProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            std::io::Error::other("failed to capture chrome stderr")
-        })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture chrome stderr"))?;
 
         let (ws_url_tx, ws_url_rx) = mpsc::channel();
         let tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
@@ -92,7 +97,10 @@ impl ChromeProcess {
             .name("chrome-stderr".into())
             .spawn(move || {
                 use std::io::{BufRead, BufReader};
-                for line in BufReader::new(stderr).lines().flatten() {
+                for line in BufReader::new(stderr).lines() {
+                    let Ok(line) = line else {
+                        break;
+                    };
                     if let Some(ws) = parse_devtools_ws_url(&line) {
                         if ws_url_tx.send(ws).is_err() {
                             break;
@@ -100,7 +108,7 @@ impl ChromeProcess {
                         continue;
                     }
                     // Keep a short stderr tail for diagnostics.
-                    let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut tail = tail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     tail.push_str(&line);
                     tail.push('\n');
                     if tail.len() > 8 * 1024 {
@@ -120,7 +128,10 @@ impl ChromeProcess {
         })
     }
 
-    /// Block until Chrome reports its DevTools endpoint (or `timeout`).
+    /// Block until the browser reports its `DevTools` endpoint (or `timeout`).
+    ///
+    /// # Errors
+    /// Fails on timeout or when the process exits before reporting.
     pub fn wait_ws_url(&mut self, timeout: Duration) -> Result<String> {
         let started = Instant::now();
         while started.elapsed() < timeout {
@@ -153,11 +164,10 @@ impl ChromeProcess {
 
     /// Kill the browser. Chrome's child processes (zygotes, GPU, network
     /// service) exit with their parent; a short reap wait follows.
+    /// Kill the browser and reap it (bounded wait).
     pub fn kill(&mut self) {
         if self.child_status().is_none() {
-            if self.child.kill().is_err() {
-                // Already gone.
-            }
+            let _ = self.child.kill();
         }
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline && self.child.try_wait().ok().flatten().is_none() {
@@ -170,7 +180,7 @@ impl ChromeProcess {
     fn stderr_tail_snapshot(&self) -> String {
         self.stderr_tail
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .to_string()
     }
 }
@@ -183,6 +193,9 @@ impl Drop for ChromeProcess {
 
 /// Resolve a configured command (absolute path or PATH name) or fall back to
 /// the standard candidate list.
+///
+/// # Errors
+/// Returns `ChromeError::NoBinary` when no candidate resolves.
 pub fn resolve_binary(command: &str) -> Result<PathBuf> {
     let path = Path::new(command);
     if path.is_absolute() {
@@ -207,6 +220,9 @@ pub fn resolve_binary(command: &str) -> Result<PathBuf> {
 }
 
 /// Resolve using an explicit command or the standard candidate list.
+///
+/// # Errors
+/// Returns `ChromeError::NoBinary` when no candidate resolves.
 pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
     if let Some(command) = command
         && !command.trim().is_empty()
@@ -230,11 +246,7 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && path
-            .metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+    path.is_file() && path.metadata().is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]

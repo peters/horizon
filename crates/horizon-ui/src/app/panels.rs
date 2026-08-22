@@ -185,6 +185,7 @@ struct PanelBodyContext<'a> {
     reconnect_requested: &'a mut bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
+    browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
 }
 
 fn show_panel_body_contents(
@@ -202,6 +203,13 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
+        PanelKind::Browser => {
+            let Some(state) = body_context.browser_ui_state else {
+                ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));
+                return false;
+            };
+            crate::browser_widget::BrowserView::new(panel, state).show(ui, is_focused, interactive)
+        }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
             is_focused,
@@ -303,7 +311,12 @@ impl HorizonApp {
                         let mut reconnect_requested = false;
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
-                                Some(self.editor_preview_cache.entry(panel_id).or_default())
+                                Some(
+                                    self.panel_render_caches
+                                        .editor_preview_cache
+                                        .entry(panel_id)
+                                        .or_default(),
+                                )
                             } else {
                                 None
                             };
@@ -321,6 +334,7 @@ impl HorizonApp {
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
+                                    browser_ui_state: None,
                                 },
                             );
                         }
@@ -619,8 +633,9 @@ impl HorizonApp {
                     |ui| {
                         let mut reconnect_requested = false;
                         let board = &mut self.board;
-                        let editor_preview_cache = &mut self.editor_preview_cache;
-                        let terminal_grid_cache = &mut self.terminal_grid_cache;
+                        let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
+                        let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
+                        let browser_ui_state = &mut self.panel_render_caches.browser_ui_state;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -630,6 +645,11 @@ impl HorizonApp {
                             };
                             let grid_cache = if panel.terminal().is_some() {
                                 Some(terminal_grid_cache.entry(panel_id).or_default())
+                            } else {
+                                None
+                            };
+                            let browser_state = if panel.kind == PanelKind::Browser {
+                                Some(browser_ui_state.entry(panel_id).or_default())
                             } else {
                                 None
                             };
@@ -647,6 +667,7 @@ impl HorizonApp {
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
+                                    browser_ui_state: browser_state,
                                 },
                             );
                         }

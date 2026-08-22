@@ -42,11 +42,15 @@ pub enum BrowserEvent {
     UrlChanged(String),
     Loading(bool),
     /// A new decoded frame is available in the panel's frame slot.
-    Frame { seq: u64 },
+    Frame {
+        seq: u64,
+    },
     /// Non-fatal problem surfaced to the panel body.
     Warning(String),
     /// The driver stopped.
-    Stopped { code: Option<i32> },
+    Stopped {
+        code: Option<i32>,
+    },
     /// An agent (via `hb`) asked the user for the wheel.
     HandoffRequested(String),
     /// The handoff was resolved (user handed back or agent cancelled).
@@ -62,7 +66,10 @@ pub enum BrowserCommand {
     Reload,
     Back,
     Forward,
-    SetViewport { width: u32, height: u32 },
+    SetViewport {
+        width: u32,
+        height: u32,
+    },
     Input(BrowserInput),
     /// The user clicked "hand back to agent" in the panel.
     HandoffDone,
@@ -87,6 +94,7 @@ pub struct BrowserSession {
 }
 
 impl BrowserSession {
+    #[must_use]
     pub fn send(&self, command: BrowserCommand) -> bool {
         self.command_tx.send(command).is_ok()
     }
@@ -99,8 +107,11 @@ const MAX_RESTART_ATTEMPTS: u32 = 8;
 const MANIFEST_MIN_INTERVAL: Duration = Duration::from_millis(200);
 const SIGNAL_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Spawn the driver thread. Chrome startup problems are reported through
+/// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
+///
+/// # Errors
+/// Fails only when the OS thread cannot be spawned.
 pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, String> {
     let frame_slot = Arc::new(FrameSlot::new());
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
@@ -109,7 +120,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
     std::thread::Builder::new()
         .name("browser-driver".into())
         .spawn(move || {
-            run_driver(config, event_tx, command_rx, slot);
+            run_driver(&config, &event_tx, &command_rx, &slot);
         })
         .map_err(|e| format!("failed to spawn browser driver: {e}"))?;
     Ok(BrowserSession {
@@ -120,12 +131,12 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
 }
 
 fn run_driver(
-    config: BrowserSessionConfig,
-    event_tx: mpsc::Sender<BrowserEvent>,
-    command_rx: mpsc::Receiver<BrowserCommand>,
-    frame_slot: Arc<FrameSlot>,
+    config: &BrowserSessionConfig,
+    event_tx: &mpsc::Sender<BrowserEvent>,
+    command_rx: &mpsc::Receiver<BrowserCommand>,
+    frame_slot: &Arc<FrameSlot>,
 ) {
-    let launch = match build_launch(&config) {
+    let launch = match build_launch(config) {
         Ok(launch) => launch,
         Err(message) => {
             let _ = event_tx.send(BrowserEvent::Warning(message));
@@ -159,80 +170,34 @@ fn run_driver(
         }
     };
 
-    let _ = link.call_and_drain(CALL_TIMEOUT, "Target.setDiscoverTargets", serde_json::json!({ "discover": true }), None);
+    let _ = link.call_and_drain(
+        CALL_TIMEOUT,
+        "Target.setDiscoverTargets",
+        &serde_json::json!({ "discover": true }),
+        None,
+    );
     let _ = link.call_and_drain(
         CALL_TIMEOUT,
         "Target.setAutoAttach",
-        serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
+        &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
         None,
     );
 
-    let mut state = DriverState::new(&config, &ws_url);
+    let mut state = DriverState::new(config, &ws_url);
     state.write_manifest(true);
 
-    'outer: loop {
+    loop {
         // 1. Commands from the UI.
-        while let Ok(command) = command_rx.try_recv() {
-            match command {
-                BrowserCommand::Stop => {
-                    chrome.kill();
-                    state.remove_manifest();
-                    let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-                    break 'outer;
-                }
-                BrowserCommand::Navigate(url) => {
-                    state.url = url.clone();
-                    state.pending_restart_at = Some(Instant::now());
-                    state.send_page_command(&mut link, "Page.navigate", serde_json::json!({ "url": url }));
-                    state.write_manifest(false);
-                    let _ = event_tx.send(BrowserEvent::UrlChanged(state.url.clone()));
-                    let _ = event_tx.send(BrowserEvent::Loading(true));
-                }
-                BrowserCommand::Reload => {
-                    state.pending_restart_at = Some(Instant::now());
-                    state.send_page_command(&mut link, "Page.reload", serde_json::json!({}));
-                }
-                BrowserCommand::Back => {
-                    state.pending_restart_at = Some(Instant::now());
-                    state.send_page_command(&mut link, "History.back", serde_json::json!({}));
-                }
-                BrowserCommand::Forward => {
-                    state.pending_restart_at = Some(Instant::now());
-                    state.send_page_command(&mut link, "History.forward", serde_json::json!({}));
-                }
-                BrowserCommand::SetViewport { width, height } => {
-                    if width > 0
-                        && height > 0
-                        && (width, height) != (state.viewport_w, state.viewport_h)
-                    {
-                        state.viewport_w = width;
-                        state.viewport_h = height;
-                        state.send_page_command(
-                            &mut link,
-                            "Emulation.setDeviceMetricsOverride",
-                            serde_json::json!({
-                                "width": width,
-                                "height": height,
-                                "deviceScaleFactor": 1,
-                                "mobile": false,
-                            }),
-                        );
-                    }
-                }
-                BrowserCommand::Input(input) => {
-                    let (method, params) = input.cdp();
-                    state.send_page_command_fire(&mut link, method, params);
-                    state.stamp_user_active();
-                }
-                BrowserCommand::HandoffDone => {
-                    state.resolve_handoff();
-                }
-            }
+        if state.drain_commands(&mut link, command_rx, event_tx) {
+            chrome.kill();
+            state.remove_manifest();
+            let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+            break;
         }
 
         // 2. CDP messages: responses and events.
         match link.read_one() {
-            Ok(Some(message)) => state.handle_message(&mut link, &event_tx, &frame_slot, message),
+            Ok(Some(message)) => state.handle_message(&mut link, event_tx, frame_slot, message),
             Ok(None) => {}
             Err(error) => {
                 // The connection is gone. Reconnecting a single panel's
@@ -243,7 +208,7 @@ fn run_driver(
                 chrome.kill();
                 state.remove_manifest();
                 let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-                break 'outer;
+                break;
             }
         }
 
@@ -251,13 +216,13 @@ fn run_driver(
         state.pending_restart_tick(&mut link);
 
         // 4. Ownership / handoff signals from the manifest (`hb` side).
-        state.tick_signals(&event_tx);
+        state.tick_signals(event_tx);
 
         // 5. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
             state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
-            break 'outer;
+            break;
         }
 
         std::thread::sleep(Duration::from_millis(5));
@@ -330,7 +295,7 @@ impl DriverState {
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
-            last_manifest_write: Instant::now() - MANIFEST_MIN_INTERVAL,
+            last_manifest_write: Instant::now(),
             manifest_dirty: true,
             last_signal_check: Instant::now(),
             owner_seen: None,
@@ -338,7 +303,7 @@ impl DriverState {
         }
     }
 
-    fn send_page_command(&self, link: &mut CdpLink, method: &str, params: serde_json::Value) {
+    fn send_page_command(&self, link: &mut CdpLink, method: &str, params: &serde_json::Value) {
         if let Some(ref session) = self.session_id
             && let Err(error) = link.call_and_drain(CALL_TIMEOUT, method, params, Some(session))
         {
@@ -346,7 +311,7 @@ impl DriverState {
         }
     }
 
-    fn send_page_command_fire(&self, link: &mut CdpLink, method: &str, params: serde_json::Value) {
+    fn send_page_command_fire(&self, link: &mut CdpLink, method: &str, params: &serde_json::Value) {
         if let Some(ref session) = self.session_id {
             let _ = link.send_fire(method, params, Some(session));
         }
@@ -364,11 +329,11 @@ impl DriverState {
     fn attach_setup(&mut self, link: &mut CdpLink, session: &str, target: &str) {
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
-        let _ = link.call_and_drain(CALL_TIMEOUT, "Page.enable", serde_json::json!({}), Some(session));
+        let _ = link.call_and_drain(CALL_TIMEOUT, "Page.enable", &serde_json::json!({}), Some(session));
         let _ = link.call_and_drain(
             CALL_TIMEOUT,
             "Emulation.setDeviceMetricsOverride",
-            serde_json::json!({
+            &serde_json::json!({
                 "width": self.viewport_w,
                 "height": self.viewport_h,
                 "deviceScaleFactor": 1,
@@ -383,7 +348,12 @@ impl DriverState {
         let Some(ref session) = self.session_id else {
             return;
         };
-        match link.call_and_drain(CALL_TIMEOUT, "Page.startScreencast", self.screencast_params(), Some(session)) {
+        match link.call_and_drain(
+            CALL_TIMEOUT,
+            "Page.startScreencast",
+            &self.screencast_params(),
+            Some(session),
+        ) {
             Ok(_) => {
                 self.screencast_on = true;
                 self.restart_attempts = 0;
@@ -419,7 +389,7 @@ impl DriverState {
                 self.session_id = None;
                 if let Err(error) = link.send_request(
                     "Target.attachToTarget",
-                    serde_json::json!({ "targetId": target, "flatten": true }),
+                    &serde_json::json!({ "targetId": target, "flatten": true }),
                     None,
                 ) {
                     tracing::warn!(target: "browser", "re-attach request failed: {error}");
@@ -448,18 +418,11 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         message: CdpMsg,
     ) {
-        if message.event().is_some() {
-            let event = message.event().unwrap();
+        if let Some(event) = message.event() {
             self.handle_event(link, event_tx, frame_slot, event);
             return;
         }
-        let CdpMsg::Response {
-            id,
-            result,
-            error,
-            ..
-        } = message
-        else {
+        let CdpMsg::Response { id, result, error, .. } = message else {
             return;
         };
         if self.reattach_in_flight {
@@ -470,7 +433,10 @@ impl DriverState {
                     self.pending_restart_at = Some(Instant::now() + RESTART_BACKOFF);
                 }
                 None => {
-                    if let Some(session) = result.as_ref().and_then(|r| r.get("sessionId")).and_then(|s| s.as_str())
+                    if let Some(session) = result
+                        .as_ref()
+                        .and_then(|r| r.get("sessionId"))
+                        .and_then(|s| s.as_str())
                         && let Some(target) = self.target_id.clone()
                     {
                         self.attach_setup(link, session, &target);
@@ -488,7 +454,7 @@ impl DriverState {
         &mut self,
         link: &mut CdpLink,
         event_tx: &mpsc::Sender<BrowserEvent>,
-        frame_slot: &Arc<FrameSlot>,
+        frame_slot: &FrameSlot,
         event: CdpEvent<'_>,
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
@@ -498,7 +464,10 @@ impl DriverState {
                     return;
                 };
                 let target_info = event.params.get("targetInfo");
-                let target_type = target_info.and_then(|t| t.get("type")).and_then(|t| t.as_str()).unwrap_or("");
+                let target_type = target_info
+                    .and_then(|t| t.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
                 let Some(target_id) = target_info.and_then(|t| t.get("targetId")).and_then(|t| t.as_str()) else {
                     return;
                 };
@@ -513,7 +482,7 @@ impl DriverState {
                     && !self.initial_navigated
                 {
                     self.initial_navigated = true;
-                    self.send_page_command(link, "Page.navigate", serde_json::json!({ "url": initial }));
+                    self.send_page_command(link, "Page.navigate", &serde_json::json!({ "url": initial }));
                     self.pending_restart_at = Some(Instant::now());
                 }
             }
@@ -564,34 +533,98 @@ impl DriverState {
                     let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
                 }
             }
-            "Page.screencastFrame" => {
-                if !on_page_session {
-                    return;
+            "Page.screencastFrame" => Self::handle_screencast_frame(link, event_tx, frame_slot, event),
+            _ => {}
+        }
+    }
+
+    /// Process every pending UI command. Returns `true` when `Stop` arrived.
+    fn drain_commands(
+        &mut self,
+        link: &mut CdpLink,
+        command_rx: &mpsc::Receiver<BrowserCommand>,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+    ) -> bool {
+        while let Ok(command) = command_rx.try_recv() {
+            match command {
+                BrowserCommand::Stop => return true,
+                BrowserCommand::Navigate(url) => {
+                    self.url.clone_from(&url);
+                    self.pending_restart_at = Some(Instant::now());
+                    self.send_page_command(link, "Page.navigate", &serde_json::json!({ "url": url }));
+                    self.write_manifest(false);
+                    let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+                    let _ = event_tx.send(BrowserEvent::Loading(true));
                 }
-                let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
-                    return;
-                };
-                let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
-                    return;
-                };
-                // Ack so the stream continues: params.sessionId echoes the
-                // frame's session identifier, the top-level sessionId scopes
-                // the call (flattened sessions).
-                let frame_session = event
-                    .params
-                    .get("sessionId")
-                    .cloned()
-                    .or_else(|| event.session_id.map(|s| serde_json::Value::String(s.to_string())));
-                let ack_params = match frame_session {
-                    Some(value) => serde_json::json!({ "sessionId": value }),
-                    None => serde_json::json!({}),
-                };
-                let _ = link.send_fire("Page.screencastFrameAck", ack_params, event.session_id);
-                if let Some(seq) = frame_slot.store_jpeg(&jpeg) {
-                    let _ = event_tx.send(BrowserEvent::Frame { seq });
+                BrowserCommand::Reload => {
+                    self.pending_restart_at = Some(Instant::now());
+                    self.send_page_command(link, "Page.reload", &serde_json::json!({}));
+                }
+                BrowserCommand::Back => {
+                    self.pending_restart_at = Some(Instant::now());
+                    self.send_page_command(link, "History.back", &serde_json::json!({}));
+                }
+                BrowserCommand::Forward => {
+                    self.pending_restart_at = Some(Instant::now());
+                    self.send_page_command(link, "History.forward", &serde_json::json!({}));
+                }
+                BrowserCommand::SetViewport { width, height } => {
+                    if width > 0 && height > 0 && (width, height) != (self.viewport_w, self.viewport_h) {
+                        self.viewport_w = width;
+                        self.viewport_h = height;
+                        self.send_page_command(
+                            link,
+                            "Emulation.setDeviceMetricsOverride",
+                            &serde_json::json!({
+                                "width": width,
+                                "height": height,
+                                "deviceScaleFactor": 1,
+                                "mobile": false,
+                            }),
+                        );
+                    }
+                }
+                BrowserCommand::Input(input) => {
+                    let (method, params) = input.cdp();
+                    self.send_page_command_fire(link, method, &params);
+                    self.stamp_user_active();
+                }
+                BrowserCommand::HandoffDone => {
+                    self.resolve_handoff();
                 }
             }
-            _ => {}
+        }
+        false
+    }
+
+    /// Decode, store, and ack one screencast frame.
+    fn handle_screencast_frame(
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &FrameSlot,
+        event: CdpEvent<'_>,
+    ) {
+        let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
+            return;
+        };
+        let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
+            return;
+        };
+        // Ack so the stream continues: params.sessionId echoes the frame's
+        // session identifier, the top-level sessionId scopes the call
+        // (flattened sessions).
+        let frame_session = event
+            .params
+            .get("sessionId")
+            .cloned()
+            .or_else(|| event.session_id.map(|s| serde_json::Value::String(s.to_string())));
+        let ack_params = match frame_session {
+            Some(value) => serde_json::json!({ "sessionId": value }),
+            None => serde_json::json!({}),
+        };
+        let _ = link.send_fire("Page.screencastFrameAck", &ack_params, event.session_id);
+        if let Some(seq) = frame_slot.store_jpeg(&jpeg) {
+            let _ = event_tx.send(BrowserEvent::Frame { seq });
         }
     }
 
@@ -629,9 +662,9 @@ impl DriverState {
             return;
         };
         let now = manifest::now_millis();
-        let owner = manifest.live_owner(now).map(|owner| owner.name.clone());
+        let mut owner = manifest.live_owner(now).map(|owner| owner.name.clone());
         if owner != self.owner_seen {
-            self.owner_seen = owner.clone();
+            self.owner_seen = std::mem::take(&mut owner);
             let _ = tx.send(BrowserEvent::OwnerChanged(owner));
         }
         match manifest.handoff_pending() {
@@ -672,10 +705,12 @@ impl DriverState {
             panel_local_id: local_id.clone(),
             ..Default::default()
         });
-        manifest.browser_ws = self.browser_ws.clone();
-        manifest.target_id = self.target_id.clone().unwrap_or_default();
-        manifest.url = self.url.clone();
-        manifest.title = self.title.clone();
+        manifest.browser_ws.clone_from(&self.browser_ws);
+        manifest
+            .target_id
+            .clone_from(&self.target_id.clone().unwrap_or_default());
+        manifest.url.clone_from(&self.url);
+        manifest.title.clone_from(&self.title);
         manifest.updated_at = manifest::now_millis();
         let _ = manifest::write(&manifest);
     }

@@ -40,8 +40,9 @@ impl HorizonApp {
             .panel(panel_id)
             .and_then(|panel| PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id));
         self.board.close_panel(panel_id);
-        self.terminal_grid_cache.remove(&panel_id);
-        self.editor_preview_cache.remove(&panel_id);
+        self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+        self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+        self.panel_render_caches.browser_ui_state.remove(&panel_id);
         if let Some(transcript) = transcript
             && let Err(error) = transcript.delete_all()
         {
@@ -78,8 +79,9 @@ impl HorizonApp {
         for panel_id in &closed_panel_ids {
             self.panel_screen_rects.remove(panel_id);
             self.terminal_body_screen_rects.remove(panel_id);
-            self.terminal_grid_cache.remove(panel_id);
-            self.editor_preview_cache.remove(panel_id);
+            self.panel_render_caches.terminal_grid_cache.remove(panel_id);
+            self.panel_render_caches.editor_preview_cache.remove(panel_id);
+            self.panel_render_caches.browser_ui_state.remove(panel_id);
         }
 
         if self
