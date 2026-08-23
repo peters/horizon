@@ -67,8 +67,9 @@ impl BrowserButton {
 }
 
 /// Keyboard keys with a distinct CDP representation. Printable characters
-/// are delivered via [`BrowserInput::InsertText`] or the `char` key event
-/// `text`, so letters/digits only appear as fallbacks for special layouts.
+/// ride on a `keyDown` event carrying `text` (Chrome then synthesizes the
+/// full keydown/keypress/input DOM sequence); non-printable keys use
+/// `rawKeyDown` with a virtual-key code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserKey {
     ArrowUp,
@@ -193,12 +194,14 @@ pub enum BrowserInput {
         delta_y: f64,
         modifiers: BrowserModifiers,
     },
-    /// Key press. `text` (for `char`-style delivery) is derived from
-    /// `key`/`text` at the call site.
+    /// Key press. `text` (for printable keys) makes Chrome run the normal
+    /// keydown→keypress→input pipeline instead of a bare text insertion.
+    /// `repeat` marks auto-repeat of a held key.
     KeyDown {
         key: BrowserKey,
         text: Option<String>,
         modifiers: BrowserModifiers,
+        repeat: bool,
     },
     KeyUp {
         key: BrowserKey,
@@ -279,27 +282,28 @@ impl BrowserInput {
                     "modifiers": modifiers.cdp_bits(),
                 }),
             ),
-            Self::KeyDown { key, text, modifiers } => {
+            Self::KeyDown {
+                key,
+                text,
+                modifiers,
+                repeat,
+            } => {
+                // Printable keys (`text` present) use `keyDown` so Chrome
+                // runs the normal keydown→keypress→input pipeline; other
+                // keys use `rawKeyDown`.
+                let ty = if text.is_some() { "keyDown" } else { "rawKeyDown" };
+                let mut params = json!({
+                    "type": ty,
+                    "key": key.dom_key_name(),
+                    "code": key.code_name(),
+                    "windowsVirtualKeyCode": key.vk_code(),
+                    "autoRepeat": repeat,
+                    "modifiers": modifiers.cdp_bits(),
+                });
                 if let Some(text) = text {
-                    (
-                        "Input.dispatchKeyEvent",
-                        json!({
-                            "type": "char",
-                            "text": text,
-                            "modifiers": modifiers.cdp_bits(),
-                        }),
-                    )
-                } else {
-                    (
-                        "Input.dispatchKeyEvent",
-                        json!({
-                            "type": "rawKeyDown",
-                            "windowsVirtualKeyCode": key.vk_code(),
-                            "code": key.code_name(),
-                            "modifiers": modifiers.cdp_bits(),
-                        }),
-                    )
+                    params["text"] = json!(text);
                 }
+                ("Input.dispatchKeyEvent", params)
             }
             Self::KeyUp { key, modifiers } => (
                 "Input.dispatchKeyEvent",
@@ -324,9 +328,48 @@ impl BrowserInput {
     }
 }
 
-/// CSS `code` identifier for CDP key events (best-effort; Chrome accepts
-/// missing `code` on rawKeyDown/keyUp in most paths).
 impl BrowserKey {
+    /// DOM `KeyboardEvent.key` value for CDP `keyDown` events (Chrome
+    /// accepts a missing `key`, but the name is what page handlers see).
+    #[must_use]
+    pub fn dom_key_name(self) -> &'static str {
+        match self {
+            Self::ArrowUp => "ArrowUp",
+            Self::ArrowDown => "ArrowDown",
+            Self::ArrowLeft => "ArrowLeft",
+            Self::ArrowRight => "ArrowRight",
+            Self::Enter => "Enter",
+            Self::Tab => "Tab",
+            Self::Escape => "Escape",
+            Self::Space => " ",
+            Self::Backspace => "Backspace",
+            Self::Delete => "Delete",
+            Self::Home => "Home",
+            Self::End => "End",
+            Self::PageUp => "PageUp",
+            Self::PageDown => "PageDown",
+            Self::Insert => "Insert",
+            Self::F1 => "F1",
+            Self::F2 => "F2",
+            Self::F3 => "F3",
+            Self::F4 => "F4",
+            Self::F5 => "F5",
+            Self::F6 => "F6",
+            Self::F7 => "F7",
+            Self::F8 => "F8",
+            Self::F9 => "F9",
+            Self::F10 => "F10",
+            Self::F11 => "F11",
+            Self::F12 => "F12",
+            Self::F13 => "F13",
+            Self::F14 => "F14",
+            Self::F15 => "F15",
+            Self::Char(c) => char_dom_key_name(c),
+        }
+    }
+
+    /// CSS `code` identifier for CDP key events (best-effort; Chrome accepts
+    /// missing `code` on rawKeyDown/keyUp in most paths).
     #[must_use]
     pub fn code_name(self) -> &'static str {
         match self {
@@ -367,6 +410,58 @@ impl BrowserKey {
 
 /// Statically allocated code names for printable characters. The set is the
 /// US-layout keyboard; anything else falls back to the generic name.
+/// Statically allocated DOM `key` names for printable characters (US
+/// layout; anything else falls back to a best-effort single-character
+/// static or "Unidentified").
+fn char_dom_key_name(c: char) -> &'static str {
+    match c {
+        'a'..='z' | 'A'..='Z' => match c.to_ascii_uppercase() as u8 - b'A' {
+            0 => "a",
+            1 => "b",
+            2 => "c",
+            3 => "d",
+            4 => "e",
+            5 => "f",
+            6 => "g",
+            7 => "h",
+            8 => "i",
+            9 => "j",
+            10 => "k",
+            11 => "l",
+            12 => "m",
+            13 => "n",
+            14 => "o",
+            15 => "p",
+            16 => "q",
+            17 => "r",
+            18 => "s",
+            19 => "t",
+            20 => "u",
+            21 => "v",
+            22 => "w",
+            23 => "x",
+            24 => "y",
+            25 => "z",
+            _ => "Unidentified",
+        },
+        '0'..='9' => match c {
+            '0' => "0",
+            '1' => "1",
+            '2' => "2",
+            '3' => "3",
+            '4' => "4",
+            '5' => "5",
+            '6' => "6",
+            '7' => "7",
+            '8' => "8",
+            _ => "9",
+        },
+        _ => "Unidentified",
+    }
+}
+
+/// Statically allocated CSS `code` identifiers for printable characters
+/// (US layout; anything else falls back to "Unidentified").
 fn char_code_name(c: char) -> &'static str {
     match c {
         'a'..='z' | 'A'..='Z' => match c.to_ascii_uppercase() as u8 - b'A' {
@@ -457,16 +552,34 @@ mod tests {
     }
 
     #[test]
-    fn char_key_uses_char_event() {
+    fn char_key_sends_keydown_with_text() {
         let (method, params) = BrowserInput::KeyDown {
             key: BrowserKey::Char('h'),
             text: Some("h".to_string()),
             modifiers: BrowserModifiers::none(),
+            repeat: false,
         }
         .cdp();
         assert_eq!(method, "Input.dispatchKeyEvent");
-        assert_eq!(params["type"], "char");
+        assert_eq!(params["type"], "keyDown");
         assert_eq!(params["text"], "h");
+        assert_eq!(params["key"], "h");
+        assert_eq!(params["windowsVirtualKeyCode"], 0x48);
+        assert_eq!(params["autoRepeat"], false);
+    }
+
+    #[test]
+    fn non_printable_key_sends_raw_keydown() {
+        let (_, params) = BrowserInput::KeyDown {
+            key: BrowserKey::Backspace,
+            text: None,
+            modifiers: BrowserModifiers::none(),
+            repeat: true,
+        }
+        .cdp();
+        assert_eq!(params["type"], "rawKeyDown");
+        assert!(params.get("text").is_none());
+        assert_eq!(params["autoRepeat"], true);
     }
 
     #[test]

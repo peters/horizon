@@ -82,6 +82,13 @@ impl FrameSlot {
         Some(inner.next_seq)
     }
 
+    /// Drop the stored frame (e.g. when the session stops) so the UI falls
+    /// back to its placeholder instead of showing stale content.
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.data = None;
+    }
+
     /// Borrow the newest frame, if any. The caller must finish using the
     /// guard promptly; the driver may wait on the same lock.
     pub fn latest(&self) -> std::sync::MutexGuard<'_, FrameSlotInner> {

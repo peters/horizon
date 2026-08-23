@@ -11,6 +11,7 @@ mod render;
 
 use egui::{Pos2, TextureHandle, Ui};
 use horizon_core::Panel;
+use horizon_core::browser::BrowserButton;
 
 /// Per-panel UI state that must survive across frames.
 #[derive(Default)]
@@ -19,6 +20,9 @@ pub struct BrowserUiState {
     seq: u64,
     /// Last mouse position forwarded to the page (movement dedup).
     last_mouse: Option<Pos2>,
+    /// Button captured by this panel (drags must deliver their release
+    /// even when it lands outside the rect).
+    captured_button: Option<BrowserButton>,
     /// URL bar buffer (follows the panel URL while unfocused).
     url_buffer: String,
 }
@@ -42,13 +46,13 @@ impl<'a> BrowserView<'a> {
         let state = &mut *self.ui_state;
         let panel_id = self.panel.id;
 
-        let url_focused = {
+        let (url_focused, chrome_clicked) = {
             let Some(browser) = self.panel.browser_mut() else {
                 return false;
             };
             chrome::show(ui, panel_id, browser, state, interactive)
         };
-        let (body_rect, frame_size, retry_clicked) = {
+        let (body_rect, frame_size, retry_clicked, body_clicked) = {
             let Some(browser) = self.panel.browser() else {
                 return false;
             };
@@ -71,6 +75,9 @@ impl<'a> BrowserView<'a> {
                 },
             );
         }
-        true
+        // Request panel focus only on an actual click in this panel (same
+        // convention as the terminal body); an unconditional request would
+        // steal focus from other panels every frame.
+        chrome_clicked || body_clicked
     }
 }

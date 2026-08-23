@@ -9,7 +9,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use horizon_core::{PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
+use horizon_core::{PanelKind, PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
 
 use self::support::detached_workspace_ids;
 use super::{DetachedWorkspaceViewportState, HorizonApp};
@@ -33,6 +33,14 @@ fn add_panel_position(
         None
     } else {
         canvas_pos
+    }
+}
+
+/// Browser panels must spawn with the active `browser` config (honoring
+/// `--config`), which preset options do not carry.
+fn attach_active_browser_config(options: &mut PanelOptions, config: &horizon_core::Config) {
+    if options.kind == PanelKind::Browser {
+        options.browser_config = Some(config.browser.clone());
     }
 }
 

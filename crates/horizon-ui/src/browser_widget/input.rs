@@ -53,111 +53,127 @@ fn pointer_events(
     // terminal widget's input.
     let from_global = ctx.layer_transform_from_global(ui.layer_id());
     let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
-    let (pos, down_left, down_middle, down_right, pressed_l, pressed_m, pressed_r, released_l, released_m, released_r) =
-        ctx.input(|i| {
-            (
-                i.pointer.interact_pos(),
-                i.pointer.primary_down(),
-                i.pointer.middle_down(),
-                i.pointer.secondary_down(),
-                i.pointer.primary_pressed(),
-                i.pointer.button_pressed(PointerButton::Middle),
-                i.pointer.secondary_pressed(),
-                i.pointer.button_released(PointerButton::Primary),
-                i.pointer.button_released(PointerButton::Middle),
-                i.pointer.button_released(PointerButton::Secondary),
-            )
-        });
-    let Some(pos) = pos else {
-        return;
-    };
-    let pos = transform(pos);
-    let buttons = (if down_left { BUTTON_LEFT } else { 0 })
-        | (if down_middle { BUTTON_MIDDLE } else { 0 })
-        | (if down_right { BUTTON_RIGHT } else { 0 });
+    let (buttons, frame_pos) = ctx.input(|i| {
+        let buttons = (if i.pointer.primary_down() { BUTTON_LEFT } else { 0 })
+            | (if i.pointer.middle_down() { BUTTON_MIDDLE } else { 0 })
+            | (if i.pointer.secondary_down() { BUTTON_RIGHT } else { 0 });
+        (buttons, i.pointer.interact_pos())
+    });
     let modifiers = key_modifiers(ui);
-    let inside = rect.contains(pos);
-    // While a button is held, keep tracking outside the panel (drags).
-    let tracking = inside || buttons != 0;
-    if !tracking {
-        state.last_mouse = None;
-        return;
-    }
+    // Frame-end pointer position: only used for wheel events, which carry
+    // no per-event position.
+    let wheel_pos = frame_pos.map(transform).filter(|p| rect.contains(*p));
 
-    let (page_x, page_y) = to_page_coords(rect, frame_size, pos);
-
-    if pressed_l || pressed_m || pressed_r {
-        let button = if pressed_l {
-            BrowserButton::Left
-        } else if pressed_m {
-            BrowserButton::Middle
-        } else {
-            BrowserButton::Right
-        };
-        browser.send(BrowserCommand::Input(BrowserInput::MousePress {
-            x: page_x,
-            y: page_y,
-            button,
-            click_count: 1,
-            buttons: buttons | button_mask(button),
-            modifiers,
-        }));
-        state.last_mouse = Some(pos);
-    }
-    // No early return after a press: a fast click delivers press *and*
-    // release in the same frame, and Chrome only acts on a complete pair.
-    if released_l || released_m || released_r {
-        let button = if released_l {
-            BrowserButton::Left
-        } else if released_m {
-            BrowserButton::Middle
-        } else {
-            BrowserButton::Right
-        };
-        browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
-            x: page_x,
-            y: page_y,
-            button,
-            click_count: 1,
-            buttons,
-            modifiers,
-        }));
-        state.last_mouse = Some(pos);
-        return;
-    }
-    // Wheel first: a wheel turn with a stationary pointer must work.
-    let wheel_events = ctx.input(|i| i.events.clone());
-    for event in wheel_events {
-        if let Event::MouseWheel { unit, delta, .. } = event
-            && inside
-        {
-            let scale = match unit {
-                egui::MouseWheelUnit::Point => 1.0,
-                egui::MouseWheelUnit::Line => 16.0,
-                egui::MouseWheelUnit::Page => 500.0,
-            };
-            browser.send(BrowserCommand::Input(BrowserInput::Wheel {
-                x: page_x,
-                y: page_y,
-                delta_x: f64::from(delta.x * scale),
-                delta_y: f64::from(delta.y * scale),
-                modifiers,
-            }));
+    // Replay this frame's pointer events with their own positions. A fast
+    // gesture (press, moves, release) can be batched into a single
+    // rendered frame; sampling only the frame-end position would collapse
+    // the whole drag to one point. A panel only owns a press that started
+    // inside its body, so a drag released over another panel (or the
+    // canvas) still ends with exactly one release. Chrome coalesces
+    // mouseMoved messages that arrive in one batch to the last position,
+    // so only the final move of the frame is forwarded.
+    let mut pending_move: Option<(f64, f64)> = None;
+    for event in ctx.input(|i| i.events.clone()) {
+        match event {
+            Event::PointerButton {
+                pos, button, pressed, ..
+            } => {
+                let Some(browser_button) = egui_button(button) else {
+                    continue;
+                };
+                let p = transform(pos);
+                let (x, y) = to_page_coords(rect, frame_size, p);
+                if pressed {
+                    if rect.contains(p) {
+                        state.captured_button = Some(browser_button);
+                        state.last_mouse = Some(p);
+                        browser.send(BrowserCommand::Input(BrowserInput::MousePress {
+                            x,
+                            y,
+                            button: browser_button,
+                            click_count: 1,
+                            buttons: buttons | button_mask(browser_button),
+                            modifiers,
+                        }));
+                    }
+                } else if state.captured_button == Some(browser_button) {
+                    state.captured_button = None;
+                    state.last_mouse = Some(p);
+                    // A release supersedes any buffered move at the same
+                    // spot: drop it to keep the CDP stream minimal.
+                    pending_move = None;
+                    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+                        x,
+                        y,
+                        button: browser_button,
+                        click_count: 1,
+                        buttons,
+                        modifiers,
+                    }));
+                }
+            }
+            Event::PointerMoved(pos) => {
+                let p = transform(pos);
+                let tracking = rect.contains(p) || state.captured_button.is_some();
+                // Movement dedup: only forward real movement.
+                if tracking && state.last_mouse.is_some_and(|last| (last - p).length() >= 0.5) {
+                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    state.last_mouse = Some(p);
+                    pending_move = Some((x, y));
+                }
+            }
+            // The pointer left the window mid-drag: end the drag where we
+            // last saw it instead of stranding Chrome's button state down.
+            Event::PointerGone => {
+                if let Some(button) = state.captured_button.take()
+                    && let Some(p) = state.last_mouse
+                {
+                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    pending_move = None;
+                    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+                        x,
+                        y,
+                        button,
+                        click_count: 1,
+                        buttons: 0,
+                        modifiers,
+                    }));
+                    state.last_mouse = None;
+                }
+            }
+            Event::MouseWheel { unit, delta, .. } => {
+                if let Some(p) = wheel_pos {
+                    let scale = match unit {
+                        egui::MouseWheelUnit::Point => 1.0,
+                        egui::MouseWheelUnit::Line => 16.0,
+                        egui::MouseWheelUnit::Page => 500.0,
+                    };
+                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
+                        x,
+                        y,
+                        delta_x: f64::from(delta.x * scale),
+                        delta_y: f64::from(delta.y * scale),
+                        modifiers,
+                    }));
+                }
+            }
+            _ => {}
         }
     }
-
-    // Movement dedup: only forward real movement.
-    if let Some(last) = state.last_mouse
-        && (last - pos).length() < 0.5
-    {
-        return;
+    if let Some((x, y)) = pending_move {
+        browser.send(BrowserCommand::Input(BrowserInput::MouseMove { x, y, buttons }));
     }
-    state.last_mouse = Some(pos);
-    browser.send(BrowserCommand::Input(BrowserInput::MouseMove {
-        x: page_x,
-        y: page_y,
-        buttons,
-    }));
+}
+
+/// egui mouse button → CDP button (mouse-only; touch is not forwarded).
+fn egui_button(button: PointerButton) -> Option<BrowserButton> {
+    match button {
+        PointerButton::Primary => Some(BrowserButton::Left),
+        PointerButton::Middle => Some(BrowserButton::Middle),
+        PointerButton::Secondary => Some(BrowserButton::Right),
+        _ => None,
+    }
 }
 
 fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
@@ -209,11 +225,9 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                     }
                     continue;
                 }
-                if repeat {
-                    continue;
-                }
-                // Panel-level shortcuts.
-                if key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.command)) {
+                // Panel-level shortcuts (first press only; held keys keep
+                // going to the page).
+                if !repeat && (key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.command))) {
                     browser.send(horizon_core::browser::BrowserCommand::Reload);
                     continue;
                 }
@@ -223,7 +237,8 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                 let modifiers = to_browser_modifiers(modifiers);
                 // Shortcut chords (Ctrl/Cmd/Alt + key) go out as raw key
                 // events so the page sees them; plain or Shift chords
-                // deliver the (shift-adjusted) character.
+                // deliver the (shift-adjusted) character. Held-key repeats
+                // are forwarded with `autoRepeat` so e.g. Backspace works.
                 let text = browser_key
                     .printable_char()
                     .map(|c| if modifiers.shift { shift_char(c) } else { c })
@@ -233,6 +248,7 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                     key: browser_key,
                     text,
                     modifiers,
+                    repeat,
                 }));
             }
             _ => {}

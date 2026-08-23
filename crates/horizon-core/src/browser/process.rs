@@ -33,6 +33,11 @@ pub const BINARY_CANDIDATES: &[&str] = &[
     "microsoft-edge",
 ];
 
+/// Windows candidates: `Path::is_file` does not apply `PATHEXT`, so the
+/// `.exe` names and standard install locations are checked explicitly.
+#[cfg(windows)]
+pub const WINDOWS_BINARY_CANDIDATES: &[&str] = &["chrome.exe", "msedge.exe", "chromium.exe"];
+
 /// Parameters for launching one headless Chrome instance.
 pub struct ChromeLaunch {
     /// Executable to run (absolute path or bare name resolved on PATH).
@@ -115,10 +120,10 @@ impl ChromeProcess {
                     tail.push_str(&line);
                     tail.push('\n');
                     if tail.len() > 8 * 1024 {
-                        let cut = tail.len() - 4 * 1024;
-                        let drain = tail[..cut].to_string();
-                        tail.clear();
-                        tail.push_str(&drain);
+                        // Keep the *newest* half, cut on a char boundary
+                        // (a blind byte split can panic on UTF-8).
+                        let cut = tail.floor_char_boundary(4 * 1024);
+                        tail.drain(..cut);
                     }
                 }
             })?;
@@ -251,7 +256,58 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
             }
         }
     }
+    #[cfg(windows)]
+    for name in WINDOWS_BINARY_CANDIDATES {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    #[cfg(windows)]
+    for candidate in standard_installations() {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    for candidate in standard_installations() {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
     Err(ChromeError::NoBinary)
+}
+
+/// Standard Windows install locations, in preference order.
+#[cfg(windows)]
+fn standard_installations() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for var in ["PROGRAMFILES", "PROGRAMFILES(X86)"] {
+        let Ok(root) = std::env::var(var) else {
+            continue;
+        };
+        candidates.push(PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe"));
+        candidates.push(PathBuf::from(root).join(r"Microsoft\Edge\Application\msedge.exe"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join(r"Programs\chromium\Application\chrome.exe"));
+    }
+    candidates
+}
+
+/// Standard macOS install locations (browsers installed as `.app` bundles
+/// are not on `PATH`), in preference order.
+#[cfg(target_os = "macos")]
+fn standard_installations() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        PathBuf::from("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+        PathBuf::from("/Applications/Arc.app/Contents/MacOS/Arc"),
+    ]
 }
 
 #[cfg(unix)]
@@ -271,7 +327,16 @@ mod tests {
 
     #[test]
     fn resolves_existing_binary() {
-        // /bin/sh is always present on the supported platforms.
+        // The running test binary always exists and is portable.
+        let exe = std::env::current_exe().unwrap();
+        let resolved = resolve_binary(exe.to_str().unwrap()).unwrap();
+        assert_eq!(resolved, exe);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolves_unix_shell() {
+        // /bin/sh is present on every supported Unix platform.
         let resolved = resolve_binary("/bin/sh").unwrap();
         assert_eq!(resolved, PathBuf::from("/bin/sh"));
     }

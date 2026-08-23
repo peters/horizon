@@ -187,10 +187,11 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 position,
                 size,
                 template,
+                browser_config,
                 ..
             } = opts;
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
-            Ok(spawn_browser(seed, command))
+            Ok(spawn_browser(seed, command, browser_config))
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -629,22 +630,24 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
 }
 
 /// Spawn a browser panel. The generic `command` field carries the optional
-/// initial URL (same convention as the editor's file path).
-fn spawn_browser(mut seed: StaticPanelSeed, initial_url: Option<String>) -> Panel {
+/// initial URL (same convention as the editor's file path); `browser_config`
+/// is the active `browser` config section (honors `--config`).
+fn spawn_browser(
+    mut seed: StaticPanelSeed,
+    initial_url: Option<String>,
+    browser_config: Option<crate::browser::BrowserConfig>,
+) -> Panel {
     let initial_url = initial_url.filter(|url| !url.trim().is_empty());
     let (title, has_custom_name) = seed.take_title(|| {
         initial_url
             .as_deref()
             .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
     });
-    let browser_config = match crate::config::Config::load(None) {
-        Ok(config) => config.browser,
-        Err(error) => {
-            tracing::warn!(target: "browser", "config load failed, using defaults: {error}");
-            crate::browser::BrowserConfig::default()
-        }
-    };
-    let browser = crate::browser::BrowserPanelState::start(seed.local_id.clone(), &browser_config, initial_url.clone());
+    let browser = crate::browser::BrowserPanelState::start(
+        seed.local_id.clone(),
+        &browser_config.unwrap_or_default(),
+        initial_url.clone(),
+    );
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
 
     seed.into_panel(

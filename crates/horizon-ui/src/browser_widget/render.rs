@@ -9,25 +9,31 @@ use horizon_core::browser::{BrowserPanelState, BrowserStatus};
 use crate::browser_widget::BrowserUiState;
 
 /// Draw the body. Returns the drawn image rect (for input mapping), the
-/// emulated viewport size in CSS pixels, and whether the retry button was
-/// clicked.
+/// emulated viewport size in CSS pixels, whether the retry button was
+/// clicked, and whether the body itself was clicked this frame (for
+/// panel-focus requests).
 pub fn show_body(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
-) -> (Option<Rect>, Option<[f32; 2]>, bool) {
+) -> (Option<Rect>, Option<[f32; 2]>, bool, bool) {
     let available = ui.available_rect_before_wrap();
     if available.size().x.min(available.size().y) < 24.0 {
-        return (None, None, false);
+        return (None, None, false, false);
     }
-    ui.allocate_rect(available, Sense::hover());
-
     let slot = browser.frame_slot.latest();
     let Some(data) = &slot.data else {
         drop(slot);
-        return (None, None, placeholder(ui, panel_id, browser, available));
+        // No frame: the placeholder owns the body. It must be drawn before
+        // allocating the body rect — allocating first would push the
+        // placeholder's widgets past the clip rect (painter-drawn frames
+        // are unaffected, which is why this only bites without frames).
+        let retry = placeholder(ui, panel_id, browser, available);
+        return (None, None, retry, false);
     };
+    let body_response = ui.allocate_rect(available, Sense::click());
+    let body_clicked = body_response.clicked();
     let width = data.width as usize;
     let height = data.height as usize;
     let frame_size = [
@@ -52,7 +58,7 @@ pub fn show_body(
     drop(slot);
 
     let Some(texture) = &state.texture else {
-        return (None, Some(frame_size), false);
+        return (None, Some(frame_size), false, body_clicked);
     };
 
     // Letterbox (upscale allowed; linear filtering smooths it).
@@ -73,10 +79,10 @@ pub fn show_body(
         angle: 0.0,
     }));
 
-    (Some(rect), Some(frame_size), false)
+    (Some(rect), Some(frame_size), false, body_clicked)
 }
 
-fn placeholder(ui: &mut Ui, panel_id: horizon_core::PanelId, browser: &BrowserPanelState, available: Rect) -> bool {
+fn placeholder(ui: &mut Ui, _panel_id: horizon_core::PanelId, browser: &BrowserPanelState, available: Rect) -> bool {
     let message = match &browser.status {
         BrowserStatus::Starting => "Starting browser…".to_string(),
         BrowserStatus::Ready => "Waiting for frames…".to_string(),
@@ -86,26 +92,17 @@ fn placeholder(ui: &mut Ui, panel_id: horizon_core::PanelId, browser: &BrowserPa
             code.map(|c| format!(" (exit {c})")).unwrap_or_default()
         ),
     };
-    let center = available.center();
-    ui.painter().text(
-        center,
-        egui::Align2::CENTER_CENTER,
-        message,
-        egui::FontId::proportional(13.0),
-        crate::theme::FG_DIM(),
-    );
-
-    if browser.status.is_alive() {
-        return false;
-    }
-    let button_rect = Rect::from_center_size(egui::Pos2::new(center.x, center.y + 26.0), vec2(80.0, 26.0));
-    let response = ui.interact(
-        button_rect,
-        ui.make_persistent_id(("browser-retry", panel_id)),
-        Sense::click(),
-    );
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    response.on_hover_text("Restart the browser").clicked()
+    let mut retry_clicked = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space(((available.height() - 90.0).max(0.0)) / 2.0);
+        ui.label(egui::RichText::new(message).color(crate::theme::FG_DIM()));
+        if !browser.status.is_alive() {
+            ui.add_space(12.0);
+            let response = ui.add(egui::Button::new("Retry")).on_hover_text("Restart the browser");
+            if response.clicked() {
+                retry_clicked = true;
+            }
+        }
+    });
+    retry_clicked
 }

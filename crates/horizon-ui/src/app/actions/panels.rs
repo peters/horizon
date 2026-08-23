@@ -118,6 +118,7 @@ impl HorizonApp {
     ) {
         if workspace_cwd(&self.board, workspace_id).is_some() || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options();
+            super::attach_active_browser_config(&mut options, &self.template_config);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
             if let Err(error) = self.create_panel_with_options(options, workspace_id) {
                 tracing::error!("failed to create panel: {error}");

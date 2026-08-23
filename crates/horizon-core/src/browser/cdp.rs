@@ -190,7 +190,12 @@ impl CdpLink {
                 // A signal can interrupt the blocking read (EINTR); the
                 // deadline is re-armed by the OS, so just try again.
                 Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                // The 250 ms read timeout surfaces as WouldBlock on Unix
+                // and TimedOut on Windows — both mean "idle, keep polling".
+                Err(tungstenite::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut =>
+                {
                     return Ok(None);
                 }
                 Err(error) => return Err(error.into()),

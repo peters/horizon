@@ -11,7 +11,6 @@
 //! - `session` — the per-panel driver thread and its state machine
 //! - `manifest` — the file-based ownership/handoff channel shared with
 //!   the `hb` agent CLI and the UI
-//! - `snapshot` — canned JS page snapshotting for agents
 
 pub mod cdp;
 pub mod frames;
@@ -19,7 +18,6 @@ pub mod input;
 pub mod manifest;
 pub mod process;
 pub mod session;
-pub mod snapshot;
 
 use std::path::PathBuf;
 
@@ -62,8 +60,6 @@ pub struct BrowserConfig {
     pub command: Option<String>,
     /// Extra CLI arguments appended to every Chrome launch.
     pub extra_args: Vec<String>,
-    /// Screencast frame rate cap (frames are change-driven; this is a cap).
-    pub max_fps: u32,
     /// JPEG quality 1-100 for screencast frames.
     pub quality: u32,
     /// Override the per-panel profile root (default
@@ -76,7 +72,6 @@ impl Default for BrowserConfig {
         Self {
             command: None,
             extra_args: Vec::new(),
-            max_fps: 15,
             quality: 60,
             profile_root: None,
         }
@@ -112,6 +107,8 @@ pub struct BrowserPanelState {
     pub loading: bool,
     pub frame_slot: Arc<FrameSlot>,
     session: Option<BrowserSession>,
+    /// Teardown-completion signal stored by [`BrowserPanelState::request_shutdown`].
+    shutdown_signal: Option<std::sync::mpsc::Receiver<()>>,
     pub panel_local_id: String,
     /// Initial URL requested at (re)start, for the URL bar.
     pub requested_url: Option<String>,
@@ -133,6 +130,7 @@ impl BrowserPanelState {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            shutdown_signal: None,
             requested_url: initial_url.clone(),
             panel_local_id: panel_local_id.clone(),
             owner: None,
@@ -153,11 +151,18 @@ impl BrowserPanelState {
         self.launch_session(initial_url);
     }
 
+    /// Bounded wait for a taken driver's teardown, so a restart cannot
+    /// launch a second Chrome against the still-locked profile directory.
+    /// The common path is fast; the bound covers an uncooperative Chrome.
+    const RESTART_TEARDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
+
     fn launch_session(&mut self, initial_url: Option<String>) {
-        // Drop the previous driver (if any); its Stop command makes it tear
-        // down its Chrome process.
+        // Drop the previous driver (if any) and wait for its Chrome to be
+        // gone: the replacement reuses the same profile directory, and a
+        // second instance would lose the profile lock race.
         if let Some(session) = self.session.take() {
-            let _ = session.send(BrowserCommand::Stop);
+            let signal = BrowserSession::shutdown_signal(session);
+            let _ = signal.recv_timeout(Self::RESTART_TEARDOWN_WAIT);
         }
         let session_config = session::BrowserSessionConfig {
             browser: self.config.clone(),
@@ -193,6 +198,8 @@ impl BrowserPanelState {
         self.handoff_reason = None;
     }
 
+    /// Stop the driver asynchronously (panel close during a session):
+    /// the driver finishes its Chrome teardown on its own thread.
     pub fn stop(&mut self) {
         if let Some(session) = self.session.take() {
             let _ = session.send(BrowserCommand::Stop);
@@ -200,6 +207,24 @@ impl BrowserPanelState {
         if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
             self.status = BrowserStatus::Stopped { code: None };
         }
+    }
+
+    /// Ask the driver to stop and remember its teardown-completion signal;
+    /// the app-shutdown paths join on it so exit cannot outrun the profile
+    /// lock.
+    pub fn request_shutdown(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.shutdown_signal = Some(session.shutdown_signal());
+        }
+        if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
+            self.status = BrowserStatus::Stopped { code: None };
+        }
+    }
+
+    /// Take the stored teardown-completion signal, if a shutdown was
+    /// requested and not yet joined.
+    pub fn take_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+        self.shutdown_signal.take()
     }
 
     /// Drain driver events into panel state. Returns `true` when the panel
@@ -243,7 +268,16 @@ impl BrowserPanelState {
                 }
                 BrowserEvent::Stopped { code } => {
                     self.session = None;
-                    self.status = BrowserStatus::Stopped { code };
+                    // Drop the stale frame so the placeholder (with Retry)
+                    // is shown instead of a frozen last frame.
+                    self.frame_slot.clear();
+                    // A startup/CDP failure arrives as Warning + Stopped;
+                    // keep the actionable error text instead of showing a
+                    // bare "stopped" state for it.
+                    let keep_error = matches!(self.status, BrowserStatus::Error { .. });
+                    if !keep_error || code.is_some() {
+                        self.status = BrowserStatus::Stopped { code };
+                    }
                     active = true;
                 }
                 BrowserEvent::HandoffRequested(reason) => {
@@ -287,7 +321,6 @@ mod tests {
     #[test]
     fn config_defaults() {
         let config = BrowserConfig::default();
-        assert_eq!(config.max_fps, 15);
         assert_eq!(config.quality, 60);
         assert!(config.command.is_none());
     }

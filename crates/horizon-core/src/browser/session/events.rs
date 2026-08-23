@@ -133,8 +133,11 @@ impl DriverState {
         let CdpMsg::Response { id, result, error, .. } = message else {
             return;
         };
-        if self.reattach_in_flight {
+        // Fire-and-forget input/ack responses also carry ids; only the
+        // exact re-attach request may consume the in-flight flag.
+        if self.reattach_in_flight && Some(id) == self.reattach_request_id {
             self.reattach_in_flight = false;
+            self.reattach_request_id = None;
             match error {
                 Some(error) => {
                     tracing::warn!(target: "browser", "re-attach rejected: {error}");

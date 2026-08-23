@@ -133,6 +133,9 @@ pub struct PanelOptions {
     pub local_id: Option<String>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    /// Active `browser` config section, so spawn honors `--config` and
+    /// in-memory config edits instead of re-reading the default path.
+    pub browser_config: Option<crate::browser::BrowserConfig>,
     pub transcript_root: Option<PathBuf>,
     pub restore_as_disconnected_snapshot: bool,
     /// True when this panel is being restored from persisted state rather
@@ -157,6 +160,7 @@ impl Default for PanelOptions {
             local_id: None,
             session_binding: None,
             template: None,
+            browser_config: None,
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: false,
@@ -436,7 +440,18 @@ impl Panel {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
-            PanelContent::Browser(browser) => browser.stop(),
+            PanelContent::Browser(browser) => browser.request_shutdown(),
+        }
+    }
+
+    /// Take this panel's browser teardown-completion signal, if the browser
+    /// shutdown was requested and not yet joined.
+    #[must_use]
+    pub fn browser_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+        if let Some(browser) = self.content.browser_mut() {
+            browser.take_shutdown_signal()
+        } else {
+            None
         }
     }
 
@@ -451,11 +466,14 @@ impl Panel {
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
             PanelContent::Browser(browser) => {
                 browser.stop();
-                // The driver tears down Chrome asynchronously; waiting here
-                // only matters for the UI to stop painting, which is
-                // immediate once the session is dropped.
-                let _ = timeout;
-                true
+                // Join the driver's teardown when a shutdown was requested
+                // (app exit paths); otherwise the async stop is enough for
+                // the UI to stop painting.
+                if let Some(signal) = browser.take_shutdown_signal() {
+                    signal.recv_timeout(timeout).is_ok()
+                } else {
+                    true
+                }
             }
         }
     }

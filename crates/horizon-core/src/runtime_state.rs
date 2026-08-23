@@ -45,6 +45,11 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
+    /// `browser` config section as of the last save. Restored browser
+    /// panels use it instead of re-reading the default config path; the app
+    /// refreshes this with the current config before every restore.
+    #[serde(default)]
+    pub browser: crate::browser::BrowserConfig,
 }
 
 impl RuntimeState {
@@ -71,6 +76,7 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
+            browser: config.browser.clone(),
         }
     }
 
@@ -230,6 +236,9 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
+            // Save-path placeholder: the app refreshes this field with the
+            // current config before any restore uses it.
+            browser: crate::browser::BrowserConfig::default(),
         }
     }
 }
@@ -245,6 +254,7 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
+            browser: crate::browser::BrowserConfig::default(),
         }
     }
 }
@@ -457,7 +467,7 @@ impl PanelState {
     }
 
     #[must_use]
-    pub fn to_panel_options(&self) -> PanelOptions {
+    pub fn to_panel_options(&self, browser_config: &crate::browser::BrowserConfig) -> PanelOptions {
         let command = if self.kind == PanelKind::Browser {
             self.browser_url.clone().or_else(|| self.command.clone())
         } else {
@@ -482,6 +492,7 @@ impl PanelState {
             local_id: Some(self.local_id.clone()),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
+            browser_config: (self.kind == PanelKind::Browser).then(|| browser_config.clone()),
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,

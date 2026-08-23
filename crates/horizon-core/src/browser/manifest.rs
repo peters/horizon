@@ -150,6 +150,10 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
 
 /// Write the manifest atomically (temp file + rename), mode 0600.
 ///
+/// The temp file is pid-unique: the driver, the `hb` CLI, and the UI can
+/// write the same manifest concurrently and must not clobber each other's
+/// temp contents.
+///
 /// # Errors
 /// Fails on filesystem errors.
 pub fn write(manifest: &BrowserManifest) -> std::io::Result<()> {
@@ -165,15 +169,28 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
         std::fs::create_dir_all(parent)?;
     }
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let temp = path.with_extension("json.tmp");
+    let temp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     std::fs::write(&temp, raw.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
     }
-    std::fs::rename(&temp, path)?;
+    replace_file(&temp, path)?;
     Ok(())
+}
+
+/// Atomic replace that also works on Windows, where `std::fs::rename` does
+/// not overwrite an existing destination (delete first, then retry once).
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
+    if std::fs::rename(temp, path).is_err() {
+        let _ = std::fs::remove_file(path);
+        std::fs::rename(temp, path).inspect_err(|_| {
+            let _ = std::fs::remove_file(temp);
+        })
+    } else {
+        Ok(())
+    }
 }
 
 pub fn remove(panel_local_id: &str) {

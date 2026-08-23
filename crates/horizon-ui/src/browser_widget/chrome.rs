@@ -9,33 +9,36 @@ use crate::theme;
 
 const CHROME_HEIGHT: f32 = 30.0;
 
-/// Draw the top strip. Returns `true` while the URL bar has focus.
+/// Draw the top strip. Returns whether the URL bar has focus and whether
+/// any chrome widget was clicked this frame (for panel-focus requests).
 pub fn show(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
     browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
     interactive: bool,
-) -> bool {
+) -> (bool, bool) {
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
-        nav_button(ui, "←", "Back", browser, BrowserCommand::Back, interactive);
-        nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
-        nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
-        let url_focused = url_bar(ui, panel_id, browser, state, interactive);
+        let mut clicked = false;
+        clicked |= nav_button(ui, "←", "Back", browser, BrowserCommand::Back, interactive);
+        clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
+        clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
+        let (url_focused, url_clicked) = url_bar(ui, panel_id, browser, state, interactive);
+        clicked |= url_clicked;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ownership_chip(ui, browser);
         });
-        url_focused
+        (url_focused, clicked)
     });
-    let url_focused = chrome_row.inner;
+    let (url_focused, mut clicked) = chrome_row.inner;
 
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
-        handoff_banner(ui, browser, &reason);
+        clicked |= handoff_banner(ui, browser, &reason);
     }
-    url_focused
+    (url_focused, clicked)
 }
 
 fn nav_button(
@@ -45,7 +48,7 @@ fn nav_button(
     browser: &BrowserPanelState,
     command: BrowserCommand,
     interactive: bool,
-) {
+) -> bool {
     let response = ui.add_enabled(
         interactive,
         egui::Button::new(RichText::new(glyph).size(13.0))
@@ -54,12 +57,12 @@ fn nav_button(
             .corner_radius(6)
             .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
     );
-    if response
-        .on_hover_text_at_pointer(format!("{label} (browser)"))
-        .clicked()
-    {
+    let response = response.on_hover_text_at_pointer(format!("{label} (browser)"));
+    if response.clicked() {
         browser.send(command);
+        return true;
     }
+    false
 }
 
 fn url_bar(
@@ -68,7 +71,7 @@ fn url_bar(
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
     interactive: bool,
-) -> bool {
+) -> (bool, bool) {
     let id = ui.make_persistent_id(("browser-url-bar", panel_id));
     // Keep the buffer in sync with the live URL while unfocused.
     if ui.memory(|m| m.focused() != Some(id)) && state.url_buffer != browser.url {
@@ -91,7 +94,7 @@ fn url_bar(
             browser.send(BrowserCommand::Navigate(url));
         }
     }
-    response.has_focus()
+    (response.has_focus(), response.clicked())
 }
 
 fn ownership_chip(ui: &mut Ui, browser: &BrowserPanelState) {
@@ -105,23 +108,25 @@ fn ownership_chip(ui: &mut Ui, browser: &BrowserPanelState) {
     ui.label(RichText::new(label).size(10.0).color(color).strong());
 }
 
-fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) {
+fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) -> bool {
+    let mut clicked = false;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(theme::PALETTE_YELLOW());
         ui.horizontal(|ui| {
             ui.add(egui::Label::new(
                 RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0),
             ));
-            if ui
+            clicked = ui
                 .add(
                     egui::Button::new(RichText::new("Done — hand back to agent").size(11.0))
                         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
                         .corner_radius(6),
                 )
-                .clicked()
-            {
-                browser.hand_back();
-            }
+                .clicked();
         });
     });
+    if clicked {
+        browser.hand_back();
+    }
+    clicked
 }

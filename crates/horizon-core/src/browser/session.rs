@@ -91,12 +91,23 @@ pub struct BrowserSession {
     command_tx: mpsc::Sender<BrowserCommand>,
     pub frame_slot: Arc<FrameSlot>,
     pub event_rx: mpsc::Receiver<BrowserEvent>,
+    /// Resolved when the driver thread has finished tearing down Chrome.
+    completion_rx: mpsc::Receiver<()>,
 }
 
 impl BrowserSession {
     #[must_use]
     pub fn send(&self, command: BrowserCommand) -> bool {
         self.command_tx.send(command).is_ok()
+    }
+
+    /// Send `Stop` and return the teardown-completion signal. The receiver
+    /// resolves once the driver has closed the `DevTools` connection, killed
+    /// Chrome, and removed the manifest.
+    #[must_use]
+    pub fn shutdown_signal(self) -> mpsc::Receiver<()> {
+        let _ = self.command_tx.send(BrowserCommand::Stop);
+        self.completion_rx
     }
 }
 
@@ -107,6 +118,9 @@ const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
 const MANIFEST_MIN_INTERVAL: Duration = Duration::from_millis(200);
 const SIGNAL_MIN_INTERVAL: Duration = Duration::from_millis(250);
+/// Pointer-move storms rewrite the manifest on every event otherwise; the
+/// 5 s user-active TTL tolerates a 1 s refresh.
+const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -117,18 +131,31 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
     let frame_slot = Arc::new(FrameSlot::new());
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
     let (event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
+    let (completion_tx, completion_rx) = mpsc::channel::<()>();
     let slot = Arc::clone(&frame_slot);
     std::thread::Builder::new()
         .name("browser-driver".into())
         .spawn(move || {
-            run_driver(&config, &event_tx, &command_rx, &slot);
+            run_driver(&config, &event_tx, &command_rx, &slot, completion_tx);
         })
         .map_err(|e| format!("failed to spawn browser driver: {e}"))?;
     Ok(BrowserSession {
         command_tx,
         frame_slot,
         event_rx,
+        completion_rx,
     })
+}
+
+/// Resolves the driver's teardown signal exactly once, on thread exit.
+struct DriverCompletion(Option<mpsc::Sender<()>>);
+
+impl Drop for DriverCompletion {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 fn run_driver(
@@ -136,7 +163,9 @@ fn run_driver(
     event_tx: &mpsc::Sender<BrowserEvent>,
     command_rx: &mpsc::Receiver<BrowserCommand>,
     frame_slot: &Arc<FrameSlot>,
+    completion_tx: mpsc::Sender<()>,
 ) {
+    let _completion = DriverCompletion(Some(completion_tx));
     let launch = match build_launch(config) {
         Ok(launch) => launch,
         Err(message) => {
@@ -230,7 +259,7 @@ fn run_loop(
             // complete (kill alone leaves a "crashed" state that makes the
             // next launch restore stale tabs); the kill below is the
             // fallback for an uncooperative process.
-            let _ = link.call_and_drain(Duration::from_secs(2), "Browser.close", &serde_json::json!({}), None);
+            let _ = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
             chrome.kill();
             state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -320,11 +349,13 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| e.to_string())?;
     let home = crate::horizon_home::HorizonHome::resolve();
-    let profile_dir = config
-        .browser
-        .profile_root
-        .clone()
-        .unwrap_or_else(|| home.browser_profile_dir(&config.panel_local_id));
+    // The configured value is a *root*: every panel still gets its own
+    // profile directory, or concurrent panels would fight over Chrome's
+    // profile lock.
+    let profile_dir = match &config.browser.profile_root {
+        Some(root) => root.join(&config.panel_local_id),
+        None => home.browser_profile_dir(&config.panel_local_id),
+    };
     Ok(crate::browser::process::ChromeLaunch {
         command,
         profile_dir,
@@ -364,9 +395,11 @@ struct DriverState {
     restart_attempts: u32,
     pending_reattach: bool,
     reattach_in_flight: bool,
+    reattach_request_id: Option<u64>,
     last_manifest_write: Instant,
     manifest_dirty: bool,
     last_signal_check: Instant,
+    last_user_active_stamp: Instant,
     owner_seen: Option<String>,
     handoff_seen: Option<i64>,
 }
@@ -396,9 +429,11 @@ impl DriverState {
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
+            reattach_request_id: None,
             last_manifest_write: Instant::now(),
             manifest_dirty: true,
             last_signal_check: Instant::now(),
+            last_user_active_stamp: Instant::now(),
             owner_seen: None,
             handoff_seen: None,
         }
@@ -443,10 +478,12 @@ impl DriverState {
     }
 
     fn screencast_params(&self) -> serde_json::Value {
+        // Change-driven: frames only arrive when the page repaints, so a
+        // static page costs nothing. `everyNthFrame` is the only rate knob
+        // this Chrome build exposes; there is no maxFPS parameter.
         serde_json::json!({
             "format": "jpeg",
             "quality": self.config.browser.quality,
-            "maxFPS": self.config.browser.max_fps,
             "everyNthFrame": 1,
         })
     }
@@ -584,14 +621,17 @@ impl DriverState {
             if let Some(ref target) = self.target_id {
                 self.reattach_in_flight = true;
                 self.session_id = None;
-                if let Err(error) = link.send_request(
+                match link.send_request(
                     "Target.attachToTarget",
                     &serde_json::json!({ "targetId": target, "flatten": true }),
                     None,
                 ) {
-                    tracing::warn!(target: "browser", "re-attach request failed: {error}");
-                    self.reattach_in_flight = false;
-                    self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
+                    Ok(request_id) => self.reattach_request_id = Some(request_id),
+                    Err(error) => {
+                        tracing::warn!(target: "browser", "re-attach request failed: {error}");
+                        self.reattach_in_flight = false;
+                        self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
+                    }
                 }
             }
             return;
@@ -637,14 +677,8 @@ impl DriverState {
                     self.pending_restart_at = Some(Instant::now());
                     self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
                 }
-                BrowserCommand::Back => {
-                    self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, event_tx, frame_slot, "History.back", &serde_json::json!({}));
-                }
-                BrowserCommand::Forward => {
-                    self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, event_tx, frame_slot, "History.forward", &serde_json::json!({}));
-                }
+                BrowserCommand::Back => self.navigate_history(link, event_tx, frame_slot, -1),
+                BrowserCommand::Forward => self.navigate_history(link, event_tx, frame_slot, 1),
                 BrowserCommand::SetViewport { width, height } => {
                     if width > 0 && height > 0 && (width, height) != (self.viewport_w, self.viewport_h) {
                         self.viewport_w = width;
@@ -683,8 +717,70 @@ impl DriverState {
         false
     }
 
+    /// `History.back`/`forward` are JavaScript, not CDP: step through the
+    /// page's navigation history explicitly instead.
+    fn navigate_history(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+        delta: i64,
+    ) {
+        let Some(session) = self.session_id.clone() else {
+            return;
+        };
+        let Ok(history) = self.call_and_ack(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.getNavigationHistory",
+            &serde_json::json!({}),
+            Some(session.as_str()),
+        ) else {
+            return;
+        };
+        let Some(current) = history.get("currentIndex").and_then(serde_json::Value::as_i64) else {
+            return;
+        };
+        let Some(entries) = history.get("entries").and_then(serde_json::Value::as_array) else {
+            return;
+        };
+        if entries.is_empty() {
+            return;
+        }
+        let last = i64::try_from(entries.len()).unwrap_or(i64::MAX) - 1;
+        let target = (current + delta).clamp(0, last);
+        if target == current {
+            return;
+        }
+        let entry_index = usize::try_from(target).unwrap_or(0);
+        // Chrome's getNavigationHistory response names the field `id` even
+        // though the navigateToHistoryEntry request takes `entryId`; accept
+        // both so this keeps working across Chrome versions.
+        let entry_value = &entries[entry_index];
+        let Some(entry_id) = entry_value
+            .get("entryId")
+            .or_else(|| entry_value.get("id"))
+            .and_then(serde_json::Value::as_i64)
+        else {
+            return;
+        };
+        self.pending_restart_at = Some(Instant::now());
+        self.send_page_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.navigateToHistoryEntry",
+            &serde_json::json!({ "entryId": entry_id }),
+        );
+    }
+
     /// Stamp the manifest so `hb` can tell the user is driving right now.
     fn stamp_user_active(&mut self) {
+        if self.last_user_active_stamp.elapsed() < USER_ACTIVE_STAMP_INTERVAL {
+            return;
+        }
+        self.last_user_active_stamp = Instant::now();
         self.write_manifest_extra(true, |manifest| {
             manifest.user_active = true;
             manifest.user_active_at = manifest::now_millis();

@@ -11,7 +11,7 @@ pub use shutdown::ShutdownProgress;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -31,8 +31,12 @@ fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
 }
 
-fn panel_restore_options(panel_state: &PanelState, transcript_root: Option<&Path>) -> PanelOptions {
-    let mut options = panel_state.to_panel_options();
+fn panel_restore_options(
+    panel_state: &PanelState,
+    transcript_root: Option<&Path>,
+    browser_config: &crate::browser::BrowserConfig,
+) -> PanelOptions {
+    let mut options = panel_state.to_panel_options(browser_config);
     options.transcript_root = transcript_root.map(Path::to_path_buf);
     options.restore_as_disconnected_snapshot = transcript_root.is_some() && panel_state.kind == PanelKind::Ssh;
     options
@@ -146,13 +150,14 @@ impl Board {
         for workspace_state in &state.workspaces {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
-                let options = panel_restore_options(panel_state, transcript_root);
+                let options = panel_restore_options(panel_state, transcript_root, &state.browser);
                 if let Err(error) = board.create_panel(options, ws_id) {
                     board.handle_panel_restore_failure(
                         &workspace_state.name,
                         panel_state,
                         ws_id,
                         transcript_root,
+                        &state.browser,
                         &error,
                     );
                 }
@@ -186,6 +191,7 @@ impl Board {
         panel_state: &PanelState,
         workspace_id: WorkspaceId,
         transcript_root: Option<&Path>,
+        browser_config: &crate::browser::BrowserConfig,
         error: &Error,
     ) {
         let panel_label = panel_restore_label(panel_state);
@@ -197,7 +203,7 @@ impl Board {
             "failed to restore panel"
         );
 
-        let options = panel_restore_options(panel_state, transcript_root);
+        let options = panel_restore_options(panel_state, transcript_root, browser_config);
         match self.create_failed_restore_panel(options, workspace_id, &error_message) {
             Ok(panel_id) => {
                 self.create_attention(
@@ -261,6 +267,21 @@ impl Board {
                 );
             }
         }
+
+        // Browser drivers tear down Chrome on their own threads; join them
+        // so this synchronous exit path does not orphan a still-running
+        // Chrome (and its locked profile).
+        for panel in &mut self.panels {
+            if let Some(signal) = panel.browser_shutdown_signal()
+                && signal.recv_timeout(TERMINAL_PANEL_SHUTDOWN_TIMEOUT).is_err()
+            {
+                tracing::warn!(
+                    panel_id = panel.id.0,
+                    timeout_ms = TERMINAL_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
+                    "timed out waiting for browser panel shutdown"
+                );
+            }
+        }
     }
 
     /// Begins shutting down all terminal panels asynchronously.
@@ -281,6 +302,20 @@ impl Board {
                 && terminal.begin_async_join(&completed)
             {
                 terminal_count += 1;
+            }
+            // Browser drivers tear down Chrome on their own threads; count
+            // that teardown in the shutdown progress so the app cannot exit
+            // while a driver still holds the profile lock.
+            if let Some(signal) = panel.browser_shutdown_signal() {
+                terminal_count += 1;
+                let completed = Arc::clone(&completed);
+                std::thread::Builder::new()
+                    .name("browser-shutdown-join".into())
+                    .spawn(move || {
+                        let _ = signal.recv_timeout(Duration::from_secs(5));
+                        completed.fetch_add(1, Ordering::Relaxed);
+                    })
+                    .ok();
             }
         }
 
