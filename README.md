@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-banner.svg" />
     <source media="(prefers-color-scheme: light)" srcset="assets/hero-banner.svg" />
-    <img src="assets/hero-banner.svg" alt="Horizon — Your Terminals, One Canvas" width="100%" />
+    <img src="assets/hero-banner.svg" alt="Horizon — Your Work, One Canvas" width="100%" />
   </picture>
 </p>
 

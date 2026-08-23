@@ -158,5 +158,5 @@
   <text x="600" y="232" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="52" font-weight="700" fill="#E0E6F1" letter-spacing="6">HORIZON</text>
 
   <!-- Subtitle -->
-  <text x="600" y="264" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" fill="#6C788E" letter-spacing="3">YOUR TERMINALS, ONE CANVAS</text>
+  <text x="600" y="264" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" fill="#6C788E" letter-spacing="3">YOUR WORK, ONE CANVAS</text>
 </svg>
