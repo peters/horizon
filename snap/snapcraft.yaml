@@ -1,6 +1,6 @@
 name: horizon-ui
 title: Horizon
-summary: GPU-accelerated terminal board on an infinite canvas
+summary: GPU-accelerated workspace on an infinite canvas
 description: |
   Horizon is a GPU-accelerated terminal board that puts your terminals on
   an infinite canvas. Organize shell, command, and SSH sessions as freely

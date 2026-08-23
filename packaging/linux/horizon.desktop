@@ -2,8 +2,8 @@
 Type=Application
 Version=1.0
 Name=Horizon
-GenericName=Spatial Terminal Workspace
-Comment=Your terminals, one canvas
+GenericName=Spatial Workspace
+Comment=Your work, one canvas
 Exec=horizon
 Icon=horizon
 Terminal=false
