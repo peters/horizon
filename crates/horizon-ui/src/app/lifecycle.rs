@@ -925,6 +925,12 @@ impl HorizonApp {
     }
 }
 
+impl Drop for HorizonApp {
+    fn drop(&mut self) {
+        self.run_exit_cleanup();
+    }
+}
+
 #[cfg(test)]
 #[path = "lifecycle/startup_organization_tests.rs"]
 mod startup_organization_tests;
