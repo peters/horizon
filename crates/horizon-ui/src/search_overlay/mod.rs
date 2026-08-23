@@ -2,14 +2,12 @@ mod render;
 
 use std::time::{Duration, Instant};
 
-use egui::{Align, Context, Id, Layout, Margin, Order, Pos2, Rect, UiBuilder, Vec2};
+use egui::{Align, Context, Id, Layout, Order, Pos2, Rect, UiBuilder, Vec2};
 use horizon_core::{Board, PanelId, SearchOptions, SearchResults, search_board};
-
-use crate::theme;
 
 use render::{
     MatchRowData, paint_dropdown_frame, paint_empty_results, paint_toolbar_search_input, render_match_row,
-    render_section_header, render_status_line, render_toggle_button,
+    render_section_header, render_status_line, render_toggle_button, toolbar_search_text_edit,
 };
 
 const DROPDOWN_WIDTH: f32 = 600.0;
@@ -136,20 +134,7 @@ impl SearchOverlay {
 
         paint_toolbar_search_input(ui, input_rect, input_has_focus, input_hovered, !self.query.is_empty());
 
-        let response = ui.put(
-            input_rect,
-            egui::TextEdit::singleline(&mut self.query)
-                .id(text_edit_id)
-                .frame(egui::Frame::NONE)
-                .font(egui::FontId::monospace(13.0))
-                .text_color(theme::FG())
-                .hint_text(
-                    egui::RichText::new("Search across all terminals...")
-                        .color(theme::FG_DIM())
-                        .size(12.5),
-                )
-                .margin(Margin::symmetric(42, 9)),
-        );
+        let response = ui.put(input_rect, toolbar_search_text_edit(&mut self.query, text_edit_id));
 
         if self.request_focus {
             response.request_focus();
