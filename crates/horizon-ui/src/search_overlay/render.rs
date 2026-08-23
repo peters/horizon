@@ -1,9 +1,27 @@
-use egui::{Align, Color32, CornerRadius, Layout, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
+use egui::{
+    Align, Color32, CornerRadius, Id, Layout, Margin, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
+};
 
 use crate::app::util::usize_to_f32;
 use crate::theme;
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
+
+const TOOLBAR_INPUT_MARGIN: Margin = Margin::symmetric(42, 9);
+
+pub(super) fn toolbar_search_text_edit(query: &mut String, id: Id) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(query)
+        .id(id)
+        .frame(egui::Frame::NONE.inner_margin(TOOLBAR_INPUT_MARGIN))
+        .font(egui::FontId::monospace(13.0))
+        .text_color(theme::FG())
+        .vertical_align(Align::Center)
+        .hint_text(
+            egui::RichText::new("Search across all terminals...")
+                .color(theme::FG_DIM())
+                .size(12.5),
+        )
+}
 
 pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: bool, hovered: bool, has_query: bool) {
     let painter = ui.painter();
@@ -320,4 +338,56 @@ fn truncate_to_width(text: &str, max_width: f32, font_size: f32) -> String {
     let mut result: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     result.push('\u{2026}');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_egui::DiscardTextures;
+    use egui::{Context, Direction, Layout, Pos2, RawInput, Rect, UiBuilder, Vec2};
+
+    use super::{TOOLBAR_INPUT_MARGIN, toolbar_search_text_edit};
+    use crate::search_overlay::TOOLBAR_INPUT_HEIGHT;
+
+    #[test]
+    fn toolbar_search_text_is_inset_and_vertically_centered() {
+        let ctx = Context::default();
+        let input_rect = Rect::from_min_size(Pos2::new(10.0, 12.0), Vec2::new(420.0, TOOLBAR_INPUT_HEIGHT));
+        let mut query = String::new();
+        let mut response_rect = Rect::ZERO;
+        let mut text_clip_rect = Rect::ZERO;
+        let _ = ctx
+            .run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 120.0))),
+                    ..RawInput::default()
+                },
+                |ui| {
+                    let output = ui
+                        .scope_builder(
+                            UiBuilder::new()
+                                .max_rect(input_rect)
+                                .layout(Layout::centered_and_justified(Direction::TopDown)),
+                            |ui| toolbar_search_text_edit(&mut query, ui.id()).show(ui),
+                        )
+                        .inner;
+                    response_rect = output.response.rect;
+                    text_clip_rect = output.text_clip_rect;
+                },
+            )
+            .discard_textures();
+
+        assert_eq!(response_rect, input_rect);
+        let expected_left = response_rect.left() + TOOLBAR_INPUT_MARGIN.leftf();
+        assert!(
+            (text_clip_rect.left() - expected_left).abs() < 0.01,
+            "text starts at {}, expected {expected_left}",
+            text_clip_rect.left()
+        );
+        assert!(
+            (text_clip_rect.center().y - response_rect.center().y).abs() < 0.01,
+            "text center is {}, input center is {}",
+            text_clip_rect.center().y,
+            response_rect.center().y
+        );
+    }
 }
