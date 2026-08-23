@@ -233,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn toolbar_prioritizes_available_update_over_tagline() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1024.0, 768.0));
+        let layout = root_toolbar_layout(viewport, true);
+
+        assert!(!layout.show_tagline);
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::Update))
+        );
+        assert!(layout.search_rect.width() >= 180.0);
+    }
+
+    #[test]
     fn toolbar_hides_tagline_before_collapsing_actions() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(960.0, 768.0));
         let layout = root_toolbar_layout(viewport, false);
