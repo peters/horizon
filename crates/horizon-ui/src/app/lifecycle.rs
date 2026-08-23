@@ -277,8 +277,9 @@ impl HorizonApp {
         if panel_output.cwd_changed {
             self.mark_runtime_dirty();
         }
-        let had_browser_output = self.board.drain_browser_events();
-        let had_terminal_output = panel_output.had_terminal_output || had_browser_output;
+        // process_output already drained browser-panel driver events
+        // (Panel::process_output handles the browser kind).
+        let had_terminal_output = panel_output.had_terminal_output;
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();

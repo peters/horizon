@@ -320,6 +320,11 @@ impl HorizonApp {
                             } else {
                                 None
                             };
+                            let browser_state = if panel.kind == PanelKind::Browser {
+                                Some(self.panel_render_caches.browser_ui_state.entry(panel_id).or_default())
+                            } else {
+                                None
+                            };
                             show_panel_body_contents(
                                 ui,
                                 panel,
@@ -334,7 +339,7 @@ impl HorizonApp {
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
-                                    browser_ui_state: None,
+                                    browser_ui_state: browser_state,
                                 },
                             );
                         }

@@ -209,6 +209,12 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                     browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
                 }
             }
+            // egui_winit turns Ctrl/Cmd+V into a global Paste event (the
+            // URL bar consumes its own copy while focused; the page gets
+            // the text via CDP insertText, matching a native paste).
+            Event::Paste(text) if !text.is_empty() => {
+                browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
+            }
             Event::Key {
                 key,
                 pressed,

@@ -25,7 +25,7 @@ thiserror = "2.0.20"
 tracing = "0.1.44"
 # Chrome DevTools Protocol transport for browser panels. Plain ws:// to
 # 127.0.0.1, so no TLS features are needed.
-tungstenite = "0.27.0"
+tungstenite = "0.30.0"
 # JPEG decoder for CDP screencast frames (change-driven video stream).
 zune-jpeg = "0.5.15"
 base64 = "0.22.1"
