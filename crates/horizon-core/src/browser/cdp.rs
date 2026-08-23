@@ -8,7 +8,7 @@
 //!   flattened *events* carry `sessionId` at the top level of the message
 //!   while commands and `Page.screencastFrameAck` need it both at the top
 //!   level (session scoping) and, for the ack, inside `params` as well.
-//! - **Direct page** (the `hb` agent CLI): one connection to
+//! - **Direct page** (an external agent): one connection to
 //!   `/devtools/page/<id>`. That connection transparently follows
 //!   cross-document navigations, which is exactly what an agent wants.
 //!
@@ -135,7 +135,7 @@ impl CdpMsg {
 }
 
 /// A live CDP connection. Single-threaded by design: the owning thread
-/// (browser driver thread, or the `hb` CLI) alternates `read_one` with
+/// (browser driver thread, or an external agent) alternates `read_one` with
 /// `send_*` calls, mirroring how terminal panels pump their event loops.
 pub struct CdpLink {
     ws: WebSocket<TcpStream>,

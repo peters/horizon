@@ -28,7 +28,7 @@ impl FrameData {
 
 /// Latest-frame guard payload. Exposed through [`FrameSlot::latest`]; treat
 /// as read-only UI data.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct FrameSlotInner {
     pub data: Option<FrameData>,
     /// Reused decode target so steady-state frames do not allocate.
@@ -37,7 +37,7 @@ pub struct FrameSlotInner {
 }
 
 /// Lock-guarded handoff of the newest decoded frame.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct FrameSlot {
     inner: Arc<std::sync::Mutex<FrameSlotInner>>,
 }

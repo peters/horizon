@@ -11,13 +11,16 @@ mod render;
 
 use egui::{Pos2, TextureHandle, Ui};
 use horizon_core::Panel;
-use horizon_core::browser::BrowserButton;
+use horizon_core::browser::{BrowserButton, BrowserCommand};
 
 /// Per-panel UI state that must survive across frames.
 #[derive(Default)]
 pub struct BrowserUiState {
     texture: Option<TextureHandle>,
     seq: u64,
+    /// Last viewport size sent to Chrome (responsive layout + input
+    /// geometry follow the panel; the driver dedupes no-ops).
+    last_viewport: (u32, u32),
     /// Last mouse position forwarded to the page (movement dedup).
     last_mouse: Option<Pos2>,
     /// Button captured by this panel (drags must deliver their release
@@ -61,6 +64,21 @@ impl<'a> BrowserView<'a> {
         if let Some(browser) = self.panel.browser_mut() {
             if retry_clicked {
                 browser.relaunch();
+            }
+            // Follow panel resizes/fullscreen with the emulated viewport
+            // so responsive layout and CDP input geometry match what is on
+            // screen (the driver no-ops an unchanged size).
+            if let Some(rect) = body_rect {
+                // egui layout sizes are finite and non-negative.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let viewport = (rect.width().round() as u32, rect.height().round() as u32);
+                if viewport.0 > 32 && viewport.1 > 32 && viewport != state.last_viewport {
+                    state.last_viewport = viewport;
+                    browser.send(BrowserCommand::SetViewport {
+                        width: viewport.0,
+                        height: viewport.1,
+                    });
+                }
             }
             input::handle(
                 ui,

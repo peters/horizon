@@ -4,10 +4,11 @@
 //! `~/.horizon/runtime/browsers/<panel_local_id>.json` while it is alive.
 //! It is the shared channel between three parties:
 //!
-//! - the **panel driver** (writes `browser_ws`, `target_id`, `url`, `title`),
-//! - the **agent CLI `hb`** (heartbeats `owner`, requests handoffs),
-//! - the **UI** (reads ownership for the titlebar chip, writes
-//!   `user_active` and the handoff `done` flag).
+//! - the **panel driver** (writes `browser_ws`, `target_id`, `url`,
+//!   `title`, `user_active`, and the handoff `done` flag),
+//! - **external agents** (read discovery fields, heartbeat `owner`, write
+//!   a `handoff` request),
+//! - the **UI** (reads ownership for the chrome chip).
 //!
 //! File-based on purpose: no new IPC mechanism, works across process
 //! boundaries, and every field is observable with plain shell tooling.
@@ -20,8 +21,6 @@ use crate::horizon_home::HorizonHome;
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
-/// How long a user-active stamp stays fresh.
-pub const USER_ACTIVE_TTL_MILLIS: i64 = 5_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestOwner {
@@ -44,7 +43,7 @@ pub struct ManifestHandoff {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct BrowserManifest {
     pub panel_local_id: String,
-    /// Browser-level `DevTools` ws endpoint (what `hb` connects to).
+    /// Browser-level `DevTools` ws endpoint (what an agent connects to).
     pub browser_ws: String,
     /// The page target the panel is driving.
     pub target_id: String,
@@ -66,11 +65,6 @@ impl BrowserManifest {
         self.owner
             .as_ref()
             .filter(|owner| now_millis.saturating_sub(owner.updated_at) <= OWNER_TTL_MILLIS)
-    }
-
-    #[must_use]
-    pub fn user_is_active(&self, now_millis: i64) -> bool {
-        self.user_active && now_millis.saturating_sub(self.user_active_at) <= USER_ACTIVE_TTL_MILLIS
     }
 
     #[must_use]
@@ -129,11 +123,6 @@ pub fn read_at(path: &Path) -> Option<BrowserManifest> {
 
 /// List panel local ids that currently have a manifest.
 #[must_use]
-pub fn list_panels() -> Vec<String> {
-    list_panels_in(&default_manifest_dir())
-}
-
-#[must_use]
 pub fn list_panels_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -150,7 +139,7 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
 
 /// Write the manifest atomically (temp file + rename), mode 0600.
 ///
-/// The temp file is pid-unique: the driver, the `hb` CLI, and the UI can
+/// The temp file is pid-unique: the driver, an external agent, and the UI can
 /// write the same manifest concurrently and must not clobber each other's
 /// temp contents.
 ///
@@ -195,84 +184,6 @@ fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
 
 pub fn remove(panel_local_id: &str) {
     let _ = std::fs::remove_file(default_manifest_path(panel_local_id));
-}
-
-/// Refresh the agent owner heartbeat (called by `hb` on every command).
-#[must_use]
-pub fn owner_heartbeat(panel_local_id: &str, name: &str, tty: Option<String>) -> Option<()> {
-    let path = default_manifest_path(panel_local_id);
-    let mut manifest = read_at(&path)?;
-    let now = now_millis();
-    manifest.owner = Some(ManifestOwner {
-        name: name.to_string(),
-        tty,
-        updated_at: now,
-    });
-    manifest.updated_at = now;
-    write_at(&path, &manifest).ok()
-}
-
-/// Ask for a human handoff. Returns the manifest path so the caller can
-/// poll for `done`.
-///
-/// The panel driver also rewrites this file (`url`/`title`/`browser_ws`), so a
-/// read-modify-write race can briefly drop a just-written field; the
-/// expected mitigation is on the caller side: re-assert the handoff
-/// (call this again) while it is pending and not yet `done`.
-#[must_use]
-pub fn request_handoff(panel_local_id: &str, reason: &str) -> Option<PathBuf> {
-    let path = default_manifest_path(panel_local_id);
-    let mut manifest = read_at(&path)?;
-    let now = now_millis();
-    manifest.handoff = Some(ManifestHandoff {
-        reason: reason.to_string(),
-        requested_at: now,
-        done: false,
-    });
-    manifest.updated_at = now;
-    write_at(&path, &manifest).ok()?;
-    Some(path)
-}
-
-/// Stamp the user as actively driving the panel.
-pub fn set_user_active(panel_local_id: &str) {
-    let path = default_manifest_path(panel_local_id);
-    let Some(mut manifest) = read_at(&path) else {
-        return;
-    };
-    let now = now_millis();
-    manifest.user_active = true;
-    manifest.user_active_at = now;
-    manifest.updated_at = now;
-    let _ = write_at(&path, &manifest);
-}
-
-/// Mark the pending handoff as complete (UI "hand back" button).
-pub fn mark_handoff_done(panel_local_id: &str) {
-    let path = default_manifest_path(panel_local_id);
-    let Some(mut manifest) = read_at(&path) else {
-        return;
-    };
-    if let Some(handoff) = manifest.handoff.as_mut() {
-        handoff.done = true;
-    }
-    manifest.updated_at = now_millis();
-    let _ = write_at(&path, &manifest);
-}
-
-/// Poll until the handoff is marked done or the timeout elapses.
-#[must_use]
-pub fn wait_handoff_done(panel_local_id: &str, timeout: std::time::Duration) -> bool {
-    let started = std::time::Instant::now();
-    loop {
-        if read(panel_local_id).and_then(|m| m.handoff).is_some_and(|h| h.done) {
-            return true;
-        }
-        if started.elapsed() > timeout {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
 }
 
 #[cfg(test)]

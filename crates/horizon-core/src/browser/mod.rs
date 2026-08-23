@@ -10,7 +10,7 @@
 //! - `input` — core input model + CDP parameter mapping
 //! - `session` — the per-panel driver thread and its state machine
 //! - `manifest` — the file-based ownership/handoff channel shared with
-//!   the `hb` agent CLI and the UI
+//!   external agents and the UI
 
 pub mod cdp;
 pub mod frames;
@@ -170,11 +170,14 @@ impl BrowserPanelState {
             initial_url,
             width: DEFAULT_VIEWPORT.0,
             height: DEFAULT_VIEWPORT.1,
+            // Reuse the panel's slot across (re)starts: frame sequence
+            // numbers stay monotonic, so a retried session's first frame is
+            // never mistaken for an unchanged one by the UI's seq check.
+            frame_slot: Arc::clone(&self.frame_slot),
         };
         match session::start_session(session_config) {
             Ok(handle) => {
                 self.status = BrowserStatus::Starting;
-                self.frame_slot = Arc::clone(&handle.frame_slot);
                 self.loading = true;
                 self.session = Some(handle);
             }
@@ -308,7 +311,7 @@ impl Drop for BrowserPanelState {
     }
 }
 
-/// Resolve the manifest directory for browser panels (UI + `hb` use this).
+/// Resolve the manifest directory for browser panels (UI + external agents).
 #[must_use]
 pub fn manifest_dir() -> PathBuf {
     HorizonHome::resolve().browsers_manifest_dir()

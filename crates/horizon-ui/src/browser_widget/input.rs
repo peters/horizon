@@ -115,8 +115,10 @@ fn pointer_events(
             Event::PointerMoved(pos) => {
                 let p = transform(pos);
                 let tracking = rect.contains(p) || state.captured_button.is_some();
-                // Movement dedup: only forward real movement.
-                if tracking && state.last_mouse.is_some_and(|last| (last - p).length() >= 0.5) {
+                // Movement dedup: only forward real movement. `None` (the
+                // first move, or the first after PointerGone) must be
+                // forwarded, or hover would be dead until a click.
+                if tracking && state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
                     let (x, y) = to_page_coords(rect, frame_size, p);
                     state.last_mouse = Some(p);
                     pending_move = Some((x, y));
@@ -223,6 +225,14 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                 ..
             } => {
                 if !pressed {
+                    // The press side swallowed the reload shortcuts (F5,
+                    // Ctrl/Cmd+R) without forwarding a keydown; drop the
+                    // orphan keyup so the page never sees a release with no
+                    // press. Plain R and plain F5 have no other meaning,
+                    // so nothing page-visible is lost.
+                    if key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.command)) {
+                        continue;
+                    }
                     if let Some(browser_key) = key_to_browser_key(key) {
                         browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
                             key: browser_key,

@@ -138,24 +138,35 @@ impl DriverState {
         if self.reattach_in_flight && Some(id) == self.reattach_request_id {
             self.reattach_in_flight = false;
             self.reattach_request_id = None;
-            match error {
-                Some(error) => {
+            if let Some(error) = error {
+                self.reattach_failures += 1;
+                if self.reattach_failures >= 5 {
+                    // Re-attach keeps failing: the target is almost
+                    // certainly gone. Stop the silent retry loop and
+                    // surface a retryable error.
+                    self.reattach_failures = 0;
+                    self.pending_reattach = false;
+                    self.pending_restart_at = None;
+                    let _ = event_tx.send(BrowserEvent::Warning(format!(
+                        "could not re-attach to the page: {error}; retry to restart"
+                    )));
+                } else {
                     tracing::warn!(target: "browser", "re-attach rejected: {error}");
                     self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
                 }
-                None => {
-                    // The auto-attach event may already have re-bound us;
-                    // only the first binder sets up the page.
-                    if self.session_id.is_none()
-                        && let Some(session) = result
-                            .as_ref()
-                            .and_then(|r| r.get("sessionId"))
-                            .and_then(|s| s.as_str())
-                        && let Some(target) = self.target_id.clone()
-                    {
-                        self.attach_setup(link, event_tx, frame_slot, session, &target);
-                    }
-                }
+                return;
+            }
+            self.reattach_failures = 0;
+            // The auto-attach event may already have re-bound us;
+            // only the first binder sets up the page.
+            if self.session_id.is_none()
+                && let Some(session) = result
+                    .as_ref()
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|s| s.as_str())
+                && let Some(target) = self.target_id.clone()
+            {
+                self.attach_setup(link, event_tx, frame_slot, session, &target);
             }
             return;
         }
@@ -204,6 +215,12 @@ impl DriverState {
                     self.title_context_id = None;
                     self.title_fetch_at = None;
                     self.title_fetch_retries = 0;
+                    // Unexpected detach (the driver never detaches its own
+                    // page session): the target usually still exists —
+                    // re-bind instead of freezing. `pending_restart_tick`
+                    // acts on this on the next loop pass; a target that is
+                    // actually gone surfaces through targetDestroyed.
+                    self.pending_reattach = true;
                 }
             }
             "Target.targetDestroyed" => {
@@ -212,6 +229,15 @@ impl DriverState {
                     self.session_id = None;
                     self.target_id = None;
                     self.screencast_on = false;
+                    self.pending_reattach = false;
+                    // The page is gone (tab closed by another CDP client,
+                    // navigation to a new target, …). Re-attach has
+                    // nothing to bind to: surface a retryable error
+                    // instead of silently ignoring input on a frozen frame.
+                    frame_slot.clear();
+                    let _ = event_tx.send(BrowserEvent::Warning(
+                        "the page target was destroyed; retry to reattach".to_string(),
+                    ));
                 }
             }
             "Page.frameNavigated" => {
@@ -269,19 +295,17 @@ impl DriverState {
         }
     }
 
-    /// Decode, store, and ack one screencast frame.
+    /// Ack, then decode and store one screencast frame.
+    ///
+    /// The ack goes out first and on every path: Chrome holds the
+    /// screencast until each frame is acknowledged, so a malformed frame
+    /// must never stall an otherwise healthy stream.
     fn handle_screencast_frame(
         link: &mut CdpLink,
         event_tx: &mpsc::Sender<BrowserEvent>,
         frame_slot: &FrameSlot,
         event: CdpEvent<'_>,
     ) {
-        let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
-            return;
-        };
-        let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
-            return;
-        };
         // Ack so the stream continues: params.sessionId echoes the frame's
         // session identifier, the top-level sessionId scopes the call
         // (flattened sessions).
@@ -296,6 +320,13 @@ impl DriverState {
         };
         // Id'd request: Chrome silently drops CDP requests without an id.
         let _ = link.send_request("Page.screencastFrameAck", &ack_params, event.session_id);
+        let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
+            return;
+        };
+        let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
+            tracing::warn!(target: "browser", "dropping undecodable screencast frame");
+            return;
+        };
         if let Some(seq) = frame_slot.store_jpeg(&jpeg) {
             let _ = event_tx.send(BrowserEvent::Frame { seq });
         }

@@ -15,7 +15,7 @@
 //! - screencasts are **change-driven**: frames only arrive when the page
 //!   repaints, so a static page costs nothing.
 //! - a cross-document navigation — especially one triggered by *another*
-//!   CDP client (e.g. the `hb` agent CLI) — temporarily breaks the
+//!   CDP client (e.g. agent CDP client) — temporarily breaks the
 //!   session's page binding and returns "Not attached to an active page".
 //!   Recovery is a backoff-retried `Page.startScreencast` (~100 ms steps),
 //!   with a full re-attach as the last resort.
@@ -51,7 +51,7 @@ pub enum BrowserEvent {
     Stopped {
         code: Option<i32>,
     },
-    /// An agent (via `hb`) asked the user for the wheel.
+    /// An agent asked the user for the wheel.
     HandoffRequested(String),
     /// The handoff was resolved (user handed back or agent cancelled).
     HandoffCleared,
@@ -84,6 +84,10 @@ pub struct BrowserSessionConfig {
     pub initial_url: Option<String>,
     pub width: u32,
     pub height: u32,
+    /// The panel's frame slot, shared across driver (re)starts so frame
+    /// sequence numbers stay monotonic across sessions — a retry must not
+    /// re-emit sequence 1 and be mistaken for an unchanged frame.
+    pub frame_slot: Arc<FrameSlot>,
 }
 
 /// The panel-side handle to a running driver.
@@ -128,7 +132,7 @@ const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
 /// # Errors
 /// Fails only when the OS thread cannot be spawned.
 pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, String> {
-    let frame_slot = Arc::new(FrameSlot::new());
+    let frame_slot = config.frame_slot.clone();
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
     let (event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
@@ -293,7 +297,7 @@ fn run_loop(
         // 4. Backoff-retried screencast restart / re-attach.
         state.pending_restart_tick(link, event_tx, frame_slot);
 
-        // 5. Ownership / handoff signals from the manifest (`hb` side).
+        // 5. Ownership / handoff signals from the manifest (agent side).
         state.tick_signals(event_tx);
 
         // 6. Chrome process liveness.
@@ -396,6 +400,9 @@ struct DriverState {
     pending_reattach: bool,
     reattach_in_flight: bool,
     reattach_request_id: Option<u64>,
+    /// Consecutive rejected re-attach attempts; surfaced as a retryable
+    /// error once re-attach clearly cannot succeed (dead target).
+    reattach_failures: u32,
     last_manifest_write: Instant,
     manifest_dirty: bool,
     last_signal_check: Instant,
@@ -430,6 +437,7 @@ impl DriverState {
             pending_reattach: false,
             reattach_in_flight: false,
             reattach_request_id: None,
+            reattach_failures: 0,
             last_manifest_write: Instant::now(),
             manifest_dirty: true,
             last_signal_check: Instant::now(),
@@ -439,10 +447,13 @@ impl DriverState {
         }
     }
 
-    /// `call_and_drain` plus full event routing for everything drained
-    /// while the roundtrip is in flight: a `Page.screencastFrame` without
-    /// an ack stops the stream, and dropping other drained events (title,
-    /// load, navigation commits) loses state Chrome already committed.
+    /// `call_and_drain` plus full routing for everything drained while the
+    /// roundtrip is in flight: a `Page.screencastFrame` without an ack
+    /// stops the stream, dropping other drained events (title, load,
+    /// navigation commits) loses state Chrome already committed, and a
+    /// drained *response* may belong to another in-flight request (notably
+    /// a re-attach roundtrip) whose state machine would otherwise never
+    /// hear back.
     fn call_and_ack(
         &mut self,
         link: &mut CdpLink,
@@ -454,9 +465,7 @@ impl DriverState {
     ) -> Result<serde_json::Value, crate::browser::cdp::CdpError> {
         let (result, drained) = link.call_and_drain(CALL_TIMEOUT, method, params, session)?;
         for message in drained {
-            if let Some(event) = message.event() {
-                self.handle_event(link, event_tx, frame_slot, event);
-            }
+            self.handle_message(link, event_tx, frame_slot, message);
         }
         Ok(result)
     }
@@ -617,6 +626,13 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
     ) {
         if self.pending_reattach && !self.reattach_in_flight {
+            // A rejected re-attach parked a backoff delay first.
+            if let Some(due) = self.pending_restart_at {
+                if Instant::now() < due {
+                    return;
+                }
+                self.pending_restart_at = None;
+            }
             self.pending_reattach = false;
             if let Some(ref target) = self.target_id {
                 self.reattach_in_flight = true;
@@ -775,7 +791,7 @@ impl DriverState {
         );
     }
 
-    /// Stamp the manifest so `hb` can tell the user is driving right now.
+    /// Stamp the manifest so an agent can tell the user is driving right now.
     fn stamp_user_active(&mut self) {
         if self.last_user_active_stamp.elapsed() < USER_ACTIVE_STAMP_INTERVAL {
             return;
@@ -788,7 +804,7 @@ impl DriverState {
     }
 
     /// User clicked "hand back": mark the pending handoff done so the
-    /// blocked `hb` process can continue.
+    /// blocked agent process can continue.
     fn resolve_handoff(&mut self) {
         self.write_manifest_extra(true, |manifest| {
             if let Some(handoff) = manifest.handoff.as_mut() {
