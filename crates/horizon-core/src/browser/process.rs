@@ -288,8 +288,8 @@ fn standard_installations() -> Vec<PathBuf> {
         let Ok(root) = std::env::var(var) else {
             continue;
         };
-        candidates.push(PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe"));
-        candidates.push(PathBuf::from(root).join(r"Microsoft\Edge\Application\msedge.exe"));
+        candidates.push(PathBuf::from(&root).join(r"Google\Chrome\Application\chrome.exe"));
+        candidates.push(PathBuf::from(&root).join(r"Microsoft\Edge\Application\msedge.exe"));
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         candidates.push(PathBuf::from(local).join(r"Programs\chromium\Application\chrome.exe"));
