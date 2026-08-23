@@ -13,7 +13,7 @@ const ROOT_TOOLBAR_SEARCH_MAX_WIDTH: f32 = 420.0;
 pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_MORE_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
-const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 324.0;
+const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 152.0;
 const SIDEBAR_WIDTH_RATIO: f32 = 0.18;
 
 pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
@@ -218,17 +218,27 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_hides_tagline_before_collapsing_actions() {
+    fn toolbar_keeps_short_tagline_when_search_still_fits() {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1024.0, 768.0));
         let layout = root_toolbar_layout(viewport, false);
 
-        assert!(!layout.show_tagline);
+        assert!(layout.show_tagline);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(
             layout
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Sessions))
         );
+        assert!(layout.search_rect.width() >= 180.0);
+    }
+
+    #[test]
+    fn toolbar_hides_tagline_before_collapsing_actions() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(960.0, 768.0));
+        let layout = root_toolbar_layout(viewport, false);
+
+        assert!(!layout.show_tagline);
+        assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.search_rect.width() >= 180.0);
     }
 
