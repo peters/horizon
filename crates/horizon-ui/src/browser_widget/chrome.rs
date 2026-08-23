@@ -82,9 +82,10 @@ fn url_bar(
             .desired_width(f32::INFINITY)
             .font(egui::FontId::monospace(11.5)),
     );
-    // Enter submits while the bar is focused (egui singleline edits do
-    // not consume it).
-    if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    // egui's singleline TextEdit consumes Enter and drops its own focus
+    // (the default `return_key` shortcut), so "focus was lost on the same
+    // frame as an Enter press" is the submit signal.
+    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         let url = state.url_buffer.trim().to_string();
         if !url.is_empty() && url != browser.url {
             browser.send(BrowserCommand::Navigate(url));

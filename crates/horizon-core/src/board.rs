@@ -287,11 +287,10 @@ impl Board {
         ShutdownProgress::new(terminal_count, completed)
     }
 
-    /// Drain pending output from all panels. Returns `true` if any panel had activity.
-    #[profiling::function]
     /// Drain browser-panel driver events. Returns `true` when any browser
     /// panel produced visible activity (frame, title, status, handoff).
     #[must_use]
+    #[profiling::function]
     pub fn drain_browser_events(&mut self) -> bool {
         self.panels
             .iter_mut()
@@ -302,6 +301,8 @@ impl Board {
             .unwrap_or(false)
     }
 
+    /// Drain pending output from all panels. Returns `true` if any panel had activity.
+    #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {

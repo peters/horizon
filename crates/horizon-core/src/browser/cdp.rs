@@ -248,24 +248,8 @@ impl CdpLink {
         {
             object.insert("sessionId".to_string(), json!(session));
         }
-        let _ = self.send_raw(&message);
+        self.send_raw(&message)?;
         Ok(id)
-    }
-
-    /// Send a fire-and-forget method call (events like acks).
-    ///
-    /// # Errors
-    /// Fails on socket write errors.
-    ///
-    pub fn send_fire(&mut self, method: &str, params: &Value, session_id: Option<&str>) -> Result<()> {
-        let mut message = json!({ "method": method, "params": params });
-        if let Some(session) = session_id
-            && let Some(object) = message.as_object_mut()
-        {
-            object.insert("sessionId".to_string(), json!(session));
-        }
-        let _ = self.send_raw(&message);
-        Ok(())
     }
 
     /// Send a request and block (bounded by `timeout`) until its response.

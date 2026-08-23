@@ -144,8 +144,13 @@ impl BrowserPanelState {
     }
 
     /// (Re)start the driver — used for the Retry action after a failure.
+    /// Resumes at the last-viewed URL when one is known, so a crashed
+    /// browser returns the user to where they were rather than the panel's
+    /// initial URL.
     pub fn relaunch(&mut self) {
-        self.launch_session(self.requested_url.clone().filter(|u| !u.is_empty()));
+        let resume = (!self.url.is_empty()).then(|| self.url.clone());
+        let initial_url = resume.or_else(|| self.requested_url.clone().filter(|u| !u.is_empty()));
+        self.launch_session(initial_url);
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {

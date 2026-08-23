@@ -47,6 +47,12 @@ fn pointer_events(
     frame_size: [f32; 2],
 ) {
     let ctx = ui.ctx();
+    // Pointer positions arrive in global (window) space; the body rect is
+    // in this layer's local space (panels are drawn on a transformed
+    // canvas), so transform before hit-testing — same pattern as the
+    // terminal widget's input.
+    let from_global = ctx.layer_transform_from_global(ui.layer_id());
+    let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
     let (pos, down_left, down_middle, down_right, pressed_l, pressed_m, pressed_r, released_l, released_m, released_r) =
         ctx.input(|i| {
             (
@@ -65,6 +71,7 @@ fn pointer_events(
     let Some(pos) = pos else {
         return;
     };
+    let pos = transform(pos);
     let buttons = (if down_left { BUTTON_LEFT } else { 0 })
         | (if down_middle { BUTTON_MIDDLE } else { 0 })
         | (if down_right { BUTTON_RIGHT } else { 0 });
@@ -96,8 +103,9 @@ fn pointer_events(
             modifiers,
         }));
         state.last_mouse = Some(pos);
-        return;
     }
+    // No early return after a press: a fast click delivers press *and*
+    // release in the same frame, and Chrome only acts on a complete pair.
     if released_l || released_m || released_r {
         let button = if released_l {
             BrowserButton::Left
@@ -155,18 +163,25 @@ fn pointer_events(
 fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
     let ctx = ui.ctx();
     let events = ctx.input(|i| i.events.clone());
-    // Single characters already delivered as Key `char` events this frame;
-    // egui may also deliver them as `Event::Text`, so skip the duplicate.
+    // Characters we deliver via the Key event's `text` (CDP `char`);
+    // egui also delivers them as `Event::Text`, so those are deduped below.
+    // The set must mirror exactly what the Key arm sends — including the
+    // shift adjustment — or Shift+letter would type twice.
     let mut key_chars: Vec<char> = Vec::new();
     for event in &events {
         if let Event::Key {
-            key, pressed, repeat, ..
+            key,
+            pressed,
+            repeat,
+            modifiers,
+            ..
         } = event
             && *pressed
             && !*repeat
+            && !(modifiers.ctrl || modifiers.command || modifiers.alt)
             && let Some(c) = key_to_browser_key(*key).and_then(BrowserKey::printable_char)
         {
-            key_chars.push(c);
+            key_chars.push(if modifiers.shift { shift_char(c) } else { c });
         }
     }
     for event in events {
@@ -211,7 +226,7 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                 // deliver the (shift-adjusted) character.
                 let text = browser_key
                     .printable_char()
-                    .map(shift_char)
+                    .map(|c| if modifiers.shift { shift_char(c) } else { c })
                     .map(|c| c.to_string())
                     .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
                 browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
