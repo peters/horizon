@@ -281,14 +281,18 @@ impl SpeechSystem {
         }
     }
 
-    /// Join every transcription worker. This must finish before process exit:
-    /// native GPU backends require all model resources to be released before
-    /// their process-level teardown handlers run.
-    pub fn shutdown_and_wait(&mut self) {
+    /// Poll every transcription worker and reap only workers that have
+    /// already returned. Native GPU backends require all model resources to
+    /// be released before their process-level teardown handlers run.
+    pub fn shutdown_is_complete(&mut self) -> bool {
         self.begin_shutdown();
+        let mut complete = true;
         for profile in &mut self.profiles {
-            profile.worker.shutdown_and_wait();
+            if !profile.worker.shutdown_is_complete() {
+                complete = false;
+            }
         }
+        complete
     }
 
     /// Drain worker/capture channels; called once per frame.

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use horizon_core::ForcedBrowserShutdownStatus;
 
@@ -7,12 +7,24 @@ use crate::loading_spinner;
 
 const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+const MAX_SPEECH_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BrowserShutdownOutcome {
     Pending,
     Complete,
     ForcedCleanupFailed,
+}
+
+fn abort_for_stuck_speech() -> ! {
+    tracing::error!(
+        timeout_ms = MAX_SPEECH_SHUTDOWN_WAIT.as_millis(),
+        "speech worker did not stop before the shutdown deadline; aborting to bypass native backend exit handlers"
+    );
+    // A normal exit runs C++ static destructors. ggml/Metal teardown can
+    // abort if one of those handlers races a native inference that ignored
+    // cancellation, so the bounded failure path must skip normal teardown.
+    std::process::abort();
 }
 
 const fn shutdown_ready_to_exit(complete: bool, timed_out: bool, browser: BrowserShutdownOutcome) -> bool {
@@ -30,9 +42,27 @@ impl HorizonApp {
         }
     }
 
-    fn finish_speech_shutdown(&mut self) {
-        if let Some(mut speech) = self.speech.take() {
-            speech.shutdown_and_wait();
+    fn poll_speech_shutdown(&mut self) -> bool {
+        let complete = self
+            .speech
+            .as_mut()
+            .is_none_or(super::super::speech::SpeechSystem::shutdown_is_complete);
+        if complete {
+            self.speech.take();
+        }
+        complete
+    }
+
+    fn wait_for_speech_shutdown(&mut self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.poll_speech_shutdown() {
+                return true;
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
         }
     }
 
@@ -79,13 +109,18 @@ impl HorizonApp {
         if !shutdown_ready_to_exit(complete, timed_out, browser_outcome) {
             return;
         }
+        if !self.poll_speech_shutdown() {
+            if timed_out {
+                abort_for_stuck_speech();
+            }
+            return;
+        }
 
         // Browser sessions publish their committed URL before resolving the
         // teardown signal. Persist that final state only after every driver
         // is known to be finished.
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
-        self.finish_speech_shutdown();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
@@ -160,7 +195,9 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
-        self.finish_speech_shutdown();
+        if !self.wait_for_speech_shutdown(MAX_SPEECH_SHUTDOWN_WAIT) {
+            abort_for_stuck_speech();
+        }
         self.release_active_session_lease();
     }
 }

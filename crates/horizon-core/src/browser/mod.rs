@@ -19,7 +19,7 @@ pub mod manifest;
 pub mod process;
 pub mod session;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -228,6 +228,14 @@ impl BrowserPanelState {
     #[must_use]
     pub fn committed_url_for_persistence(&self) -> Option<&str> {
         self.url.as_deref()
+    }
+
+    /// Profile root this panel was launched with. Persisting it separately
+    /// keeps the profile reachable if the live config changes before the
+    /// panel is next saved.
+    #[must_use]
+    pub fn profile_root_for_persistence(&self) -> Option<&Path> {
+        self.config.profile_root.as_deref()
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {

@@ -242,15 +242,22 @@ fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<
     result
         .get("targetInfos")
         .and_then(|t| t.as_array())
-        .and_then(|targets| {
-            targets
-                .iter()
-                .find(|t| t.get("type").and_then(serde_json::Value::as_str) == Some("page"))
-                .filter(|t| !t.get("attached").and_then(serde_json::Value::as_bool).unwrap_or(false))
-        })
-        .and_then(|t| t.get("targetId"))
-        .and_then(|t| t.as_str())
+        .and_then(|targets| first_available_page_target_id(targets))
         .map(str::to_string)
+}
+
+fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str> {
+    targets
+        .iter()
+        .find(|target| {
+            target.get("type").and_then(serde_json::Value::as_str) == Some("page")
+                && !target
+                    .get("attached")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .and_then(|target| target.get("targetId"))
+        .and_then(serde_json::Value::as_str)
 }
 
 /// Create a fresh page target as a fallback (browser opened without one).
@@ -294,7 +301,21 @@ mod tests {
     use crate::browser::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::profile_dir;
+    use super::{first_available_page_target_id, profile_dir};
+
+    #[test]
+    fn target_selection_skips_attached_pages() {
+        let targets = serde_json::json!([
+            { "targetId": "attached", "type": "page", "attached": true },
+            { "targetId": "worker", "type": "service_worker", "attached": false },
+            { "targetId": "available", "type": "page", "attached": false }
+        ]);
+
+        assert_eq!(
+            first_available_page_target_id(targets.as_array().expect("target list")),
+            Some("available")
+        );
+    }
 
     #[test]
     fn configured_profile_root_confines_unsafe_panel_ids() {

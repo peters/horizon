@@ -196,15 +196,24 @@ impl WorkerHandle {
         register_retiring_worker(&self.life);
     }
 
-    /// Cancel and join this worker so its session and model are released
-    /// before process-level native backend teardown runs.
-    pub(super) fn shutdown_and_wait(&mut self) {
+    /// Poll cancellation without blocking the caller. Once the worker has
+    /// returned, consume its join handle so its session and model are known
+    /// to be released before process-level native backend teardown runs.
+    pub(super) fn shutdown_is_complete(&mut self) -> bool {
         self.begin_shutdown();
-        if let Some(join) = self.join.take()
-            && join.join().is_err()
-        {
+        let Some(join) = self.join.as_ref() else {
+            return true;
+        };
+        if !join.is_finished() {
+            return false;
+        }
+        let Some(join) = self.join.take() else {
+            return true;
+        };
+        if join.join().is_err() {
             tracing::warn!("speech transcription worker panicked during shutdown");
         }
+        true
     }
 
     pub fn spawn(profile: &SpeechProfile, backend: SpeechBackend) -> std::io::Result<Self> {
@@ -555,6 +564,7 @@ fn ensure_session(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
@@ -618,16 +628,49 @@ mod tests {
     }
 
     #[test]
-    fn explicit_shutdown_joins_an_idle_worker() {
+    fn explicit_shutdown_reaps_an_idle_worker() {
         let _test_guard = RETIREMENT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut handle = WorkerHandle::spawn(&SpeechProfile::default(), SpeechBackend::Cpu).expect("spawn worker");
         assert_eq!(handle.life.strong_count(), 1);
 
-        handle.shutdown_and_wait();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !handle.shutdown_is_complete() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         assert_eq!(handle.life.strong_count(), 0);
         assert!(handle.join.is_none());
         assert!(handle.job_tx.is_none());
+    }
+
+    #[test]
+    fn shutdown_poll_does_not_join_a_running_worker() {
+        let (job_tx, _job_rx) = std::sync::mpsc::sync_channel(1);
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let join = std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        });
+        let mut handle = WorkerHandle {
+            job_tx: Some(job_tx),
+            event_rx,
+            shutdown: transcribe_cpp::CancelToken::new(),
+            run_cancels: Arc::new(Mutex::new(HashMap::new())),
+            life: std::sync::Weak::new(),
+            join: Some(join),
+            shutdown_started: false,
+        };
+
+        let started = Instant::now();
+        assert!(!handle.shutdown_is_complete());
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        release_tx.send(()).expect("release fake worker");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !handle.shutdown_is_complete() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(handle.join.is_none());
     }
 
     #[test]
