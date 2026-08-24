@@ -60,7 +60,10 @@ back into large multi-purpose modules.
     paint/render/toolbar helpers split into `workspace/`
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
-  instead of extending a single file.
+  instead of extending a single file. Browser-widget input keeps frame-level
+  coordination in `browser_widget/input.rs`, with independent keyboard/IME and
+  pointer-capture state machines in `browser_widget/input/keyboard.rs` and
+  `browser_widget/input/pointer.rs`.
 
 ## File Size Policy
 
