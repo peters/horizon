@@ -70,7 +70,7 @@ impl BrowserButton {
 /// ride on a `keyDown` event carrying `text` (Chrome then synthesizes the
 /// full keydown/keypress/input DOM sequence); non-printable keys use
 /// `rawKeyDown` with a virtual-key code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BrowserKey {
     ArrowUp,
     ArrowDown,
@@ -152,12 +152,28 @@ impl BrowserKey {
             _ => None,
         }
     }
+
+    #[must_use]
+    pub fn printable_char_with_shift(self, shift: bool) -> Option<char> {
+        self.printable_char().map(|c| if shift { shifted_char(c) } else { c })
+    }
 }
 
 fn vk_for_char(c: char) -> u32 {
     match c {
         'a'..='z' | 'A'..='Z' => (c.to_ascii_uppercase() as u32) - ('A' as u32) + 0x41,
         '0'..='9' => (c as u32) - ('0' as u32) + 0x30,
+        ';' => 0xBA,
+        '=' => 0xBB,
+        ',' => 0xBC,
+        '-' => 0xBD,
+        '.' => 0xBE,
+        '/' => 0xBF,
+        '`' => 0xC0,
+        '[' => 0xDB,
+        '\\' => 0xDC,
+        ']' => 0xDD,
+        '\'' => 0xDE,
         c => c as u32,
     }
 }
@@ -205,6 +221,8 @@ pub enum BrowserInput {
     },
     KeyUp {
         key: BrowserKey,
+        /// Effective DOM key captured on key-down for layout-correct key-up.
+        text: Option<String>,
         modifiers: BrowserModifiers,
     },
     /// Paste-style raw text insertion (IME path; also used for pasting).
@@ -287,33 +305,8 @@ impl BrowserInput {
                 text,
                 modifiers,
                 repeat,
-            } => {
-                // Printable keys (`text` present) use `keyDown` so Chrome
-                // runs the normal keydown→keypress→input pipeline; other
-                // keys use `rawKeyDown`.
-                let ty = if text.is_some() { "keyDown" } else { "rawKeyDown" };
-                let mut params = json!({
-                    "type": ty,
-                    "key": key.dom_key_name(),
-                    "code": key.code_name(),
-                    "windowsVirtualKeyCode": key.vk_code(),
-                    "autoRepeat": repeat,
-                    "modifiers": modifiers.cdp_bits(),
-                });
-                if let Some(text) = text {
-                    params["text"] = json!(text);
-                }
-                ("Input.dispatchKeyEvent", params)
-            }
-            Self::KeyUp { key, modifiers } => (
-                "Input.dispatchKeyEvent",
-                json!({
-                    "type": "keyUp",
-                    "windowsVirtualKeyCode": key.vk_code(),
-                    "code": key.code_name(),
-                    "modifiers": modifiers.cdp_bits(),
-                }),
-            ),
+            } => key_down_cdp(key, text, modifiers, repeat),
+            Self::KeyUp { key, text, modifiers } => key_up_cdp(key, text.as_deref(), modifiers),
             Self::InsertText { text } => ("Input.insertText", json!({ "text": text })),
         }
     }
@@ -326,6 +319,44 @@ impl BrowserInput {
             Self::MousePress { .. } | Self::Wheel { .. } | Self::KeyDown { .. } | Self::InsertText { .. }
         )
     }
+}
+
+fn key_down_cdp(
+    key: BrowserKey,
+    text: Option<String>,
+    modifiers: BrowserModifiers,
+    repeat: bool,
+) -> (&'static str, Value) {
+    // Printable keys (`text` present) use `keyDown` so Chrome runs the normal
+    // keydown→keypress→input pipeline; other keys use `rawKeyDown`.
+    let ty = if text.is_some() { "keyDown" } else { "rawKeyDown" };
+    let dom_key = dispatch_dom_key(key, text.as_deref(), modifiers.shift);
+    let mut params = json!({
+        "type": ty,
+        "key": dom_key,
+        "code": key.code_name(),
+        "windowsVirtualKeyCode": key.vk_code(),
+        "autoRepeat": repeat,
+        "modifiers": modifiers.cdp_bits(),
+    });
+    if let Some(text) = text {
+        params["text"] = json!(text);
+    }
+    ("Input.dispatchKeyEvent", params)
+}
+
+fn key_up_cdp(key: BrowserKey, text: Option<&str>, modifiers: BrowserModifiers) -> (&'static str, Value) {
+    let dom_key = dispatch_dom_key(key, text, modifiers.shift);
+    (
+        "Input.dispatchKeyEvent",
+        json!({
+            "type": "keyUp",
+            "key": dom_key,
+            "windowsVirtualKeyCode": key.vk_code(),
+            "code": key.code_name(),
+            "modifiers": modifiers.cdp_bits(),
+        }),
+    )
 }
 
 impl BrowserKey {
@@ -456,6 +487,17 @@ fn char_dom_key_name(c: char) -> &'static str {
             '8' => "8",
             _ => "9",
         },
+        ';' => ";",
+        '=' => "=",
+        ',' => ",",
+        '-' => "-",
+        '.' => ".",
+        '/' => "/",
+        '`' => "`",
+        '[' => "[",
+        '\\' => "\\",
+        ']' => "]",
+        '\'' => "'",
         _ => "Unidentified",
     }
 }
@@ -505,7 +547,60 @@ fn char_code_name(c: char) -> &'static str {
             '8' => "Digit8",
             _ => "Digit9",
         },
+        ';' => "Semicolon",
+        '=' => "Equal",
+        ',' => "Comma",
+        '-' => "Minus",
+        '.' => "Period",
+        '/' => "Slash",
+        '`' => "Backquote",
+        '[' => "BracketLeft",
+        '\\' => "Backslash",
+        ']' => "BracketRight",
+        '\'' => "Quote",
         _ => "Unidentified",
+    }
+}
+
+fn dispatch_dom_key(key: BrowserKey, text: Option<&str>, shift: bool) -> std::borrow::Cow<'_, str> {
+    if let Some(text) = text
+        && text.chars().count() == 1
+    {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    if shift && let Some(character) = key.printable_char_with_shift(true) {
+        return std::borrow::Cow::Owned(character.to_string());
+    }
+    std::borrow::Cow::Borrowed(key.dom_key_name())
+}
+
+/// Shift-adjusted character for the US-layout physical key map.
+#[must_use]
+pub const fn shifted_char(c: char) -> char {
+    match c {
+        'a'..='z' => c.to_ascii_uppercase(),
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        '`' => '~',
+        other => other,
     }
 }
 
@@ -580,6 +675,60 @@ mod tests {
         assert_eq!(params["type"], "rawKeyDown");
         assert!(params.get("text").is_none());
         assert_eq!(params["autoRepeat"], true);
+    }
+
+    #[test]
+    fn shifted_keys_report_effective_dom_key_and_physical_code() {
+        let modifiers = BrowserModifiers {
+            shift: true,
+            ..BrowserModifiers::none()
+        };
+        let (_, params) = BrowserInput::KeyDown {
+            key: BrowserKey::Char('a'),
+            text: Some("A".to_string()),
+            modifiers,
+            repeat: false,
+        }
+        .cdp();
+        assert_eq!(params["key"], "A");
+        assert_eq!(params["code"], "KeyA");
+        assert_eq!(params["windowsVirtualKeyCode"], 0x41);
+
+        let (_, shortcut) = BrowserInput::KeyDown {
+            key: BrowserKey::Char('1'),
+            text: None,
+            modifiers: BrowserModifiers {
+                ctrl: true,
+                ..modifiers
+            },
+            repeat: false,
+        }
+        .cdp();
+        assert_eq!(shortcut["key"], "!");
+        assert_eq!(shortcut["code"], "Digit1");
+    }
+
+    #[test]
+    fn punctuation_uses_oem_virtual_keys_and_css_codes() {
+        let cases = [
+            (';', "Semicolon", 0xBA),
+            ('=', "Equal", 0xBB),
+            (',', "Comma", 0xBC),
+            ('-', "Minus", 0xBD),
+            ('.', "Period", 0xBE),
+            ('/', "Slash", 0xBF),
+            ('`', "Backquote", 0xC0),
+            ('[', "BracketLeft", 0xDB),
+            ('\\', "Backslash", 0xDC),
+            (']', "BracketRight", 0xDD),
+            ('\'', "Quote", 0xDE),
+        ];
+        for (character, code, virtual_key) in cases {
+            let key = BrowserKey::Char(character);
+            assert_eq!(key.code_name(), code);
+            assert_eq!(key.vk_code(), virtual_key);
+            assert_eq!(key.dom_key_name(), character.to_string());
+        }
     }
 
     #[test]

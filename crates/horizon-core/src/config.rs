@@ -676,6 +676,12 @@ impl Config {
     ///
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
+        if !(1..=100).contains(&self.browser.quality) {
+            return Err(Error::Config(format!(
+                "browser.quality must be between 1 and 100 (got {})",
+                self.browser.quality
+            )));
+        }
         let shortcuts = self.shortcuts.resolve()?;
         crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
@@ -995,6 +1001,15 @@ mod tests {
 
         assert!(error.to_string().contains("conflicts with"));
         assert!(error.to_string().contains("toggle_sidebar"));
+    }
+
+    #[test]
+    fn browser_quality_must_fit_cdp_range() {
+        let error = Config::from_yaml("browser:\n  quality: 101\n").expect_err("quality must be rejected");
+        assert!(error.to_string().contains("browser.quality must be between 1 and 100"));
+
+        Config::from_yaml("browser:\n  quality: 1\n").expect("minimum quality should be accepted");
+        Config::from_yaml("browser:\n  quality: 100\n").expect("maximum quality should be accepted");
     }
 
     #[test]

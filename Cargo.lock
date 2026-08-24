@@ -1524,7 +1524,7 @@ name = "horizon-core"
 version = "0.2.7"
 dependencies = [
  "alacritty_terminal",
- "base64 0.22.1",
+ "base64 0.23.1",
  "comrak",
  "git2",
  "profiling",

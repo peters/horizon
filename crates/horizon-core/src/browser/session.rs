@@ -22,12 +22,13 @@
 //! - the screencast is implicitly terminated by navigation, so it is
 //!   restarted on every top-level `Page.frameNavigated`.
 
+mod commands;
 mod events;
 
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::browser::cdp::CdpLink;
+use crate::browser::cdp::{CdpError, CdpLink};
 use crate::browser::frames::FrameSlot;
 use crate::browser::manifest::{self, BrowserManifest};
 use crate::browser::process::ChromeProcess;
@@ -40,6 +41,7 @@ pub enum BrowserEvent {
     Ready,
     Title(String),
     UrlChanged(String),
+    NavigationFailed(String),
     Loading(bool),
     /// A new decoded frame is available in the panel's frame slot.
     Frame {
@@ -125,6 +127,10 @@ const SIGNAL_MIN_INTERVAL: Duration = Duration::from_millis(250);
 /// Pointer-move storms rewrite the manifest on every event otherwise; the
 /// 5 s user-active TTL tolerates a 1 s refresh.
 const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
+/// Wait until a resize gesture settles before forcing one current-viewport
+/// screenshot. Chrome can update device metrics without emitting a
+/// screencast frame, which otherwise leaves the previous frame stretched.
+const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -231,8 +237,9 @@ fn run_driver(
             &serde_json::json!({ "targetId": target_id, "flatten": true }),
             None,
         )
+        .result
         .ok()
-        .and_then(|(result, _)| result.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
+        .and_then(|result| result.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
     else {
         let _ = event_tx.send(BrowserEvent::Warning("initial attach failed".to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -294,6 +301,9 @@ fn run_loop(
         // 3b. Delayed post-load title fetch.
         state.tick_title_fetch(link, event_tx, frame_slot);
 
+        // 3c. One fresh frame after a viewport-resize burst settles.
+        state.tick_viewport_capture(link);
+
         // 4. Backoff-retried screencast restart / re-attach.
         state.pending_restart_tick(link, event_tx, frame_slot);
 
@@ -313,8 +323,9 @@ fn run_loop(
 
 /// First existing `page` target, if any.
 fn first_page_target(link: &mut CdpLink) -> Option<String> {
-    let (result, _) = link
+    let result = link
         .call_and_drain(CALL_TIMEOUT, "Target.getTargets", &serde_json::json!({}), None)
+        .result
         .ok()?;
     result
         .get("targetInfos")
@@ -337,13 +348,14 @@ fn create_page_target(link: &mut CdpLink, config: &BrowserSessionConfig) -> Opti
         .clone()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| "about:blank".to_string());
-    let (result, _) = link
+    let result = link
         .call_and_drain(
             CALL_TIMEOUT,
             "Target.createTarget",
             &serde_json::json!({ "url": url }),
             None,
         )
+        .result
         .ok()?;
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
 }
@@ -357,7 +369,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
     // profile directory, or concurrent panels would fight over Chrome's
     // profile lock.
     let profile_dir = match &config.browser.profile_root {
-        Some(root) => root.join(&config.panel_local_id),
+        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy()).join(&config.panel_local_id),
         None => home.browser_profile_dir(&config.panel_local_id),
     };
     Ok(crate::browser::process::ChromeLaunch {
@@ -377,8 +389,11 @@ struct DriverState {
     browser_ws: String,
     session_id: Option<String>,
     target_id: Option<String>,
+    main_frame_id: Option<String>,
     viewport_w: u32,
     viewport_h: u32,
+    pending_viewport_capture_at: Option<Instant>,
+    viewport_capture_request_id: Option<u64>,
     url: String,
     title: String,
     initial_navigated: bool,
@@ -406,7 +421,7 @@ struct DriverState {
     last_manifest_write: Instant,
     manifest_dirty: bool,
     last_signal_check: Instant,
-    last_user_active_stamp: Instant,
+    last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
     handoff_seen: Option<i64>,
 }
@@ -423,8 +438,11 @@ impl DriverState {
             browser_ws: browser_ws.to_string(),
             session_id: None,
             target_id: None,
+            main_frame_id: None,
             viewport_w: config.width,
             viewport_h: config.height,
+            pending_viewport_capture_at: None,
+            viewport_capture_request_id: None,
             url,
             title: String::new(),
             initial_navigated: false,
@@ -441,7 +459,7 @@ impl DriverState {
             last_manifest_write: Instant::now(),
             manifest_dirty: true,
             last_signal_check: Instant::now(),
-            last_user_active_stamp: Instant::now(),
+            last_user_active_stamp: None,
             owner_seen: None,
             handoff_seen: None,
         }
@@ -463,11 +481,11 @@ impl DriverState {
         params: &serde_json::Value,
         session: Option<&str>,
     ) -> Result<serde_json::Value, crate::browser::cdp::CdpError> {
-        let (result, drained) = link.call_and_drain(CALL_TIMEOUT, method, params, session)?;
-        for message in drained {
+        let outcome = link.call_and_drain(CALL_TIMEOUT, method, params, session);
+        for message in outcome.drained {
             self.handle_message(link, event_tx, frame_slot, message);
         }
-        Ok(result)
+        outcome.result
     }
 
     fn send_page_command(
@@ -477,12 +495,50 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         method: &str,
         params: &serde_json::Value,
-    ) {
+    ) -> Result<serde_json::Value, CdpError> {
         let Some(session) = self.session_id.clone() else {
-            return;
+            return Err(CdpError::NoPageSession {
+                method: method.to_string(),
+            });
         };
-        if let Err(error) = self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str())) {
-            tracing::debug!(target: "browser", "cdp {method} failed: {error}");
+        self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
+    }
+
+    fn navigate_to(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        frame_slot: &Arc<FrameSlot>,
+        url: &str,
+    ) {
+        let result = self.send_page_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.navigate",
+            &serde_json::json!({ "url": url }),
+        );
+        match result {
+            Ok(result) => {
+                if let Some(error) = result.get("errorText").and_then(serde_json::Value::as_str)
+                    && !error.is_empty()
+                {
+                    let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
+                        "could not navigate to {url}: {error}"
+                    )));
+                    return;
+                }
+                // The committed URL remains authoritative and arrives via a
+                // navigation event. Do not overwrite it with a merely
+                // requested value.
+                self.pending_restart_at = Some(Instant::now());
+                let _ = event_tx.send(BrowserEvent::Loading(true));
+            }
+            Err(error) => {
+                let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
+                    "could not navigate to {url}: {error}"
+                )));
+            }
         }
     }
 
@@ -545,17 +601,11 @@ impl DriverState {
         // One-shot: navigate to the panel's initial URL after first attach.
         if !self.initial_navigated {
             self.initial_navigated = true;
-            if let Some(ref initial) = self.config.initial_url
+            let initial_url = self.config.initial_url.clone();
+            if let Some(initial) = initial_url
                 && initial != "about:blank"
             {
-                self.send_page_command(
-                    link,
-                    event_tx,
-                    frame_slot,
-                    "Page.navigate",
-                    &serde_json::json!({ "url": initial }),
-                );
-                self.pending_restart_at = Some(Instant::now());
+                self.navigate_to(link, event_tx, frame_slot, &initial);
             }
         }
     }
@@ -619,6 +669,21 @@ impl DriverState {
         }
     }
 
+    fn note_reattach_failure(&mut self, event_tx: &mpsc::Sender<BrowserEvent>, message: &str) {
+        self.reattach_failures += 1;
+        if self.reattach_failures >= 5 {
+            self.reattach_failures = 0;
+            self.pending_reattach = false;
+            self.pending_restart_at = None;
+            let _ = event_tx.send(BrowserEvent::Warning(format!(
+                "could not re-attach to the page: {message}; retry to restart"
+            )));
+        } else {
+            self.pending_reattach = true;
+            self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
+        }
+    }
+
     fn pending_restart_tick(
         &mut self,
         link: &mut CdpLink,
@@ -646,7 +711,8 @@ impl DriverState {
                     Err(error) => {
                         tracing::warn!(target: "browser", "re-attach request failed: {error}");
                         self.reattach_in_flight = false;
-                        self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
+                        self.reattach_request_id = None;
+                        self.note_reattach_failure(event_tx, &error.to_string());
                     }
                 }
             }
@@ -662,145 +728,6 @@ impl DriverState {
         if self.session_id.is_some() {
             self.start_screencast(link, event_tx, frame_slot);
         }
-    }
-
-    /// Process every pending UI command. Returns `true` when `Stop` arrived.
-    fn drain_commands(
-        &mut self,
-        link: &mut CdpLink,
-        command_rx: &mpsc::Receiver<BrowserCommand>,
-        event_tx: &mpsc::Sender<BrowserEvent>,
-        frame_slot: &Arc<FrameSlot>,
-    ) -> bool {
-        while let Ok(command) = command_rx.try_recv() {
-            match command {
-                BrowserCommand::Stop => return true,
-                BrowserCommand::Navigate(url) => {
-                    self.url.clone_from(&url);
-                    self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(
-                        link,
-                        event_tx,
-                        frame_slot,
-                        "Page.navigate",
-                        &serde_json::json!({ "url": url }),
-                    );
-                    self.write_manifest(true);
-                    let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-                    let _ = event_tx.send(BrowserEvent::Loading(true));
-                }
-                BrowserCommand::Reload => {
-                    self.pending_restart_at = Some(Instant::now());
-                    self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
-                }
-                BrowserCommand::Back => self.navigate_history(link, event_tx, frame_slot, -1),
-                BrowserCommand::Forward => self.navigate_history(link, event_tx, frame_slot, 1),
-                BrowserCommand::SetViewport { width, height } => {
-                    if width > 0 && height > 0 && (width, height) != (self.viewport_w, self.viewport_h) {
-                        self.viewport_w = width;
-                        self.viewport_h = height;
-                        self.send_page_command(
-                            link,
-                            event_tx,
-                            frame_slot,
-                            "Emulation.setDeviceMetricsOverride",
-                            &serde_json::json!({
-                                "width": width,
-                                "height": height,
-                                "deviceScaleFactor": 1,
-                                "mobile": false,
-                            }),
-                        );
-                    }
-                }
-                BrowserCommand::Input(input) => {
-                    // Id'd fire-and-forget: input must not block the driver
-                    // loop on a roundtrip (a request to a detaching session
-                    // would stall every frame for the full call timeout),
-                    // and Chrome silently drops id-less requests. Unmatched
-                    // responses are drained and ignored by the main loop.
-                    let (method, params) = input.cdp();
-                    if let Some(session) = self.session_id.clone() {
-                        let _ = link.send_request(method, &params, Some(session.as_str()));
-                    }
-                    self.stamp_user_active();
-                }
-                BrowserCommand::HandoffDone => {
-                    self.resolve_handoff();
-                }
-            }
-        }
-        false
-    }
-
-    /// `History.back`/`forward` are JavaScript, not CDP: step through the
-    /// page's navigation history explicitly instead.
-    fn navigate_history(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
-        frame_slot: &Arc<FrameSlot>,
-        delta: i64,
-    ) {
-        let Some(session) = self.session_id.clone() else {
-            return;
-        };
-        let Ok(history) = self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.getNavigationHistory",
-            &serde_json::json!({}),
-            Some(session.as_str()),
-        ) else {
-            return;
-        };
-        let Some(current) = history.get("currentIndex").and_then(serde_json::Value::as_i64) else {
-            return;
-        };
-        let Some(entries) = history.get("entries").and_then(serde_json::Value::as_array) else {
-            return;
-        };
-        if entries.is_empty() {
-            return;
-        }
-        let last = i64::try_from(entries.len()).unwrap_or(i64::MAX) - 1;
-        let target = (current + delta).clamp(0, last);
-        if target == current {
-            return;
-        }
-        let entry_index = usize::try_from(target).unwrap_or(0);
-        // Chrome's getNavigationHistory response names the field `id` even
-        // though the navigateToHistoryEntry request takes `entryId`; accept
-        // both so this keeps working across Chrome versions.
-        let entry_value = &entries[entry_index];
-        let Some(entry_id) = entry_value
-            .get("entryId")
-            .or_else(|| entry_value.get("id"))
-            .and_then(serde_json::Value::as_i64)
-        else {
-            return;
-        };
-        self.pending_restart_at = Some(Instant::now());
-        self.send_page_command(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.navigateToHistoryEntry",
-            &serde_json::json!({ "entryId": entry_id }),
-        );
-    }
-
-    /// Stamp the manifest so an agent can tell the user is driving right now.
-    fn stamp_user_active(&mut self) {
-        if self.last_user_active_stamp.elapsed() < USER_ACTIVE_STAMP_INTERVAL {
-            return;
-        }
-        self.last_user_active_stamp = Instant::now();
-        self.write_manifest_extra(true, |manifest| {
-            manifest.user_active = true;
-            manifest.user_active_at = manifest::now_millis();
-        });
     }
 
     /// User clicked "hand back": mark the pending handoff done so the

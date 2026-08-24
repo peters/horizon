@@ -1,12 +1,13 @@
 //! Decoded screencast frames shared between the driver thread and the UI.
 //!
 //! The driver thread decodes JPEG frames into a double-buffered slot and
-//! signals the UI with a lightweight "frame arrived" event; the UI borrows
-//! the pixels for texture upload. No frame payload ever crosses the mpsc
+//! signals the UI with a lightweight "frame arrived" event; the UI clones
+//! an `Arc` for texture upload. No frame payload ever crosses the mpsc
 //! channel.
 
 use std::sync::Arc;
 
+use base64::Engine;
 use zune_jpeg::JpegDecoder;
 
 /// A single decoded frame (RGB8, top-down, tightly packed).
@@ -30,7 +31,7 @@ impl FrameData {
 /// as read-only UI data.
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlotInner {
-    pub data: Option<FrameData>,
+    data: Option<Arc<FrameData>>,
     /// Reused decode target so steady-state frames do not allocate.
     decode_buffer: Vec<u8>,
     next_seq: u64,
@@ -50,49 +51,81 @@ impl FrameSlot {
 
     /// Decode a JPEG frame into the slot and bump `seq`.
     ///
-    /// Steady state allocates nothing: the decode target is the previous
-    /// frame's pixel buffer, which becomes free the moment the new frame
-    /// replaces it.
+    /// The publication lock is held only while taking a reusable buffer and
+    /// swapping the completed frame. JPEG parsing and decoding happen without
+    /// the lock, so the render thread never waits on codec work.
     ///
     /// Returns the new sequence number, or `None` on decode failure (the
     /// previous frame is kept).
     pub fn store_jpeg(&self, jpeg: &[u8]) -> Option<u64> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut decoder = JpegDecoder::new(std::io::Cursor::new(jpeg));
         let output_size = decoder.output_buffer_size().or_else(|| {
             decoder.decode_headers().ok()?;
             decoder.output_buffer_size()
         })?;
-        let mut buffer = std::mem::take(&mut inner.decode_buffer);
+        let mut buffer = {
+            let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut inner.decode_buffer)
+        };
         buffer.resize(output_size, 0);
         if decoder.decode_into(&mut buffer).is_err() {
-            inner.decode_buffer = buffer;
+            self.return_decode_buffer(buffer);
             return None;
         }
-        let info = decoder.info()?;
+        let Some(info) = decoder.info() else {
+            self.return_decode_buffer(buffer);
+            return None;
+        };
+
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.next_seq += 1;
-        // The old frame's buffer becomes the next decode target.
-        inner.decode_buffer = inner.data.take().map_or_else(Vec::new, |old| old.rgb);
-        inner.data = Some(FrameData {
+        let frame = Arc::new(FrameData {
             width: u32::from(info.width),
             height: u32::from(info.height),
             rgb: buffer,
             seq: inner.next_seq,
         });
+        let old = inner.data.replace(frame);
+        if let Some(old) = old
+            && let Ok(old) = Arc::try_unwrap(old)
+        {
+            inner.decode_buffer = old.rgb;
+        }
         Some(inner.next_seq)
+    }
+
+    /// Decode a base64-encoded JPEG and publish it as the newest frame.
+    #[must_use]
+    pub fn store_base64_jpeg(&self, data: &str) -> Option<u64> {
+        let jpeg = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+        self.store_jpeg(&jpeg)
+    }
+
+    fn return_decode_buffer(&self, buffer: Vec<u8>) {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.decode_buffer = buffer;
     }
 
     /// Drop the stored frame (e.g. when the session stops) so the UI falls
     /// back to its placeholder instead of showing stale content.
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.data = None;
+        if let Some(data) = inner.data.take()
+            && let Ok(data) = Arc::try_unwrap(data)
+        {
+            inner.decode_buffer = data.rgb;
+        }
     }
 
-    /// Borrow the newest frame, if any. The caller must finish using the
-    /// guard promptly; the driver may wait on the same lock.
-    pub fn latest(&self) -> std::sync::MutexGuard<'_, FrameSlotInner> {
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// Clone the newest frame handle, if any. Pixel conversion and texture
+    /// upload can then proceed without holding the publication lock.
+    #[must_use]
+    pub fn latest(&self) -> Option<Arc<FrameData>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .data
+            .clone()
     }
 }
 
@@ -127,15 +160,14 @@ mod tests {
     #[test]
     fn decodes_and_bumps_seq() {
         let slot = FrameSlot::new();
-        assert!(slot.latest().data.is_none());
+        assert!(slot.latest().is_none());
         let seq = slot.store_jpeg(JPEG_1X1).expect("decode 1x1 jpeg");
         assert_eq!(seq, 1);
-        let guard = slot.latest();
-        let data = guard.data.as_ref().unwrap();
+        let data = slot.latest().unwrap();
         assert_eq!((data.width, data.height), (1, 1));
         assert_eq!(data.rgb.len(), 3);
         assert_eq!(data.seq, 1);
-        drop(guard);
+        drop(data);
         let seq2 = slot.store_jpeg(JPEG_1X1).unwrap();
         assert_eq!(seq2, 2);
     }
@@ -144,5 +176,14 @@ mod tests {
     fn rejects_garbage() {
         let slot = FrameSlot::new();
         assert!(slot.store_jpeg(b"not a jpeg at all").is_none());
+    }
+
+    #[test]
+    fn decodes_base64_jpeg() {
+        let slot = FrameSlot::new();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(JPEG_1X1);
+
+        assert_eq!(slot.store_base64_jpeg(&encoded), Some(1));
+        assert_eq!(slot.latest().map(|frame| (frame.width, frame.height)), Some((1, 1)));
     }
 }

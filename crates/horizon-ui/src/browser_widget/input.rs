@@ -1,6 +1,7 @@
 //! egui → CDP input translation for the focused browser panel.
 
 use egui::{Event, Key, Modifiers, PointerButton, Ui};
+use horizon_core::AppShortcuts;
 use horizon_core::browser::{
     BrowserButton, BrowserCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
 };
@@ -14,10 +15,18 @@ const BUTTON_RIGHT: u32 = 4;
 
 /// Focus/interaction flags for one frame.
 #[derive(Clone, Copy)]
-pub(crate) struct InputFlags {
+pub(crate) struct InputFlags<'a> {
     pub(crate) is_focused: bool,
     pub(crate) interactive: bool,
     pub(crate) url_focused: bool,
+    pub(crate) shortcuts: &'a AppShortcuts,
+    pub(crate) exit_fullscreen_shortcut_owner: ShortcutOwner,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ShortcutOwner {
+    App,
+    Page,
 }
 
 pub fn handle(
@@ -26,7 +35,7 @@ pub fn handle(
     state: &mut BrowserUiState,
     body: Option<egui::Rect>,
     frame_size: Option<[f32; 2]>,
-    flags: InputFlags,
+    flags: InputFlags<'_>,
 ) {
     if !flags.interactive {
         return;
@@ -35,7 +44,13 @@ pub fn handle(
         pointer_events(ui, browser, state, rect, frame_size);
     }
     if flags.is_focused && !flags.url_focused {
-        keyboard_events(ui, browser);
+        keyboard_events(
+            ui,
+            browser,
+            state,
+            flags.shortcuts,
+            matches!(flags.exit_fullscreen_shortcut_owner, ShortcutOwner::App),
+        );
     }
 }
 
@@ -53,12 +68,7 @@ fn pointer_events(
     // terminal widget's input.
     let from_global = ctx.layer_transform_from_global(ui.layer_id());
     let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
-    let (buttons, frame_pos) = ctx.input(|i| {
-        let buttons = (if i.pointer.primary_down() { BUTTON_LEFT } else { 0 })
-            | (if i.pointer.middle_down() { BUTTON_MIDDLE } else { 0 })
-            | (if i.pointer.secondary_down() { BUTTON_RIGHT } else { 0 });
-        (buttons, i.pointer.interact_pos())
-    });
+    let frame_pos = ctx.input(|i| i.pointer.interact_pos());
     let modifiers = key_modifiers(ui);
     // Frame-end pointer position: only used for wheel events, which carry
     // no per-event position.
@@ -69,15 +79,17 @@ fn pointer_events(
     // rendered frame; sampling only the frame-end position would collapse
     // the whole drag to one point. A panel only owns a press that started
     // inside its body, so a drag released over another panel (or the
-    // canvas) still ends with exactly one release. Chrome coalesces
-    // mouseMoved messages that arrive in one batch to the last position,
-    // so only the final move of the frame is forwarded.
-    let mut pending_move: Option<(f64, f64)> = None;
+    // canvas) still ends with exactly one release. Chrome coalesces adjacent
+    // mouseMoved messages, so only the final move in each adjacent run is
+    // forwarded while button and wheel ordering is preserved.
+    let mut event_buttons = state.captured_button.map_or(0, button_mask);
+    let mut pending_move: Option<(f64, f64, u32)> = None;
     for event in ctx.input(|i| i.events.clone()) {
         match event {
             Event::PointerButton {
                 pos, button, pressed, ..
             } => {
+                flush_pending_move(browser, &mut pending_move);
                 let Some(browser_button) = egui_button(button) else {
                     continue;
                 };
@@ -87,27 +99,26 @@ fn pointer_events(
                     if rect.contains(p) {
                         state.captured_button = Some(browser_button);
                         state.last_mouse = Some(p);
+                        event_buttons |= button_mask(browser_button);
                         browser.send(BrowserCommand::Input(BrowserInput::MousePress {
                             x,
                             y,
                             button: browser_button,
                             click_count: 1,
-                            buttons: buttons | button_mask(browser_button),
+                            buttons: event_buttons,
                             modifiers,
                         }));
                     }
                 } else if state.captured_button == Some(browser_button) {
                     state.captured_button = None;
                     state.last_mouse = Some(p);
-                    // A release supersedes any buffered move at the same
-                    // spot: drop it to keep the CDP stream minimal.
-                    pending_move = None;
+                    event_buttons &= !button_mask(browser_button);
                     browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
                         x,
                         y,
                         button: browser_button,
                         click_count: 1,
-                        buttons,
+                        buttons: event_buttons,
                         modifiers,
                     }));
                 }
@@ -121,29 +132,31 @@ fn pointer_events(
                 if tracking && state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
                     let (x, y) = to_page_coords(rect, frame_size, p);
                     state.last_mouse = Some(p);
-                    pending_move = Some((x, y));
+                    pending_move = Some((x, y, event_buttons));
                 }
             }
             // The pointer left the window mid-drag: end the drag where we
             // last saw it instead of stranding Chrome's button state down.
             Event::PointerGone => {
+                flush_pending_move(browser, &mut pending_move);
                 if let Some(button) = state.captured_button.take()
                     && let Some(p) = state.last_mouse
                 {
                     let (x, y) = to_page_coords(rect, frame_size, p);
-                    pending_move = None;
+                    event_buttons &= !button_mask(button);
                     browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
                         x,
                         y,
                         button,
                         click_count: 1,
-                        buttons: 0,
+                        buttons: event_buttons,
                         modifiers,
                     }));
-                    state.last_mouse = None;
                 }
+                state.last_mouse = None;
             }
             Event::MouseWheel { unit, delta, .. } => {
+                flush_pending_move(browser, &mut pending_move);
                 if let Some(p) = wheel_pos {
                     let scale = match unit {
                         egui::MouseWheelUnit::Point => 1.0,
@@ -160,10 +173,14 @@ fn pointer_events(
                     }));
                 }
             }
-            _ => {}
+            _ => flush_pending_move(browser, &mut pending_move),
         }
     }
-    if let Some((x, y)) = pending_move {
+    flush_pending_move(browser, &mut pending_move);
+}
+
+fn flush_pending_move(browser: &BrowserPanelState, pending_move: &mut Option<(f64, f64, u32)>) {
+    if let Some((x, y, buttons)) = pending_move.take() {
         browser.send(BrowserCommand::Input(BrowserInput::MouseMove { x, y, buttons }));
     }
 }
@@ -178,43 +195,33 @@ fn egui_button(button: PointerButton) -> Option<BrowserButton> {
     }
 }
 
-fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
-    let ctx = ui.ctx();
-    let events = ctx.input(|i| i.events.clone());
-    // Characters we deliver via the Key event's `text` (CDP `char`);
-    // egui also delivers them as `Event::Text`, so those are deduped below.
-    // The set must mirror exactly what the Key arm sends — including the
-    // shift adjustment — or Shift+letter would type twice.
-    let mut key_chars: Vec<char> = Vec::new();
-    for event in &events {
-        if let Event::Key {
-            key,
-            pressed,
-            repeat,
-            modifiers,
-            ..
-        } = event
-            && *pressed
-            && !*repeat
-            && !(modifiers.ctrl || modifiers.command || modifiers.alt)
-            && let Some(c) = key_to_browser_key(*key).and_then(BrowserKey::printable_char)
-        {
-            key_chars.push(if modifiers.shift { shift_char(c) } else { c });
-        }
-    }
-    for event in events {
+fn keyboard_events(
+    ui: &Ui,
+    browser: &mut BrowserPanelState,
+    state: &mut BrowserUiState,
+    shortcuts: &AppShortcuts,
+    exit_fullscreen_shortcut_active: bool,
+) {
+    let KeyboardFrameEvents {
+        events,
+        key_texts,
+        mut key_chars,
+        mut shortcut_chars,
+        shortcut_presses,
+    } = collect_keyboard_frame_events(ui, shortcuts, exit_fullscreen_shortcut_active);
+    for (event_index, event) in events.into_iter().enumerate() {
         match event {
             Event::Text(text) if !text.is_empty() => {
-                let duplicate =
-                    text.chars().count() == 1 && text.chars().next().is_some_and(|c| key_chars.contains(&c));
-                if !duplicate {
+                let shortcut_text = take_matching_single_char(&text, &mut shortcut_chars);
+                let duplicate_key_text = take_matching_single_char(&text, &mut key_chars);
+                if !shortcut_text && !duplicate_key_text {
                     browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
                 }
             }
-            // egui_winit turns Ctrl/Cmd+V into a global Paste event (the
-            // URL bar consumes its own copy while focused; the page gets
-            // the text via CDP insertText, matching a native paste).
-            Event::Paste(text) if !text.is_empty() => {
+            // egui_winit turns Ctrl/Cmd+V into a global Paste event (the URL
+            // bar consumes its own copy while focused). Both paste and IME
+            // commits reach the page as one CDP insertText operation.
+            Event::Ime(egui::ImeEvent::Commit(text)) | Event::Paste(text) if !text.is_empty() => {
                 browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
             }
             Event::Key {
@@ -223,90 +230,216 @@ fn keyboard_events(ui: &Ui, browser: &mut BrowserPanelState) {
                 repeat,
                 modifiers,
                 ..
-            } => {
-                if !pressed {
-                    // The press side swallowed the reload shortcuts (F5,
-                    // Ctrl/Cmd+R) without forwarding a keydown; drop the
-                    // orphan keyup so the page never sees a release with no
-                    // press. Plain R and plain F5 have no other meaning,
-                    // so nothing page-visible is lost.
-                    if key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.command)) {
-                        continue;
-                    }
-                    if let Some(browser_key) = key_to_browser_key(key) {
-                        browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
-                            key: browser_key,
-                            modifiers: to_browser_modifiers(modifiers),
-                        }));
-                    }
-                    continue;
-                }
-                // Panel-level shortcuts (first press only; held keys keep
-                // going to the page).
-                if !repeat && (key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.command))) {
-                    browser.send(horizon_core::browser::BrowserCommand::Reload);
-                    continue;
-                }
-                let Some(browser_key) = key_to_browser_key(key) else {
-                    continue;
-                };
-                let modifiers = to_browser_modifiers(modifiers);
-                // Shortcut chords (Ctrl/Cmd/Alt + key) go out as raw key
-                // events so the page sees them; plain or Shift chords
-                // deliver the (shift-adjusted) character. Held-key repeats
-                // are forwarded with `autoRepeat` so e.g. Backspace works.
-                let text = browser_key
-                    .printable_char()
-                    .map(|c| if modifiers.shift { shift_char(c) } else { c })
-                    .map(|c| c.to_string())
-                    .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
-                browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
-                    key: browser_key,
-                    text,
-                    modifiers,
+            } => handle_key_event(
+                browser,
+                state,
+                BrowserKeyEvent {
+                    key,
+                    pressed,
                     repeat,
-                }));
-            }
+                    modifiers,
+                    key_text: key_texts[event_index],
+                    app_shortcut: shortcut_presses[event_index],
+                },
+            ),
             _ => {}
         }
     }
 }
 
-/// Shift-adjusted character for the US layout (letters + the symbols the
-/// key map covers).
-fn shift_char(c: char) -> char {
-    match c {
-        'a'..='z' => c.to_ascii_uppercase(),
-        '1' => '!',
-        '2' => '@',
-        '3' => '#',
-        '4' => '$',
-        '5' => '%',
-        '6' => '^',
-        '7' => '&',
-        '8' => '*',
-        '9' => '(',
-        '0' => ')',
-        '-' => '_',
-        '=' => '+',
-        '[' => '{',
-        ']' => '}',
-        '\\' => '|',
-        ';' => ':',
-        '\'' => '"',
-        ',' => '<',
-        '.' => '>',
-        '/' => '?',
-        '`' => '~',
-        other => other,
+struct KeyboardFrameEvents {
+    events: Vec<Event>,
+    key_texts: Vec<Option<char>>,
+    key_chars: Vec<char>,
+    shortcut_chars: Vec<char>,
+    shortcut_presses: Vec<bool>,
+}
+
+fn collect_keyboard_frame_events(
+    ui: &Ui,
+    shortcuts: &AppShortcuts,
+    exit_fullscreen_shortcut_active: bool,
+) -> KeyboardFrameEvents {
+    let events = ui.ctx().input(|i| i.events.clone());
+    let shortcut_presses: Vec<bool> = events
+        .iter()
+        .map(|event| app_shortcut_press(event, shortcuts, exit_fullscreen_shortcut_active))
+        .collect();
+    // Pair each printable key-down with its adjacent committed text. That text
+    // is layout-authoritative (unlike a US-layout Shift prediction) and is
+    // also removed from the later Event::Text path to avoid double insertion.
+    let key_texts: Vec<Option<char>> = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            if shortcut_presses[index] {
+                return None;
+            }
+            if let Event::Key {
+                key,
+                pressed,
+                modifiers,
+                ..
+            } = event
+                && *pressed
+                && !(modifiers.ctrl || modifiers.mac_cmd || modifiers.alt)
+                && let Some(browser_key) = key_to_browser_key(*key)
+            {
+                committed_text_after_key(&events, index)
+                    .or_else(|| browser_key.printable_char_with_shift(modifiers.shift))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let key_chars = key_texts.iter().flatten().copied().collect();
+    let shortcut_chars = shortcut_presses
+        .iter()
+        .enumerate()
+        .filter(|(_, suppressed)| **suppressed)
+        .filter_map(|(index, _)| committed_text_after_key(&events, index))
+        .collect();
+    KeyboardFrameEvents {
+        events,
+        key_texts,
+        key_chars,
+        shortcut_chars,
+        shortcut_presses,
     }
+}
+
+fn take_matching_single_char(text: &str, candidates: &mut Vec<char>) -> bool {
+    (text.chars().count() == 1)
+        .then(|| text.chars().next())
+        .flatten()
+        .and_then(|character| candidates.iter().position(|candidate| *candidate == character))
+        .is_some_and(|index| {
+            candidates.swap_remove(index);
+            true
+        })
+}
+
+#[derive(Clone, Copy)]
+struct BrowserKeyEvent {
+    key: Key,
+    pressed: bool,
+    repeat: bool,
+    modifiers: Modifiers,
+    key_text: Option<char>,
+    app_shortcut: bool,
+}
+
+fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, event: BrowserKeyEvent) {
+    let BrowserKeyEvent {
+        key,
+        pressed,
+        repeat,
+        modifiers,
+        key_text,
+        app_shortcut,
+    } = event;
+    if key == Key::Enter && state.url_submit_enter_pending {
+        if !pressed {
+            state.url_submit_enter_pending = false;
+        }
+        return;
+    }
+    let reload_shortcut = key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.mac_cmd));
+    let browser_key = key_to_browser_key(key);
+    if app_shortcut {
+        if let Some(browser_key) = browser_key {
+            state.suppressed_shortcut_keys.insert(browser_key);
+            state.pressed_key_text.remove(&browser_key);
+        }
+        return;
+    }
+    if consume_suppressed_key(state, browser_key, pressed) {
+        return;
+    }
+    if reload_shortcut {
+        if pressed {
+            if let Some(browser_key) = browser_key {
+                // Modifiers can be released before the key. Remember the
+                // consumed press so that later bare key-up cannot reach the
+                // page without a matching key-down.
+                state.suppressed_shortcut_keys.insert(browser_key);
+                state.pressed_key_text.remove(&browser_key);
+            }
+            // Consume every repeat in a held shortcut, but reload only once.
+            if !repeat {
+                browser.send(BrowserCommand::Reload);
+            }
+        }
+        return;
+    }
+    if !pressed {
+        if let Some(browser_key) = browser_key {
+            browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+                key: browser_key,
+                text: state.pressed_key_text.remove(&browser_key),
+                modifiers: to_browser_modifiers(modifiers),
+            }));
+        }
+        return;
+    }
+    let Some(browser_key) = browser_key else {
+        return;
+    };
+    let modifiers = to_browser_modifiers(modifiers);
+    let text = key_text
+        .map(|character| character.to_string())
+        .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
+    if let Some(text) = &text {
+        state.pressed_key_text.insert(browser_key, text.clone());
+    } else {
+        state.pressed_key_text.remove(&browser_key);
+    }
+    browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        key: browser_key,
+        text,
+        modifiers,
+        repeat,
+    }));
+}
+
+fn consume_suppressed_key(state: &mut BrowserUiState, key: Option<BrowserKey>, pressed: bool) -> bool {
+    let Some(key) = key.filter(|key| state.suppressed_shortcut_keys.contains(key)) else {
+        return false;
+    };
+    if !pressed {
+        state.suppressed_shortcut_keys.remove(&key);
+        state.pressed_key_text.remove(&key);
+    }
+    true
+}
+
+fn committed_text_after_key(events: &[Event], key_index: usize) -> Option<char> {
+    for event in &events[key_index + 1..] {
+        match event {
+            Event::Text(text) if text.chars().count() == 1 => return text.chars().next(),
+            Event::Text(_) | Event::Key { .. } | Event::Ime(egui::ImeEvent::Commit(_)) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn app_shortcut_press(event: &Event, shortcuts: &AppShortcuts, exit_fullscreen_shortcut_active: bool) -> bool {
+    crate::app::global_shortcut_bindings(shortcuts)
+        .into_iter()
+        .filter(|binding| *binding != shortcuts.save_editor)
+        .filter(|binding| exit_fullscreen_shortcut_active || *binding != shortcuts.exit_fullscreen_panel)
+        .any(|binding| crate::app::shortcuts::shortcut_event_matches(event, binding))
 }
 
 fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
     BrowserModifiers {
         alt: modifiers.alt,
         ctrl: modifiers.ctrl,
-        meta: modifiers.command,
+        // `command` is the platform-primary shortcut flag and is also true
+        // for physical Ctrl on Linux/Windows. CDP Meta must represent the
+        // physical macOS Command key only.
+        meta: modifiers.mac_cmd,
         shift: modifiers.shift,
     }
 }
@@ -407,4 +540,86 @@ fn key_to_browser_key(key: Key) -> Option<BrowserKey> {
         Key::Backtick => BrowserKey::Char('`'),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(key: Key, shift: bool) -> Event {
+        modified_press(
+            key,
+            Modifiers {
+                shift,
+                ..Modifiers::NONE
+            },
+        )
+    }
+
+    fn modified_press(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn committed_text_is_layout_authoritative() {
+        let events = [press(Key::Semicolon, true), Event::Text(";".to_owned())];
+
+        assert_eq!(committed_text_after_key(&events, 0), Some(';'));
+    }
+
+    #[test]
+    fn committed_text_does_not_cross_the_next_key_event() {
+        let events = [press(Key::A, false), press(Key::B, false), Event::Text("b".to_owned())];
+
+        assert_eq!(committed_text_after_key(&events, 0), None);
+        assert_eq!(committed_text_after_key(&events, 1), Some('b'));
+    }
+
+    #[test]
+    fn committed_text_does_not_cross_a_multi_character_text_event() {
+        let events = [
+            press(Key::A, false),
+            Event::Text("paste".to_owned()),
+            Event::Text("a".to_owned()),
+        ];
+
+        assert_eq!(committed_text_after_key(&events, 0), None);
+    }
+
+    #[test]
+    fn app_shortcuts_are_filtered_only_when_the_app_owns_them() {
+        let shortcuts = AppShortcuts::default();
+        let escape = press(Key::Escape, false);
+        let fullscreen = press(Key::F11, false);
+        let save_editor = modified_press(
+            Key::S,
+            Modifiers {
+                shift: true,
+                mac_cmd: true,
+                command: true,
+                ..Modifiers::NONE
+            },
+        );
+
+        assert!(app_shortcut_press(&fullscreen, &shortcuts, false));
+        assert!(!app_shortcut_press(&escape, &shortcuts, false));
+        assert!(app_shortcut_press(&escape, &shortcuts, true));
+        assert!(!app_shortcut_press(&save_editor, &shortcuts, false));
+    }
+
+    #[test]
+    fn suppressed_release_is_consumed_after_modifiers_change() {
+        let mut state = BrowserUiState::default();
+        state.suppressed_shortcut_keys.insert(BrowserKey::Char('r'));
+
+        assert!(consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+        assert!(!state.suppressed_shortcut_keys.contains(&BrowserKey::Char('r')));
+        assert!(!consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+    }
 }

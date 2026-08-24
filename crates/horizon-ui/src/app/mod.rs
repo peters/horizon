@@ -17,6 +17,7 @@ mod session;
 mod session_manager;
 mod settings;
 mod shortcut_inventory;
+pub(crate) use shortcut_inventory::global_shortcut_bindings;
 pub(crate) mod shortcuts;
 mod sidebar;
 pub(crate) mod speech;

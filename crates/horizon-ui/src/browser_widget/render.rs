@@ -8,29 +8,49 @@ use horizon_core::browser::{BrowserPanelState, BrowserStatus};
 
 use crate::browser_widget::BrowserUiState;
 
-/// Draw the body. Returns the drawn image rect (for input mapping), the
-/// emulated viewport size in CSS pixels, whether the retry button was
-/// clicked, and whether the body itself was clicked this frame (for
-/// panel-focus requests).
+pub struct BodyOutput {
+    pub image_rect: Option<Rect>,
+    pub frame_size: Option<[f32; 2]>,
+    pub viewport_size: Option<(u32, u32)>,
+    pub retry_clicked: bool,
+    pub body_clicked: bool,
+}
+
+/// Draw the body and return its separate layout and image geometry. The full
+/// layout size drives Chrome's responsive viewport; the letterboxed image
+/// rect is only for painting and pointer-coordinate mapping.
 pub fn show_body(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
-) -> (Option<Rect>, Option<[f32; 2]>, bool, bool) {
+) -> BodyOutput {
     let available = ui.available_rect_before_wrap();
     if available.size().x.min(available.size().y) < 24.0 {
-        return (None, None, false, false);
+        return BodyOutput {
+            image_rect: None,
+            frame_size: None,
+            viewport_size: None,
+            retry_clicked: false,
+            body_clicked: false,
+        };
     }
-    let slot = browser.frame_slot.latest();
-    let Some(data) = &slot.data else {
-        drop(slot);
+    // egui layout sizes are finite and non-negative.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let viewport_size = (available.width().round() as u32, available.height().round() as u32);
+    let Some(data) = browser.frame_slot.latest() else {
         // No frame: the placeholder owns the body. It must be drawn before
         // allocating the body rect — allocating first would push the
         // placeholder's widgets past the clip rect (painter-drawn frames
         // are unaffected, which is why this only bites without frames).
         let retry = placeholder(ui, panel_id, browser, available);
-        return (None, None, retry, false);
+        return BodyOutput {
+            image_rect: None,
+            frame_size: None,
+            viewport_size: Some(viewport_size),
+            retry_clicked: retry,
+            body_clicked: false,
+        };
     };
     let body_response = ui.allocate_rect(available, Sense::click());
     let body_clicked = body_response.clicked();
@@ -55,10 +75,14 @@ pub fn show_body(
         }
         state.seq = data.seq;
     }
-    drop(slot);
-
     let Some(texture) = &state.texture else {
-        return (None, Some(frame_size), false, body_clicked);
+        return BodyOutput {
+            image_rect: None,
+            frame_size: Some(frame_size),
+            viewport_size: Some(viewport_size),
+            retry_clicked: false,
+            body_clicked,
+        };
     };
 
     // Letterbox (upscale allowed; linear filtering smooths it).
@@ -79,7 +103,13 @@ pub fn show_body(
         angle: 0.0,
     }));
 
-    (Some(rect), Some(frame_size), false, body_clicked)
+    BodyOutput {
+        image_rect: Some(rect),
+        frame_size: Some(frame_size),
+        viewport_size: Some(viewport_size),
+        retry_clicked: false,
+        body_clicked,
+    }
 }
 
 fn placeholder(ui: &mut Ui, _panel_id: horizon_core::PanelId, browser: &BrowserPanelState, available: Rect) -> bool {

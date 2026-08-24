@@ -1,5 +1,7 @@
 //! Headless Chrome lifecycle: binary discovery, spawn, ws-url capture, kill.
 
+#[cfg(any(windows, test))]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -85,6 +87,10 @@ impl ChromeProcess {
             "--remote-allow-origins=*".to_string(),
             "--disable-features=TranslateUI".to_string(),
         ];
+        // A disposable per-panel profile must never block startup on a
+        // macOS keychain creation prompt.
+        #[cfg(target_os = "macos")]
+        args.push("--use-mock-keychain".to_string());
         args.extend(launch.extra_args.iter().cloned());
         args.push("about:blank".to_string());
 
@@ -226,13 +232,47 @@ pub fn resolve_binary(command: &str) -> Result<PathBuf> {
     let Some(path_var) = std::env::var_os("PATH") else {
         return Err(ChromeError::NoBinary);
     };
+    #[cfg(windows)]
+    let windows_path_names = windows_path_names(command);
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(command);
         if is_executable_file(&candidate) {
             return Ok(candidate);
         }
+        #[cfg(windows)]
+        for command_with_extension in &windows_path_names {
+            let candidate = dir.join(command_with_extension);
+            if is_executable_file(&candidate) {
+                return Ok(candidate);
+            }
+        }
     }
     Err(ChromeError::NoBinary)
+}
+
+#[cfg(windows)]
+fn windows_path_names(command: &str) -> Vec<OsString> {
+    if Path::new(command).extension().is_some() {
+        return Vec::new();
+    }
+    let extensions = std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+    path_names_with_extensions(command, &extensions.to_string_lossy())
+}
+
+#[cfg(any(windows, test))]
+fn path_names_with_extensions(command: &str, extensions: &str) -> Vec<OsString> {
+    extensions
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            let mut candidate = OsString::from(command);
+            if !extension.starts_with('.') {
+                candidate.push(".");
+            }
+            candidate.push(extension);
+            candidate
+        })
+        .collect()
 }
 
 /// Resolve using an explicit command or the standard candidate list.
@@ -347,6 +387,19 @@ mod tests {
             resolve_binary("/definitely/not/a/real/binary"),
             Err(ChromeError::NoBinary)
         ));
+    }
+
+    #[test]
+    fn windows_path_extensions_are_applied_to_bare_commands() {
+        let names = path_names_with_extensions("chrome", ".COM;.EXE;CMD");
+        assert_eq!(
+            names,
+            [
+                OsString::from("chrome.COM"),
+                OsString::from("chrome.EXE"),
+                OsString::from("chrome.CMD")
+            ]
+        );
     }
 
     #[test]

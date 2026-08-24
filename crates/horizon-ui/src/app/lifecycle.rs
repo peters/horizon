@@ -15,6 +15,9 @@ mod startup_workspace;
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Browser teardown may spend one second on `Browser.close` and three seconds
+/// killing/reaping Chrome; board joiners allow five seconds.
+const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
@@ -192,8 +195,6 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn poll_shutdown_progress(&mut self) {
-        const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
-
         let Some(progress) = &self.shutdown_progress else {
             return;
         };
@@ -237,6 +238,15 @@ impl HorizonApp {
         self.exit_cleanup_complete = true;
         let _ = self.auto_save_runtime_state();
         self.board.shutdown_terminal_panels();
+        if let Some(progress) = &self.shutdown_progress
+            && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
+        {
+            tracing::warn!(
+                completed = progress.terminals_completed(),
+                total = progress.terminal_count(),
+                "timed out waiting for asynchronous panel shutdown during exit"
+            );
+        }
         self.git_watchers.clear();
         self.release_active_session_lease();
     }
@@ -274,7 +284,7 @@ impl HorizonApp {
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
         let panel_output = self.board.process_output();
-        if panel_output.cwd_changed {
+        if panel_output.persisted_state_changed {
             self.mark_runtime_dirty();
         }
         // process_output already drained browser-panel driver events

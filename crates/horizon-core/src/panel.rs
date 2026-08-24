@@ -205,6 +205,7 @@ pub struct Panel {
 pub struct PanelProcessOutput {
     pub had_output: bool,
     pub cwd_changed: bool,
+    pub persisted_state_changed: bool,
 }
 
 impl Panel {
@@ -303,20 +304,21 @@ impl Panel {
     #[profiling::function]
     pub fn process_output(&mut self) -> PanelProcessOutput {
         if let Some(browser) = self.content.browser_mut() {
-            let had_output = browser.drain_events();
+            let browser_output = browser.drain_events();
             // Feed page titles into the same runtime-title channel the
             // terminal xterm-title sequence uses, so the titlebar tracks
             // the page (custom names keep their "name — title" form).
-            if !browser.title.is_empty() && browser.title != self.terminal_title {
+            if browser.title != self.terminal_title {
                 self.terminal_title = browser.title.clone();
             }
-            self.had_recent_output = had_output;
-            if had_output {
+            self.had_recent_output = browser_output.had_output;
+            if browser_output.had_output {
                 self.last_output_at_millis = Some(current_unix_millis());
             }
             return PanelProcessOutput {
-                had_output,
+                had_output: browser_output.had_output,
                 cwd_changed: false,
+                persisted_state_changed: browser_output.url_changed,
             };
         }
 
@@ -348,9 +350,11 @@ impl Panel {
             }
         }
 
+        let cwd_changed = self.update_tracked_cwd(current_cwd);
         PanelProcessOutput {
             had_output,
-            cwd_changed: self.update_tracked_cwd(current_cwd),
+            cwd_changed,
+            persisted_state_changed: cwd_changed,
         }
     }
 

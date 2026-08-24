@@ -1,6 +1,6 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentStatus, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
+    AgentSessionBinding, AgentStatus, AppShortcuts, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
     SshConnectionStatus, WorkspaceId,
 };
 
@@ -186,6 +186,8 @@ struct PanelBodyContext<'a> {
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
+    browser_shortcuts: Option<&'a AppShortcuts>,
+    browser_fullscreen_active: bool,
 }
 
 fn show_panel_body_contents(
@@ -204,11 +206,12 @@ fn show_panel_body_contents(
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         PanelKind::Browser => {
-            let Some(state) = body_context.browser_ui_state else {
+            let (Some(state), Some(shortcuts)) = (body_context.browser_ui_state, body_context.browser_shortcuts) else {
                 ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));
                 return false;
             };
-            crate::browser_widget::BrowserView::new(panel, state).show(ui, is_focused, interactive)
+            crate::browser_widget::BrowserView::new(panel, state, shortcuts, body_context.browser_fullscreen_active)
+                .show(ui, is_focused, interactive)
         }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
@@ -293,6 +296,11 @@ impl HorizonApp {
             return;
         };
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
+        let browser_shortcuts = self
+            .board
+            .panel(panel_id)
+            .is_some_and(|panel| panel.kind == PanelKind::Browser)
+            .then(|| self.shortcuts.clone());
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
@@ -340,6 +348,8 @@ impl HorizonApp {
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
+                                    browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_fullscreen_active: true,
                                 },
                             );
                         }
@@ -466,6 +476,7 @@ impl HorizonApp {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
+        let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
 
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
@@ -675,6 +686,8 @@ impl HorizonApp {
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
+                                    browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_fullscreen_active: false,
                                 },
                             );
                         }

@@ -34,6 +34,10 @@ pub fn show(
     });
     let (url_focused, mut clicked) = chrome_row.inner;
 
+    if let Some(error) = &browser.navigation_error {
+        ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
+    }
+
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
         clicked |= handoff_banner(ui, browser, &reason);
@@ -88,13 +92,15 @@ fn url_bar(
     // egui's singleline TextEdit consumes Enter and drops its own focus
     // (the default `return_key` shortcut), so "focus was lost on the same
     // frame as an Enter press" is the submit signal.
-    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if submitted {
+        state.url_submit_enter_pending = !ui.input(|i| i.key_released(egui::Key::Enter));
         let url = state.url_buffer.trim().to_string();
         if !url.is_empty() && url != browser.url {
             browser.send(BrowserCommand::Navigate(url));
         }
     }
-    (response.has_focus(), response.clicked())
+    (response.has_focus() || submitted, response.clicked())
 }
 
 fn ownership_chip(ui: &mut Ui, browser: &BrowserPanelState) {

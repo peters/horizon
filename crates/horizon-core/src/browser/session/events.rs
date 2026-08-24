@@ -8,8 +8,6 @@
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use base64::Engine;
-
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
@@ -88,7 +86,7 @@ impl DriverState {
         let Some(title) = parsed.pointer("/t").and_then(|v| v.as_str()) else {
             return;
         };
-        if title.is_empty() || title == self.title {
+        if title == self.title {
             return;
         }
         self.title = title.to_string();
@@ -133,27 +131,32 @@ impl DriverState {
         let CdpMsg::Response { id, result, error, .. } = message else {
             return;
         };
+        if self.viewport_capture_request_id == Some(id) {
+            self.viewport_capture_request_id = None;
+            if let Some(error) = error {
+                tracing::debug!(target: "browser", "viewport frame capture rejected: {error}");
+                return;
+            }
+            let Some(data) = result
+                .as_ref()
+                .and_then(|value| value.get("data"))
+                .and_then(serde_json::Value::as_str)
+            else {
+                return;
+            };
+            if let Some(seq) = frame_slot.store_base64_jpeg(data) {
+                let _ = event_tx.send(BrowserEvent::Frame { seq });
+            }
+            return;
+        }
         // Fire-and-forget input/ack responses also carry ids; only the
         // exact re-attach request may consume the in-flight flag.
         if self.reattach_in_flight && Some(id) == self.reattach_request_id {
             self.reattach_in_flight = false;
             self.reattach_request_id = None;
             if let Some(error) = error {
-                self.reattach_failures += 1;
-                if self.reattach_failures >= 5 {
-                    // Re-attach keeps failing: the target is almost
-                    // certainly gone. Stop the silent retry loop and
-                    // surface a retryable error.
-                    self.reattach_failures = 0;
-                    self.pending_reattach = false;
-                    self.pending_restart_at = None;
-                    let _ = event_tx.send(BrowserEvent::Warning(format!(
-                        "could not re-attach to the page: {error}; retry to restart"
-                    )));
-                } else {
-                    tracing::warn!(target: "browser", "re-attach rejected: {error}");
-                    self.pending_restart_at = Some(Instant::now() + self.restart_backoff());
-                }
+                tracing::warn!(target: "browser", "re-attach rejected: {error}");
+                self.note_reattach_failure(event_tx, &error.to_string());
                 return;
             }
             self.reattach_failures = 0;
@@ -210,9 +213,12 @@ impl DriverState {
                 if on_page_session {
                     self.session_id = None;
                     self.screencast_on = false;
+                    self.pending_viewport_capture_at = None;
+                    self.viewport_capture_request_id = None;
                     // Drop the tracked context: the next title fetch must
                     // use a fresh default context, not a dead contextId.
                     self.title_context_id = None;
+                    self.main_frame_id = None;
                     self.title_fetch_at = None;
                     self.title_fetch_retries = 0;
                     // Unexpected detach (the driver never detaches its own
@@ -228,7 +234,10 @@ impl DriverState {
                 if self.target_id.as_deref() == destroyed {
                     self.session_id = None;
                     self.target_id = None;
+                    self.main_frame_id = None;
                     self.screencast_on = false;
+                    self.pending_viewport_capture_at = None;
+                    self.viewport_capture_request_id = None;
                     self.pending_reattach = false;
                     // The page is gone (tab closed by another CDP client,
                     // navigation to a new target, …). Re-attach has
@@ -240,29 +249,9 @@ impl DriverState {
                     ));
                 }
             }
-            "Page.frameNavigated" => {
-                if !on_page_session {
-                    return;
-                }
-                // Subframe (iframe) navigations carry `frame.parentId`;
-                // only the top frame defines the panel's URL.
-                let Some(frame) = event.params.get("frame") else {
-                    return;
-                };
-                if frame.get("parentId").is_some() {
-                    return;
-                }
-                if let Some(url) = frame.get("url").and_then(|u| u.as_str())
-                    && !url.is_empty()
-                    && url != self.url
-                {
-                    self.url = url.to_string();
-                    self.manifest_dirty = true;
-                }
-                self.pending_restart_at = Some(Instant::now());
-                self.write_manifest(true);
-                let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-                let _ = event_tx.send(BrowserEvent::Loading(true));
+            "Page.frameNavigated" => self.handle_frame_navigated(event_tx, event, on_page_session),
+            "Page.navigatedWithinDocument" => {
+                self.handle_same_document_navigation(event_tx, event, on_page_session);
             }
             "Page.loadEventFired" => {
                 if on_page_session {
@@ -281,7 +270,6 @@ impl DriverState {
                     return;
                 }
                 if let Some(title) = event.params.get("title").and_then(|t| t.as_str())
-                    && !title.is_empty()
                     && title != self.title
                 {
                     self.title = title.to_string();
@@ -293,6 +281,69 @@ impl DriverState {
             "Page.screencastFrame" => Self::handle_screencast_frame(link, event_tx, frame_slot, event),
             _ => {}
         }
+    }
+
+    fn handle_frame_navigated(
+        &mut self,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        event: CdpEvent<'_>,
+        on_page_session: bool,
+    ) {
+        if !on_page_session {
+            return;
+        }
+        // Subframe (iframe) navigations carry `frame.parentId`; only the top
+        // frame defines the panel's URL.
+        let Some(frame) = event.params.get("frame") else {
+            return;
+        };
+        if frame.get("parentId").is_some() {
+            return;
+        }
+        self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
+        if let Some(url) = frame.get("url").and_then(|url| url.as_str())
+            && !url.is_empty()
+            && url != self.url
+        {
+            self.url = url.to_string();
+            self.manifest_dirty = true;
+        }
+        self.pending_restart_at = Some(Instant::now());
+        // A back/forward-cache restore can commit `frameNavigated` without a
+        // later `loadEventFired`. Always schedule the title read here so the
+        // panel cannot retain the destination page's title after history
+        // navigation. The href guard in `fetch_title` retries if the new
+        // execution context is not ready yet.
+        self.title_fetch_retries = 0;
+        self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
+        self.write_manifest(true);
+        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        let _ = event_tx.send(BrowserEvent::Loading(true));
+    }
+
+    fn handle_same_document_navigation(
+        &mut self,
+        event_tx: &mpsc::Sender<BrowserEvent>,
+        event: CdpEvent<'_>,
+        on_page_session: bool,
+    ) {
+        if !on_page_session {
+            return;
+        }
+        let frame_id = event.params.get("frameId").and_then(|id| id.as_str());
+        if self.main_frame_id.as_deref() != frame_id {
+            return;
+        }
+        let Some(url) = event.params.get("url").and_then(|url| url.as_str()) else {
+            return;
+        };
+        if url.is_empty() || url == self.url {
+            return;
+        }
+        self.url = url.to_string();
+        self.manifest_dirty = true;
+        self.write_manifest(true);
+        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
     }
 
     /// Ack, then decode and store one screencast frame.
@@ -323,12 +374,10 @@ impl DriverState {
         let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
             return;
         };
-        let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
-            tracing::warn!(target: "browser", "dropping undecodable screencast frame");
-            return;
-        };
-        if let Some(seq) = frame_slot.store_jpeg(&jpeg) {
+        if let Some(seq) = frame_slot.store_base64_jpeg(data) {
             let _ = event_tx.send(BrowserEvent::Frame { seq });
+        } else {
+            tracing::warn!(target: "browser", "dropping undecodable screencast frame");
         }
     }
 }

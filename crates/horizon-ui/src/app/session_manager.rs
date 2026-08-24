@@ -5,8 +5,8 @@ use horizon_core::{ResolvedSession, SessionSummary};
 
 use crate::theme;
 
-use super::HorizonApp;
 use super::util::{chrome_button, danger_button, format_relative_time, primary_button, viewport_local_rect};
+use super::{HorizonApp, PanelRenderCaches};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
@@ -235,6 +235,10 @@ impl HorizonApp {
         self.active_session = None;
         self.last_terminal_output_at = None;
         self.fullscreen_panel = None;
+        // Numeric panel ids restart in the replacement board. Drop every
+        // per-panel cache so a same-id panel cannot inherit stale textures or
+        // sequence numbers from the previous session.
+        self.panel_render_caches = PanelRenderCaches::default();
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;

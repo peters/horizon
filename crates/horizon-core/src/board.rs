@@ -101,6 +101,7 @@ pub struct Board {
 pub struct BoardProcessOutput {
     pub had_terminal_output: bool,
     pub cwd_changed: bool,
+    pub persisted_state_changed: bool,
 }
 
 impl Board {
@@ -330,6 +331,7 @@ impl Board {
             let panel_output: PanelProcessOutput = panel.process_output();
             output.had_terminal_output |= panel_output.had_output;
             output.cwd_changed |= panel_output.cwd_changed;
+            output.persisted_state_changed |= panel_output.persisted_state_changed;
         }
         // Only run attention detection when terminals actually produced new
         // output.  The expensive path — `detect_attention()` — locks the

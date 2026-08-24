@@ -18,6 +18,9 @@ back into large multi-purpose modules.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
+- `browser/session.rs` owns driver lifecycle and shared state; UI-command
+  dispatch belongs in `browser/session/commands.rs`, while CDP response/event
+  transitions belong in `browser/session/events.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in

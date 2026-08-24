@@ -116,7 +116,15 @@ pub struct BrowserPanelState {
     pub owner: Option<String>,
     /// Pending handoff request from the agent, with its reason.
     pub handoff_reason: Option<String>,
+    /// Most recent URL submission error; cleared after a committed navigation.
+    pub navigation_error: Option<String>,
     config: BrowserConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BrowserDrainOutput {
+    pub had_output: bool,
+    pub url_changed: bool,
 }
 
 impl BrowserPanelState {
@@ -135,6 +143,7 @@ impl BrowserPanelState {
             panel_local_id: panel_local_id.clone(),
             owner: None,
             handoff_reason: None,
+            navigation_error: None,
             config: config.clone(),
         };
         state.launch_session(initial_url);
@@ -157,6 +166,7 @@ impl BrowserPanelState {
     const RESTART_TEARDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
     fn launch_session(&mut self, initial_url: Option<String>) {
+        self.navigation_error = None;
         // Drop the previous driver (if any) and wait for its Chrome to be
         // gone: the replacement reuses the same profile directory, and a
         // second instance would lose the profile lock race.
@@ -230,44 +240,52 @@ impl BrowserPanelState {
         self.shutdown_signal.take()
     }
 
-    /// Drain driver events into panel state. Returns `true` when the panel
-    /// should be considered to have produced visible output this frame
-    /// (new frame, title change, or status change).
-    pub fn drain_events(&mut self) -> bool {
+    /// Drain driver events into panel state, separating visible activity from
+    /// URL changes that must dirty the persisted runtime state.
+    pub fn drain_events(&mut self) -> BrowserDrainOutput {
         let events = self
             .session
             .as_ref()
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         if events.is_empty() {
-            return false;
+            return BrowserDrainOutput::default();
         }
-        let mut active = false;
+        let mut output = BrowserDrainOutput::default();
         for event in events {
             match event {
                 BrowserEvent::Ready => {
                     self.status = BrowserStatus::Ready;
-                    active = true;
+                    output.had_output = true;
                 }
                 BrowserEvent::Title(title) => {
                     if self.title != title {
                         self.title = title;
-                        active = true;
+                        output.had_output = true;
                     }
                 }
                 BrowserEvent::UrlChanged(url) => {
-                    self.url = url;
-                    active = true;
+                    if self.url != url {
+                        self.url = url;
+                        output.url_changed = true;
+                    }
+                    self.navigation_error = None;
+                    output.had_output = true;
+                }
+                BrowserEvent::NavigationFailed(message) => {
+                    self.navigation_error = Some(message);
+                    output.had_output = true;
                 }
                 BrowserEvent::Loading(loading) => {
                     self.loading = loading;
                 }
                 BrowserEvent::Frame { .. } => {
-                    active = true;
+                    output.had_output = true;
                 }
                 BrowserEvent::Warning(message) => {
+                    self.frame_slot.clear();
                     self.status = BrowserStatus::Error { message };
-                    active = true;
+                    output.had_output = true;
                 }
                 BrowserEvent::Stopped { code } => {
                     self.session = None;
@@ -281,27 +299,27 @@ impl BrowserPanelState {
                     if !keep_error || code.is_some() {
                         self.status = BrowserStatus::Stopped { code };
                     }
-                    active = true;
+                    output.had_output = true;
                 }
                 BrowserEvent::HandoffRequested(reason) => {
                     self.handoff_reason = Some(reason);
-                    active = true;
+                    output.had_output = true;
                 }
                 BrowserEvent::HandoffCleared => {
                     if self.handoff_reason.is_some() {
                         self.handoff_reason = None;
-                        active = true;
+                        output.had_output = true;
                     }
                 }
                 BrowserEvent::OwnerChanged(owner) => {
                     if self.owner != owner {
                         self.owner = owner;
-                        active = true;
+                        output.had_output = true;
                     }
                 }
             }
         }
-        active
+        output
     }
 }
 
