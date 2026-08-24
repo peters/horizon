@@ -272,6 +272,25 @@ impl SpeechSystem {
         self.state = State::Idle;
     }
 
+    /// Start cancelling every transcription worker without waiting on native
+    /// inference. The app calls this while its other shutdown work proceeds.
+    pub fn begin_shutdown(&mut self) {
+        self.cancel();
+        for profile in &mut self.profiles {
+            profile.worker.begin_shutdown();
+        }
+    }
+
+    /// Join every transcription worker. This must finish before process exit:
+    /// native GPU backends require all model resources to be released before
+    /// their process-level teardown handlers run.
+    pub fn shutdown_and_wait(&mut self) {
+        self.begin_shutdown();
+        for profile in &mut self.profiles {
+            profile.worker.shutdown_and_wait();
+        }
+    }
+
     /// Drain worker/capture channels; called once per frame.
     pub fn poll(&mut self) -> Vec<SpeechEvent> {
         let mut events = Vec::new();

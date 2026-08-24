@@ -71,6 +71,10 @@ impl SpeechSystem {
 
     pub fn cancel(&mut self) {}
 
+    pub fn begin_shutdown(&mut self) {}
+
+    pub fn shutdown_and_wait(&mut self) {}
+
     pub fn poll(&mut self) -> Vec<SpeechEvent> {
         Vec::new()
     }

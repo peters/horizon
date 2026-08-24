@@ -24,6 +24,18 @@ const fn shutdown_ready_to_exit(complete: bool, timed_out: bool, browser: Browse
 }
 
 impl HorizonApp {
+    fn begin_speech_shutdown(&mut self) {
+        if let Some(speech) = &mut self.speech {
+            speech.begin_shutdown();
+        }
+    }
+
+    fn finish_speech_shutdown(&mut self) {
+        if let Some(mut speech) = self.speech.take() {
+            speech.shutdown_and_wait();
+        }
+    }
+
     /// Starts asynchronous panel shutdown. State is saved immediately, and
     /// background threads join terminal event loops and browser drivers.
     #[profiling::function]
@@ -32,6 +44,7 @@ impl HorizonApp {
             return;
         }
 
+        self.begin_speech_shutdown();
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
@@ -72,6 +85,7 @@ impl HorizonApp {
         // is known to be finished.
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
+        self.finish_speech_shutdown();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
@@ -111,6 +125,7 @@ impl HorizonApp {
         }
 
         self.exit_cleanup_complete = true;
+        self.begin_speech_shutdown();
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         if let Some(progress) = self
@@ -145,6 +160,7 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
+        self.finish_speech_shutdown();
         self.release_active_session_lease();
     }
 }
