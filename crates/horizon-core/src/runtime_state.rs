@@ -2,6 +2,7 @@ mod agent_sessions;
 mod binding_bootstrap;
 mod claude_live_sessions;
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -130,13 +131,28 @@ impl RuntimeState {
             self.version = RUNTIME_STATE_VERSION;
         }
 
+        let mut reserved_panel_local_ids = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| !panel.local_id.is_empty())
+            .map(|panel| panel.local_id.clone())
+            .collect::<HashSet<_>>();
+        let mut seen_panel_local_ids = HashSet::new();
+
         for workspace in &mut self.workspaces {
             if workspace.local_id.is_empty() {
                 workspace.local_id = new_local_id();
             }
             for panel in &mut workspace.panels {
                 if panel.local_id.is_empty() {
-                    panel.local_id = new_local_id();
+                    panel.local_id = reserve_new_local_id(&mut reserved_panel_local_ids);
+                    seen_panel_local_ids.insert(panel.local_id.clone());
+                } else if !seen_panel_local_ids.insert(panel.local_id.clone()) {
+                    // Focus restoration resolves the first matching panel.
+                    // Keep that identity stable and repair later duplicates.
+                    panel.local_id = reserve_new_local_id(&mut reserved_panel_local_ids);
+                    seen_panel_local_ids.insert(panel.local_id.clone());
                 }
             }
         }
@@ -612,6 +628,15 @@ pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn reserve_new_local_id(reserved: &mut HashSet<String>) -> String {
+    loop {
+        let local_id = new_local_id();
+        if reserved.insert(local_id.clone()) {
+            return local_id;
+        }
+    }
+}
+
 fn normalize_cwd(cwd: Option<&str>) -> Option<String> {
     cwd.map(Config::expand_tilde).map(|path| path.display().to_string())
 }
@@ -748,6 +773,47 @@ mod tests {
         let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
 
         assert_eq!(options.command.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn ensure_local_ids_repairs_duplicates_without_moving_focus() {
+        let mut state = RuntimeState {
+            focused_panel_local_id: Some("shared-browser".to_string()),
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                panels: vec![
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        kind: PanelKind::Browser,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        kind: PanelKind::Browser,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        ..PanelState::default()
+                    },
+                ],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        state.ensure_local_ids();
+
+        let local_ids = state.workspaces[0]
+            .panels
+            .iter()
+            .map(|panel| panel.local_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(local_ids[0], "shared-browser");
+        assert_ne!(local_ids[1], "shared-browser");
+        assert_ne!(local_ids[2], "shared-browser");
+        assert_eq!(local_ids.iter().copied().collect::<HashSet<_>>().len(), 3);
+        assert_eq!(state.focused_panel_local_id.as_deref(), Some("shared-browser"));
     }
 
     #[test]

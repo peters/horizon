@@ -330,7 +330,7 @@ workspaces:
         command: http://127.0.0.1:3000
 ```
 
-Chrome, Chromium, Microsoft Edge, or Brave must be installed. Horizon discovers their normal executable names and standard macOS/Windows install locations; set `browser.command` when the executable is elsewhere. The remaining browser settings control screencast quality/rate and the per-panel private Chrome profiles:
+Chrome, Chromium, Microsoft Edge, or Brave must be installed. Horizon scans common executable names and the standard Chrome, Chromium, and Edge installation locations on macOS and Windows. Brave is also discovered in its standard macOS location and through common PATH names on macOS/Linux; on Windows, set `browser.command` to the `brave.exe` path. The remaining browser settings control screencast quality/rate and the per-panel private Chrome profiles:
 
 ```yaml
 browser:
