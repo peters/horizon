@@ -1,7 +1,7 @@
 //! Browser panel chrome strip: navigation buttons, URL bar, ownership
 //! chip, and the handoff banner.
 
-use egui::{RichText, Stroke, TextEdit, TextWrapMode, Ui, vec2};
+use egui::{RichText, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo, WidgetType, vec2};
 use horizon_core::browser::{BrowserCommand, BrowserPanelState};
 
 use crate::browser_widget::BrowserUiState;
@@ -61,12 +61,18 @@ fn nav_button(
             .corner_radius(6)
             .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
     );
+    let enabled = response.enabled();
+    response.widget_info(|| nav_widget_info(label, enabled));
     let response = response.on_hover_text_at_pointer(format!("{label} (browser)"));
     if response.clicked() {
         browser.send(command);
         return true;
     }
     false
+}
+
+fn nav_widget_info(label: &str, enabled: bool) -> WidgetInfo {
+    WidgetInfo::labeled(WidgetType::Button, enabled, label)
 }
 
 fn url_bar(
@@ -154,4 +160,21 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
         browser.hand_back();
     }
     clicked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nav_widget_info;
+
+    #[test]
+    fn navigation_widget_info_names_glyph_only_controls() {
+        for label in ["Back", "Forward", "Reload"] {
+            let info = nav_widget_info(label, true);
+            assert_eq!(info.typ, egui::WidgetType::Button);
+            assert!(info.enabled);
+            assert_eq!(info.label.as_deref(), Some(label));
+        }
+
+        assert!(!nav_widget_info("Back", false).enabled);
+    }
 }

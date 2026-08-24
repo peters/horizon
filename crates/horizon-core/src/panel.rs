@@ -519,13 +519,16 @@ impl Panel {
         self.layout.size = size;
     }
 
-    /// Restart the terminal process while keeping the same panel identity,
-    /// layout, and session binding. For agent panels this
-    /// resumes the existing session so no work is lost.
+    /// Restart panel content while keeping the same identity and layout.
+    /// Terminal agent panels resume their existing session. Browser panels
+    /// only schedule an asynchronous relaunch; `Ok(())` confirms that the
+    /// request was accepted, while launch failures arrive through Browser
+    /// status/events.
     ///
     /// # Errors
     ///
-    /// Returns an error if the new terminal cannot be spawned.
+    /// Returns an error if a terminal cannot be spawned or a file-backed
+    /// editor cannot be reopened.
     pub fn restart(&mut self) -> Result<()> {
         if let PanelContent::GitChanges(_) = &self.content {
             return Ok(());

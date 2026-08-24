@@ -36,21 +36,28 @@ use crate::horizon_home::HorizonHome;
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Short human-facing title for a URL (hostname, or the raw input).
+/// Short human-facing title for a URL (hostname, or a non-empty fallback).
 #[must_use]
 pub fn panel_title_for_url(url: &str) -> String {
-    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(url)
-        .split('@')
-        .next_back()
-        .unwrap_or(url)
-        .split(':')
-        .next()
-        .unwrap_or(url)
-        .to_string()
+    let input = url.trim();
+    if input.is_empty() {
+        return "Browser".to_string();
+    }
+    let Some((_, scheme_specific)) = input.split_once("://") else {
+        return input.to_string();
+    };
+    let authority = scheme_specific.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_and_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = if let Some(bracketed) = host_and_port.strip_prefix('[') {
+        bracketed.split_once(']').map_or("", |(host, _)| host)
+    } else {
+        host_and_port.split(':').next().unwrap_or_default()
+    };
+    if host.is_empty() {
+        input.to_string()
+    } else {
+        host.to_string()
+    }
 }
 
 /// `browser` section of the Horizon config.
@@ -577,6 +584,20 @@ mod tests {
         assert_eq!(config.quality, 60);
         assert_eq!(config.every_nth_frame, 1);
         assert!(config.command.is_none());
+    }
+
+    #[test]
+    fn panel_titles_extract_dns_and_bracketed_ipv6_hosts() {
+        assert_eq!(panel_title_for_url("https://example.com:8443/path"), "example.com");
+        assert_eq!(panel_title_for_url("http://[::1]:3000/path"), "::1");
+        assert_eq!(panel_title_for_url("https://user:secret@example.net/a"), "example.net");
+    }
+
+    #[test]
+    fn panel_titles_keep_non_empty_fallbacks_for_hostless_urls() {
+        assert_eq!(panel_title_for_url("file:///tmp/page.html"), "file:///tmp/page.html");
+        assert_eq!(panel_title_for_url("about:blank"), "about:blank");
+        assert_eq!(panel_title_for_url("  "), "Browser");
     }
 
     #[test]
