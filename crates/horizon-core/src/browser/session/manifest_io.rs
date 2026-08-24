@@ -13,9 +13,10 @@ impl DriverState {
     /// User clicked "hand back": mark the pending handoff done so the
     /// blocked agent process can continue.
     pub(super) fn resolve_handoff(&mut self, event_tx: &mpsc::Sender<BrowserEvent>) {
+        let expected_requested_at = self.handoff_seen;
         let mut acknowledged = false;
         let result = self.write_manifest_extra(true, |manifest| {
-            acknowledged = acknowledge_handoff(manifest);
+            acknowledged = acknowledge_handoff(manifest, expected_requested_at);
         });
         match result.and_then(|()| {
             acknowledged
@@ -139,8 +140,15 @@ impl DriverState {
     }
 }
 
-fn acknowledge_handoff(manifest: &mut BrowserManifest) -> bool {
-    let Some(handoff) = manifest.handoff.as_mut() else {
+fn acknowledge_handoff(manifest: &mut BrowserManifest, expected_requested_at: Option<i64>) -> bool {
+    let Some(expected_requested_at) = expected_requested_at else {
+        return false;
+    };
+    let Some(handoff) = manifest
+        .handoff
+        .as_mut()
+        .filter(|handoff| !handoff.done && handoff.requested_at == expected_requested_at)
+    else {
         return false;
     };
     handoff.done = true;
@@ -164,15 +172,32 @@ mod tests {
     #[test]
     fn acknowledgement_requires_a_manifest_handoff() {
         let mut manifest = BrowserManifest::default();
-        assert!(!acknowledge_handoff(&mut manifest));
+        assert!(!acknowledge_handoff(&mut manifest, Some(1)));
 
         manifest.handoff = Some(ManifestHandoff {
             reason: "captcha".to_string(),
             requested_at: 1,
             done: false,
         });
-        assert!(acknowledge_handoff(&mut manifest));
+        assert!(!acknowledge_handoff(&mut manifest, None));
+        assert!(!acknowledge_handoff(&mut manifest, Some(2)));
+        assert!(acknowledge_handoff(&mut manifest, Some(1)));
         assert!(manifest.handoff.is_some_and(|handoff| handoff.done));
+    }
+
+    #[test]
+    fn acknowledgement_does_not_complete_a_replacement_handoff() {
+        let mut manifest = BrowserManifest {
+            handoff: Some(ManifestHandoff {
+                reason: "replacement".to_string(),
+                requested_at: 2,
+                done: false,
+            }),
+            ..BrowserManifest::default()
+        };
+
+        assert!(!acknowledge_handoff(&mut manifest, Some(1)));
+        assert!(manifest.handoff.is_some_and(|handoff| !handoff.done));
     }
 
     #[test]

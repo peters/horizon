@@ -6,6 +6,7 @@
 //! channel.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use zune_jpeg::JpegDecoder;
@@ -41,6 +42,7 @@ pub struct FrameSlotInner {
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlot {
     inner: Arc<std::sync::Mutex<FrameSlotInner>>,
+    notification_pending: Arc<AtomicBool>,
 }
 
 impl FrameSlot {
@@ -127,6 +129,19 @@ impl FrameSlot {
             .data
             .clone()
     }
+
+    /// Claim the single outstanding UI wake-up for this slot. Further
+    /// frames remain coalesced in `latest` until the UI releases the claim.
+    pub(crate) fn claim_notification(&self) -> bool {
+        self.notification_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Let a later frame enqueue the next UI wake-up.
+    pub(crate) fn release_notification(&self) {
+        self.notification_pending.store(false, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +200,15 @@ mod tests {
 
         assert_eq!(slot.store_base64_jpeg(&encoded), Some(1));
         assert_eq!(slot.latest().map(|frame| (frame.width, frame.height)), Some((1, 1)));
+    }
+
+    #[test]
+    fn frame_notifications_coalesce_until_released() {
+        let slot = FrameSlot::new();
+
+        assert!(slot.claim_notification());
+        assert!(!slot.claim_notification());
+        slot.release_notification();
+        assert!(slot.claim_notification());
     }
 }

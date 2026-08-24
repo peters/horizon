@@ -300,6 +300,14 @@ impl BrowserPanelState {
         self.teardown_signal.take()
     }
 
+    /// Request driver shutdown and wait up to `timeout` for Chrome teardown.
+    #[must_use]
+    pub fn shutdown_with_timeout(&mut self, timeout: std::time::Duration) -> bool {
+        self.request_shutdown();
+        self.take_shutdown_signal()
+            .is_none_or(|signal| signal.recv_timeout(timeout).is_ok())
+    }
+
     /// Permanently close this panel and remove its persistent Chrome profile
     /// only after the driver has released the profile lock.
     pub fn close_permanently(&mut self) {
@@ -371,6 +379,7 @@ impl BrowserPanelState {
                     self.loading = loading;
                 }
                 BrowserEvent::Frame { .. } => {
+                    self.frame_slot.release_notification();
                     output.had_output = true;
                 }
                 BrowserEvent::Warning(message) => {
@@ -520,6 +529,42 @@ mod tests {
         assert_eq!(completion_tx.send(()), Ok(()));
         assert!(state.retry_ready());
         assert!(state.teardown_signal.is_none());
+    }
+
+    #[test]
+    fn shutdown_with_timeout_waits_for_driver_completion() {
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Ready,
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            teardown_signal: Some(completion_rx),
+            pending_relaunch: None,
+            panel_local_id: "shutdown-wait-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            config: BrowserConfig::default(),
+        };
+        let completion = std::thread::spawn(move || {
+            let _ = start_rx.recv();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            completion_tx.send(())
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(start_tx.send(()), Ok(()));
+
+        assert!(state.shutdown_with_timeout(std::time::Duration::from_secs(1)));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(20));
+        assert!(completion.join().is_ok_and(|result| result.is_ok()));
     }
 
     #[test]

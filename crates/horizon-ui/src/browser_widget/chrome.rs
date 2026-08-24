@@ -1,7 +1,7 @@
 //! Browser panel chrome strip: navigation buttons, URL bar, ownership
 //! chip, and the handoff banner.
 
-use egui::{RichText, Stroke, TextEdit, Ui, vec2};
+use egui::{RichText, Stroke, TextEdit, TextWrapMode, Ui, vec2};
 use horizon_core::browser::{BrowserCommand, BrowserPanelState};
 
 use crate::browser_widget::BrowserUiState;
@@ -119,10 +119,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) ->
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(theme::PALETTE_YELLOW());
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(
-                    RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0),
-                ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let button_label = if browser.handoff_resolution_pending {
                     "Handing back…"
                 } else {
@@ -136,6 +133,11 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) ->
                             .corner_radius(6),
                     )
                     .clicked();
+                ui.add(
+                    egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
+                        .wrap_mode(TextWrapMode::Truncate),
+                )
+                .on_hover_text(reason);
             });
             if let Some(error) = &browser.handoff_error {
                 ui.label(

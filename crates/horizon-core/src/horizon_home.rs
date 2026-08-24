@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HorizonHome {
     root: PathBuf,
@@ -97,17 +99,24 @@ impl HorizonHome {
 
 #[must_use]
 pub(crate) fn safe_local_id(local_id: &str) -> String {
-    let safe: String = local_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe.is_empty() { "_".to_string() } else { safe }
+    if !local_id.is_empty()
+        && local_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return local_id.to_string();
+    }
+
+    // '%' is never emitted by the unchanged safe form. Prefixing the hex
+    // encoding with it keeps every derived path unique, including the empty
+    // id, without allowing separators or platform-specific path characters.
+    let mut encoded = String::with_capacity(1 + local_id.len() * 2);
+    encoded.push('%');
+    for byte in local_id.bytes() {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -147,11 +156,20 @@ mod tests {
         );
         assert_eq!(
             home.browser_profile_dir("../outside"),
-            PathBuf::from("/tmp/horizon-home/browser-profiles/___outside")
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%2e2e2f6f757473696465")
         );
         assert_eq!(
             home.browser_profile_dir(""),
-            PathBuf::from("/tmp/horizon-home/browser-profiles/_")
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%")
         );
+    }
+
+    #[test]
+    fn unsafe_local_ids_have_distinct_paths() {
+        let home = HorizonHome::from_root("/tmp/horizon-home".into());
+
+        assert_ne!(home.browser_profile_dir("a/b"), home.browser_profile_dir("a_b"));
+        assert_ne!(home.browser_profile_dir(""), home.browser_profile_dir("_"));
+        assert_ne!(home.browser_profile_dir("%"), home.browser_profile_dir("%25"));
     }
 }

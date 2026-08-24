@@ -4,8 +4,10 @@
 //! alacritty event loops: it owns the Chrome process and the browser-level
 //! CDP connection, decodes screencast frames into a shared
 //! [`FrameSlot`], and reports lightweight [`BrowserEvent`]s over an mpsc
-//! channel that the main thread drains each frame. Input and navigation
-//! commands travel the other way over [`BrowserCommand`].
+//! channel that the main thread drains each frame. Frame wake-ups are
+//! coalesced to one outstanding event while the slot keeps only the newest
+//! image. Input and navigation commands travel the other way over
+//! [`BrowserCommand`].
 //!
 //! CDP behaviors encoded here (validated against real Chrome in the L0
 //! spike):
@@ -44,7 +46,9 @@ pub enum BrowserEvent {
     UrlChanged(String),
     NavigationFailed(String),
     Loading(bool),
-    /// A new decoded frame is available in the panel's frame slot.
+    /// A new decoded frame is available in the panel's frame slot. The
+    /// sequence belongs to the frame that claimed the coalesced wake-up;
+    /// callers must read the slot for the newest frame.
     Frame {
         seq: u64,
     },
@@ -124,6 +128,7 @@ impl BrowserSession {
     pub fn shutdown_signal(self) -> mpsc::Receiver<()> {
         self.stop_requested.store(true, Ordering::Release);
         let _ = self.command_tx.send(BrowserCommand::Stop);
+        self.frame_slot.release_notification();
         self.completion_rx
     }
 
@@ -131,7 +136,14 @@ impl BrowserSession {
     /// already announced `Stopped`; no second stop request is necessary.
     #[must_use]
     pub fn completion_signal(self) -> mpsc::Receiver<()> {
+        self.frame_slot.release_notification();
         self.completion_rx
+    }
+}
+
+fn publish_frame(event_tx: &mpsc::Sender<BrowserEvent>, frame_slot: &FrameSlot, seq: u64) {
+    if frame_slot.claim_notification() && event_tx.send(BrowserEvent::Frame { seq }).is_err() {
+        frame_slot.release_notification();
     }
 }
 
@@ -871,8 +883,9 @@ mod tests {
 
         assert_eq!(
             profile_dir(&config, "../outside/profile"),
-            std::path::PathBuf::from("/tmp/horizon-browser-profiles/___outside_profile")
+            std::path::PathBuf::from("/tmp/horizon-browser-profiles/%2e2e2f6f7574736964652f70726f66696c65")
         );
+        assert_ne!(profile_dir(&config, "a/b"), profile_dir(&config, "a_b"));
     }
 
     #[test]

@@ -486,17 +486,7 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
-            PanelContent::Browser(browser) => {
-                browser.stop();
-                // Join the driver's teardown when a shutdown was requested
-                // (app exit paths); otherwise the async stop is enough for
-                // the UI to stop painting.
-                if let Some(signal) = browser.take_shutdown_signal() {
-                    signal.recv_timeout(timeout).is_ok()
-                } else {
-                    true
-                }
-            }
+            PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
 
@@ -509,11 +499,7 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
-            PanelContent::Browser(browser) => {
-                browser.stop();
-                let _ = timeout;
-                true
-            }
+            PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
 

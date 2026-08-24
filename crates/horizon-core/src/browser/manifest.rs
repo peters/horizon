@@ -341,6 +341,19 @@ mod tests {
         let path = manifest_path_for_root(&root, "../evil");
         assert!(path.starts_with(&root));
         assert!(!path.to_string_lossy().contains(".."));
+        assert_ne!(path, manifest_path_for_root(&root, "___evil"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn distinct_unsafe_ids_have_distinct_manifest_paths() {
+        let root = test_root();
+
+        assert_ne!(
+            manifest_path_for_root(&root, "a/b"),
+            manifest_path_for_root(&root, "a_b")
+        );
+        assert_ne!(manifest_path_for_root(&root, ""), manifest_path_for_root(&root, "_"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

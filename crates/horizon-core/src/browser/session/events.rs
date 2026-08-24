@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
-use super::{BrowserEvent, DriverState};
+use super::{BrowserEvent, DriverState, publish_frame};
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -151,7 +151,7 @@ impl DriverState {
                 return;
             };
             if let Some(seq) = frame_slot.store_base64_jpeg(data) {
-                let _ = event_tx.send(BrowserEvent::Frame { seq });
+                publish_frame(event_tx, frame_slot, seq);
             }
             return;
         }
@@ -383,7 +383,7 @@ impl DriverState {
             return;
         };
         if let Some(seq) = frame_slot.store_base64_jpeg(data) {
-            let _ = event_tx.send(BrowserEvent::Frame { seq });
+            publish_frame(event_tx, frame_slot, seq);
         } else {
             tracing::warn!(target: "browser", "dropping undecodable screencast frame");
         }
