@@ -378,6 +378,9 @@ fn remove_at_with_warning(path: &Path) {
 }
 
 fn remove_at(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let _lock = ManifestLock::acquire(path)?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -608,6 +611,18 @@ mod tests {
         drop(lifetime);
 
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_a_missing_manifest_initializes_its_coordination_directory() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "missing");
+
+        remove_at(&path).unwrap();
+
+        assert!(!path.exists());
+        assert!(path.with_extension("json.lock").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
