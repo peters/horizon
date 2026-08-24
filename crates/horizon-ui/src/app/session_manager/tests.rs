@@ -80,7 +80,30 @@ fn persistent_session_switch_waits_for_viewport_before_finalizing_target() {
         .and_then(|id| app.board.workspace(id))
         .expect("target right");
     assert!((left.position[1] - right.position[1]).abs() <= 0.01);
-    assert!(app.runtime_dirty_since.is_some());
+    if app.runtime_dirty_since.is_some() {
+        app.runtime_dirty_since = Some(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .expect("test clock supports a one-second lookback"),
+        );
+        app.flush_runtime_if_dirty();
+    }
+    let saved_target = RuntimeState::load(&target.runtime_state_path)
+        .expect("load target runtime after switch")
+        .expect("target runtime exists after switch");
+    let saved_left = saved_target
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.local_id == "target-left")
+        .expect("saved target left");
+    let saved_right = saved_target
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.local_id == "target-right")
+        .expect("saved target right");
+    let saved_left_y = saved_left.position.expect("saved target left position")[1];
+    let saved_right_y = saved_right.position.expect("saved target right position")[1];
+    assert!((saved_left_y - saved_right_y).abs() <= 0.01);
     assert!(temp.path().join(".horizon").exists());
 }
 
