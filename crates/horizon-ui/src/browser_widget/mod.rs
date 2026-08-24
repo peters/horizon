@@ -47,6 +47,10 @@ pub struct BrowserUiState {
     /// Copy/Cut pseudo-events synthesize a complete CDP key pair; consume a
     /// later native release, but abandon suppression if a new press starts.
     clipboard_release_keys: std::collections::HashSet<BrowserKey>,
+    /// A non-empty IME preedit remains active across frames until commit or
+    /// dismissal. While active, printable key events must not guess Latin
+    /// text ahead of the authoritative IME commit.
+    ime_composing: bool,
     /// Escape exits panel fullscreen after the app has already cleared the
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,

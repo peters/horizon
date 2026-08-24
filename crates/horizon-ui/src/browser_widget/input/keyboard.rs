@@ -21,7 +21,9 @@ pub(super) fn events(
         mut key_chars,
         mut shortcut_chars,
         shortcut_presses,
-    } = collect_keyboard_frame_events(events, shortcuts, exit_fullscreen_shortcut_active);
+        ime_composing,
+    } = collect_keyboard_frame_events(events, shortcuts, exit_fullscreen_shortcut_active, state.ime_composing);
+    state.ime_composing = ime_composing;
     for (event_index, event) in events.iter().enumerate() {
         match event {
             Event::Text(text) if !text.is_empty() => {
@@ -174,20 +176,38 @@ struct KeyboardFrameEvents {
     key_chars: Vec<char>,
     shortcut_chars: Vec<char>,
     shortcut_presses: Vec<bool>,
+    ime_composing: bool,
 }
 
 fn collect_keyboard_frame_events(
     events: &[Event],
     shortcuts: &AppShortcuts,
     exit_fullscreen_shortcut_active: bool,
+    ime_composing: bool,
 ) -> KeyboardFrameEvents {
     let shortcut_presses: Vec<bool> = events
         .iter()
         .map(|event| app_shortcut_press(event, shortcuts, exit_fullscreen_shortcut_active))
         .collect();
+    let mut ime_composing = ime_composing;
+    let ime_composing_at_event: Vec<bool> = events
+        .iter()
+        .map(|event| {
+            match event {
+                Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    ime_composing = !text.is_empty();
+                }
+                Event::Ime(egui::ImeEvent::Commit(_)) => ime_composing = false,
+                _ => {}
+            }
+            ime_composing
+        })
+        .collect();
     // Pair each printable key-down with its adjacent committed text. That text
     // is layout-authoritative (unlike a US-layout Shift prediction) and is
     // also removed from the later Event::Text path to avoid double insertion.
+    // During an IME composition, omit the guessed fallback: the final commit
+    // is authoritative and can arrive in a later frame.
     let key_texts: Vec<Option<char>> = events
         .iter()
         .enumerate()
@@ -205,8 +225,11 @@ fn collect_keyboard_frame_events(
                 && !(modifiers.ctrl || modifiers.mac_cmd || modifiers.alt)
                 && let Some(browser_key) = key_to_browser_key(*key)
             {
-                committed_text_after_key(events, index)
-                    .or_else(|| browser_key.printable_char_with_shift(modifiers.shift))
+                committed_text_after_key(events, index).or_else(|| {
+                    (!ime_composing_at_event[index])
+                        .then(|| browser_key.printable_char_with_shift(modifiers.shift))
+                        .flatten()
+                })
             } else {
                 None
             }
@@ -224,6 +247,7 @@ fn collect_keyboard_frame_events(
         key_chars,
         shortcut_chars,
         shortcut_presses,
+        ime_composing,
     }
 }
 
@@ -558,6 +582,53 @@ mod tests {
         ];
 
         assert_eq!(committed_text_after_key(&events, 0), None);
+    }
+
+    #[test]
+    fn printable_fallback_stays_suppressed_until_ime_commit() {
+        let shortcuts = AppShortcuts::default();
+        let first_frame = collect_keyboard_frame_events(
+            &[Event::Ime(egui::ImeEvent::Preedit {
+                text: "中".to_owned(),
+                active_range_chars: None,
+            })],
+            &shortcuts,
+            false,
+            false,
+        );
+        assert!(first_frame.ime_composing);
+
+        let composing_frame =
+            collect_keyboard_frame_events(&[press(Key::A, false)], &shortcuts, false, first_frame.ime_composing);
+        assert_eq!(composing_frame.key_texts, [None]);
+        assert!(composing_frame.ime_composing);
+
+        let committed_frame = collect_keyboard_frame_events(
+            &[
+                Event::Ime(egui::ImeEvent::Commit("中".to_owned())),
+                press(Key::B, false),
+            ],
+            &shortcuts,
+            false,
+            composing_frame.ime_composing,
+        );
+        assert_eq!(committed_frame.key_texts, [None, Some('b')]);
+        assert!(!committed_frame.ime_composing);
+
+        let dismissed_frame = collect_keyboard_frame_events(
+            &[
+                Event::Ime(egui::ImeEvent::Preedit {
+                    text: String::new(),
+                    active_range_chars: None,
+                }),
+                press(Key::C, false),
+            ],
+            &shortcuts,
+            false,
+            true,
+        );
+        assert_eq!(dismissed_frame.key_texts, [None, Some('c')]);
+        assert!(!dismissed_frame.ime_composing);
     }
 
     #[test]

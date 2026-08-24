@@ -425,8 +425,8 @@ fn validate_extra_args(extra_args: &[String]) -> Result<()> {
         else {
             continue;
         };
-        let name = switch.split(['=', ':']).next().unwrap_or(switch);
-        if name.starts_with("remote-debugging-") || matches!(name, "remote-allow-origins" | "user-data-dir") {
+        let name = switch.split(['=', ':']).next().unwrap_or(switch).to_ascii_lowercase();
+        if name.starts_with("remote-debugging-") || matches!(name.as_str(), "remote-allow-origins" | "user-data-dir") {
             return Err(ChromeError::ProtectedExtraArg(argument.clone()));
         }
     }
@@ -885,6 +885,9 @@ mod tests {
             vec!["-remote-allow-origins=https://example.com".to_string()],
             vec!["--user-data-dir".to_string(), "/tmp/shared".to_string()],
             vec!["/user-data-dir=C:\\shared".to_string()],
+            vec!["--REMOTE-DEBUGGING-ADDRESS=0.0.0.0".to_string()],
+            vec!["--Remote-Allow-Origins=https://example.com".to_string()],
+            vec!["/USER-DATA-DIR:C:\\shared".to_string()],
         ] {
             assert!(matches!(
                 validate_extra_args(&arguments),

@@ -53,6 +53,7 @@ pub fn handle(
     let page_keyboard_active = flags.interactive && matches!(flags.keyboard_target, KeyboardTarget::Page);
     if !page_keyboard_active {
         keyboard::release_pressed_keys(browser, state, keyboard::key_modifiers(ui));
+        state.ime_composing = false;
     }
     if !flags.interactive || matches!(flags.keyboard_target, KeyboardTarget::None) {
         keyboard::clear_focus_lost_suppressions(state);
