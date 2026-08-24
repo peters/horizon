@@ -319,7 +319,7 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ## Speech Input (opt-in)
 
-Dictate straight into a terminal: every terminal-backed panel's title bar gets a mic button (Editor, Git Changes, and Usage panels have no PTY, so they get none), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
+Dictate straight into a terminal or a browser page: terminal-backed and Browser panels get a mic button in their title bar (Editor, Git Changes, and Usage panels do not), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
 
 It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
 
@@ -402,7 +402,7 @@ features:
 
 Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
 
-**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal panel title bars.
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal and Browser panel title bars.
 
 ---
 
