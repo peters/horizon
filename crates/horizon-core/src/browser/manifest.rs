@@ -97,7 +97,7 @@ impl BrowserManifest {
     pub fn live_owner(&self, now_millis: i64) -> Option<&ManifestOwner> {
         self.owner
             .as_ref()
-            .filter(|owner| now_millis.saturating_sub(owner.updated_at) <= OWNER_TTL_MILLIS)
+            .filter(|owner| timestamp_is_fresh(now_millis, owner.updated_at, OWNER_TTL_MILLIS))
     }
 
     #[must_use]
@@ -109,8 +109,13 @@ impl BrowserManifest {
     #[must_use]
     pub fn user_is_active(&self, now_millis: i64) -> bool {
         let ttl_millis = i64::try_from(USER_ACTIVE_TTL.as_millis()).unwrap_or(i64::MAX);
-        self.user_active && now_millis.saturating_sub(self.user_active_at) <= ttl_millis
+        self.user_active && timestamp_is_fresh(now_millis, self.user_active_at, ttl_millis)
     }
+}
+
+fn timestamp_is_fresh(now_millis: i64, timestamp_millis: i64, ttl_millis: i64) -> bool {
+    let age_millis = now_millis.saturating_sub(timestamp_millis);
+    (0..=ttl_millis).contains(&age_millis)
 }
 
 #[must_use]
@@ -542,12 +547,14 @@ mod tests {
         m.owner = Some(ManifestOwner {
             name: "pi".to_string(),
             tty: Some("pts/1".to_string()),
-            updated_at: now - OWNER_TTL_MILLIS / 2,
+            updated_at: now,
         });
         write_at(&path, &m).unwrap();
         let read_back = read_at(&path).unwrap();
         assert!(read_back.live_owner(now).is_some());
-        assert!(read_back.live_owner(now + OWNER_TTL_MILLIS).is_none());
+        assert!(read_back.live_owner(now + OWNER_TTL_MILLIS).is_some());
+        assert!(read_back.live_owner(now + OWNER_TTL_MILLIS + 1).is_none());
+        assert!(read_back.live_owner(now - 1).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -558,7 +565,9 @@ mod tests {
         manifest.user_active_at = 1_000;
 
         assert!(manifest.user_is_active(5_999));
+        assert!(manifest.user_is_active(6_000));
         assert!(!manifest.user_is_active(6_001));
+        assert!(!manifest.user_is_active(999));
         manifest.user_active = false;
         assert!(!manifest.user_is_active(1_001));
     }
