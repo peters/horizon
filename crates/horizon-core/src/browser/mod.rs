@@ -508,12 +508,12 @@ impl Drop for BrowserPanelState {
     }
 }
 
-fn schedule_profile_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<()> {
+fn schedule_profile_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
     let fallback_profile_dir = profile_dir.clone();
     let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    let worker_completion_tx = completion_tx.clone();
     let cleanup = move || {
-        remove_browser_profile(&profile_dir);
-        let _ = completion_tx.send(());
+        let _ = worker_completion_tx.send(remove_browser_profile(&profile_dir));
     };
 
     if let Err(error) = std::thread::Builder::new()
@@ -521,16 +521,16 @@ fn schedule_profile_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<(
         .spawn(cleanup)
     {
         tracing::warn!("failed to start browser profile cleanup: {error}");
-        remove_browser_profile(&fallback_profile_dir);
+        let _ = completion_tx.send(remove_browser_profile(&fallback_profile_dir));
     }
     completion_rx
 }
 
-fn remove_browser_profile(profile_dir: &std::path::Path) {
-    if let Err(error) = std::fs::remove_dir_all(profile_dir)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(path = %profile_dir.display(), "failed to remove browser profile: {error}");
+fn remove_browser_profile(profile_dir: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(profile_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -685,6 +685,24 @@ mod tests {
         assert_eq!(completion_tx.send(()), Ok(()));
         assert!(signal.wait(std::time::Duration::from_secs(1)));
         assert!(!profile_dir.exists());
+    }
+
+    #[test]
+    fn failed_profile_cleanup_is_not_acknowledged_as_complete() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let profile_path = root.path().join("not-a-directory");
+        std::fs::write(&profile_path, b"profile placeholder").expect("profile placeholder");
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let signal = BrowserShutdownSignal::for_test(completion_rx).with_profile_cleanup(profile_path.clone());
+        assert_eq!(completion_tx.send(()), Ok(()));
+
+        assert!(!signal.wait(std::time::Duration::from_secs(1)));
+        assert!(!signal.is_complete());
+        assert!(profile_path.exists());
+
+        std::fs::remove_file(&profile_path).expect("remove profile placeholder");
+        assert!(signal.force_cleanup(std::time::Duration::from_secs(1)));
+        assert!(!profile_path.exists());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use horizon_core::browser::{
     BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
 };
 
-use crate::browser_widget::BrowserUiState;
+use crate::browser_widget::{BrowserUiState, PressedBrowserKey};
 
 pub(super) fn events(
     ui: &Ui,
@@ -53,6 +53,7 @@ pub(super) fn events(
             ),
             Event::Key {
                 key,
+                physical_key,
                 pressed,
                 repeat,
                 modifiers,
@@ -62,6 +63,7 @@ pub(super) fn events(
                 state,
                 BrowserKeyEvent {
                     key: *key,
+                    physical_key: *physical_key,
                     pressed: *pressed,
                     repeat: *repeat,
                     modifiers: *modifiers,
@@ -78,6 +80,7 @@ pub(super) fn browser_shortcut_events(events: &[Event], browser: &BrowserPanelSt
     for event in events {
         let Event::Key {
             key,
+            physical_key,
             pressed,
             repeat,
             modifiers,
@@ -92,6 +95,7 @@ pub(super) fn browser_shortcut_events(events: &[Event], browser: &BrowserPanelSt
                 state,
                 BrowserKeyEvent {
                     key: *key,
+                    physical_key: *physical_key,
                     pressed: *pressed,
                     repeat: *repeat,
                     modifiers: *modifiers,
@@ -116,8 +120,13 @@ pub(super) fn release_pressed_keys(
     state: &mut BrowserUiState,
     modifiers: BrowserModifiers,
 ) {
-    for (key, text) in state.pressed_keys.drain() {
-        browser.send(BrowserCommand::Input(BrowserInput::KeyUp { key, text, modifiers }));
+    for (key, pressed) in state.pressed_keys.drain() {
+        browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+            physical_key: pressed.physical_key,
+            key,
+            text: pressed.text,
+            modifiers,
+        }));
     }
 }
 
@@ -131,6 +140,7 @@ fn send_clipboard_shortcut(
     state.clipboard_release_keys.insert(key);
     state.pressed_keys.remove(&key);
     browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        physical_key: Some(key),
         key,
         text: None,
         modifiers,
@@ -138,6 +148,7 @@ fn send_clipboard_shortcut(
         edit_command: Some(edit_command),
     }));
     browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+        physical_key: Some(key),
         key,
         text: None,
         modifiers,
@@ -216,6 +227,7 @@ fn take_matching_single_char(text: &str, candidates: &mut Vec<char>) -> bool {
 #[derive(Clone, Copy)]
 struct BrowserKeyEvent {
     key: Key,
+    physical_key: Option<Key>,
     pressed: bool,
     repeat: bool,
     modifiers: Modifiers,
@@ -226,6 +238,7 @@ struct BrowserKeyEvent {
 fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, event: BrowserKeyEvent) {
     let BrowserKeyEvent {
         key,
+        physical_key,
         pressed,
         repeat,
         modifiers,
@@ -271,12 +284,13 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
     }
     if !pressed {
         if let Some(browser_key) = browser_key {
-            let Some(text) = state.pressed_keys.remove(&browser_key) else {
+            let Some(pressed_key) = state.pressed_keys.remove(&browser_key) else {
                 return;
             };
             browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+                physical_key: pressed_key.physical_key,
                 key: browser_key,
-                text,
+                text: pressed_key.text,
                 modifiers: to_browser_modifiers(modifiers),
             }));
         }
@@ -292,12 +306,20 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
         return;
     }
     let modifiers = to_browser_modifiers(modifiers);
+    let physical_browser_key = physical_key.and_then(key_to_browser_key);
     let edit_command = editing_command(key, modifiers);
     let text = key_text
         .map(|character| character.to_string())
         .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
-    state.pressed_keys.insert(browser_key, text.clone());
+    state.pressed_keys.insert(
+        browser_key,
+        PressedBrowserKey {
+            physical_key: physical_browser_key,
+            text: text.clone(),
+        },
+    );
     browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        physical_key: physical_browser_key,
         key: browser_key,
         text,
         modifiers,

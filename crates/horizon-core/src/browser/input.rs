@@ -237,6 +237,9 @@ pub enum BrowserInput {
     /// keydown→keypress→input pipeline instead of a bare text insertion.
     /// `repeat` marks auto-repeat of a held key.
     KeyDown {
+        /// Physical key position used for DOM `code` and Windows VK. The
+        /// logical `key` and committed `text` still drive DOM `key`/input.
+        physical_key: Option<BrowserKey>,
         key: BrowserKey,
         text: Option<String>,
         modifiers: BrowserModifiers,
@@ -244,6 +247,8 @@ pub enum BrowserInput {
         edit_command: Option<BrowserEditCommand>,
     },
     KeyUp {
+        /// Physical key position retained from the matching key-down.
+        physical_key: Option<BrowserKey>,
         key: BrowserKey,
         /// Effective DOM key captured on key-down for layout-correct key-up.
         text: Option<String>,
@@ -329,13 +334,19 @@ impl BrowserInput {
                 }),
             ),
             Self::KeyDown {
+                physical_key,
                 key,
                 text,
                 modifiers,
                 repeat,
                 edit_command,
-            } => key_down_cdp(key, text, modifiers, repeat, edit_command),
-            Self::KeyUp { key, text, modifiers } => key_up_cdp(key, text.as_deref(), modifiers),
+            } => key_down_cdp(physical_key, key, text, modifiers, repeat, edit_command),
+            Self::KeyUp {
+                physical_key,
+                key,
+                text,
+                modifiers,
+            } => key_up_cdp(physical_key, key, text.as_deref(), modifiers),
             Self::InsertText { text } => ("Input.insertText", json!({ "text": text })),
         }
     }
@@ -365,6 +376,7 @@ impl BrowserInput {
 }
 
 fn key_down_cdp(
+    physical_key: Option<BrowserKey>,
     key: BrowserKey,
     text: Option<String>,
     modifiers: BrowserModifiers,
@@ -378,11 +390,12 @@ fn key_down_cdp(
     // keydown→keypress→input pipeline; other keys use `rawKeyDown`.
     let ty = if text.is_some() { "keyDown" } else { "rawKeyDown" };
     let dom_key = dispatch_dom_key(key, text.as_deref(), modifiers.shift);
+    let hardware_key = physical_key.unwrap_or(key);
     let mut params = json!({
         "type": ty,
         "key": dom_key,
-        "code": key.code_name(),
-        "windowsVirtualKeyCode": key.vk_code(),
+        "code": hardware_key.code_name(),
+        "windowsVirtualKeyCode": hardware_key.vk_code(),
         "autoRepeat": repeat,
         "modifiers": modifiers.cdp_bits(),
     });
@@ -395,15 +408,21 @@ fn key_down_cdp(
     ("Input.dispatchKeyEvent", params)
 }
 
-fn key_up_cdp(key: BrowserKey, text: Option<&str>, modifiers: BrowserModifiers) -> (&'static str, Value) {
+fn key_up_cdp(
+    physical_key: Option<BrowserKey>,
+    key: BrowserKey,
+    text: Option<&str>,
+    modifiers: BrowserModifiers,
+) -> (&'static str, Value) {
     let dom_key = dispatch_dom_key(key, text, modifiers.shift);
+    let hardware_key = physical_key.unwrap_or(key);
     (
         "Input.dispatchKeyEvent",
         json!({
             "type": "keyUp",
             "key": dom_key,
-            "windowsVirtualKeyCode": key.vk_code(),
-            "code": key.code_name(),
+            "windowsVirtualKeyCode": hardware_key.vk_code(),
+            "code": hardware_key.code_name(),
             "modifiers": modifiers.cdp_bits(),
         }),
     )
@@ -713,6 +732,7 @@ mod tests {
     #[test]
     fn char_key_sends_keydown_with_text() {
         let (method, params) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('h'),
             text: Some("h".to_string()),
             modifiers: BrowserModifiers::none(),
@@ -731,6 +751,7 @@ mod tests {
     #[test]
     fn non_printable_key_sends_raw_keydown() {
         let (_, params) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Backspace,
             text: None,
             modifiers: BrowserModifiers::none(),
@@ -746,6 +767,7 @@ mod tests {
     #[test]
     fn unmodified_enter_sends_text_for_chromiums_keypress_pipeline() {
         let (_, params) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Enter,
             text: None,
             modifiers: BrowserModifiers::none(),
@@ -776,6 +798,7 @@ mod tests {
             },
         ] {
             let (_, params) = BrowserInput::KeyDown {
+                physical_key: None,
                 key: BrowserKey::Enter,
                 text: None,
                 modifiers,
@@ -796,6 +819,7 @@ mod tests {
             ..BrowserModifiers::none()
         };
         let (_, params) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('a'),
             text: Some("A".to_string()),
             modifiers,
@@ -808,6 +832,7 @@ mod tests {
         assert_eq!(params["windowsVirtualKeyCode"], 0x41);
 
         let (_, shortcut) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('1'),
             text: None,
             modifiers: BrowserModifiers {
@@ -823,8 +848,35 @@ mod tests {
     }
 
     #[test]
+    fn physical_key_drives_code_and_virtual_key_without_changing_layout_text() {
+        let (_, key_down) = BrowserInput::KeyDown {
+            physical_key: Some(BrowserKey::Char('q')),
+            key: BrowserKey::Char('a'),
+            text: Some("a".to_string()),
+            modifiers: BrowserModifiers::none(),
+            repeat: false,
+            edit_command: None,
+        }
+        .cdp();
+        let (_, key_up) = BrowserInput::KeyUp {
+            physical_key: Some(BrowserKey::Char('q')),
+            key: BrowserKey::Char('a'),
+            text: Some("a".to_string()),
+            modifiers: BrowserModifiers::none(),
+        }
+        .cdp();
+
+        for params in [&key_down, &key_up] {
+            assert_eq!(params["key"], "a");
+            assert_eq!(params["code"], "KeyQ");
+            assert_eq!(params["windowsVirtualKeyCode"], 0x51);
+        }
+    }
+
+    #[test]
     fn editing_keydowns_carry_chromium_edit_commands() {
         let (_, params) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('x'),
             text: None,
             modifiers: BrowserModifiers {
@@ -840,6 +892,7 @@ mod tests {
         assert_eq!(params["commands"], json!(["Cut"]));
 
         let (_, select_all) = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('a'),
             text: None,
             modifiers: BrowserModifiers {
@@ -856,6 +909,7 @@ mod tests {
     #[test]
     fn only_copying_edit_commands_request_a_selection_snapshot() {
         let cut = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('x'),
             text: None,
             modifiers: BrowserModifiers::none(),
@@ -863,6 +917,7 @@ mod tests {
             edit_command: Some(BrowserEditCommand::Cut),
         };
         let select_all = BrowserInput::KeyDown {
+            physical_key: None,
             key: BrowserKey::Char('a'),
             text: None,
             modifiers: BrowserModifiers::none(),

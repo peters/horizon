@@ -6,6 +6,7 @@
 //! moves are deduplicated to actual movement.
 
 mod chrome;
+mod ime;
 mod input;
 mod render;
 
@@ -39,7 +40,7 @@ pub struct BrowserUiState {
     /// Every key-down delivered to the page, with its layout-resolved text
     /// when present. Tracking non-printable keys too lets focus loss synthesize
     /// every matching key-up instead of leaving Chrome's key state stuck.
-    pressed_keys: std::collections::HashMap<BrowserKey, Option<String>>,
+    pressed_keys: std::collections::HashMap<BrowserKey, PressedBrowserKey>,
     /// App-owned shortcuts and browser-local reload stay consumed through
     /// their release even if a later frame has different modifier state.
     suppressed_shortcut_keys: std::collections::HashSet<BrowserKey>,
@@ -57,6 +58,11 @@ struct BrowserPointerClick {
     position: Pos2,
     time: f64,
     count: u32,
+}
+
+struct PressedBrowserKey {
+    physical_key: Option<BrowserKey>,
+    text: Option<String>,
 }
 
 pub struct BrowserView<'a> {
@@ -120,6 +126,18 @@ impl<'a> BrowserView<'a> {
         } else {
             input::KeyboardTarget::None
         };
+        if let Some(body_id) = body.keyboard_focus_id {
+            if page_keyboard_active {
+                ui.memory_mut(|memory| {
+                    memory.set_focus_lock_filter(body_id, page_focus_event_filter());
+                });
+                if let Some(body_rect) = body.image_rect {
+                    ime::publish_page_ime_output(ui, body_id, body_rect);
+                }
+            } else {
+                ime::clear_page_ime_state(ui, body_id);
+            }
+        }
         if let Some(browser) = self.panel.browser_mut() {
             if body.retry_clicked {
                 browser.relaunch();
@@ -182,6 +200,15 @@ impl<'a> BrowserView<'a> {
     }
 }
 
+const fn page_focus_event_filter() -> egui::EventFilter {
+    egui::EventFilter {
+        tab: true,
+        horizontal_arrows: true,
+        vertical_arrows: true,
+        escape: false,
+    }
+}
+
 const fn page_keyboard_can_route(
     viewport_panel_focused: bool,
     url_focused: bool,
@@ -208,7 +235,16 @@ fn frame_matches_viewport(
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_matches_viewport, page_keyboard_can_route};
+    use super::{frame_matches_viewport, page_focus_event_filter, page_keyboard_can_route};
+
+    #[test]
+    fn page_focus_keeps_navigation_keys_out_of_egui() {
+        let filter = page_focus_event_filter();
+        assert!(filter.tab);
+        assert!(filter.horizontal_arrows);
+        assert!(filter.vertical_arrows);
+        assert!(!filter.escape);
+    }
 
     #[test]
     fn pointer_input_waits_for_the_sent_viewport_frame() {

@@ -96,13 +96,51 @@ impl ChromeProcessControl {
 
     fn clear(&self, child: &Arc<Mutex<Child>>) {
         let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state
-            .child
-            .as_ref()
-            .is_some_and(|registered| Arc::ptr_eq(registered, child))
-        {
-            state.child = None;
+        clear_registered_child(&mut state, child);
+    }
+
+    fn clear_until(&self, child: &Arc<Mutex<Child>>, deadline: Instant) -> bool {
+        let Some(mut state) = lock_until(&self.inner, deadline) else {
+            return false;
+        };
+        clear_registered_child(&mut state, child);
+        true
+    }
+
+    /// Whether no registered child remains alive. A driver completion signal
+    /// is not sufficient: its final kill/reap can fail while this retained
+    /// exact handle still owns a live Chrome process.
+    pub(crate) fn is_reaped(&self) -> bool {
+        let child = {
+            let state = match self.inner.try_lock() {
+                Ok(state) => state,
+                Err(TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(TryLockError::WouldBlock) => return false,
+            };
+            state.child.clone()
+        };
+        let Some(child) = child else {
+            return true;
+        };
+        let reaped = {
+            let mut child_guard = match child.try_lock() {
+                Ok(child) => child,
+                Err(TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(TryLockError::WouldBlock) => return false,
+            };
+            match child_guard.try_wait() {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(error) => {
+                    tracing::warn!(pid = child_guard.id(), "failed to poll Chrome child: {error}");
+                    false
+                }
+            }
+        };
+        if reaped {
+            self.clear(&child);
         }
+        reaped
     }
 
     /// Force the exact registered Chrome child to exit and reap it within the
@@ -121,12 +159,12 @@ impl ChromeProcessControl {
         let Some(child) = child else {
             return true;
         };
-        let Some(mut child) = lock_until(&child, deadline) else {
+        let Some(mut child_guard) = lock_until(&child, deadline) else {
             tracing::warn!("timed out waiting for the exact Chrome child handle");
             return false;
         };
-        let pid = child.id();
-        match kill_and_reap(&mut child, deadline.saturating_duration_since(Instant::now())) {
+        let pid = child_guard.id();
+        let reaped = match kill_and_reap(&mut child_guard, deadline.saturating_duration_since(Instant::now())) {
             Ok(Some(_)) => true,
             Ok(None) => {
                 tracing::warn!(pid, "Chrome did not exit within the forced shutdown deadline");
@@ -136,7 +174,23 @@ impl ChromeProcessControl {
                 tracing::warn!(pid, "failed to force-terminate Chrome: {error}");
                 false
             }
+        };
+        drop(child_guard);
+        if reaped && !self.clear_until(&child, deadline) {
+            tracing::warn!(pid, "timed out clearing the reaped Chrome child handle");
+            return false;
         }
+        reaped
+    }
+}
+
+fn clear_registered_child(state: &mut ChromeProcessControlState, child: &Arc<Mutex<Child>>) {
+    if state
+        .child
+        .as_ref()
+        .is_some_and(|registered| Arc::ptr_eq(registered, child))
+    {
+        state.child = None;
     }
 }
 
@@ -167,7 +221,7 @@ impl ChromeProcess {
     pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
         validate_extra_args(&launch.extra_args)?;
         let command = resolve_binary(&launch.command)?;
-        std::fs::create_dir_all(&launch.profile_dir)?;
+        prepare_profile_dir(&launch.profile_dir)?;
 
         let mut args: Vec<String> = vec![
             "--headless=new".to_string(),
@@ -299,19 +353,25 @@ impl ChromeProcess {
 
     /// Kill the browser. Chrome's child processes (zygotes, GPU, network
     /// service) exit with their parent; a short reap wait follows.
-    pub fn kill(&mut self) {
+    #[must_use]
+    pub fn kill(&mut self) -> bool {
         if self.child_status().is_some() {
-            return;
+            return true;
         }
         let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = child.id();
         match kill_and_reap(&mut child, Duration::from_secs(3)) {
-            Ok(Some(status)) => self.exit_status = Some(status),
+            Ok(Some(status)) => {
+                self.exit_status = Some(status);
+                true
+            }
             Ok(None) => {
                 tracing::warn!(pid, "Chrome did not exit within the reap deadline");
+                false
             }
             Err(error) => {
                 tracing::warn!(pid, "failed to kill or reap Chrome: {error}");
+                false
             }
         }
     }
@@ -322,6 +382,17 @@ impl ChromeProcess {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .to_string()
     }
+}
+
+fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(profile_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(profile_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 fn validate_extra_args(extra_args: &[String]) -> Result<()> {
@@ -404,8 +475,9 @@ fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
 
 impl Drop for ChromeProcess {
     fn drop(&mut self) {
-        self.kill();
-        self.control.clear(&self.child);
+        if self.kill() {
+            self.control.clear(&self.child);
+        }
     }
 }
 
@@ -596,6 +668,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn profile_directory_permissions_are_private_and_existing_modes_are_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("temp dir");
+        let profile_dir = root.path().join("profile");
+        std::fs::create_dir(&profile_dir).expect("profile dir");
+        std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("permissive profile mode");
+
+        prepare_profile_dir(&profile_dir).expect("private profile dir");
+
+        let mode = std::fs::metadata(&profile_dir)
+            .expect("profile metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn process_control_force_terminates_and_reaps_the_exact_child() {
         use std::os::unix::process::CommandExt;
 
@@ -608,7 +700,9 @@ mod tests {
         let control = ChromeProcessControl::default();
         control.register(&child);
 
+        assert!(!control.is_reaped());
         assert!(control.terminate(Duration::from_secs(2)));
+        assert!(control.is_reaped());
         assert!(
             child
                 .lock()

@@ -126,6 +126,7 @@ pub struct BrowserSession {
 /// terminate/reap the owned process and remove its dead manifest.
 pub(crate) struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
+    driver_complete: AtomicBool,
     process_complete: AtomicBool,
     process_control: ChromeProcessControl,
     panel_local_id: Option<String>,
@@ -135,8 +136,17 @@ pub(crate) struct BrowserShutdownSignal {
 enum ProfileCleanupState {
     NotRequired,
     Pending(std::path::PathBuf),
-    Running(mpsc::Receiver<()>),
+    Running {
+        profile_dir: std::path::PathBuf,
+        completion_rx: mpsc::Receiver<std::io::Result<()>>,
+    },
+    RetryPending {
+        profile_dir: std::path::PathBuf,
+        retry_at: Instant,
+    },
 }
+
+const PROFILE_CLEANUP_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 impl BrowserShutdownSignal {
     pub(crate) fn with_profile_cleanup(self, profile_dir: std::path::PathBuf) -> Self {
@@ -152,6 +162,7 @@ impl BrowserShutdownSignal {
         drop(completion_tx);
         Self {
             completion_rx,
+            driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control: ChromeProcessControl::default(),
             panel_local_id: None,
@@ -167,12 +178,19 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub(crate) fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        if !self.process_complete.load(Ordering::Acquire)
-            && !matches!(
+        if !self.driver_complete.load(Ordering::Acquire) {
+            if !matches!(
                 self.completion_rx.recv_timeout(timeout),
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-            )
-        {
+            ) {
+                return false;
+            }
+            self.driver_complete.store(true, Ordering::Release);
+        }
+        while !self.process_control.is_reaped() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !self.process_control.is_reaped() {
             return false;
         }
         self.process_complete.store(true, Ordering::Release);
@@ -200,6 +218,7 @@ impl BrowserShutdownSignal {
             return false;
         }
         self.process_complete.store(true, Ordering::Release);
+        self.retry_failed_profile_cleanup_now();
         self.wait_for_profile_cleanup(deadline.saturating_duration_since(Instant::now()))
     }
 
@@ -207,10 +226,15 @@ impl BrowserShutdownSignal {
         if self.process_complete.load(Ordering::Acquire) {
             return true;
         }
-        let complete = matches!(
-            self.completion_rx.try_recv(),
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
-        );
+        let driver_complete = self.driver_complete.load(Ordering::Acquire)
+            || matches!(
+                self.completion_rx.try_recv(),
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected)
+            );
+        if driver_complete {
+            self.driver_complete.store(true, Ordering::Release);
+        }
+        let complete = driver_complete && self.process_control.is_reaped();
         if complete {
             self.process_complete.store(true, Ordering::Release);
         }
@@ -222,18 +246,7 @@ impl BrowserShutdownSignal {
             .profile_cleanup
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        start_profile_cleanup(&mut cleanup);
-        let complete = match &*cleanup {
-            ProfileCleanupState::NotRequired => true,
-            ProfileCleanupState::Pending(_) => false,
-            ProfileCleanupState::Running(completion_rx) => {
-                matches!(completion_rx.try_recv(), Ok(()) | Err(mpsc::TryRecvError::Disconnected))
-            }
-        };
-        if complete {
-            *cleanup = ProfileCleanupState::NotRequired;
-        }
-        complete
+        poll_profile_cleanup(&mut cleanup, None)
     }
 
     fn wait_for_profile_cleanup(&self, timeout: Duration) -> bool {
@@ -241,25 +254,26 @@ impl BrowserShutdownSignal {
             .profile_cleanup
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        start_profile_cleanup(&mut cleanup);
-        let complete = match &*cleanup {
-            ProfileCleanupState::NotRequired => true,
-            ProfileCleanupState::Pending(_) => false,
-            ProfileCleanupState::Running(completion_rx) => matches!(
-                completion_rx.recv_timeout(timeout),
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-            ),
+        poll_profile_cleanup(&mut cleanup, Some(timeout))
+    }
+
+    fn retry_failed_profile_cleanup_now(&self) {
+        let mut cleanup = self
+            .profile_cleanup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::mem::replace(&mut *cleanup, ProfileCleanupState::NotRequired);
+        *cleanup = match previous {
+            ProfileCleanupState::RetryPending { profile_dir, .. } => ProfileCleanupState::Pending(profile_dir),
+            other => other,
         };
-        if complete {
-            *cleanup = ProfileCleanupState::NotRequired;
-        }
-        complete
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(completion_rx: mpsc::Receiver<()>) -> Self {
         Self {
             completion_rx,
+            driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control: ChromeProcessControl::default(),
             panel_local_id: None,
@@ -269,10 +283,66 @@ impl BrowserShutdownSignal {
 }
 
 fn start_profile_cleanup(cleanup: &mut ProfileCleanupState) {
-    let ProfileCleanupState::Pending(profile_dir) = std::mem::replace(cleanup, ProfileCleanupState::NotRequired) else {
-        return;
+    let previous = std::mem::replace(cleanup, ProfileCleanupState::NotRequired);
+    let profile_dir = match previous {
+        ProfileCleanupState::Pending(profile_dir) => profile_dir,
+        ProfileCleanupState::RetryPending { profile_dir, retry_at } if Instant::now() >= retry_at => profile_dir,
+        other => {
+            *cleanup = other;
+            return;
+        }
     };
-    *cleanup = ProfileCleanupState::Running(super::schedule_profile_removal(profile_dir));
+    let completion_rx = super::schedule_profile_removal(profile_dir.clone());
+    *cleanup = ProfileCleanupState::Running {
+        profile_dir,
+        completion_rx,
+    };
+}
+
+fn poll_profile_cleanup(cleanup: &mut ProfileCleanupState, timeout: Option<Duration>) -> bool {
+    start_profile_cleanup(cleanup);
+    let outcome = match cleanup {
+        ProfileCleanupState::NotRequired => return true,
+        ProfileCleanupState::Pending(_) | ProfileCleanupState::RetryPending { .. } => return false,
+        ProfileCleanupState::Running { completion_rx, .. } => match timeout {
+            Some(timeout) => match completion_rx.recv_timeout(timeout) {
+                Ok(result) => Some(result),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => Some(Err(std::io::Error::other(
+                    "browser profile cleanup worker disconnected",
+                ))),
+            },
+            None => match completion_rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(std::io::Error::other(
+                    "browser profile cleanup worker disconnected",
+                ))),
+            },
+        },
+    };
+    let Some(outcome) = outcome else {
+        return false;
+    };
+    match outcome {
+        Ok(()) => {
+            *cleanup = ProfileCleanupState::NotRequired;
+            true
+        }
+        Err(error) => {
+            let ProfileCleanupState::Running { profile_dir, .. } =
+                std::mem::replace(cleanup, ProfileCleanupState::NotRequired)
+            else {
+                return false;
+            };
+            tracing::warn!(path = %profile_dir.display(), "failed to remove browser profile: {error}");
+            *cleanup = ProfileCleanupState::RetryPending {
+                profile_dir,
+                retry_at: Instant::now() + PROFILE_CLEANUP_RETRY_DELAY,
+            };
+            false
+        }
+    }
 }
 
 /// Latest URL that the driver has observed Chrome commit. This survives the
@@ -370,6 +440,7 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal {
             completion_rx: self.completion_rx,
+            driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
@@ -384,6 +455,7 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal {
             completion_rx: self.completion_rx,
+            driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
@@ -509,7 +581,7 @@ fn run_loop(
             for message in outcome.drained {
                 state.handle_message(link, event_tx, frame_slot, message);
             }
-            chrome.kill();
+            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
         }
@@ -524,7 +596,7 @@ fn run_loop(
                 // failure and stop — the panel offers Retry.
                 tracing::warn!(target: "browser", "cdp connection lost: {error}");
                 let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
-                chrome.kill();
+                let _ = chrome.kill();
                 let _ = event_tx.send(BrowserEvent::Stopped { code: None });
                 break;
             }

@@ -99,18 +99,11 @@ impl HorizonHome {
 
 #[must_use]
 pub(crate) fn safe_local_id(local_id: &str) -> String {
-    if !local_id.is_empty()
-        && local_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-        && !is_windows_reserved_basename(local_id)
-    {
-        return local_id.to_string();
-    }
-
-    // '%' is never emitted by the unchanged safe form. Prefixing the hex
-    // encoding with it keeps every derived path unique, including the empty
-    // id, without allowing separators or platform-specific path characters.
+    // Always encode the exact UTF-8 bytes. Keeping an apparently safe ID
+    // verbatim would make identifiers that differ only by case collide on
+    // default macOS and Windows filesystems. The lowercase hexadecimal
+    // alphabet itself has no case variants, and the '%' prefix keeps the
+    // empty identifier distinct.
     let mut encoded = String::with_capacity(1 + local_id.len() * 2);
     encoded.push('%');
     for byte in local_id.bytes() {
@@ -118,17 +111,6 @@ pub(crate) fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
-}
-
-fn is_windows_reserved_basename(local_id: &str) -> bool {
-    let uppercase = local_id.to_ascii_uppercase();
-    if matches!(uppercase.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
-        return true;
-    }
-    let Some(number) = uppercase.strip_prefix("COM").or_else(|| uppercase.strip_prefix("LPT")) else {
-        return false;
-    };
-    matches!(number.as_bytes(), [b'1'..=b'9'])
 }
 
 #[cfg(test)]
@@ -164,7 +146,7 @@ mod tests {
         );
         assert_eq!(
             home.browser_profile_dir("panel-1"),
-            PathBuf::from("/tmp/horizon-home/browser-profiles/panel-1")
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%70616e656c2d31")
         );
         assert_eq!(
             home.browser_profile_dir("../outside"),
@@ -183,21 +165,20 @@ mod tests {
         assert_ne!(home.browser_profile_dir("a/b"), home.browser_profile_dir("a_b"));
         assert_ne!(home.browser_profile_dir(""), home.browser_profile_dir("_"));
         assert_ne!(home.browser_profile_dir("%"), home.browser_profile_dir("%25"));
+        assert_ne!(home.browser_profile_dir("Panel-A"), home.browser_profile_dir("panel-a"));
     }
 
     #[test]
-    fn windows_device_basenames_are_encoded_on_every_platform() {
+    fn every_local_id_uses_the_canonical_encoding() {
         let home = HorizonHome::from_root("/tmp/horizon-home".into());
 
-        for reserved in ["CON", "nul", "Aux", "PRN", "COM1", "com9", "LPT1", "lpt9"] {
+        for local_id in ["panel-1", "CON", "nul", "Aux", "PRN", "COM1", "com9", "LPT1", "lpt9"] {
             assert!(
-                home.browser_profile_dir(reserved)
+                home.browser_profile_dir(local_id)
                     .file_name()
                     .is_some_and(|name| name.to_string_lossy().starts_with('%')),
-                "{reserved} must not be used as a Windows path component"
+                "{local_id} must use the canonical path encoding"
             );
         }
-        assert_eq!(home.browser_profile_dir("COM0").file_name().unwrap(), "COM0");
-        assert_eq!(home.browser_profile_dir("LPT10").file_name().unwrap(), "LPT10");
     }
 }

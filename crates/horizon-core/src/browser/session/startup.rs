@@ -33,7 +33,7 @@ fn cancel_startup_if_requested(
     if !requested.load(Ordering::Acquire) {
         return false;
     }
-    chrome.kill();
+    let _ = chrome.kill();
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
     true
 }
@@ -75,13 +75,13 @@ fn initialize_driver(
     let ws_url = match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
         Ok(Some(url)) => url,
         Ok(None) => {
-            chrome.kill();
+            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("no DevTools endpoint: {error}")));
-            chrome.kill();
+            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
@@ -93,7 +93,7 @@ fn initialize_driver(
         Ok(link) => link,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connect failed: {error}")));
-            chrome.kill();
+            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
@@ -140,7 +140,7 @@ fn initialize_target(
             return None;
         }
         let _ = event_tx.send(BrowserEvent::Warning("no page target found".to_string()));
-        chrome.kill();
+        let _ = chrome.kill();
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     };
@@ -160,7 +160,7 @@ fn initialize_target(
         .and_then(|result| result.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
     else {
         let _ = event_tx.send(BrowserEvent::Warning("initial attach failed".to_string()));
-        chrome.kill();
+        let _ = chrome.kill();
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     };
@@ -212,7 +212,7 @@ pub(super) fn run_driver(
         &connection.session_id,
         &connection.target_id,
     ) {
-        connection.chrome.kill();
+        let _ = connection.chrome.kill();
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     }
@@ -225,7 +225,7 @@ pub(super) fn run_driver(
         frame_slot,
         event_tx,
     );
-    connection.chrome.kill();
+    let _ = connection.chrome.kill();
 }
 
 /// First existing `page` target, if any.
@@ -307,6 +307,7 @@ mod tests {
             std::path::PathBuf::from("/tmp/horizon-browser-profiles/%2e2e2f6f7574736964652f70726f66696c65")
         );
         assert_ne!(profile_dir(&config, "a/b"), profile_dir(&config, "a_b"));
+        assert_ne!(profile_dir(&config, "Panel-A"), profile_dir(&config, "panel-a"));
     }
 
     #[test]

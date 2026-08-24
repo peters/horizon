@@ -497,6 +497,10 @@ mod tests {
             manifest_path_for_root(&root, "a_b")
         );
         assert_ne!(manifest_path_for_root(&root, ""), manifest_path_for_root(&root, "_"));
+        assert_ne!(
+            manifest_path_for_root(&root, "Panel-A"),
+            manifest_path_for_root(&root, "panel-a")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
