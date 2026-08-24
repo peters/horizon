@@ -29,6 +29,7 @@ use tungstenite::protocol::WebSocket;
 /// checks UI commands again on an idle page, so keep it within one frame.
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(16);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Error, Debug)]
 pub enum CdpError {
@@ -174,8 +175,10 @@ impl CdpLink {
         let host_port = host_port_from_ws_url(ws_url)?;
         let tcp = TcpStream::connect(host_port)?;
         // The interactive polling timeout is intentionally short, but the
-        // HTTP Upgrade handshake needs a normal network-operation budget.
+        // HTTP Upgrade handshake and every later CDP write need a normal,
+        // bounded network-operation budget.
         tcp.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+        tcp.set_write_timeout(Some(WRITE_TIMEOUT))?;
         tcp.set_nodelay(true)?;
         let (mut ws, _response) =
             tungstenite::client::client(request, tcp).map_err(|e| CdpError::Handshake(e.to_string()))?;
@@ -643,6 +646,7 @@ mod tests {
 
         let mut link =
             CdpLink::connect_with_timeout(&format!("ws://{addr}/devtools/page/x"), Duration::from_secs(2)).unwrap();
+        assert_eq!(link.ws.get_ref().write_timeout().unwrap(), Some(WRITE_TIMEOUT));
         let outcome = link.call_and_drain(Duration::from_secs(5), "Page.enable", &json!({}), None);
         let result = outcome.result.unwrap();
         assert_eq!(result, json!({ "ok": true }));

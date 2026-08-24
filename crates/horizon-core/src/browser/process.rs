@@ -371,9 +371,18 @@ fn standard_installations() -> Vec<PathBuf> {
         candidates.push(PathBuf::from(&root).join(r"Microsoft\Edge\Application\msedge.exe"));
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join(r"Programs\chromium\Application\chrome.exe"));
+        candidates.extend(per_user_windows_installations(Path::new(&local)));
     }
     candidates
+}
+
+#[cfg(any(windows, test))]
+fn per_user_windows_installations(local_app_data: &Path) -> [PathBuf; 3] {
+    [
+        local_app_data.join(r"Google\Chrome\Application\chrome.exe"),
+        local_app_data.join(r"Microsoft\Edge\Application\msedge.exe"),
+        local_app_data.join(r"Programs\chromium\Application\chrome.exe"),
+    ]
 }
 
 /// Standard macOS install locations (browsers installed as `.app` bundles
@@ -437,6 +446,20 @@ mod tests {
                 OsString::from("chrome.COM"),
                 OsString::from("chrome.EXE"),
                 OsString::from("chrome.CMD")
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_per_user_browser_locations_cover_chrome_edge_and_chromium() {
+        let candidates = per_user_windows_installations(Path::new(r"C:\Users\test\AppData\Local"));
+
+        assert_eq!(
+            candidates,
+            [
+                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Google\Chrome\Application\chrome.exe"),
+                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Microsoft\Edge\Application\msedge.exe"),
+                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Programs\chromium\Application\chrome.exe"),
             ]
         );
     }

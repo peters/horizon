@@ -304,7 +304,6 @@ fn run_loop(
             // fallback for an uncooperative process.
             let _ = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
             chrome.kill();
-            state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
         }
@@ -320,7 +319,6 @@ fn run_loop(
                 tracing::warn!(target: "browser", "cdp connection lost: {error}");
                 let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
                 chrome.kill();
-                state.remove_manifest();
                 let _ = event_tx.send(BrowserEvent::Stopped { code: None });
                 break;
             }
@@ -344,7 +342,6 @@ fn run_loop(
 
         // 6. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
-            state.remove_manifest();
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
             break;
         }

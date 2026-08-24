@@ -113,11 +113,28 @@ impl DriverState {
     }
 
     pub(super) fn initialize_manifest(&mut self) {
-        if let Err(error) = self.write_manifest_extra(true, |manifest| {
+        let local_id = &self.config.panel_local_id;
+        let initialize_result = manifest::initialize(local_id, |manifest| {
+            manifest.panel_local_id.clone_from(local_id);
             manifest.user_active = false;
             manifest.user_active_at = 0;
-        }) {
-            tracing::warn!(target: "browser", "failed to initialize browser manifest: {error}");
+            manifest.browser_ws.clone_from(&self.browser_ws);
+            manifest
+                .target_id
+                .clone_from(&self.target_id.clone().unwrap_or_default());
+            manifest.url.clone_from(&self.url);
+            manifest.title.clone_from(&self.title);
+            manifest.updated_at = manifest::now_millis();
+        });
+        match initialize_result {
+            Ok(_) => {
+                self.manifest_dirty = false;
+                self.last_manifest_write = Instant::now();
+            }
+            Err(error) => {
+                self.manifest_dirty = true;
+                tracing::warn!(target: "browser", "failed to initialize browser manifest: {error}");
+            }
         }
     }
 
@@ -132,10 +149,6 @@ impl DriverState {
             Ok(()) => self.last_user_active_stamp = None,
             Err(error) => tracing::warn!(target: "browser", "failed to expire user activity: {error}"),
         }
-    }
-
-    pub(super) fn remove_manifest(&self) {
-        manifest::remove(&self.config.panel_local_id);
     }
 }
 

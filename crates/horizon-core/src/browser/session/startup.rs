@@ -6,6 +6,7 @@ use std::sync::{Arc, mpsc};
 use crate::browser::BrowserConfig;
 use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
+use crate::browser::manifest::DriverManifestLifetime;
 use crate::browser::process::ChromeProcess;
 
 use super::{
@@ -196,6 +197,7 @@ pub(super) fn run_driver(
     completion_tx: mpsc::Sender<()>,
 ) {
     let _completion = DriverCompletion(Some(completion_tx));
+    let _manifest_lifetime = DriverManifestLifetime::start(&config.panel_local_id);
     let Some(mut connection) = initialize_driver(config, event_tx, stop_requested) else {
         return;
     };
@@ -210,7 +212,6 @@ pub(super) fn run_driver(
         &connection.target_id,
     ) {
         connection.chrome.kill();
-        state.remove_manifest();
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     }

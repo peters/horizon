@@ -16,8 +16,9 @@
 //! Every update to an existing manifest must use [`update`] (or implement its
 //! adjacent `<panel>.json.lock` protocol around both the read and the write).
 //! This serializes read-modify-write transactions across the driver and agent
-//! processes so ownership/handoff fields cannot be lost. [`write`] is only a
-//! full replacement for initialization when no concurrent writer exists.
+//! processes so ownership/handoff fields cannot be lost. Driver startup uses
+//! [`initialize`] to create the manifest explicitly; later updates fail when
+//! teardown has removed it, so a delayed writer cannot resurrect a dead panel.
 
 use std::fs::OpenOptions;
 #[cfg(unix)]
@@ -187,6 +188,29 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
     write_at_locked(path, manifest)
 }
 
+/// Initialize a driver's manifest, preserving any agent-owned fields already
+/// written under the same lock.
+///
+/// Unlike [`update`], this operation may create a missing manifest. It is
+/// reserved for the single driver-start boundary.
+///
+/// # Errors
+/// Fails when the lock or manifest write cannot be completed.
+pub(crate) fn initialize(
+    panel_local_id: &str,
+    update: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
+    initialize_at(&default_manifest_path(panel_local_id), panel_local_id, update)
+}
+
+fn initialize_at(
+    path: &Path,
+    panel_local_id: &str,
+    update: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
+    mutate_at(path, panel_local_id, true, update)
+}
+
 /// Atomically read, mutate, and replace one manifest while holding the
 /// inter-process manifest lock.
 ///
@@ -201,14 +225,32 @@ fn update_at(
     panel_local_id: &str,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
+    mutate_at(path, panel_local_id, false, update)
+}
+
+fn mutate_at(
+    path: &Path,
+    panel_local_id: &str,
+    create_missing: bool,
+    update: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire(path)?;
-    let mut manifest = read_at(path).unwrap_or(BrowserManifest {
-        panel_local_id: panel_local_id.to_string(),
-        ..BrowserManifest::default()
-    });
+    let mut manifest = read_at(path)
+        .or_else(|| {
+            create_missing.then(|| BrowserManifest {
+                panel_local_id: panel_local_id.to_string(),
+                ..BrowserManifest::default()
+            })
+        })
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("browser manifest no longer exists: {}", path.display()),
+            )
+        })?;
     update(&mut manifest);
     write_at_locked(path, &manifest)?;
     Ok(manifest)
@@ -297,7 +339,34 @@ fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
 
 pub fn remove(panel_local_id: &str) {
     let path = default_manifest_path(panel_local_id);
-    if let Err(error) = remove_at(&path, REMOVE_STALE_LOCK_AGE) {
+    remove_at_with_warning(&path);
+}
+
+/// Owns one driver's manifest from startup through every exit path.
+pub(crate) struct DriverManifestLifetime {
+    path: PathBuf,
+}
+
+impl DriverManifestLifetime {
+    /// Remove any stale predecessor manifest and arm cleanup for this run.
+    pub(crate) fn start(panel_local_id: &str) -> Self {
+        Self::start_at(default_manifest_path(panel_local_id))
+    }
+
+    fn start_at(path: PathBuf) -> Self {
+        remove_at_with_warning(&path);
+        Self { path }
+    }
+}
+
+impl Drop for DriverManifestLifetime {
+    fn drop(&mut self) {
+        remove_at_with_warning(&self.path);
+    }
+}
+
+fn remove_at_with_warning(path: &Path) {
+    if let Err(error) = remove_at(path, REMOVE_STALE_LOCK_AGE) {
         tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
     }
 }
@@ -480,6 +549,59 @@ mod tests {
         let manifest = read_at(&path).unwrap();
         assert_eq!(manifest.title, "title-49");
         assert_eq!(manifest.user_active_at, 49);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_cannot_recreate_a_manifest_removed_while_waiting_for_its_lock() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "teardown-race");
+        write_at(&path, &sample("teardown-race")).unwrap();
+        let lock = ManifestLock::acquire(&path).unwrap();
+
+        let result = std::thread::scope(|scope| {
+            let update_path = path.clone();
+            let update = scope.spawn(move || {
+                update_at(&update_path, "teardown-race", |manifest| {
+                    manifest.title = "late update".to_string();
+                })
+            });
+            std::fs::remove_file(&path).unwrap();
+            drop(lock);
+            update.join().unwrap()
+        });
+
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn driver_initialization_is_the_explicit_create_boundary() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "initialize");
+
+        let manifest = initialize_at(&path, "initialize", |manifest| {
+            manifest.browser_ws = "ws://127.0.0.1:2/devtools/browser/y".to_string();
+        })
+        .unwrap();
+
+        assert_eq!(read_at(&path), Some(manifest));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn driver_lifetime_cleans_stale_and_new_manifests() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "lifetime");
+        write_at(&path, &sample("lifetime")).unwrap();
+
+        let lifetime = DriverManifestLifetime::start_at(path.clone());
+        assert!(!path.exists());
+        write_at(&path, &sample("lifetime")).unwrap();
+        drop(lifetime);
+
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

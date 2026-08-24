@@ -103,6 +103,7 @@ pub(crate) fn safe_local_id(local_id: &str) -> String {
         && local_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        && !is_windows_reserved_basename(local_id)
     {
         return local_id.to_string();
     }
@@ -117,6 +118,17 @@ pub(crate) fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn is_windows_reserved_basename(local_id: &str) -> bool {
+    let uppercase = local_id.to_ascii_uppercase();
+    if matches!(uppercase.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    let Some(number) = uppercase.strip_prefix("COM").or_else(|| uppercase.strip_prefix("LPT")) else {
+        return false;
+    };
+    matches!(number.as_bytes(), [b'1'..=b'9'])
 }
 
 #[cfg(test)]
@@ -171,5 +183,21 @@ mod tests {
         assert_ne!(home.browser_profile_dir("a/b"), home.browser_profile_dir("a_b"));
         assert_ne!(home.browser_profile_dir(""), home.browser_profile_dir("_"));
         assert_ne!(home.browser_profile_dir("%"), home.browser_profile_dir("%25"));
+    }
+
+    #[test]
+    fn windows_device_basenames_are_encoded_on_every_platform() {
+        let home = HorizonHome::from_root("/tmp/horizon-home".into());
+
+        for reserved in ["CON", "nul", "Aux", "PRN", "COM1", "com9", "LPT1", "lpt9"] {
+            assert!(
+                home.browser_profile_dir(reserved)
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('%')),
+                "{reserved} must not be used as a Windows path component"
+            );
+        }
+        assert_eq!(home.browser_profile_dir("COM0").file_name().unwrap(), "COM0");
+        assert_eq!(home.browser_profile_dir("LPT10").file_name().unwrap(), "LPT10");
     }
 }

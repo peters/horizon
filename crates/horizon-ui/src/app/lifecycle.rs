@@ -190,6 +190,10 @@ impl HorizonApp {
             return;
         }
 
+        // A browser navigation can commit between the preceding frame and
+        // the close request. Fold queued driver events into panel state before
+        // serializing the final runtime snapshot.
+        let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
         let mut progress = self
@@ -244,6 +248,7 @@ impl HorizonApp {
         }
 
         self.exit_cleanup_complete = true;
+        let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         if let Some(progress) = self
             .pending_session_switch
@@ -318,13 +323,7 @@ impl HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
-        let panel_output = self.board.process_output();
-        if panel_output.persisted_state_changed {
-            self.mark_runtime_dirty();
-        }
-        // process_output already drained browser-panel driver events
-        // (Panel::process_output handles the browser kind).
-        let had_panel_output = panel_output.activity.terminal || panel_output.activity.browser;
+        let had_panel_output = self.drain_panel_output();
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -337,6 +336,16 @@ impl HorizonApp {
         self.maybe_start_update_check();
 
         had_panel_output
+    }
+
+    /// Drain terminal and browser events, promoting persistence-relevant
+    /// changes into the app's runtime dirty state.
+    fn drain_panel_output(&mut self) -> bool {
+        let panel_output = self.board.process_output();
+        if panel_output.persisted_state_changed {
+            self.mark_runtime_dirty();
+        }
+        panel_output.activity.terminal || panel_output.activity.browser
     }
 
     fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {

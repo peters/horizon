@@ -189,11 +189,12 @@ fn pointer_events(
                         egui::MouseWheelUnit::Page => 500.0,
                     };
                     let (x, y) = to_page_coords(rect, frame_size, p);
+                    let (delta_x, delta_y) = cdp_wheel_delta(*delta, scale);
                     browser.send(BrowserCommand::Input(BrowserInput::Wheel {
                         x,
                         y,
-                        delta_x: f64::from(delta.x * scale),
-                        delta_y: f64::from(delta.y * scale),
+                        delta_x,
+                        delta_y,
                         modifiers,
                     }));
                 }
@@ -763,6 +764,12 @@ fn to_page_coords(rect: egui::Rect, frame_size: [f32; 2], pos: egui::Pos2) -> (f
     (x, y)
 }
 
+fn cdp_wheel_delta(delta: egui::Vec2, scale: f32) -> (f64, f64) {
+    // egui reports positive movement toward the top/left; CDP uses the DOM
+    // wheel convention where positive deltas move toward the bottom/right.
+    (-f64::from(delta.x * scale), -f64::from(delta.y * scale))
+}
+
 fn button_mask(button: BrowserButton) -> u32 {
     match button {
         BrowserButton::Left => BUTTON_LEFT,
@@ -954,6 +961,12 @@ mod tests {
         assert!(!should_track_pointer(false, true, false));
         assert!(should_track_pointer(true, true, false));
         assert!(should_track_pointer(false, false, true));
+    }
+
+    #[test]
+    fn wheel_deltas_follow_the_dom_direction() {
+        assert_eq!(cdp_wheel_delta(egui::vec2(2.0, 3.0), 16.0), (-32.0, -48.0));
+        assert_eq!(cdp_wheel_delta(egui::vec2(-2.0, -3.0), 16.0), (32.0, 48.0));
     }
 
     #[test]
