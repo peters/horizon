@@ -341,6 +341,11 @@ fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
         // GNU kill otherwise accepts a negative PID as another option and
         // can report success without signaling the process group.
         .args(["-KILL", "--", process_group.as_str()])
+        // The status drives the exact-child fallback below. Do not leak a
+        // partial process-group diagnostic when that fallback still reaps the
+        // owned Chrome tree successfully.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success());
     if tree_killed || child.try_wait()?.is_some() {
@@ -355,6 +360,8 @@ fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
     let pid = child.id().to_string();
     let tree_killed = Command::new("taskkill")
         .args(["/PID", pid.as_str(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success());
     if tree_killed || child.try_wait()?.is_some() {
