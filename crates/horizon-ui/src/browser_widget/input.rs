@@ -17,12 +17,18 @@ const BUTTON_RIGHT: u32 = 4;
 #[derive(Clone, Copy)]
 pub(crate) struct InputFlags<'a> {
     pub(crate) events: &'a [Event],
-    pub(crate) is_focused: bool,
     pub(crate) interactive: bool,
+    pub(crate) keyboard_target: KeyboardTarget,
     pub(crate) pointer_viewport: PointerViewportState,
-    pub(crate) url_focused: bool,
     pub(crate) shortcuts: &'a AppShortcuts,
     pub(crate) exit_fullscreen_shortcut_owner: ShortcutOwner,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum KeyboardTarget {
+    None,
+    Url,
+    Page,
 }
 
 #[derive(Clone, Copy)]
@@ -46,7 +52,7 @@ pub fn handle(
     pointer_target: bool,
     flags: InputFlags<'_>,
 ) {
-    let page_keyboard_active = flags.interactive && flags.is_focused && !flags.url_focused;
+    let page_keyboard_active = flags.interactive && matches!(flags.keyboard_target, KeyboardTarget::Page);
     if !page_keyboard_active {
         release_pressed_keys(browser, state, key_modifiers(ui));
     }
@@ -59,20 +65,18 @@ pub fn handle(
     {
         pointer_events(ui, flags.events, browser, state, rect, frame_size, pointer_target);
     }
-    if flags.is_focused {
+    if matches!(flags.keyboard_target, KeyboardTarget::Url) {
+        browser_shortcut_events(flags.events, browser, state);
+    } else if page_keyboard_active {
         let exit_fullscreen_shortcut_active = matches!(flags.exit_fullscreen_shortcut_owner, ShortcutOwner::App);
-        if flags.url_focused {
-            browser_shortcut_events(flags.events, browser, state);
-        } else {
-            keyboard_events(
-                ui,
-                flags.events,
-                browser,
-                state,
-                flags.shortcuts,
-                exit_fullscreen_shortcut_active,
-            );
-        }
+        keyboard_events(
+            ui,
+            flags.events,
+            browser,
+            state,
+            flags.shortcuts,
+            exit_fullscreen_shortcut_active,
+        );
     }
 }
 

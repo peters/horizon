@@ -7,7 +7,7 @@ use crate::browser::BrowserConfig;
 use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
 use crate::browser::manifest::DriverManifestLifetime;
-use crate::browser::process::ChromeProcess;
+use crate::browser::process::{ChromeProcess, ChromeProcessControl};
 
 use super::{
     BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, DriverState, WS_URL_TIMEOUT,
@@ -50,6 +50,7 @@ fn initialize_driver(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
+    process_control: ChromeProcessControl,
 ) -> Option<DriverConnection> {
     let launch = match build_launch(config) {
         Ok(launch) => launch,
@@ -63,7 +64,7 @@ fn initialize_driver(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     }
-    let mut chrome = match ChromeProcess::spawn(&launch) {
+    let mut chrome = match ChromeProcess::spawn(&launch, process_control) {
         Ok(chrome) => chrome,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("failed to start chrome: {error}")));
@@ -194,10 +195,11 @@ pub(super) fn run_driver(
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,
     completion_tx: mpsc::Sender<()>,
+    process_control: ChromeProcessControl,
 ) {
     let _completion = DriverCompletion(Some(completion_tx));
     let _manifest_lifetime = DriverManifestLifetime::start(&config.panel_local_id);
-    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested) else {
+    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
         return;
     };
 
@@ -345,6 +347,6 @@ mod tests {
         assert!(started.exists(), "delayed browser did not start");
 
         let completion = session.shutdown_signal();
-        assert_eq!(completion.recv_timeout(Duration::from_secs(2)), Ok(()));
+        assert!(completion.wait(Duration::from_secs(2)));
     }
 }

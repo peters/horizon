@@ -469,7 +469,7 @@ impl Panel {
     /// Take this panel's browser teardown-completion signal, if the browser
     /// shutdown was requested and not yet joined.
     #[must_use]
-    pub fn browser_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+    pub(crate) fn browser_shutdown_signal(&mut self) -> Option<crate::browser::BrowserShutdownSignal> {
         if let Some(browser) = self.content.browser_mut() {
             browser.take_shutdown_signal()
         } else {

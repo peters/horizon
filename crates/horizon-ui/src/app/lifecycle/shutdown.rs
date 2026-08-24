@@ -4,6 +4,7 @@ use super::HorizonApp;
 use crate::loading_spinner;
 
 const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
+const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 const fn shutdown_ready_to_exit(complete: bool, browser_shutdown_complete: bool, timed_out: bool) -> bool {
     browser_shutdown_complete && (complete || timed_out)
@@ -37,7 +38,11 @@ impl HorizonApp {
         };
         let complete = progress.is_complete();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
-        if !shutdown_ready_to_exit(complete, progress.browser_shutdown_is_complete(), timed_out) {
+        let mut browser_shutdown_complete = progress.browser_shutdown_is_complete();
+        if timed_out && !browser_shutdown_complete {
+            browser_shutdown_complete = progress.force_browser_shutdown(FORCED_BROWSER_SHUTDOWN_WAIT);
+        }
+        if !shutdown_ready_to_exit(complete, browser_shutdown_complete, timed_out) {
             return;
         }
 
@@ -88,7 +93,9 @@ impl HorizonApp {
             .take()
             .map(|pending| pending.shutdown_progress)
         {
-            progress.wait_for_browser_shutdown();
+            if !progress.wait_for_browser_shutdown(MAX_SHUTDOWN_WAIT) {
+                tracing::warn!("failed to terminate every browser during session-switch exit cleanup");
+            }
             if !progress.wait_for_completion(MAX_SHUTDOWN_WAIT) {
                 tracing::warn!(
                     completed = progress.panels_completed(),
@@ -99,7 +106,9 @@ impl HorizonApp {
         }
         self.board.shutdown_terminal_panels();
         if let Some(progress) = &self.shutdown_progress {
-            progress.wait_for_browser_shutdown();
+            if !progress.wait_for_browser_shutdown(MAX_SHUTDOWN_WAIT) {
+                tracing::warn!("failed to terminate every browser during asynchronous exit cleanup");
+            }
             if !progress.wait_for_completion(MAX_SHUTDOWN_WAIT) {
                 tracing::warn!(
                     completed = progress.panels_completed(),

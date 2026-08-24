@@ -1,6 +1,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::browser::BrowserShutdownSignal;
+
+const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 /// Tracks the progress of an asynchronous panel shutdown.
 ///
@@ -11,7 +15,7 @@ pub struct ShutdownProgress {
     panel_count: usize,
     terminal_joins_completed: Arc<AtomicUsize>,
     browser_count: usize,
-    browser_shutdown_signals: Mutex<Vec<mpsc::Receiver<()>>>,
+    browser_shutdown_signals: Mutex<Vec<BrowserShutdownSignal>>,
     browsers_completed: AtomicUsize,
 }
 
@@ -19,7 +23,7 @@ impl ShutdownProgress {
     pub(crate) fn new(
         panel_count: usize,
         terminal_joins_completed: Arc<AtomicUsize>,
-        browser_shutdown_signals: Vec<mpsc::Receiver<()>>,
+        browser_shutdown_signals: Vec<BrowserShutdownSignal>,
     ) -> Self {
         let browser_count = browser_shutdown_signals.len();
         Self {
@@ -73,12 +77,13 @@ impl ShutdownProgress {
             .browser_shutdown_signals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        signals.retain(|signal| match signal.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
+        signals.retain(|signal| {
+            if signal.is_complete() {
                 self.browsers_completed.fetch_add(1, Ordering::Relaxed);
                 false
+            } else {
+                true
             }
-            Err(mpsc::TryRecvError::Empty) => true,
         });
     }
 
@@ -94,19 +99,43 @@ impl ShutdownProgress {
         self.is_complete()
     }
 
-    /// Block until every browser driver has released its Chrome process and
-    /// profile lock. Browser I/O and process termination are independently
-    /// bounded, so application exit must never bypass this ownership gate.
-    pub fn wait_for_browser_shutdown(&self) {
-        while !self.browser_shutdown_is_complete() {
+    /// Wait for normal browser teardown up to `timeout`, then force-terminate
+    /// and reap every exact owned Chrome child within one final bounded
+    /// window. Returns whether all browser ownership was released.
+    #[must_use]
+    pub fn wait_for_browser_shutdown(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !self.browser_shutdown_is_complete() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
+        self.browser_shutdown_is_complete() || self.force_browser_shutdown(FORCED_BROWSER_SHUTDOWN_WAIT)
+    }
+
+    /// Emergency process cleanup for frame-polled shutdown after its normal
+    /// deadline. The timeout is shared across all pending browser processes.
+    #[must_use]
+    pub fn force_browser_shutdown(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut signals = self
+            .browser_shutdown_signals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        signals.retain(|signal| {
+            let complete =
+                signal.is_complete() || signal.force_cleanup(deadline.saturating_duration_since(Instant::now()));
+            if complete {
+                self.browsers_completed.fetch_add(1, Ordering::Relaxed);
+            }
+            !complete
+        });
+        self.browsers_completed.load(Ordering::Relaxed) >= self.browser_count
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     #[test]
     fn completion_wait_observes_async_teardown() {
@@ -130,11 +159,28 @@ mod tests {
     #[test]
     fn browser_completion_is_tracked_separately_from_terminal_joins() {
         let (completed_tx, completed_rx) = mpsc::channel();
-        let progress = ShutdownProgress::new(2, Arc::new(AtomicUsize::new(0)), vec![completed_rx]);
+        let progress = ShutdownProgress::new(
+            2,
+            Arc::new(AtomicUsize::new(0)),
+            vec![BrowserShutdownSignal::for_test(completed_rx)],
+        );
 
         assert!(!progress.browser_shutdown_is_complete());
         assert!(completed_tx.send(()).is_ok());
         assert!(progress.browser_shutdown_is_complete());
         assert!(!progress.is_complete());
+    }
+
+    #[test]
+    fn browser_wait_forces_bounded_cleanup_after_timeout() {
+        let (_completed_tx, completed_rx) = mpsc::channel();
+        let progress = ShutdownProgress::new(
+            1,
+            Arc::new(AtomicUsize::new(0)),
+            vec![BrowserShutdownSignal::for_test(completed_rx)],
+        );
+
+        assert!(progress.wait_for_browser_shutdown(Duration::ZERO));
+        assert!(progress.is_complete());
     }
 }

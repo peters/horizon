@@ -17,6 +17,8 @@ pub struct BodyOutput {
     pub pointer_target: bool,
     pub retry_clicked: bool,
     pub body_clicked: bool,
+    /// Stable egui focus owner for page keyboard input.
+    pub keyboard_focus_id: Option<egui::Id>,
 }
 
 /// Draw the body and return its separate layout and image geometry. The full
@@ -37,6 +39,7 @@ pub fn show_body(
             pointer_target: false,
             retry_clicked: false,
             body_clicked: false,
+            keyboard_focus_id: None,
         };
     }
     // egui layout sizes are finite and non-negative.
@@ -55,10 +58,15 @@ pub fn show_body(
             pointer_target: false,
             retry_clicked: retry,
             body_clicked: false,
+            keyboard_focus_id: None,
         };
     };
     let body_response = ui.allocate_rect(available, Sense::click_and_drag());
     let body_clicked = body_response.clicked();
+    if body_clicked {
+        body_response.request_focus();
+    }
+    let keyboard_focus_id = Some(body_response.id);
     let pointer_target = body_response.contains_pointer()
         || body_response.is_pointer_button_down_on()
         || body_response.drag_started()
@@ -92,6 +100,7 @@ pub fn show_body(
             pointer_target,
             retry_clicked: false,
             body_clicked,
+            keyboard_focus_id,
         };
     };
 
@@ -120,6 +129,7 @@ pub fn show_body(
         pointer_target,
         retry_clicked: false,
         body_clicked,
+        keyboard_focus_id,
     }
 }
 

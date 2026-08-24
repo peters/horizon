@@ -201,10 +201,10 @@ impl RuntimeState {
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
-                            browser_url: panel
-                                .browser()
-                                .map(|browser| browser.url.clone())
-                                .filter(|url| !url.is_empty()),
+                            // `Some("")` is meaningful: Chrome committed its
+                            // blank startup target, so restore must not fall
+                            // back to the requested/configured URL.
+                            browser_url: panel.browser().map(|browser| browser.url.clone()),
                         }
                     })
                     .collect();
@@ -713,6 +713,20 @@ mod tests {
         let state = WorkspaceState::from_config(0, &workspace, [120.0, 64.0]);
 
         assert_eq!(state.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn empty_committed_browser_url_overrides_the_requested_command() {
+        let panel = PanelState {
+            kind: PanelKind::Browser,
+            command: Some("https://requested.example".to_string()),
+            browser_url: Some(String::new()),
+            ..PanelState::default()
+        };
+
+        let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+
+        assert_eq!(options.command.as_deref(), Some(""));
     }
 
     #[test]

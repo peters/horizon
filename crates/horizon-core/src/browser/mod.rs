@@ -27,12 +27,14 @@ use std::sync::Arc;
 
 pub use frames::FrameSlot;
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub(crate) use session::BrowserShutdownSignal;
 pub use session::{BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
 
 /// Default emulated viewport for a freshly created browser panel.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
+const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Short human-facing title for a URL (hostname, or the raw input).
 #[must_use]
@@ -117,7 +119,7 @@ pub struct BrowserPanelState {
     committed_url: session::CommittedUrl,
     /// Driver teardown that must finish before Retry or application exit can
     /// reuse/release this panel's Chrome profile.
-    teardown_signal: Option<std::sync::mpsc::Receiver<()>>,
+    teardown_signal: Option<BrowserShutdownSignal>,
     /// One-click Retry waits for the prior Chrome profile lock to be released,
     /// then starts this replacement automatically.
     pending_relaunch: Option<PendingRelaunch>,
@@ -316,7 +318,7 @@ impl BrowserPanelState {
 
     /// Take the stored teardown-completion signal, if a shutdown was
     /// requested and not yet joined.
-    pub fn take_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+    pub(crate) fn take_shutdown_signal(&mut self) -> Option<BrowserShutdownSignal> {
         self.teardown_signal.take()
     }
 
@@ -325,7 +327,7 @@ impl BrowserPanelState {
     pub fn shutdown_with_timeout(&mut self, timeout: std::time::Duration) -> bool {
         self.request_shutdown();
         self.take_shutdown_signal()
-            .is_none_or(|signal| signal.recv_timeout(timeout).is_ok())
+            .is_none_or(|signal| signal.wait(timeout) || signal.force_cleanup(FORCED_CHROME_SHUTDOWN_WAIT))
     }
 
     /// Permanently close this panel and remove its persistent Chrome profile
@@ -343,12 +345,11 @@ impl BrowserPanelState {
         let Some(signal) = &self.teardown_signal else {
             return true;
         };
-        match signal.try_recv() {
-            Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.teardown_signal = None;
-                true
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+        if signal.is_complete() {
+            self.teardown_signal = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -477,10 +478,12 @@ impl Drop for BrowserPanelState {
     }
 }
 
-fn schedule_profile_cleanup(profile_dir: PathBuf, teardown_signal: Option<std::sync::mpsc::Receiver<()>>) {
+fn schedule_profile_cleanup(profile_dir: PathBuf, teardown_signal: Option<BrowserShutdownSignal>) {
     let cleanup = move || {
-        if let Some(signal) = teardown_signal {
-            let _ = signal.recv();
+        if let Some(signal) = teardown_signal
+            && !signal.wait(std::time::Duration::from_secs(10))
+        {
+            let _ = signal.force_cleanup(FORCED_CHROME_SHUTDOWN_WAIT);
         }
         if let Err(error) = std::fs::remove_dir_all(&profile_dir)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -541,7 +544,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(completion_rx),
+            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
             pending_relaunch: None,
             panel_local_id: "retry-test".to_string(),
             requested_url: None,
@@ -572,7 +575,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(completion_rx),
+            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
             pending_relaunch: None,
             panel_local_id: "shutdown-wait-test".to_string(),
             requested_url: None,
@@ -608,7 +611,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(completion_rx),
+            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
             pending_relaunch: Some(PendingRelaunch { initial_url: None }),
             panel_local_id: "queued-retry-test".to_string(),
             requested_url: None,
@@ -631,7 +634,7 @@ mod tests {
         assert!(state.session.is_some());
         state.request_shutdown();
         if let Some(signal) = state.take_shutdown_signal() {
-            assert!(signal.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
+            assert!(signal.wait(std::time::Duration::from_secs(2)));
         }
     }
 
@@ -643,7 +646,10 @@ mod tests {
         std::fs::write(profile_dir.join("Preferences"), b"state").expect("profile state");
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
 
-        schedule_profile_cleanup(profile_dir.clone(), Some(completion_rx));
+        schedule_profile_cleanup(
+            profile_dir.clone(),
+            Some(BrowserShutdownSignal::for_test(completion_rx)),
+        );
         assert!(profile_dir.exists());
         assert_eq!(completion_tx.send(()), Ok(()));
 

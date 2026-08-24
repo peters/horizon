@@ -104,6 +104,19 @@ impl<'a> BrowserView<'a> {
             };
             render::show_body(ui, panel_id, browser, state)
         };
+        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
+        let other_widget_has_focus = ui
+            .memory(egui::Memory::focused)
+            .is_some_and(|focused| body.keyboard_focus_id != Some(focused));
+        let page_keyboard_active =
+            page_keyboard_can_route(window_focused && is_focused, url_focused, other_widget_has_focus);
+        let keyboard_target = if is_focused && url_focused {
+            input::KeyboardTarget::Url
+        } else if page_keyboard_active {
+            input::KeyboardTarget::Page
+        } else {
+            input::KeyboardTarget::None
+        };
         if let Some(browser) = self.panel.browser_mut() {
             if body.retry_clicked {
                 browser.relaunch();
@@ -138,8 +151,8 @@ impl<'a> BrowserView<'a> {
                 body.pointer_target,
                 input::InputFlags {
                     events,
-                    is_focused,
                     interactive,
+                    keyboard_target,
                     pointer_viewport: if frame_matches_viewport(
                         body.frame_size,
                         body.viewport_size,
@@ -149,7 +162,6 @@ impl<'a> BrowserView<'a> {
                     } else {
                         input::PointerViewportState::AwaitingFrame
                     },
-                    url_focused,
                     shortcuts: self.shortcuts,
                     exit_fullscreen_shortcut_owner: if self.fullscreen_active || state.fullscreen_active_last_frame {
                         input::ShortcutOwner::App
@@ -165,6 +177,14 @@ impl<'a> BrowserView<'a> {
         // steal focus from other panels every frame.
         chrome_clicked || body.body_clicked
     }
+}
+
+const fn page_keyboard_can_route(
+    viewport_panel_focused: bool,
+    url_focused: bool,
+    other_widget_has_focus: bool,
+) -> bool {
+    viewport_panel_focused && !url_focused && !other_widget_has_focus
 }
 
 fn frame_matches_viewport(
@@ -185,7 +205,7 @@ fn frame_matches_viewport(
 
 #[cfg(test)]
 mod tests {
-    use super::frame_matches_viewport;
+    use super::{frame_matches_viewport, page_keyboard_can_route};
 
     #[test]
     fn pointer_input_waits_for_the_sent_viewport_frame() {
@@ -205,5 +225,13 @@ mod tests {
             (800, 600)
         ));
         assert!(!frame_matches_viewport(None, Some((800, 600)), (800, 600)));
+    }
+
+    #[test]
+    fn page_keyboard_requires_window_panel_and_egui_focus() {
+        assert!(page_keyboard_can_route(true, false, false));
+        assert!(!page_keyboard_can_route(false, false, false));
+        assert!(!page_keyboard_can_route(true, true, false));
+        assert!(!page_keyboard_can_route(true, false, true));
     }
 }

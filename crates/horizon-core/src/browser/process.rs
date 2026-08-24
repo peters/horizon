@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -57,7 +57,8 @@ pub struct ChromeLaunch {
 
 /// A running headless `Chrome` process plus its captured `DevTools` endpoint.
 pub struct ChromeProcess {
-    child: Child,
+    child: Arc<Mutex<Child>>,
+    control: ChromeProcessControl,
     /// Cached once the child has been reaped, so repeated
     /// [`ChromeProcess::child_status`]/[`ChromeProcess::kill`] calls stay cheap.
     exit_status: Option<std::process::ExitStatus>,
@@ -66,12 +67,78 @@ pub struct ChromeProcess {
     stderr_tail: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
+/// Exact child handle retained outside the driver so an application-exit
+/// deadline can terminate and reap Chrome even if the driver is stuck in
+/// teardown. Keeping the `Child` handle, rather than only its PID, prevents a
+/// timeout cleanup from targeting a later process that reused the number.
+#[derive(Clone, Default)]
+pub(crate) struct ChromeProcessControl {
+    inner: Arc<Mutex<ChromeProcessControlState>>,
+}
+
+#[derive(Default)]
+struct ChromeProcessControlState {
+    child: Option<Arc<Mutex<Child>>>,
+    force_requested: bool,
+}
+
+impl ChromeProcessControl {
+    fn register(&self, child: &Arc<Mutex<Child>>) {
+        let force_requested = {
+            let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.child = Some(Arc::clone(child));
+            state.force_requested
+        };
+        if force_requested {
+            let _ = self.terminate(Duration::from_secs(3));
+        }
+    }
+
+    fn clear(&self, child: &Arc<Mutex<Child>>) {
+        let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .child
+            .as_ref()
+            .is_some_and(|registered| Arc::ptr_eq(registered, child))
+        {
+            state.child = None;
+        }
+    }
+
+    /// Force the exact registered Chrome child to exit and reap it within the
+    /// supplied deadline. A force requested just before spawn is remembered;
+    /// registration immediately terminates that child.
+    pub(crate) fn terminate(&self, timeout: Duration) -> bool {
+        let child = {
+            let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.force_requested = true;
+            state.child.clone()
+        };
+        let Some(child) = child else {
+            return true;
+        };
+        let mut child = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pid = child.id();
+        match kill_and_reap(&mut child, timeout) {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                tracing::warn!(pid, "Chrome did not exit within the forced shutdown deadline");
+                false
+            }
+            Err(error) => {
+                tracing::warn!(pid, "failed to force-terminate Chrome: {error}");
+                false
+            }
+        }
+    }
+}
+
 impl ChromeProcess {
     /// Spawn the configured browser with a private profile dir.
     ///
     /// # Errors
     /// Fails when the binary is missing or the process cannot start.
-    pub fn spawn(launch: &ChromeLaunch) -> Result<Self> {
+    pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
         validate_extra_args(&launch.extra_args)?;
         let command = resolve_binary(&launch.command)?;
         std::fs::create_dir_all(&launch.profile_dir)?;
@@ -95,11 +162,17 @@ impl ChromeProcess {
         args.extend(launch.extra_args.iter().cloned());
         args.push("about:blank".to_string());
 
-        let mut child = Command::new(command)
-            .args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        let mut command = Command::new(command);
+        command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
+        // Give Chrome an isolated process group so emergency cleanup can
+        // terminate helpers as well as the browser parent on Unix. Windows
+        // uses taskkill /T against the exact unreaped child PID below.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn()?;
         let Some(stderr) = child.stderr.take() else {
             let _ = kill_and_reap(&mut child, Duration::from_secs(3));
             return Err(std::io::Error::other("failed to capture chrome stderr").into());
@@ -137,8 +210,11 @@ impl ChromeProcess {
             return Err(error.into());
         }
 
+        let child = Arc::new(Mutex::new(child));
+        control.register(&child);
         Ok(Self {
             child,
+            control,
             exit_status: None,
             ws_url_rx,
             ws_url: None,
@@ -184,7 +260,13 @@ impl ChromeProcess {
         if self.exit_status.is_some() {
             return self.exit_status;
         }
-        let status = self.child.try_wait().ok().flatten();
+        let status = self
+            .child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_wait()
+            .ok()
+            .flatten();
         self.exit_status = status;
         status
     }
@@ -195,13 +277,15 @@ impl ChromeProcess {
         if self.child_status().is_some() {
             return;
         }
-        match kill_and_reap(&mut self.child, Duration::from_secs(3)) {
+        let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pid = child.id();
+        match kill_and_reap(&mut child, Duration::from_secs(3)) {
             Ok(Some(status)) => self.exit_status = Some(status),
             Ok(None) => {
-                tracing::warn!(pid = self.child.id(), "Chrome did not exit within the reap deadline");
+                tracing::warn!(pid, "Chrome did not exit within the reap deadline");
             }
             Err(error) => {
-                tracing::warn!(pid = self.child.id(), "failed to kill or reap Chrome: {error}");
+                tracing::warn!(pid, "failed to kill or reap Chrome: {error}");
             }
         }
     }
@@ -230,7 +314,7 @@ fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option
     if let Some(status) = child.try_wait()? {
         return Ok(Some(status));
     }
-    child.kill()?;
+    terminate_process_tree(child)?;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
@@ -243,9 +327,43 @@ fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option
     }
 }
 
+#[cfg(unix)]
+fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
+    let process_group = format!("-{}", child.id());
+    let tree_killed = Command::new("/bin/kill")
+        .args(["-KILL", process_group.as_str()])
+        .status()
+        .is_ok_and(|status| status.success());
+    if tree_killed || child.try_wait()?.is_some() {
+        Ok(())
+    } else {
+        child.kill()
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
+    let pid = child.id().to_string();
+    let tree_killed = Command::new("taskkill")
+        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if tree_killed || child.try_wait()?.is_some() {
+        Ok(())
+    } else {
+        child.kill()
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
+    child.kill()
+}
+
 impl Drop for ChromeProcess {
     fn drop(&mut self) {
         self.kill();
+        self.control.clear(&self.child);
     }
 }
 
@@ -432,6 +550,30 @@ mod tests {
             resolve_binary("/definitely/not/a/real/binary"),
             Err(ChromeError::NoBinary)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_control_force_terminates_and_reaps_the_exact_child() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]).process_group(0);
+        let child = command
+            .spawn()
+            .unwrap_or_else(|error| panic!("spawn test child: {error}"));
+        let child = Arc::new(Mutex::new(child));
+        let control = ChromeProcessControl::default();
+        control.register(&child);
+
+        assert!(control.terminate(Duration::from_secs(2)));
+        assert!(
+            child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .try_wait()
+                .is_ok_and(|status| status.is_some())
+        );
     }
 
     #[test]

@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
-use super::{BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, publish_frame};
+use super::{
+    BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, normalized_committed_url, publish_frame,
+};
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -314,11 +316,10 @@ impl DriverState {
             return;
         }
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
-        if let Some(url) = frame.get("url").and_then(|url| url.as_str())
-            && !url.is_empty()
-            && url != self.url
+        if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
+            && normalized_committed_url(target_url) != self.url
         {
-            self.url = url.to_string();
+            self.url = normalized_committed_url(target_url).to_string();
             self.manifest_dirty = true;
         }
         self.pending_restart_at = Some(Instant::now());
@@ -347,10 +348,11 @@ impl DriverState {
         if self.main_frame_id.as_deref() != frame_id {
             return;
         }
-        let Some(url) = event.params.get("url").and_then(|url| url.as_str()) else {
+        let Some(target_url) = event.params.get("url").and_then(|url| url.as_str()) else {
             return;
         };
-        if url.is_empty() || url == self.url {
+        let url = normalized_committed_url(target_url);
+        if url == self.url {
             return;
         }
         self.url = url.to_string();

@@ -15,12 +15,15 @@
 //! boundaries, and every field is observable with plain shell tooling.
 //! Every update to an existing manifest must use [`update`] (or implement its
 //! adjacent `<panel>.json.lock` protocol around both the read and the write).
-//! This serializes read-modify-write transactions across the driver and agent
-//! processes so ownership/handoff fields cannot be lost. Driver startup uses
-//! [`initialize`] to create the manifest explicitly; later updates fail when
-//! teardown has removed it, so a delayed writer cannot resurrect a dead panel.
+//! The lock file is a stable coordination inode guarded by the operating
+//! system, so a crashed holder releases the lock without any stale-file
+//! deletion race. This serializes read-modify-write transactions across the
+//! driver and agent processes so ownership/handoff fields cannot be lost.
+//! Driver startup uses [`initialize`] to create the manifest explicitly;
+//! later updates fail when teardown has removed it, so a delayed writer cannot
+//! resurrect a dead panel.
 
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, TryLockError};
 #[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -37,11 +40,6 @@ pub const OWNER_TTL_MILLIS: i64 = 10_000;
 /// qualifying interaction.
 pub const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const LOCK_WAIT: Duration = Duration::from_secs(2);
-const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
-/// Teardown must not leave a live endpoint behind for the normal 30-second
-/// stale-lock window. Manifest transactions are local, tiny file writes; a
-/// lock held for this long cannot still represent a healthy transaction.
-const REMOVE_STALE_LOCK_AGE: Duration = Duration::from_secs(1);
 const LOCK_RETRY: Duration = Duration::from_millis(5);
 static HANDOFF_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -297,25 +295,27 @@ fn write_at_locked(path: &Path, manifest: &BrowserManifest) -> std::io::Result<(
 }
 
 struct ManifestLock {
-    path: PathBuf,
+    // The operating system releases the advisory lock when this handle is
+    // dropped, including after a process crash. The coordination file itself
+    // intentionally remains stable so contenders can never lock different
+    // inodes for the same manifest.
+    _file: std::fs::File,
 }
 
 impl ManifestLock {
     fn acquire(manifest_path: &Path) -> std::io::Result<Self> {
-        Self::acquire_with_stale_age(manifest_path, STALE_LOCK_AGE)
-    }
-
-    fn acquire_with_stale_age(manifest_path: &Path, stale_lock_age: Duration) -> std::io::Result<Self> {
         let path = manifest_path.with_extension("json.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)?;
         let deadline = Instant::now() + LOCK_WAIT;
         loop {
-            match OpenOptions::new().create_new(true).write(true).open(&path) {
-                Ok(_file) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(&path, stale_lock_age) {
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(TryLockError::WouldBlock) => {
                     if Instant::now() >= deadline {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
@@ -324,23 +324,10 @@ impl ManifestLock {
                     }
                     std::thread::sleep(LOCK_RETRY);
                 }
-                Err(error) => return Err(error),
+                Err(TryLockError::Error(error)) => return Err(error),
             }
         }
     }
-}
-
-impl Drop for ManifestLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn lock_is_stale(path: &Path, stale_lock_age: Duration) -> bool {
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
-        .is_ok_and(|age| age >= stale_lock_age)
 }
 
 /// Atomic replace that also works on Windows, where `std::fs::rename` does
@@ -385,13 +372,13 @@ impl Drop for DriverManifestLifetime {
 }
 
 fn remove_at_with_warning(path: &Path) {
-    if let Err(error) = remove_at(path, REMOVE_STALE_LOCK_AGE) {
+    if let Err(error) = remove_at(path) {
         tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
     }
 }
 
-fn remove_at(path: &Path, stale_lock_age: Duration) -> std::io::Result<()> {
-    let _lock = ManifestLock::acquire_with_stale_age(path, stale_lock_age)?;
+fn remove_at(path: &Path) -> std::io::Result<()> {
+    let _lock = ManifestLock::acquire(path)?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -443,17 +430,17 @@ mod tests {
     }
 
     #[test]
-    fn teardown_removal_reclaims_an_orphaned_lock() {
+    fn teardown_removal_reuses_an_unlocked_coordination_file() {
         let root = test_root();
         let path = manifest_path_for_root(&root, "orphaned-lock");
         write_at(&path, &sample("orphaned-lock")).unwrap();
         let lock_path = path.with_extension("json.lock");
         std::fs::write(&lock_path, b"").unwrap();
 
-        remove_at(&path, Duration::ZERO).unwrap();
+        remove_at(&path).unwrap();
 
         assert!(!path.exists());
-        assert!(!lock_path.exists());
+        assert!(lock_path.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

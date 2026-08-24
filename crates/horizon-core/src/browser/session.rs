@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use crate::browser::cdp::{CdpError, CdpLink};
 use crate::browser::frames::FrameSlot;
-use crate::browser::process::ChromeProcess;
+use crate::browser::process::{ChromeProcess, ChromeProcessControl};
 use crate::browser::{BrowserConfig, BrowserInput};
 
 /// What the driver reports to the panel.
@@ -117,6 +117,57 @@ pub struct BrowserSession {
     completion_rx: mpsc::Receiver<()>,
     event_wake: BrowserEventWake,
     committed_url: CommittedUrl,
+    process_control: ChromeProcessControl,
+    panel_local_id: String,
+}
+
+/// Completion signal paired with an exact Chrome child handle. Normal paths
+/// only poll the receiver; a hard application-exit deadline can explicitly
+/// terminate/reap the owned process and remove its dead manifest.
+pub(crate) struct BrowserShutdownSignal {
+    completion_rx: mpsc::Receiver<()>,
+    process_control: ChromeProcessControl,
+    panel_local_id: Option<String>,
+}
+
+impl BrowserShutdownSignal {
+    #[must_use]
+    pub(crate) fn is_complete(&self) -> bool {
+        matches!(
+            self.completion_rx.try_recv(),
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn wait(&self, timeout: Duration) -> bool {
+        matches!(
+            self.completion_rx.recv_timeout(timeout),
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
+        )
+    }
+
+    /// Emergency cleanup after the normal driver deadline. Returns only
+    /// after Chrome has been reaped (or no child was ever spawned).
+    #[must_use]
+    pub(crate) fn force_cleanup(&self, timeout: Duration) -> bool {
+        if !self.process_control.terminate(timeout) {
+            return false;
+        }
+        if let Some(panel_local_id) = &self.panel_local_id {
+            crate::browser::manifest::remove(panel_local_id);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(completion_rx: mpsc::Receiver<()>) -> Self {
+        Self {
+            completion_rx,
+            process_control: ChromeProcessControl::default(),
+            panel_local_id: None,
+        }
+    }
 }
 
 /// Latest URL that the driver has observed Chrome commit. This survives the
@@ -208,19 +259,27 @@ impl BrowserSession {
     /// resolves once the driver has closed the `DevTools` connection, killed
     /// Chrome, and removed the manifest.
     #[must_use]
-    pub fn shutdown_signal(self) -> mpsc::Receiver<()> {
+    pub(crate) fn shutdown_signal(self) -> BrowserShutdownSignal {
         self.stop_requested.store(true, Ordering::Release);
         let _ = self.command_tx.send(BrowserCommand::Stop);
         self.frame_slot.release_notification();
-        self.completion_rx
+        BrowserShutdownSignal {
+            completion_rx: self.completion_rx,
+            process_control: self.process_control,
+            panel_local_id: Some(self.panel_local_id),
+        }
     }
 
     /// Return the existing teardown-completion signal after the driver has
     /// already announced `Stopped`; no second stop request is necessary.
     #[must_use]
-    pub fn completion_signal(self) -> mpsc::Receiver<()> {
+    pub(crate) fn completion_signal(self) -> BrowserShutdownSignal {
         self.frame_slot.release_notification();
-        self.completion_rx
+        BrowserShutdownSignal {
+            completion_rx: self.completion_rx,
+            process_control: self.process_control,
+            panel_local_id: Some(self.panel_local_id),
+        }
     }
 
     pub(super) fn committed_url(&self) -> CommittedUrl {
@@ -288,6 +347,9 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
         committed_url: committed_url.clone(),
     };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
+    let process_control = ChromeProcessControl::default();
+    let driver_process_control = process_control.clone();
+    let panel_local_id = config.panel_local_id.clone();
     let stop_requested = Arc::new(AtomicBool::new(false));
     let driver_stop_requested = Arc::clone(&stop_requested);
     let slot = Arc::clone(&frame_slot);
@@ -301,6 +363,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
                 &slot,
                 &driver_stop_requested,
                 completion_tx,
+                driver_process_control,
             );
         })
         .map_err(|e| format!("failed to spawn browser driver: {e}"))?;
@@ -312,6 +375,8 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
         completion_rx,
         event_wake,
         committed_url,
+        process_control,
+        panel_local_id,
     })
 }
 
@@ -431,11 +496,6 @@ struct DriverState {
 
 impl DriverState {
     fn new(config: &BrowserSessionConfig, browser_ws: &str, stop_requested: Arc<AtomicBool>) -> Self {
-        let url = config
-            .initial_url
-            .clone()
-            .filter(|u| u != "about:blank")
-            .unwrap_or_else(|| "about:blank".to_string());
         Self {
             config: config.clone(),
             browser_ws: browser_ws.to_string(),
@@ -447,7 +507,9 @@ impl DriverState {
             pending_viewport_capture_at: None,
             viewport_capture_request_id: None,
             clipboard_read_request_ids: std::collections::HashSet::new(),
-            url,
+            // The requested initial URL is not committed state. Chrome starts
+            // at about:blank and navigation may fail or be cancelled.
+            url: String::new(),
             title: String::new(),
             initial_navigated: false,
             screencast_on: false,
@@ -522,19 +584,15 @@ impl DriverState {
         for message in outcome.drained {
             self.handle_message(link, event_tx, frame_slot, message);
         }
-        let Some(url) = outcome
-            .result
-            .ok()
-            .and_then(|result| {
-                result
-                    .pointer("/targetInfo/url")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            })
-            .filter(|url| !url.is_empty() && url != "about:blank")
-        else {
+        let Some(target_url) = outcome.result.ok().and_then(|result| {
+            result
+                .pointer("/targetInfo/url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        }) else {
             return;
         };
+        let url = normalized_committed_url(&target_url).to_string();
         if self.url != url {
             self.url = url;
             self.manifest_dirty = true;
@@ -598,6 +656,14 @@ impl DriverState {
     }
 }
 
+fn normalized_committed_url(url: &str) -> &str {
+    if url.is_empty() || url == "about:blank" {
+        ""
+    } else {
+        url
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -641,5 +707,12 @@ mod tests {
                 .is_err()
         );
         assert_eq!(committed_url.snapshot().as_deref(), Some("https://example.com/final"));
+    }
+
+    #[test]
+    fn blank_target_is_an_empty_committed_url() {
+        assert_eq!(normalized_committed_url("about:blank"), "");
+        assert_eq!(normalized_committed_url(""), "");
+        assert_eq!(normalized_committed_url("https://example.com"), "https://example.com");
     }
 }
