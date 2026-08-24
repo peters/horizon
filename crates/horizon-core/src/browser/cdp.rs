@@ -414,10 +414,8 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
 /// this reads exactly `Content-Length` bytes instead of to EOF.
 ///
 /// # Errors
-/// Fails on any network or framing error.
-///
-/// # Panics
-/// Panics if the response header block exceeds the 64 KB bound.
+/// Fails on any network or framing error, including a response header block
+/// that exceeds the 64 KB bound.
 pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
     let mut stream = TcpStream::connect(host_port)?;
     let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");

@@ -45,9 +45,9 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
-    /// `browser` config section as of the last save. Restored browser
-    /// panels use it instead of re-reading the default config path; the app
-    /// refreshes this with the current config before every restore.
+    /// Browser config injected by the app before restore. Core-only board
+    /// snapshots store a default placeholder because a [`Board`] does not
+    /// own the config that created it.
     #[serde(default)]
     pub browser: crate::browser::BrowserConfig,
 }

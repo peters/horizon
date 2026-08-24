@@ -185,11 +185,19 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub(crate) fn force_cleanup(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        if !self.process_control.terminate(timeout) {
+        if !self
+            .process_control
+            .terminate(deadline.saturating_duration_since(Instant::now()))
+        {
             return false;
         }
-        if let Some(panel_local_id) = &self.panel_local_id {
-            crate::browser::manifest::remove(panel_local_id);
+        if let Some(panel_local_id) = &self.panel_local_id
+            && !crate::browser::manifest::remove_with_timeout(
+                panel_local_id,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+        {
+            return false;
         }
         self.process_complete.store(true, Ordering::Release);
         self.wait_for_profile_cleanup(deadline.saturating_duration_since(Instant::now()))

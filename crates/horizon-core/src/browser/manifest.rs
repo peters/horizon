@@ -301,6 +301,10 @@ struct ManifestLock {
 
 impl ManifestLock {
     fn acquire(manifest_path: &Path) -> std::io::Result<Self> {
+        Self::acquire_with_timeout(manifest_path, LOCK_WAIT)
+    }
+
+    fn acquire_with_timeout(manifest_path: &Path, timeout: Duration) -> std::io::Result<Self> {
         let path = manifest_path.with_extension("json.lock");
         let file = OpenOptions::new()
             .create(true)
@@ -308,18 +312,25 @@ impl ManifestLock {
             .write(true)
             .truncate(false)
             .open(&path)?;
-        let deadline = Instant::now() + LOCK_WAIT;
+        let deadline = Instant::now() + timeout;
         loop {
             match file.try_lock() {
                 Ok(()) => return Ok(Self { _file: file }),
                 Err(TryLockError::WouldBlock) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            format!("timed out waiting for manifest lock {}", path.display()),
+                        ));
+                    }
+                    std::thread::sleep(remaining.min(LOCK_RETRY));
                     if Instant::now() >= deadline {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
                             format!("timed out waiting for manifest lock {}", path.display()),
                         ));
                     }
-                    std::thread::sleep(LOCK_RETRY);
                 }
                 Err(TryLockError::Error(error)) => return Err(error),
             }
@@ -330,6 +341,20 @@ impl ManifestLock {
 pub fn remove(panel_local_id: &str) {
     let path = default_manifest_path(panel_local_id);
     remove_at_with_warning(&path);
+}
+
+/// Remove a live manifest within the caller's remaining shutdown budget.
+/// Returns `false` if lock acquisition or removal cannot finish in time.
+#[must_use]
+pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bool {
+    let path = default_manifest_path(panel_local_id);
+    match remove_at_with_timeout(&path, timeout) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
+            false
+        }
+    }
 }
 
 /// Owns one driver's manifest from startup through every exit path.
@@ -362,10 +387,14 @@ fn remove_at_with_warning(path: &Path) {
 }
 
 fn remove_at(path: &Path) -> std::io::Result<()> {
+    remove_at_with_timeout(path, LOCK_WAIT)
+}
+
+fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = ManifestLock::acquire(path)?;
+    let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -428,6 +457,24 @@ mod tests {
 
         assert!(!path.exists());
         assert!(lock_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teardown_removal_honors_the_callers_lock_deadline() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "bounded-removal");
+        write_at(&path, &sample("bounded-removal")).unwrap();
+        let lock = ManifestLock::acquire(&path).unwrap();
+        let started = Instant::now();
+
+        let error = remove_at_with_timeout(&path, Duration::from_millis(20)).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(path.exists());
+        drop(lock);
+        remove_at(&path).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 

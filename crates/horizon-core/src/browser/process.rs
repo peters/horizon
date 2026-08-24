@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, mpsc};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -109,17 +109,24 @@ impl ChromeProcessControl {
     /// supplied deadline. A force requested just before spawn is remembered;
     /// registration immediately terminates that child.
     pub(crate) fn terminate(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
         let child = {
-            let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(mut state) = lock_until(&self.inner, deadline) else {
+                tracing::warn!("timed out waiting for Chrome process-control state");
+                return false;
+            };
             state.force_requested = true;
             state.child.clone()
         };
         let Some(child) = child else {
             return true;
         };
-        let mut child = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(mut child) = lock_until(&child, deadline) else {
+            tracing::warn!("timed out waiting for the exact Chrome child handle");
+            return false;
+        };
         let pid = child.id();
-        match kill_and_reap(&mut child, timeout) {
+        match kill_and_reap(&mut child, deadline.saturating_duration_since(Instant::now())) {
             Ok(Some(_)) => true,
             Ok(None) => {
                 tracing::warn!(pid, "Chrome did not exit within the forced shutdown deadline");
@@ -128,6 +135,25 @@ impl ChromeProcessControl {
             Err(error) => {
                 tracing::warn!(pid, "failed to force-terminate Chrome: {error}");
                 false
+            }
+        }
+    }
+}
+
+fn lock_until<T>(mutex: &Mutex<T>, deadline: Instant) -> Option<MutexGuard<'_, T>> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(error)) => return Some(error.into_inner()),
+            Err(TryLockError::WouldBlock) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return None;
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                if Instant::now() >= deadline {
+                    return None;
+                }
             }
         }
     }
@@ -590,6 +616,35 @@ mod tests {
                 .try_wait()
                 .is_ok_and(|status| status.is_some())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_control_force_honors_deadline_while_child_handle_is_busy() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]).process_group(0);
+        let child = Arc::new(Mutex::new(
+            command
+                .spawn()
+                .unwrap_or_else(|error| panic!("spawn test child: {error}")),
+        ));
+        let control = ChromeProcessControl::default();
+        control.register(&child);
+        let child_guard = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let worker_control = control.clone();
+        let worker = std::thread::spawn(move || {
+            let started = Instant::now();
+            let terminated = worker_control.terminate(Duration::from_millis(20));
+            (terminated, started.elapsed())
+        });
+
+        let (terminated, elapsed) = worker.join().unwrap_or_else(|error| std::panic::resume_unwind(error));
+        assert!(!terminated);
+        assert!(elapsed < Duration::from_millis(500));
+        drop(child_guard);
+        assert!(control.terminate(Duration::from_secs(2)));
     }
 
     #[test]
