@@ -61,7 +61,12 @@ pub fn show_body(
             keyboard_focus_id: None,
         };
     };
-    let body_response = ui.allocate_rect(available, Sense::click_and_drag());
+    let (body_rect, _) = ui.allocate_exact_size(available.size(), Sense::hover());
+    let body_response = ui.interact(
+        body_rect,
+        ui.make_persistent_id(("browser_body", panel_id.0)),
+        Sense::click_and_drag(),
+    );
     let body_clicked = body_response.clicked();
     if body_clicked {
         body_response.request_focus();
@@ -105,8 +110,8 @@ pub fn show_body(
     };
 
     // Letterbox (upscale allowed; linear filtering smooths it).
-    let scale = (available.width() / frame_size[0]).min(available.height() / frame_size[1]);
-    let rect = Rect::from_center_size(available.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
+    let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
+    let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     ui.painter().add(egui::epaint::Shape::Rect(egui::epaint::RectShape {
         rect,
         corner_radius: CornerRadius::ZERO,

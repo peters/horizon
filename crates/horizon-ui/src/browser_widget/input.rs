@@ -54,6 +54,9 @@ pub fn handle(
     if !page_keyboard_active {
         keyboard::release_pressed_keys(browser, state, keyboard::key_modifiers(ui));
     }
+    if !flags.interactive || matches!(flags.keyboard_target, KeyboardTarget::None) {
+        keyboard::clear_focus_lost_suppressions(state);
+    }
     if !flags.interactive {
         pointer::cancel_pointer_capture(browser, state, body, frame_size);
         state.pointer_modifiers = keyboard::key_modifiers(ui);

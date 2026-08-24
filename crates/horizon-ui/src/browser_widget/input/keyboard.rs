@@ -130,6 +130,14 @@ pub(super) fn release_pressed_keys(
     }
 }
 
+pub(super) fn clear_focus_lost_suppressions(state: &mut BrowserUiState) {
+    // Once another widget owns keyboard focus, releases are intentionally not
+    // routed to the page. Retire matching suppression at the same boundary so
+    // a missed release cannot swallow that key when page focus returns.
+    state.suppressed_shortcut_keys.clear();
+    state.clipboard_release_keys.clear();
+}
+
 fn send_clipboard_shortcut(
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
@@ -572,6 +580,18 @@ mod tests {
         assert!(consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
         assert!(!state.suppressed_shortcut_keys.contains(&BrowserKey::Char('r')));
         assert!(!consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+    }
+
+    #[test]
+    fn focus_loss_retires_stale_key_suppressions() {
+        let mut state = BrowserUiState::default();
+        state.suppressed_shortcut_keys.insert(BrowserKey::Char('r'));
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+
+        clear_focus_lost_suppressions(&mut state);
+
+        assert!(state.suppressed_shortcut_keys.is_empty());
+        assert!(state.clipboard_release_keys.is_empty());
     }
 
     #[test]
