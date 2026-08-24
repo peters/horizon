@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Context;
@@ -295,6 +296,21 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        if self.board.panels.iter().any(|panel| {
+            panel
+                .browser()
+                .is_some_and(horizon_core::browser::BrowserPanelState::needs_event_waker)
+        }) {
+            let repaint_ctx = ctx.clone();
+            let waker: horizon_core::browser::BrowserEventWaker = Arc::new(move || repaint_ctx.request_repaint());
+            for panel in &self.board.panels {
+                if let Some(browser) = panel.browser()
+                    && browser.needs_event_waker()
+                {
+                    browser.set_event_waker(Arc::clone(&waker));
+                }
+            }
+        }
         self.sync_panel_focus_from_pointer_press(ctx);
         // Speech runs before the fullscreen handler so that Escape cancels an
         // active recording instead of also exiting panel fullscreen.

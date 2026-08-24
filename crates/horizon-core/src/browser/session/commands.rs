@@ -8,7 +8,7 @@ use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
 use crate::browser::manifest;
 
-use super::{BrowserCommand, BrowserEvent, DriverState, USER_ACTIVE_STAMP_INTERVAL};
+use super::{BrowserCommand, BrowserEventSender, DriverState, USER_ACTIVE_STAMP_INTERVAL};
 
 const SELECTED_TEXT_EXPRESSION: &str = r#"(() => {
   const selectedText = (document) => {
@@ -34,7 +34,7 @@ impl DriverState {
         &mut self,
         link: &mut CdpLink,
         command_rx: &mpsc::Receiver<BrowserCommand>,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) -> bool {
         while let Ok(command) = command_rx.try_recv() {
@@ -93,7 +93,7 @@ impl DriverState {
     fn set_viewport(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         width: u32,
         height: u32,
@@ -159,7 +159,7 @@ impl DriverState {
     fn navigate_history(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         delta: i64,
     ) {

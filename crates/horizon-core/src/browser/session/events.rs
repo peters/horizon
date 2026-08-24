@@ -5,19 +5,19 @@
 //! state machine's reactive half, while the parent module keeps the loop,
 //! command drain, and manifest/signal plumbing.
 
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
-use super::{BrowserEvent, DriverState, TITLE_BINDING_NAME, publish_frame};
+use super::{BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, publish_frame};
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) {
         let Some(due) = self.title_fetch_at else {
@@ -35,7 +35,7 @@ impl DriverState {
     pub(super) fn fetch_title(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) {
         let Some(session) = self.session_id.clone() else {
@@ -88,7 +88,7 @@ impl DriverState {
         self.update_title(event_tx, title);
     }
 
-    fn update_title(&mut self, event_tx: &mpsc::Sender<BrowserEvent>, title: &str) {
+    fn update_title(&mut self, event_tx: &BrowserEventSender, title: &str) {
         if title == self.title {
             return;
         }
@@ -119,7 +119,7 @@ impl DriverState {
     pub(super) fn handle_message(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         message: CdpMsg,
     ) {
@@ -190,7 +190,7 @@ impl DriverState {
     pub(super) fn handle_event(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         event: CdpEvent<'_>,
     ) {
@@ -205,17 +205,9 @@ impl DriverState {
                 let Some(session) = event.session_id else {
                     return;
                 };
-                let target_info = event.params.get("targetInfo");
-                let target_type = target_info
-                    .and_then(|t| t.get("type"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-                let Some(target_id) = target_info.and_then(|t| t.get("targetId")).and_then(|t| t.as_str()) else {
+                let Some(target_id) = attached_bound_page_target(event.params, self.target_id.as_deref()) else {
                     return;
                 };
-                if target_type != "page" {
-                    return;
-                }
                 self.attach_setup(link, event_tx, frame_slot, session, target_id);
             }
             "Target.detachedFromTarget" => {
@@ -241,15 +233,11 @@ impl DriverState {
             }
             "Target.targetDestroyed" => {
                 let destroyed = event.params.get("targetId").and_then(|t| t.as_str());
-                if self.target_id.as_deref() == destroyed {
-                    self.session_id = None;
-                    self.target_id = None;
-                    self.main_frame_id = None;
-                    self.screencast_on = false;
-                    self.pending_viewport_capture_at = None;
-                    self.viewport_capture_request_id = None;
-                    self.clipboard_read_request_ids.clear();
-                    self.pending_reattach = false;
+                if self.forget_destroyed_bound_target(destroyed) {
+                    // External agents discover the page through this field.
+                    // Clear it synchronously so a destroyed target is not
+                    // advertised as a live endpoint after this event.
+                    self.write_manifest(true);
                     // The page is gone (tab closed by another CDP client,
                     // navigation to a new target, …). Re-attach has
                     // nothing to bind to: surface a retryable error
@@ -294,12 +282,26 @@ impl DriverState {
         }
     }
 
-    fn handle_frame_navigated(
-        &mut self,
-        event_tx: &mpsc::Sender<BrowserEvent>,
-        event: CdpEvent<'_>,
-        on_page_session: bool,
-    ) {
+    fn forget_destroyed_bound_target(&mut self, destroyed: Option<&str>) -> bool {
+        let Some(destroyed) = destroyed else {
+            return false;
+        };
+        if self.target_id.as_deref() != Some(destroyed) {
+            return false;
+        }
+        self.session_id = None;
+        self.target_id = None;
+        self.main_frame_id = None;
+        self.screencast_on = false;
+        self.pending_viewport_capture_at = None;
+        self.viewport_capture_request_id = None;
+        self.clipboard_read_request_ids.clear();
+        self.pending_reattach = false;
+        self.manifest_dirty = true;
+        true
+    }
+
+    fn handle_frame_navigated(&mut self, event_tx: &BrowserEventSender, event: CdpEvent<'_>, on_page_session: bool) {
         if !on_page_session {
             return;
         }
@@ -334,7 +336,7 @@ impl DriverState {
 
     fn handle_same_document_navigation(
         &mut self,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         event: CdpEvent<'_>,
         on_page_session: bool,
     ) {
@@ -364,7 +366,7 @@ impl DriverState {
     /// must never stall an otherwise healthy stream.
     fn handle_screencast_frame(
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &FrameSlot,
         event: CdpEvent<'_>,
     ) {
@@ -413,6 +415,15 @@ fn title_for_bound_target<'a>(params: &'a serde_json::Value, target_id: Option<&
         .flatten()
 }
 
+fn attached_bound_page_target<'a>(params: &'a serde_json::Value, bound_target_id: Option<&str>) -> Option<&'a str> {
+    let target_info = params.get("targetInfo")?;
+    if target_info.get("type")?.as_str()? != "page" {
+        return None;
+    }
+    let attached_target_id = target_info.get("targetId")?.as_str()?;
+    (Some(attached_target_id) == bound_target_id).then_some(attached_target_id)
+}
+
 fn title_from_binding(params: &serde_json::Value) -> Option<(String, String)> {
     if params.get("name")?.as_str()? != TITLE_BINDING_NAME {
         return None;
@@ -436,9 +447,31 @@ fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Optio
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use crate::browser::frames::FrameSlot;
+    use crate::browser::{BrowserConfig, session::BrowserSessionConfig};
+
     use super::{
-        clipboard_text_from_evaluation, default_context_id_for_frame, title_for_bound_target, title_from_binding,
+        DriverState, attached_bound_page_target, clipboard_text_from_evaluation, default_context_id_for_frame,
+        title_for_bound_target, title_from_binding,
     };
+
+    fn driver_state() -> DriverState {
+        DriverState::new(
+            &BrowserSessionConfig {
+                browser: BrowserConfig::default(),
+                panel_local_id: "panel-1".to_string(),
+                initial_url: None,
+                width: 1280,
+                height: 800,
+                frame_slot: Arc::new(FrameSlot::new()),
+            },
+            "ws://127.0.0.1/devtools/browser/test",
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
 
     #[test]
     fn title_context_accepts_only_the_main_frames_default_context() {
@@ -477,6 +510,44 @@ mod tests {
         assert_eq!(title_for_bound_target(&params, Some("bound")), Some("Updated"));
         assert_eq!(title_for_bound_target(&params, Some("other")), None);
         assert_eq!(title_for_bound_target(&params, None), None);
+    }
+
+    #[test]
+    fn auto_attach_accepts_only_the_already_bound_page() {
+        let page = serde_json::json!({
+            "targetInfo": { "targetId": "bound", "type": "page" }
+        });
+        let popup = serde_json::json!({
+            "targetInfo": { "targetId": "popup", "type": "page" }
+        });
+        let worker = serde_json::json!({
+            "targetInfo": { "targetId": "bound", "type": "worker" }
+        });
+
+        assert_eq!(attached_bound_page_target(&page, Some("bound")), Some("bound"));
+        assert_eq!(attached_bound_page_target(&popup, Some("bound")), None);
+        assert_eq!(attached_bound_page_target(&page, None), None);
+        assert_eq!(attached_bound_page_target(&worker, Some("bound")), None);
+    }
+
+    #[test]
+    fn destroying_the_bound_target_marks_its_manifest_identity_for_removal() {
+        let mut state = driver_state();
+        assert!(!state.forget_destroyed_bound_target(None));
+
+        state.target_id = Some("bound".to_string());
+        state.session_id = Some("session".to_string());
+        state.manifest_dirty = false;
+
+        assert!(!state.forget_destroyed_bound_target(Some("popup")));
+        assert_eq!(state.target_id.as_deref(), Some("bound"));
+        assert!(!state.manifest_dirty);
+
+        assert!(state.forget_destroyed_bound_target(Some("bound")));
+        assert_eq!(state.target_id, None);
+        assert_eq!(state.session_id, None);
+        assert!(state.manifest_dirty);
+        assert!(!state.pending_reattach);
     }
 
     #[test]

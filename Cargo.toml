@@ -49,6 +49,8 @@ git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
+# Mainline PR #300 advanced the resolved dependency to beta.54. Keep the
+# manifest pin aligned so unrelated lock regeneration cannot roll it back.
 surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.54", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —

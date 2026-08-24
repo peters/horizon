@@ -2,17 +2,16 @@
 //! driver. The parent session module owns lifecycle/CDP state; this leaf keeps
 //! filesystem synchronization and TTL behavior out of that event loop.
 
-use std::sync::mpsc;
 use std::time::Instant;
 
 use crate::browser::manifest::{self, BrowserManifest};
 
-use super::{BrowserEvent, DriverState, MANIFEST_MIN_INTERVAL, SIGNAL_MIN_INTERVAL};
+use super::{BrowserEvent, BrowserEventSender, DriverState, MANIFEST_MIN_INTERVAL, SIGNAL_MIN_INTERVAL};
 
 impl DriverState {
     /// User clicked "hand back": mark the pending handoff done so the
     /// blocked agent process can continue.
-    pub(super) fn resolve_handoff(&mut self, event_tx: &mpsc::Sender<BrowserEvent>) {
+    pub(super) fn resolve_handoff(&mut self, event_tx: &BrowserEventSender) {
         let expected_requested_at = self.handoff_seen;
         let mut acknowledged = false;
         let result = self.write_manifest_extra(true, |manifest| {
@@ -36,7 +35,7 @@ impl DriverState {
 
     /// Poll the manifest for agent-side signals (owner heartbeat, handoff
     /// requests). Cheap file read, throttled.
-    pub(super) fn tick_signals(&mut self, tx: &mpsc::Sender<BrowserEvent>) {
+    pub(super) fn tick_signals(&mut self, tx: &BrowserEventSender) {
         if self.last_signal_check.elapsed() < SIGNAL_MIN_INTERVAL {
             return;
         }
@@ -155,7 +154,7 @@ fn acknowledge_handoff(manifest: &mut BrowserManifest, expected_requested_at: Op
     true
 }
 
-fn publish_owner_change(owner_seen: &mut Option<String>, owner: Option<String>, event_tx: &mpsc::Sender<BrowserEvent>) {
+fn publish_owner_change(owner_seen: &mut Option<String>, owner: Option<String>, event_tx: &BrowserEventSender) {
     if owner == *owner_seen {
         return;
     }
@@ -202,7 +201,11 @@ mod tests {
 
     #[test]
     fn owner_change_keeps_and_publishes_the_live_owner() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = super::super::BrowserEventSender {
+            tx,
+            wake: super::super::BrowserEventWake::default(),
+        };
         let mut owner_seen = None;
 
         publish_owner_change(&mut owner_seen, Some("agent-1".to_string()), &tx);

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 pub use frames::FrameSlot;
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
-pub use session::{BrowserCommand, BrowserEvent, BrowserSession};
+pub use session::{BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
 
@@ -246,6 +246,17 @@ impl BrowserPanelState {
 
     pub fn send(&self, command: BrowserCommand) {
         let _ = self.try_send(command);
+    }
+
+    #[must_use]
+    pub fn needs_event_waker(&self) -> bool {
+        self.session.as_ref().is_some_and(BrowserSession::needs_event_waker)
+    }
+
+    pub fn set_event_waker(&self, callback: BrowserEventWaker) {
+        if let Some(session) = &self.session {
+            session.set_event_waker(callback);
+        }
     }
 
     /// Queue a command only when the driver session currently exists.

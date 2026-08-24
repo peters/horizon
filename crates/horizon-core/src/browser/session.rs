@@ -34,7 +34,7 @@ pub(super) use startup::profile_dir;
 use startup::run_driver;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::browser::cdp::{CdpError, CdpLink};
@@ -115,6 +115,54 @@ pub struct BrowserSession {
     pub event_rx: mpsc::Receiver<BrowserEvent>,
     /// Resolved when the driver thread has finished tearing down Chrome.
     completion_rx: mpsc::Receiver<()>,
+    event_wake: BrowserEventWake,
+}
+
+/// UI callback invoked after the driver queues an event. Keeping this generic
+/// avoids coupling core browser lifecycle code to egui while still allowing
+/// the native event loop to wake immediately from its idle backoff.
+pub type BrowserEventWaker = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Clone, Default)]
+struct BrowserEventWake {
+    callback: Arc<Mutex<Option<BrowserEventWaker>>>,
+}
+
+impl BrowserEventWake {
+    fn is_set(&self) -> bool {
+        self.callback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn set(&self, callback: BrowserEventWaker) {
+        *self.callback.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(callback);
+    }
+
+    fn wake(&self) {
+        let callback = self
+            .callback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+}
+
+struct BrowserEventSender {
+    tx: mpsc::Sender<BrowserEvent>,
+    wake: BrowserEventWake,
+}
+
+impl BrowserEventSender {
+    fn send(&self, event: BrowserEvent) -> Result<(), mpsc::SendError<BrowserEvent>> {
+        self.tx.send(event)?;
+        self.wake.wake();
+        Ok(())
+    }
 }
 
 impl BrowserSession {
@@ -124,6 +172,15 @@ impl BrowserSession {
             self.stop_requested.store(true, Ordering::Release);
         }
         self.command_tx.send(command).is_ok()
+    }
+
+    pub fn set_event_waker(&self, callback: BrowserEventWaker) {
+        self.event_wake.set(callback);
+    }
+
+    #[must_use]
+    pub fn needs_event_waker(&self) -> bool {
+        !self.event_wake.is_set()
     }
 
     /// Send `Stop` and return the teardown-completion signal. The receiver
@@ -146,7 +203,7 @@ impl BrowserSession {
     }
 }
 
-fn publish_frame(event_tx: &mpsc::Sender<BrowserEvent>, frame_slot: &FrameSlot, seq: u64) {
+fn publish_frame(event_tx: &BrowserEventSender, frame_slot: &FrameSlot, seq: u64) {
     if frame_slot.claim_notification() && event_tx.send(BrowserEvent::Frame { seq }).is_err() {
         frame_slot.release_notification();
     }
@@ -197,7 +254,12 @@ const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
 pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, String> {
     let frame_slot = config.frame_slot.clone();
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
-    let (event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
+    let (raw_event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
+    let event_wake = BrowserEventWake::default();
+    let event_tx = BrowserEventSender {
+        tx: raw_event_tx,
+        wake: event_wake.clone(),
+    };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
     let stop_requested = Arc::new(AtomicBool::new(false));
     let driver_stop_requested = Arc::clone(&stop_requested);
@@ -221,6 +283,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
         frame_slot,
         event_rx,
         completion_rx,
+        event_wake,
     })
 }
 
@@ -230,7 +293,7 @@ fn run_loop(
     link: &mut CdpLink,
     command_rx: &mpsc::Receiver<BrowserCommand>,
     frame_slot: &Arc<FrameSlot>,
-    event_tx: &mpsc::Sender<BrowserEvent>,
+    event_tx: &BrowserEventSender,
 ) {
     loop {
         // 1. Commands from the UI.
@@ -388,7 +451,7 @@ impl DriverState {
     fn call_and_ack(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         method: &str,
         params: &serde_json::Value,
@@ -407,7 +470,7 @@ impl DriverState {
     fn send_page_command(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         method: &str,
         params: &serde_json::Value,
@@ -423,7 +486,7 @@ impl DriverState {
     fn navigate_to(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         url: &str,
     ) {
@@ -456,5 +519,28 @@ impl DriverState {
                 )));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn queued_browser_events_wake_the_registered_ui_callback() {
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&wake_count);
+        let wake = BrowserEventWake::default();
+        wake.set(Arc::new(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+        }));
+        let (tx, rx) = mpsc::channel();
+        let sender = BrowserEventSender { tx, wake };
+
+        assert!(sender.send(BrowserEvent::Ready).is_ok());
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Ready));
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
     }
 }

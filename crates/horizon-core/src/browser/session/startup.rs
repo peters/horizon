@@ -8,7 +8,10 @@ use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
 use crate::browser::process::ChromeProcess;
 
-use super::{BrowserCommand, BrowserEvent, BrowserSessionConfig, CALL_TIMEOUT, DriverState, WS_URL_TIMEOUT, run_loop};
+use super::{
+    BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, DriverState, WS_URL_TIMEOUT,
+    run_loop,
+};
 
 /// Resolves the driver's teardown signal exactly once, on thread exit.
 struct DriverCompletion(Option<mpsc::Sender<()>>);
@@ -24,7 +27,7 @@ impl Drop for DriverCompletion {
 fn cancel_startup_if_requested(
     requested: &AtomicBool,
     chrome: &mut ChromeProcess,
-    event_tx: &mpsc::Sender<BrowserEvent>,
+    event_tx: &BrowserEventSender,
 ) -> bool {
     if !requested.load(Ordering::Acquire) {
         return false;
@@ -44,7 +47,7 @@ struct DriverConnection {
 
 fn initialize_driver(
     config: &BrowserSessionConfig,
-    event_tx: &mpsc::Sender<BrowserEvent>,
+    event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
 ) -> Option<DriverConnection> {
     let launch = match build_launch(config) {
@@ -101,7 +104,7 @@ fn initialize_driver(
 
 fn initialize_target(
     config: &BrowserSessionConfig,
-    event_tx: &mpsc::Sender<BrowserEvent>,
+    event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
     mut chrome: ChromeProcess,
     mut link: CdpLink,
@@ -186,7 +189,7 @@ fn call_during_startup(
 
 pub(super) fn run_driver(
     config: &BrowserSessionConfig,
-    event_tx: &mpsc::Sender<BrowserEvent>,
+    event_tx: &BrowserEventSender,
     command_rx: &mpsc::Receiver<BrowserCommand>,
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,

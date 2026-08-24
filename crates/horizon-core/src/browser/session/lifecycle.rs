@@ -1,15 +1,15 @@
 //! Page-session setup and screencast recovery lifecycle.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
 
 use super::{
-    BrowserEvent, DriverState, MAX_RESTART_ATTEMPTS, RESTART_BACKOFF, RESTART_BACKOFF_CAP, TITLE_BINDING_NAME,
-    TITLE_OBSERVER_SCRIPT,
+    BrowserEvent, BrowserEventSender, DriverState, MAX_RESTART_ATTEMPTS, RESTART_BACKOFF, RESTART_BACKOFF_CAP,
+    TITLE_BINDING_NAME, TITLE_OBSERVER_SCRIPT,
 };
 
 impl DriverState {
@@ -27,7 +27,7 @@ impl DriverState {
     pub(super) fn attach_setup(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         session: &str,
         target: &str,
@@ -127,22 +127,29 @@ impl DriverState {
     fn setup_command(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         method: &str,
         params: &serde_json::Value,
         session: Option<&str>,
     ) -> bool {
-        let _ = self.call_and_ack(link, event_tx, frame_slot, method, params, session);
-        !self.stop_requested.load(Ordering::Acquire)
+        match self.call_and_ack(link, event_tx, frame_slot, method, params, session) {
+            Ok(_) => !self.stop_requested.load(Ordering::Acquire),
+            Err(_) if self.stop_requested.load(Ordering::Acquire) => false,
+            Err(error) => {
+                self.session_id = None;
+                self.screencast_on = false;
+                self.pending_reattach = self.target_id.is_some();
+                frame_slot.clear();
+                let message = format!("browser setup failed at {method}: {error}; retry to restart");
+                tracing::warn!(target: "browser", "{message}");
+                let _ = event_tx.send(BrowserEvent::Warning(message));
+                false
+            }
+        }
     }
 
-    fn start_screencast(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
-        frame_slot: &Arc<FrameSlot>,
-    ) {
+    fn start_screencast(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
         let Some(session) = self.session_id.clone() else {
             return;
         };
@@ -196,7 +203,7 @@ impl DriverState {
         }
     }
 
-    pub(super) fn note_reattach_failure(&mut self, event_tx: &mpsc::Sender<BrowserEvent>, message: &str) {
+    pub(super) fn note_reattach_failure(&mut self, event_tx: &BrowserEventSender, message: &str) {
         self.reattach_failures += 1;
         if self.reattach_failures >= 5 {
             self.reattach_failures = 0;
@@ -214,7 +221,7 @@ impl DriverState {
     pub(super) fn pending_restart_tick(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &mpsc::Sender<BrowserEvent>,
+        event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) {
         if self.pending_reattach && !self.reattach_in_flight {
