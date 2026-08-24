@@ -233,7 +233,7 @@ impl HorizonApp {
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
-        self.last_terminal_output_at = None;
+        self.last_panel_output_at = None;
         self.fullscreen_panel = None;
         // Numeric panel ids restart in the replacement board. Drop every
         // per-panel cache so a same-id panel cannot inherit stale textures or

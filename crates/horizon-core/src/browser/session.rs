@@ -25,6 +25,7 @@
 mod commands;
 mod events;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -95,6 +96,7 @@ pub struct BrowserSessionConfig {
 /// The panel-side handle to a running driver.
 pub struct BrowserSession {
     command_tx: mpsc::Sender<BrowserCommand>,
+    stop_requested: Arc<AtomicBool>,
     pub frame_slot: Arc<FrameSlot>,
     pub event_rx: mpsc::Receiver<BrowserEvent>,
     /// Resolved when the driver thread has finished tearing down Chrome.
@@ -104,6 +106,9 @@ pub struct BrowserSession {
 impl BrowserSession {
     #[must_use]
     pub fn send(&self, command: BrowserCommand) -> bool {
+        if matches!(command, BrowserCommand::Stop) {
+            self.stop_requested.store(true, Ordering::Release);
+        }
         self.command_tx.send(command).is_ok()
     }
 
@@ -112,7 +117,15 @@ impl BrowserSession {
     /// Chrome, and removed the manifest.
     #[must_use]
     pub fn shutdown_signal(self) -> mpsc::Receiver<()> {
+        self.stop_requested.store(true, Ordering::Release);
         let _ = self.command_tx.send(BrowserCommand::Stop);
+        self.completion_rx
+    }
+
+    /// Return the existing teardown-completion signal after the driver has
+    /// already announced `Stopped`; no second stop request is necessary.
+    #[must_use]
+    pub fn completion_signal(self) -> mpsc::Receiver<()> {
         self.completion_rx
     }
 }
@@ -142,15 +155,25 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
     let (event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let driver_stop_requested = Arc::clone(&stop_requested);
     let slot = Arc::clone(&frame_slot);
     std::thread::Builder::new()
         .name("browser-driver".into())
         .spawn(move || {
-            run_driver(&config, &event_tx, &command_rx, &slot, completion_tx);
+            run_driver(
+                &config,
+                &event_tx,
+                &command_rx,
+                &slot,
+                &driver_stop_requested,
+                completion_tx,
+            );
         })
         .map_err(|e| format!("failed to spawn browser driver: {e}"))?;
     Ok(BrowserSession {
         command_tx,
+        stop_requested,
         frame_slot,
         event_rx,
         completion_rx,
@@ -168,69 +191,122 @@ impl Drop for DriverCompletion {
     }
 }
 
-fn run_driver(
+fn cancel_startup_if_requested(
+    requested: &AtomicBool,
+    chrome: &mut ChromeProcess,
+    event_tx: &mpsc::Sender<BrowserEvent>,
+) -> bool {
+    if !requested.load(Ordering::Acquire) {
+        return false;
+    }
+    chrome.kill();
+    let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+    true
+}
+
+struct DriverConnection {
+    chrome: ChromeProcess,
+    link: CdpLink,
+    ws_url: String,
+    target_id: String,
+    session_id: String,
+}
+
+fn initialize_driver(
     config: &BrowserSessionConfig,
     event_tx: &mpsc::Sender<BrowserEvent>,
-    command_rx: &mpsc::Receiver<BrowserCommand>,
-    frame_slot: &Arc<FrameSlot>,
-    completion_tx: mpsc::Sender<()>,
-) {
-    let _completion = DriverCompletion(Some(completion_tx));
+    stop_requested: &AtomicBool,
+) -> Option<DriverConnection> {
     let launch = match build_launch(config) {
         Ok(launch) => launch,
         Err(message) => {
             let _ = event_tx.send(BrowserEvent::Warning(message));
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-            return;
+            return None;
         }
     };
-
+    if stop_requested.load(Ordering::Acquire) {
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return None;
+    }
     let mut chrome = match ChromeProcess::spawn(&launch) {
         Ok(chrome) => chrome,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("failed to start chrome: {error}")));
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-            return;
+            return None;
         }
     };
-    let ws_url = match chrome.wait_ws_url(WS_URL_TIMEOUT) {
-        Ok(url) => url,
+    let ws_url = match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
+        Ok(Some(url)) => url,
+        Ok(None) => {
+            chrome.kill();
+            let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+            return None;
+        }
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("no DevTools endpoint: {error}")));
+            chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-            return;
+            return None;
         }
     };
-    let mut link = match CdpLink::connect(&ws_url) {
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    let link = match CdpLink::connect(&ws_url) {
         Ok(link) => link,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connect failed: {error}")));
+            chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-            return;
+            return None;
         }
     };
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
+}
 
+fn initialize_target(
+    config: &BrowserSessionConfig,
+    event_tx: &mpsc::Sender<BrowserEvent>,
+    stop_requested: &AtomicBool,
+    mut chrome: ChromeProcess,
+    mut link: CdpLink,
+    ws_url: String,
+) -> Option<DriverConnection> {
     let _ = link.call_and_drain(
         CALL_TIMEOUT,
         "Target.setDiscoverTargets",
         &serde_json::json!({ "discover": true }),
         None,
     );
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
     let _ = link.call_and_drain(
         CALL_TIMEOUT,
         "Target.setAutoAttach",
         &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
         None,
     );
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
     // setAutoAttach only covers *future* targets: attach explicitly to the
     // page that Chrome opened at startup (creating one if it has none).
     let Some(target_id) = first_page_target(&mut link).or_else(|| create_page_target(&mut link, config)) else {
         let _ = event_tx.send(BrowserEvent::Warning("no page target found".to_string()));
-        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         chrome.kill();
-        return;
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return None;
     };
-    let Some(session) = link
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    let Some(session_id) = link
         .call_and_drain(
             CALL_TIMEOUT,
             "Target.attachToTarget",
@@ -242,17 +318,54 @@ fn run_driver(
         .and_then(|result| result.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
     else {
         let _ = event_tx.send(BrowserEvent::Warning("initial attach failed".to_string()));
-        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         chrome.kill();
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return None;
+    };
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    Some(DriverConnection {
+        chrome,
+        link,
+        ws_url,
+        target_id,
+        session_id,
+    })
+}
+
+fn run_driver(
+    config: &BrowserSessionConfig,
+    event_tx: &mpsc::Sender<BrowserEvent>,
+    command_rx: &mpsc::Receiver<BrowserCommand>,
+    frame_slot: &Arc<FrameSlot>,
+    stop_requested: &AtomicBool,
+    completion_tx: mpsc::Sender<()>,
+) {
+    let _completion = DriverCompletion(Some(completion_tx));
+    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested) else {
         return;
     };
 
-    let mut state = DriverState::new(config, &ws_url);
+    let mut state = DriverState::new(config, &connection.ws_url);
     state.write_manifest(true);
-    state.attach_setup(&mut link, event_tx, frame_slot, &session, &target_id);
+    state.attach_setup(
+        &mut connection.link,
+        event_tx,
+        frame_slot,
+        &connection.session_id,
+        &connection.target_id,
+    );
 
-    run_loop(&mut state, &mut chrome, &mut link, command_rx, frame_slot, event_tx);
-    chrome.kill();
+    run_loop(
+        &mut state,
+        &mut connection.chrome,
+        &mut connection.link,
+        command_rx,
+        frame_slot,
+        event_tx,
+    );
+    connection.chrome.kill();
 }
 
 fn run_loop(
@@ -816,5 +929,53 @@ impl DriverState {
 
     fn remove_manifest(&self) {
         manifest::remove(&self.config.panel_local_id);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn shutdown_cancels_devtools_endpoint_wait() {
+        let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
+        let browser = temp.path().join("delayed-browser");
+        let started = temp.path().join("started");
+        std::fs::write(
+            &browser,
+            format!("#!/bin/sh\nprintf started > '{}'\nexec sleep 30\n", started.display()),
+        )
+        .unwrap_or_else(|error| panic!("write delayed browser: {error}"));
+        let mut permissions = std::fs::metadata(&browser)
+            .unwrap_or_else(|error| panic!("read delayed browser metadata: {error}"))
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&browser, permissions)
+            .unwrap_or_else(|error| panic!("make delayed browser executable: {error}"));
+
+        let session = start_session(BrowserSessionConfig {
+            browser: BrowserConfig {
+                command: Some(browser.to_string_lossy().into_owned()),
+                profile_root: Some(temp.path().join("profiles")),
+                ..BrowserConfig::default()
+            },
+            panel_local_id: "startup-cancel".to_string(),
+            initial_url: None,
+            width: 320,
+            height: 200,
+            frame_slot: Arc::new(FrameSlot::new()),
+        })
+        .unwrap_or_else(|error| panic!("start browser session: {error}"));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !started.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(started.exists(), "delayed browser did not start");
+
+        let completion = session.shutdown_signal();
+        assert_eq!(completion.recv_timeout(Duration::from_secs(2)), Ok(()));
     }
 }

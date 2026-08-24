@@ -143,20 +143,24 @@ impl ChromeProcess {
         })
     }
 
-    /// Block until the browser reports its `DevTools` endpoint (or `timeout`).
+    /// Block until the browser reports its `DevTools` endpoint, the caller
+    /// cancels startup, or `timeout` elapses.
     ///
     /// # Errors
     /// Fails on timeout or when the process exits before reporting.
-    pub fn wait_ws_url(&mut self, timeout: Duration) -> Result<String> {
+    pub fn wait_ws_url(&mut self, timeout: Duration, mut cancelled: impl FnMut() -> bool) -> Result<Option<String>> {
         let started = Instant::now();
         while started.elapsed() < timeout {
-            if let Some(url) = self.ws_url.take() {
-                return Ok(url);
+            if cancelled() {
+                return Ok(None);
             }
-            match self.ws_url_rx.recv_timeout(Duration::from_millis(100)) {
+            if let Some(url) = self.ws_url.take() {
+                return Ok(Some(url));
+            }
+            match self.ws_url_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(url) => {
                     self.ws_url = Some(url.clone());
-                    return Ok(url);
+                    return Ok(Some(url));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if self.child_status().is_some() {

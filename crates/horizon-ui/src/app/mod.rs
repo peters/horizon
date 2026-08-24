@@ -258,7 +258,7 @@ pub struct HorizonApp {
     remote_hosts_refresh_in_flight: bool,
     remote_hosts_last_refresh: Option<Instant>,
     last_session_catalog_refresh: Option<Instant>,
-    last_terminal_output_at: Option<Instant>,
+    last_panel_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     session_manager: Option<RuntimeSessionManagerState>,
@@ -437,7 +437,7 @@ impl HorizonApp {
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
-            last_terminal_output_at: Some(Instant::now()),
+            last_panel_output_at: Some(Instant::now()),
             settings: None,
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
@@ -584,7 +584,7 @@ impl eframe::App for HorizonApp {
         }
 
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
-        let had_terminal_output = self.process_frame_inputs(ctx);
+        let had_panel_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
@@ -603,7 +603,7 @@ impl eframe::App for HorizonApp {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
         self.render_speech_notice(ctx);
-        self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
+        self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

@@ -22,7 +22,7 @@ pub struct BodyOutput {
 pub fn show_body(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
-    browser: &BrowserPanelState,
+    browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
 ) -> BodyOutput {
     let available = ui.available_rect_before_wrap();
@@ -112,7 +112,12 @@ pub fn show_body(
     }
 }
 
-fn placeholder(ui: &mut Ui, _panel_id: horizon_core::PanelId, browser: &BrowserPanelState, available: Rect) -> bool {
+fn placeholder(
+    ui: &mut Ui,
+    _panel_id: horizon_core::PanelId,
+    browser: &mut BrowserPanelState,
+    available: Rect,
+) -> bool {
     let message = match &browser.status {
         BrowserStatus::Starting => "Starting browser…".to_string(),
         BrowserStatus::Ready => "Waiting for frames…".to_string(),
@@ -128,7 +133,14 @@ fn placeholder(ui: &mut Ui, _panel_id: horizon_core::PanelId, browser: &BrowserP
         ui.label(egui::RichText::new(message).color(crate::theme::FG_DIM()));
         if !browser.status.is_alive() {
             ui.add_space(12.0);
-            let response = ui.add(egui::Button::new("Retry")).on_hover_text("Restart the browser");
+            let retry_ready = browser.retry_ready();
+            let response = ui
+                .add_enabled(retry_ready, egui::Button::new("Retry"))
+                .on_hover_text(if retry_ready {
+                    "Restart the browser"
+                } else {
+                    "Waiting for the previous browser to finish shutting down"
+                });
             if response.clicked() {
                 retry_clicked = true;
             }

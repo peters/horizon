@@ -107,8 +107,9 @@ pub struct BrowserPanelState {
     pub loading: bool,
     pub frame_slot: Arc<FrameSlot>,
     session: Option<BrowserSession>,
-    /// Teardown-completion signal stored by [`BrowserPanelState::request_shutdown`].
-    shutdown_signal: Option<std::sync::mpsc::Receiver<()>>,
+    /// Driver teardown that must finish before Retry or application exit can
+    /// reuse/release this panel's Chrome profile.
+    teardown_signal: Option<std::sync::mpsc::Receiver<()>>,
     pub panel_local_id: String,
     /// Initial URL requested at (re)start, for the URL bar.
     pub requested_url: Option<String>,
@@ -138,7 +139,7 @@ impl BrowserPanelState {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
-            shutdown_signal: None,
+            teardown_signal: None,
             requested_url: initial_url.clone(),
             panel_local_id: panel_local_id.clone(),
             owner: None,
@@ -160,19 +161,20 @@ impl BrowserPanelState {
         self.launch_session(initial_url);
     }
 
-    /// Bounded wait for a taken driver's teardown, so a restart cannot
-    /// launch a second Chrome against the still-locked profile directory.
-    /// The common path is fast; the bound covers an uncooperative Chrome.
-    const RESTART_TEARDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
-
     fn launch_session(&mut self, initial_url: Option<String>) {
         self.navigation_error = None;
         // Drop the previous driver (if any) and wait for its Chrome to be
         // gone: the replacement reuses the same profile directory, and a
         // second instance would lose the profile lock race.
         if let Some(session) = self.session.take() {
-            let signal = BrowserSession::shutdown_signal(session);
-            let _ = signal.recv_timeout(Self::RESTART_TEARDOWN_WAIT);
+            self.teardown_signal = Some(BrowserSession::shutdown_signal(session));
+        }
+        if !self.retry_ready() {
+            self.loading = false;
+            self.status = BrowserStatus::Error {
+                message: "the previous browser is still shutting down; retry in a moment".to_string(),
+            };
+            return;
         }
         let session_config = session::BrowserSessionConfig {
             browser: self.config.clone(),
@@ -227,7 +229,7 @@ impl BrowserPanelState {
     /// lock.
     pub fn request_shutdown(&mut self) {
         if let Some(session) = self.session.take() {
-            self.shutdown_signal = Some(session.shutdown_signal());
+            self.teardown_signal = Some(session.shutdown_signal());
         }
         if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
             self.status = BrowserStatus::Stopped { code: None };
@@ -237,7 +239,23 @@ impl BrowserPanelState {
     /// Take the stored teardown-completion signal, if a shutdown was
     /// requested and not yet joined.
     pub fn take_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
-        self.shutdown_signal.take()
+        self.teardown_signal.take()
+    }
+
+    /// Whether a failed/stopped session has fully released its Chrome
+    /// process and profile, making Retry safe. Polling is non-blocking so the
+    /// recovery placeholder cannot freeze the UI.
+    pub fn retry_ready(&mut self) -> bool {
+        let Some(signal) = &self.teardown_signal else {
+            return true;
+        };
+        match signal.try_recv() {
+            Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.teardown_signal = None;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+        }
     }
 
     /// Drain driver events into panel state, separating visible activity from
@@ -288,7 +306,9 @@ impl BrowserPanelState {
                     output.had_output = true;
                 }
                 BrowserEvent::Stopped { code } => {
-                    self.session = None;
+                    if let Some(session) = self.session.take() {
+                        self.teardown_signal = Some(session.completion_signal());
+                    }
                     // Drop the stale frame so the placeholder (with Retry)
                     // is shown instead of a frozen last frame.
                     self.frame_slot.clear();
@@ -357,5 +377,32 @@ mod tests {
             }
             .is_alive()
         );
+    }
+
+    #[test]
+    fn retry_stays_disabled_until_teardown_completes() {
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Error {
+                message: "stopped".to_string(),
+            },
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            teardown_signal: Some(completion_rx),
+            panel_local_id: "retry-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            navigation_error: None,
+            config: BrowserConfig::default(),
+        };
+
+        assert!(!state.retry_ready());
+        assert_eq!(completion_tx.send(()), Ok(()));
+        assert!(state.retry_ready());
+        assert!(state.teardown_signal.is_none());
     }
 }

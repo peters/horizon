@@ -19,13 +19,16 @@ use serde::{Deserialize, Serialize};
 use crate::attention::{AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessOutput};
+use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
 use crate::runtime_state::{PanelState, RuntimeState};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Covers one in-flight five-second CDP startup call plus Chrome's bounded
+/// kill/reap fallback. Healthy sessions normally finish in under a second.
+const BROWSER_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(9);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
@@ -99,7 +102,7 @@ pub struct Board {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoardProcessOutput {
-    pub had_terminal_output: bool,
+    pub activity: PanelProcessActivity,
     pub cwd_changed: bool,
     pub persisted_state_changed: bool,
 }
@@ -274,11 +277,11 @@ impl Board {
         // Chrome (and its locked profile).
         for panel in &mut self.panels {
             if let Some(signal) = panel.browser_shutdown_signal()
-                && signal.recv_timeout(TERMINAL_PANEL_SHUTDOWN_TIMEOUT).is_err()
+                && signal.recv_timeout(BROWSER_PANEL_SHUTDOWN_TIMEOUT).is_err()
             {
                 tracing::warn!(
                     panel_id = panel.id.0,
-                    timeout_ms = TERMINAL_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
+                    timeout_ms = BROWSER_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
                     "timed out waiting for browser panel shutdown"
                 );
             }
@@ -313,7 +316,7 @@ impl Board {
                 std::thread::Builder::new()
                     .name("browser-shutdown-join".into())
                     .spawn(move || {
-                        let _ = signal.recv_timeout(Duration::from_secs(5));
+                        let _ = signal.recv();
                         completed.fetch_add(1, Ordering::Relaxed);
                     })
                     .ok();
@@ -329,7 +332,8 @@ impl Board {
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
             let panel_output: PanelProcessOutput = panel.process_output();
-            output.had_terminal_output |= panel_output.had_output;
+            output.activity.terminal |= panel_output.activity.terminal;
+            output.activity.browser |= panel_output.activity.browser;
             output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
         }
@@ -337,7 +341,7 @@ impl Board {
         // output.  The expensive path — `detect_attention()` — locks the
         // terminal mutex and iterates the full display, so skipping it on
         // idle frames is a significant CPU win.
-        if self.attention_enabled && output.had_terminal_output {
+        if self.attention_enabled && output.activity.terminal {
             self.update_attention();
         }
         // Working-status refresh runs every frame: the per-panel check is a

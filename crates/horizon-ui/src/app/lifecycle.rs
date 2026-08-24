@@ -15,9 +15,9 @@ mod startup_workspace;
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Browser teardown may spend one second on `Browser.close` and three seconds
-/// killing/reaping Chrome; board joiners allow five seconds.
-const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(6);
+/// Exceeds the core browser teardown bound, including a cancellable startup
+/// call and Chrome's kill/reap fallback.
+const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
@@ -289,7 +289,7 @@ impl HorizonApp {
         }
         // process_output already drained browser-panel driver events
         // (Panel::process_output handles the browser kind).
-        let had_terminal_output = panel_output.had_terminal_output;
+        let had_panel_output = panel_output.activity.terminal || panel_output.activity.browser;
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -301,7 +301,7 @@ impl HorizonApp {
         self.poll_update_check();
         self.maybe_start_update_check();
 
-        had_terminal_output
+        had_panel_output
     }
 
     fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {
@@ -883,7 +883,7 @@ impl HorizonApp {
     pub(super) fn finalize_frame(
         &mut self,
         ctx: &Context,
-        had_terminal_output: bool,
+        had_panel_output: bool,
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
@@ -917,12 +917,12 @@ impl HorizonApp {
             // Keep streaming terminals responsive, but progressively back off
             // once the board has been quiet for a while to reduce idle CPU.
             let now = Instant::now();
-            let poll = if had_terminal_output {
-                self.last_terminal_output_at = Some(now);
+            let poll = if had_panel_output {
+                self.last_panel_output_at = Some(now);
                 Duration::from_millis(16)
             } else {
                 let idle_for = self
-                    .last_terminal_output_at
+                    .last_panel_output_at
                     .map_or(Duration::MAX, |last_output| now.saturating_duration_since(last_output));
 
                 if idle_for < Duration::from_secs(1) {

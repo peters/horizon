@@ -79,7 +79,7 @@ impl<'a> BrowserView<'a> {
             chrome::show(ui, panel_id, browser, state, interactive)
         };
         let body = {
-            let Some(browser) = self.panel.browser() else {
+            let Some(browser) = self.panel.browser_mut() else {
                 return false;
             };
             render::show_body(ui, panel_id, browser, state)

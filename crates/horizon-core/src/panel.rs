@@ -202,8 +202,17 @@ pub struct Panel {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PanelProcessActivity {
+    /// New terminal-grid output that may require attention/agent scanning.
+    pub terminal: bool,
+    /// Browser state/frame activity that requires repainting but must not
+    /// trigger terminal-grid scans.
+    pub browser: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanelProcessOutput {
-    pub had_output: bool,
+    pub activity: PanelProcessActivity,
     pub cwd_changed: bool,
     pub persisted_state_changed: bool,
 }
@@ -311,12 +320,12 @@ impl Panel {
             if browser.title != self.terminal_title {
                 self.terminal_title = browser.title.clone();
             }
-            self.had_recent_output = browser_output.had_output;
-            if browser_output.had_output {
-                self.last_output_at_millis = Some(current_unix_millis());
-            }
+            self.had_recent_output = false;
             return PanelProcessOutput {
-                had_output: browser_output.had_output,
+                activity: PanelProcessActivity {
+                    terminal: false,
+                    browser: browser_output.had_output,
+                },
                 cwd_changed: false,
                 persisted_state_changed: browser_output.url_changed,
             };
@@ -352,7 +361,10 @@ impl Panel {
 
         let cwd_changed = self.update_tracked_cwd(current_cwd);
         PanelProcessOutput {
-            had_output,
+            activity: PanelProcessActivity {
+                terminal: had_output,
+                browser: false,
+            },
             cwd_changed,
             persisted_state_changed: cwd_changed,
         }

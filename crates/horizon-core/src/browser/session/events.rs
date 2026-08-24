@@ -95,17 +95,13 @@ impl DriverState {
         let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
     }
 
-    /// Track the current document's default execution context for the
-    /// title fetch. A creation with `auxData.isDefault` replaces the
-    /// tracked id; a destruction of the tracked id clears it (the next
-    /// fetch then runs without an explicit contextId).
+    /// Track the top-level document's default execution context for the
+    /// title fetch. Iframes also publish `isDefault` contexts, so their
+    /// `frameId` must not replace the context used for page metadata.
     fn note_execution_context(&mut self, event: &CdpEvent<'_>) {
-        let context = event.params.get("context");
-        let is_default = context
-            .and_then(|c| c.pointer("/auxData/isDefault"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if is_default && let Some(id) = context.and_then(|c| c.get("id")).and_then(serde_json::Value::as_u64) {
+        if event.method == "Runtime.executionContextCreated"
+            && let Some(id) = default_context_id_for_frame(event.params, self.main_frame_id.as_deref())
+        {
             self.title_context_id = Some(id);
         } else if let Some(id) = event
             .params
@@ -388,4 +384,37 @@ fn href_matches_url(href: &str, url: &str) -> bool {
     let href = href.trim_end_matches('/');
     let url = url.trim_end_matches('/');
     href == url
+}
+
+fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Option<&str>) -> Option<u64> {
+    let context = params.get("context")?;
+    let is_default = context.pointer("/auxData/isDefault")?.as_bool()?;
+    let frame_id = context.pointer("/auxData/frameId")?.as_str()?;
+    if !is_default || Some(frame_id) != main_frame_id {
+        return None;
+    }
+    context.get("id")?.as_u64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_context_id_for_frame;
+
+    #[test]
+    fn title_context_accepts_only_the_main_frames_default_context() {
+        let main = serde_json::json!({
+            "context": { "id": 7, "auxData": { "isDefault": true, "frameId": "main" } }
+        });
+        let iframe = serde_json::json!({
+            "context": { "id": 8, "auxData": { "isDefault": true, "frameId": "child" } }
+        });
+        let isolated = serde_json::json!({
+            "context": { "id": 9, "auxData": { "isDefault": false, "frameId": "main" } }
+        });
+
+        assert_eq!(default_context_id_for_frame(&main, Some("main")), Some(7));
+        assert_eq!(default_context_id_for_frame(&iframe, Some("main")), None);
+        assert_eq!(default_context_id_for_frame(&isolated, Some("main")), None);
+        assert_eq!(default_context_id_for_frame(&main, None), None);
+    }
 }
