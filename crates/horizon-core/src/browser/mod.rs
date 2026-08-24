@@ -110,6 +110,9 @@ pub struct BrowserPanelState {
     /// Driver teardown that must finish before Retry or application exit can
     /// reuse/release this panel's Chrome profile.
     teardown_signal: Option<std::sync::mpsc::Receiver<()>>,
+    /// One-click Retry waits for the prior Chrome profile lock to be released,
+    /// then starts this replacement automatically.
+    pending_relaunch: Option<PendingRelaunch>,
     pub panel_local_id: String,
     /// Initial URL requested at (re)start, for the URL bar.
     pub requested_url: Option<String>,
@@ -127,6 +130,10 @@ pub struct BrowserPanelState {
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
     config: BrowserConfig,
+}
+
+struct PendingRelaunch {
+    initial_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -147,6 +154,7 @@ impl BrowserPanelState {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             teardown_signal: None,
+            pending_relaunch: None,
             requested_url: initial_url.clone(),
             panel_local_id: panel_local_id.clone(),
             owner: None,
@@ -180,12 +188,15 @@ impl BrowserPanelState {
             self.teardown_signal = Some(BrowserSession::shutdown_signal(session));
         }
         if !self.retry_ready() {
-            self.loading = false;
-            self.status = BrowserStatus::Error {
-                message: "the previous browser is still shutting down; retry in a moment".to_string(),
-            };
+            self.pending_relaunch = Some(PendingRelaunch { initial_url });
+            self.loading = true;
+            self.status = BrowserStatus::Starting;
             return;
         }
+        self.start_session(initial_url);
+    }
+
+    fn start_session(&mut self, initial_url: Option<String>) {
         let session_config = session::BrowserSessionConfig {
             browser: self.config.clone(),
             panel_local_id: self.panel_local_id.clone(),
@@ -208,6 +219,17 @@ impl BrowserPanelState {
                 self.status = BrowserStatus::Error { message };
             }
         }
+    }
+
+    fn continue_pending_relaunch(&mut self) -> bool {
+        if self.pending_relaunch.is_none() || !self.retry_ready() {
+            return false;
+        }
+        let Some(pending) = self.pending_relaunch.take() else {
+            return false;
+        };
+        self.start_session(pending.initial_url);
+        true
     }
 
     fn clear_agent_state_for_relaunch(&mut self) {
@@ -258,6 +280,7 @@ impl BrowserPanelState {
     /// the app-shutdown paths join on it so exit cannot outrun the profile
     /// lock.
     pub fn request_shutdown(&mut self) {
+        self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(session.shutdown_signal());
         }
@@ -270,6 +293,14 @@ impl BrowserPanelState {
     /// requested and not yet joined.
     pub fn take_shutdown_signal(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
         self.teardown_signal.take()
+    }
+
+    /// Permanently close this panel and remove its persistent Chrome profile
+    /// only after the driver has released the profile lock.
+    pub fn close_permanently(&mut self) {
+        self.request_shutdown();
+        let profile_dir = session::profile_dir(&self.config, &self.panel_local_id);
+        schedule_profile_cleanup(profile_dir, self.take_shutdown_signal());
     }
 
     /// Whether a failed/stopped session has fully released its Chrome
@@ -291,15 +322,22 @@ impl BrowserPanelState {
     /// Drain driver events into panel state, separating visible activity from
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
+        let relaunched = self.continue_pending_relaunch();
         let events = self
             .session
             .as_ref()
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         if events.is_empty() {
-            return BrowserDrainOutput::default();
+            return BrowserDrainOutput {
+                had_output: relaunched,
+                ..BrowserDrainOutput::default()
+            };
         }
-        let mut output = BrowserDrainOutput::default();
+        let mut output = BrowserDrainOutput {
+            had_output: relaunched,
+            ..BrowserDrainOutput::default()
+        };
         for event in events {
             match event {
                 BrowserEvent::Ready => {
@@ -397,6 +435,26 @@ impl Drop for BrowserPanelState {
     }
 }
 
+fn schedule_profile_cleanup(profile_dir: PathBuf, teardown_signal: Option<std::sync::mpsc::Receiver<()>>) {
+    let cleanup = move || {
+        if let Some(signal) = teardown_signal {
+            let _ = signal.recv();
+        }
+        if let Err(error) = std::fs::remove_dir_all(&profile_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %profile_dir.display(), "failed to remove browser profile: {error}");
+        }
+    };
+
+    if let Err(error) = std::thread::Builder::new()
+        .name("browser-profile-cleanup".into())
+        .spawn(cleanup)
+    {
+        tracing::warn!("failed to start browser profile cleanup: {error}");
+    }
+}
+
 /// Resolve the manifest directory for browser panels (UI + external agents).
 #[must_use]
 pub fn manifest_dir() -> PathBuf {
@@ -440,6 +498,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             teardown_signal: Some(completion_rx),
+            pending_relaunch: None,
             panel_local_id: "retry-test".to_string(),
             requested_url: None,
             owner: None,
@@ -458,6 +517,62 @@ mod tests {
     }
 
     #[test]
+    fn queued_retry_launches_after_teardown_without_another_click() {
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Starting,
+            url: String::new(),
+            title: String::new(),
+            loading: true,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            teardown_signal: Some(completion_rx),
+            pending_relaunch: Some(PendingRelaunch { initial_url: None }),
+            panel_local_id: "queued-retry-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            config: BrowserConfig {
+                command: Some("/definitely/missing/chrome".to_string()),
+                ..BrowserConfig::default()
+            },
+        };
+
+        assert!(!state.continue_pending_relaunch());
+        assert_eq!(completion_tx.send(()), Ok(()));
+        assert!(state.continue_pending_relaunch());
+        assert!(state.pending_relaunch.is_none());
+        assert!(state.session.is_some());
+        state.request_shutdown();
+        if let Some(signal) = state.take_shutdown_signal() {
+            assert!(signal.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
+        }
+    }
+
+    #[test]
+    fn profile_cleanup_waits_for_driver_teardown() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let profile_dir = root.path().join("panel-profile");
+        std::fs::create_dir(&profile_dir).expect("profile dir");
+        std::fs::write(profile_dir.join("Preferences"), b"state").expect("profile state");
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+
+        schedule_profile_cleanup(profile_dir.clone(), Some(completion_rx));
+        assert!(profile_dir.exists());
+        assert_eq!(completion_tx.send(()), Ok(()));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while profile_dir.exists() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(!profile_dir.exists());
+    }
+
+    #[test]
     fn failed_hand_back_keeps_the_retry_affordance() {
         let mut state = BrowserPanelState {
             status: BrowserStatus::Stopped { code: None },
@@ -467,6 +582,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             teardown_signal: None,
+            pending_relaunch: None,
             panel_local_id: "handoff-test".to_string(),
             requested_url: None,
             owner: Some("agent".to_string()),
@@ -495,6 +611,7 @@ mod tests {
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             teardown_signal: None,
+            pending_relaunch: None,
             panel_local_id: "relaunch-test".to_string(),
             requested_url: None,
             owner: Some("agent".to_string()),

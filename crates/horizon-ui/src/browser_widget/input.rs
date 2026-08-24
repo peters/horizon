@@ -6,7 +6,7 @@ use horizon_core::browser::{
     BrowserButton, BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
 };
 
-use crate::browser_widget::BrowserUiState;
+use crate::browser_widget::{BrowserPointerClick, BrowserUiState};
 
 /// CDP `buttons` bitmask for currently-down mouse buttons.
 const BUTTON_LEFT: u32 = 1;
@@ -72,6 +72,15 @@ fn pointer_events(
     let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
     let frame_pos = ctx.input(|i| i.pointer.interact_pos());
     let modifiers = key_modifiers(ui);
+    let event_time = ctx.input(|input| input.time);
+    let (max_click_dist, max_click_duration, max_double_click_delay) = ctx.options(|options| {
+        let input = &options.input_options;
+        (
+            input.max_click_dist,
+            input.max_click_duration,
+            input.max_double_click_delay,
+        )
+    });
     // Frame-end pointer position: only used for wheel events, which carry
     // no per-event position.
     let wheel_pos = frame_pos.map(transform).filter(|p| pointer_target && rect.contains(*p));
@@ -84,7 +93,7 @@ fn pointer_events(
     // canvas) still ends with exactly one release. Chrome coalesces adjacent
     // mouseMoved messages, so only the final move in each adjacent run is
     // forwarded while button and wheel ordering is preserved.
-    let mut event_buttons = state.captured_button.map_or(0, button_mask);
+    let mut event_buttons = state.captured_click.map_or(0, |click| button_mask(click.button));
     let mut pending_move: Option<(f64, f64, u32)> = None;
     for event in ctx.input(|i| i.events.clone()) {
         match event {
@@ -96,38 +105,29 @@ fn pointer_events(
                     continue;
                 };
                 let p = transform(pos);
-                let (x, y) = to_page_coords(rect, frame_size, p);
-                if pressed {
-                    if pointer_target && rect.contains(p) {
-                        state.captured_button = Some(browser_button);
-                        state.last_mouse = Some(p);
-                        event_buttons |= button_mask(browser_button);
-                        browser.send(BrowserCommand::Input(BrowserInput::MousePress {
-                            x,
-                            y,
-                            button: browser_button,
-                            click_count: 1,
-                            buttons: event_buttons,
-                            modifiers,
-                        }));
-                    }
-                } else if state.captured_button == Some(browser_button) {
-                    state.captured_button = None;
-                    state.last_mouse = Some(p);
-                    event_buttons &= !button_mask(browser_button);
-                    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
-                        x,
-                        y,
+                replay_pointer_button(
+                    browser,
+                    state,
+                    &mut event_buttons,
+                    PointerButtonReplay {
+                        global_position: pos,
+                        local_position: p,
                         button: browser_button,
-                        click_count: 1,
-                        buttons: event_buttons,
+                        pressed,
+                        pointer_target,
+                        event_time,
+                        max_click_dist,
+                        max_click_duration,
+                        max_double_click_delay,
                         modifiers,
-                    }));
-                }
+                        rect,
+                        frame_size,
+                    },
+                );
             }
             Event::PointerMoved(pos) => {
                 let p = transform(pos);
-                let tracking = should_track_pointer(pointer_target, rect.contains(p), state.captured_button.is_some());
+                let tracking = should_track_pointer(pointer_target, rect.contains(p), state.captured_click.is_some());
                 // Movement dedup: only forward real movement. `None` (the
                 // first move, or the first after PointerGone) must be
                 // forwarded, or hover would be dead until a click.
@@ -141,16 +141,16 @@ fn pointer_events(
             // last saw it instead of stranding Chrome's button state down.
             Event::PointerGone => {
                 flush_pending_move(browser, &mut pending_move);
-                if let Some(button) = state.captured_button.take()
+                if let Some(click) = state.captured_click.take()
                     && let Some(p) = state.last_mouse
                 {
                     let (x, y) = to_page_coords(rect, frame_size, p);
-                    event_buttons &= !button_mask(button);
+                    event_buttons &= !button_mask(click.button);
                     browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
                         x,
                         y,
-                        button,
-                        click_count: 1,
+                        button: click.button,
+                        click_count: click.count,
                         buttons: event_buttons,
                         modifiers,
                     }));
@@ -181,6 +181,89 @@ fn pointer_events(
     flush_pending_move(browser, &mut pending_move);
 }
 
+#[derive(Clone, Copy)]
+struct PointerButtonReplay {
+    global_position: egui::Pos2,
+    local_position: egui::Pos2,
+    button: BrowserButton,
+    pressed: bool,
+    pointer_target: bool,
+    event_time: f64,
+    max_click_dist: f32,
+    max_click_duration: f64,
+    max_double_click_delay: f64,
+    modifiers: BrowserModifiers,
+    rect: egui::Rect,
+    frame_size: [f32; 2],
+}
+
+fn replay_pointer_button(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    event_buttons: &mut u32,
+    event: PointerButtonReplay,
+) {
+    let (x, y) = to_page_coords(event.rect, event.frame_size, event.local_position);
+    if event.pressed {
+        if !event.pointer_target || !event.rect.contains(event.local_position) {
+            return;
+        }
+        let click_count = next_click_count(
+            state.last_click,
+            event.button,
+            event.global_position,
+            event.event_time,
+            event.max_double_click_delay,
+            event.max_click_dist,
+        );
+        state.captured_click = Some(BrowserPointerClick {
+            button: event.button,
+            position: event.global_position,
+            time: event.event_time,
+            count: click_count,
+        });
+        state.last_mouse = Some(event.local_position);
+        *event_buttons |= button_mask(event.button);
+        browser.send(BrowserCommand::Input(BrowserInput::MousePress {
+            x,
+            y,
+            button: event.button,
+            click_count,
+            buttons: *event_buttons,
+            modifiers: event.modifiers,
+        }));
+        return;
+    }
+
+    if !state.captured_click.is_some_and(|click| click.button == event.button) {
+        return;
+    }
+    let Some(click) = state.captured_click.take() else {
+        return;
+    };
+    state.last_mouse = Some(event.local_position);
+    *event_buttons &= !button_mask(event.button);
+    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+        x,
+        y,
+        button: event.button,
+        click_count: click.count,
+        buttons: *event_buttons,
+        modifiers: event.modifiers,
+    }));
+    if event.global_position.distance(click.position) <= event.max_click_dist
+        && event.event_time - click.time <= event.max_click_duration
+    {
+        state.last_click = Some(BrowserPointerClick {
+            position: event.global_position,
+            time: event.event_time,
+            ..click
+        });
+    } else {
+        state.last_click = None;
+    }
+}
+
 fn flush_pending_move(browser: &BrowserPanelState, pending_move: &mut Option<(f64, f64, u32)>) {
     if let Some((x, y, buttons)) = pending_move.take() {
         browser.send(BrowserCommand::Input(BrowserInput::MouseMove { x, y, buttons }));
@@ -189,6 +272,24 @@ fn flush_pending_move(browser: &BrowserPanelState, pending_move: &mut Option<(f6
 
 const fn should_track_pointer(pointer_target: bool, inside_rect: bool, captured: bool) -> bool {
     (pointer_target && inside_rect) || captured
+}
+
+fn next_click_count(
+    last_click: Option<BrowserPointerClick>,
+    button: BrowserButton,
+    position: egui::Pos2,
+    time: f64,
+    max_delay: f64,
+    max_distance: f32,
+) -> u32 {
+    last_click
+        .filter(|last| {
+            last.button == button
+                && time >= last.time
+                && time - last.time <= max_delay
+                && position.distance(last.position) <= max_distance
+        })
+        .map_or(1, |last| last.count.saturating_add(1).min(3))
 }
 
 /// egui mouse button → CDP button (mouse-only; touch is not forwarded).
@@ -711,6 +812,40 @@ mod tests {
         assert!(!should_track_pointer(false, true, false));
         assert!(should_track_pointer(true, true, false));
         assert!(should_track_pointer(false, false, true));
+    }
+
+    #[test]
+    fn click_sequence_tracks_button_time_and_position() {
+        let first = BrowserPointerClick {
+            button: BrowserButton::Left,
+            position: egui::pos2(20.0, 30.0),
+            time: 10.0,
+            count: 1,
+        };
+
+        assert_eq!(
+            next_click_count(Some(first), BrowserButton::Left, egui::pos2(22.0, 31.0), 10.2, 0.3, 6.0,),
+            2
+        );
+        assert_eq!(
+            next_click_count(
+                Some(first),
+                BrowserButton::Right,
+                egui::pos2(22.0, 31.0),
+                10.2,
+                0.3,
+                6.0,
+            ),
+            1
+        );
+        assert_eq!(
+            next_click_count(Some(first), BrowserButton::Left, egui::pos2(40.0, 30.0), 10.2, 0.3, 6.0,),
+            1
+        );
+        assert_eq!(
+            next_click_count(Some(first), BrowserButton::Left, egui::pos2(20.0, 30.0), 10.4, 0.3, 6.0,),
+            1
+        );
     }
 
     #[test]

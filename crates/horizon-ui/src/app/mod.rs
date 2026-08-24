@@ -103,6 +103,11 @@ struct ActiveSession {
     persistent: bool,
 }
 
+struct PendingSessionSwitch {
+    shutdown_progress: ShutdownProgress,
+    target: ResolvedSession,
+}
+
 struct StartupChooserState {
     chooser: StartupChooser,
     selected_session_id: Option<String>,
@@ -284,7 +289,7 @@ pub struct HorizonApp {
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,
-    session_switch_shutdown_progress: Option<ShutdownProgress>,
+    pending_session_switch: Option<PendingSessionSwitch>,
     exit_cleanup_complete: bool,
 }
 
@@ -477,7 +482,7 @@ impl HorizonApp {
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,
-            session_switch_shutdown_progress: None,
+            pending_session_switch: None,
             exit_cleanup_complete: false,
         }
     }
@@ -563,6 +568,12 @@ impl eframe::App for HorizonApp {
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
             self.poll_shutdown_progress();
+            return;
+        }
+
+        if self.poll_session_switch(ctx) {
+            self.refresh_active_session_lease();
+            self.render_session_switch_overlay(ui);
             return;
         }
 

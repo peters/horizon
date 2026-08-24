@@ -45,11 +45,8 @@ impl DriverState {
             return;
         };
         let now = manifest::now_millis();
-        let mut owner = manifest.live_owner(now).map(|owner| owner.name.clone());
-        if owner != self.owner_seen {
-            self.owner_seen = std::mem::take(&mut owner);
-            let _ = tx.send(BrowserEvent::OwnerChanged(owner));
-        }
+        let owner = manifest.live_owner(now).map(|owner| owner.name.clone());
+        publish_owner_change(&mut self.owner_seen, owner, tx);
         match manifest.handoff_pending() {
             Some(handoff) => {
                 if self.handoff_seen != Some(handoff.requested_at) {
@@ -150,6 +147,14 @@ fn acknowledge_handoff(manifest: &mut BrowserManifest) -> bool {
     true
 }
 
+fn publish_owner_change(owner_seen: &mut Option<String>, owner: Option<String>, event_tx: &mpsc::Sender<BrowserEvent>) {
+    if owner == *owner_seen {
+        return;
+    }
+    owner_seen.clone_from(&owner);
+    let _ = event_tx.send(BrowserEvent::OwnerChanged(owner));
+}
+
 #[cfg(test)]
 mod tests {
     use crate::browser::manifest::ManifestHandoff;
@@ -168,5 +173,16 @@ mod tests {
         });
         assert!(acknowledge_handoff(&mut manifest));
         assert!(manifest.handoff.is_some_and(|handoff| handoff.done));
+    }
+
+    #[test]
+    fn owner_change_keeps_and_publishes_the_live_owner() {
+        let (tx, rx) = mpsc::channel();
+        let mut owner_seen = None;
+
+        publish_owner_change(&mut owner_seen, Some("agent-1".to_string()), &tx);
+
+        assert_eq!(owner_seen.as_deref(), Some("agent-1"));
+        assert_eq!(rx.recv(), Ok(BrowserEvent::OwnerChanged(Some("agent-1".to_string()))));
     }
 }

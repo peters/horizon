@@ -23,9 +23,11 @@ pub struct BrowserUiState {
     last_viewport: (u32, u32),
     /// Last mouse position forwarded to the page (movement dedup).
     last_mouse: Option<Pos2>,
-    /// Button captured by this panel (drags must deliver their release
-    /// even when it lands outside the rect).
-    captured_button: Option<BrowserButton>,
+    /// Press captured by this panel (drags must deliver their release even
+    /// when it lands outside the rect). The count is reused on release.
+    captured_click: Option<BrowserPointerClick>,
+    /// Most recent completed click, used to identify double/triple clicks.
+    last_click: Option<BrowserPointerClick>,
     /// URL bar buffer (follows the panel URL while unfocused).
     url_buffer: String,
     /// Enter submitted in the URL bar; its later key-up must not leak to the
@@ -42,6 +44,14 @@ pub struct BrowserUiState {
     /// Escape exits panel fullscreen after the app has already cleared the
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BrowserPointerClick {
+    button: BrowserButton,
+    position: Pos2,
+    time: f64,
+    count: u32,
 }
 
 pub struct BrowserView<'a> {

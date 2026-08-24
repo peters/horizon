@@ -91,8 +91,23 @@ impl HorizonHome {
 
     #[must_use]
     pub fn browser_profile_dir(&self, local_id: &str) -> PathBuf {
-        self.root.join("browser-profiles").join(local_id)
+        self.root.join("browser-profiles").join(safe_local_id(local_id))
     }
+}
+
+#[must_use]
+pub(crate) fn safe_local_id(local_id: &str) -> String {
+    let safe: String = local_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe.is_empty() { "_".to_string() } else { safe }
 }
 
 #[cfg(test)]
@@ -129,6 +144,14 @@ mod tests {
         assert_eq!(
             home.browser_profile_dir("panel-1"),
             PathBuf::from("/tmp/horizon-home/browser-profiles/panel-1")
+        );
+        assert_eq!(
+            home.browser_profile_dir("../outside"),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/___outside")
+        );
+        assert_eq!(
+            home.browser_profile_dir(""),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/_")
         );
     }
 }

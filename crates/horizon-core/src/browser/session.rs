@@ -482,14 +482,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
     let command = crate::browser::process::resolve_binary_or_default(&config.browser.command)
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| e.to_string())?;
-    let home = crate::horizon_home::HorizonHome::resolve();
-    // The configured value is a *root*: every panel still gets its own
-    // profile directory, or concurrent panels would fight over Chrome's
-    // profile lock.
-    let profile_dir = match &config.browser.profile_root {
-        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy()).join(&config.panel_local_id),
-        None => home.browser_profile_dir(&config.panel_local_id),
-    };
+    let profile_dir = profile_dir(&config.browser, &config.panel_local_id);
     Ok(crate::browser::process::ChromeLaunch {
         command,
         profile_dir,
@@ -497,6 +490,18 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
         height: config.height,
         extra_args: config.browser.extra_args.clone(),
     })
+}
+
+pub(super) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> std::path::PathBuf {
+    let home = crate::horizon_home::HorizonHome::resolve();
+    // The configured value is a *root*: every panel still gets its own
+    // profile directory, or concurrent panels would fight over Chrome's
+    // profile lock.
+    match &config.profile_root {
+        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy())
+            .join(crate::horizon_home::safe_local_id(panel_local_id)),
+        None => home.browser_profile_dir(panel_local_id),
+    }
 }
 
 /// Driver-side state machine for one page session.
@@ -856,6 +861,19 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    #[test]
+    fn configured_profile_root_confines_unsafe_panel_ids() {
+        let config = BrowserConfig {
+            profile_root: Some("/tmp/horizon-browser-profiles".into()),
+            ..BrowserConfig::default()
+        };
+
+        assert_eq!(
+            profile_dir(&config, "../outside/profile"),
+            std::path::PathBuf::from("/tmp/horizon-browser-profiles/___outside_profile")
+        );
+    }
 
     #[test]
     fn shutdown_cancels_devtools_endpoint_wait() {

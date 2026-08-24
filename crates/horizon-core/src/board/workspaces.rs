@@ -158,10 +158,12 @@ impl Board {
         // down the PTY while the `Terminal::Drop` impl detaches the thread.
         // This avoids blocking the UI thread — the child process is cleaned
         // up asynchronously in the background.
-        if let Some(mut panel) = removed_panel
-            && panel.kind.is_agent()
-        {
-            panel.request_shutdown();
+        if let Some(mut panel) = removed_panel {
+            if let Some(browser) = panel.browser_mut() {
+                browser.close_permanently();
+            } else if panel.kind.is_agent() {
+                panel.request_shutdown();
+            }
         }
     }
 

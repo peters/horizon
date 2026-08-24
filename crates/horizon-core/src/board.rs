@@ -288,14 +288,14 @@ impl Board {
         }
     }
 
-    /// Begins shutting down all terminal panels asynchronously.
+    /// Begins shutting down all panels asynchronously.
     ///
     /// Sends shutdown signals to every terminal and spawns background threads
     /// to join their event loops. Returns a [`ShutdownProgress`] handle that
     /// can be polled each frame to track completion without blocking the UI.
     pub fn begin_async_shutdown(&mut self) -> ShutdownProgress {
         let completed = Arc::new(AtomicUsize::new(0));
-        let mut terminal_count = 0;
+        let mut panel_count = 0;
 
         for panel in &mut self.panels {
             panel.request_shutdown();
@@ -305,13 +305,13 @@ impl Board {
             if let Some(terminal) = panel.terminal_mut()
                 && terminal.begin_async_join(&completed)
             {
-                terminal_count += 1;
+                panel_count += 1;
             }
             // Browser drivers tear down Chrome on their own threads; count
             // that teardown in the shutdown progress so the app cannot exit
             // while a driver still holds the profile lock.
             if let Some(signal) = panel.browser_shutdown_signal() {
-                terminal_count += 1;
+                panel_count += 1;
                 let completed = Arc::clone(&completed);
                 std::thread::Builder::new()
                     .name("browser-shutdown-join".into())
@@ -323,7 +323,7 @@ impl Board {
             }
         }
 
-        ShutdownProgress::new(terminal_count, completed)
+        ShutdownProgress::new(panel_count, completed)
     }
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.

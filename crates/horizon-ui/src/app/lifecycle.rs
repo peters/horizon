@@ -179,9 +179,10 @@ impl HorizonApp {
         self.begin_shutdown();
     }
 
-    /// Starts asynchronous terminal shutdown. State is saved immediately,
-    /// and background threads join each terminal event loop. The UI shows a
-    /// progress overlay until all terminals are done or the budget expires.
+    /// Starts asynchronous panel shutdown. State is saved immediately, and
+    /// background threads join terminal event loops and browser drivers. The
+    /// UI shows a progress overlay until every panel is done or the budget
+    /// expires.
     #[profiling::function]
     fn begin_shutdown(&mut self) {
         if self.shutdown_progress.is_some() {
@@ -191,8 +192,9 @@ impl HorizonApp {
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
         let mut progress = self
-            .session_switch_shutdown_progress
+            .pending_session_switch
             .take()
+            .map(|pending| pending.shutdown_progress)
             .unwrap_or_else(|| self.board.begin_async_shutdown());
         progress.restart_timeout_window();
         self.shutdown_progress = Some(progress);
@@ -216,8 +218,8 @@ impl HorizonApp {
         let Some(progress) = &self.shutdown_progress else {
             return;
         };
-        let completed = progress.terminals_completed();
-        let total = progress.terminal_count();
+        let completed = progress.panels_completed();
+        let total = progress.panel_count();
 
         egui::CentralPanel::default().show(ui, |ui| {
             if total > 0 {
@@ -225,7 +227,7 @@ impl HorizonApp {
                     ui,
                     egui::Id::new("shutdown_spinner"),
                     "Closing Horizon\u{2026}",
-                    &format!("{completed} / {total} terminals shut down"),
+                    &format!("{completed} / {total} panels shut down"),
                 );
             } else {
                 loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
@@ -242,12 +244,15 @@ impl HorizonApp {
 
         self.exit_cleanup_complete = true;
         let _ = self.auto_save_runtime_state();
-        if let Some(progress) = self.session_switch_shutdown_progress.take()
+        if let Some(progress) = self
+            .pending_session_switch
+            .take()
+            .map(|pending| pending.shutdown_progress)
             && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
         {
             tracing::warn!(
-                completed = progress.terminals_completed(),
-                total = progress.terminal_count(),
+                completed = progress.panels_completed(),
+                total = progress.panel_count(),
                 "timed out waiting for session-switch panel shutdown during exit"
             );
         }
@@ -256,8 +261,8 @@ impl HorizonApp {
             && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
         {
             tracing::warn!(
-                completed = progress.terminals_completed(),
-                total = progress.terminal_count(),
+                completed = progress.panels_completed(),
+                total = progress.panel_count(),
                 "timed out waiting for asynchronous panel shutdown during exit"
             );
         }

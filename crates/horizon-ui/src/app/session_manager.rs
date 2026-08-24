@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, RichText, Stroke, Vec2};
 use horizon_core::{ResolvedSession, SessionSummary};
 
-use crate::theme;
+use crate::{loading_spinner, theme};
 
 use super::util::{chrome_button, danger_button, format_relative_time, primary_button, viewport_local_rect};
-use super::{HorizonApp, PanelRenderCaches};
+use super::{HorizonApp, PanelRenderCaches, PendingSessionSwitch};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
@@ -208,16 +208,15 @@ impl HorizonApp {
             tracing::debug!("session switch ignored while the root viewport is stabilizing");
             return;
         }
-        if let Err(error) = self.prepare_session_switch() {
-            self.set_session_manager_error(error);
+        if self.pending_session_switch.is_some() {
+            tracing::debug!("session switch ignored while another switch is in progress");
             return;
         }
-        self.activate_persistent_session(session);
-        self.restore_window_viewport(ctx);
-        self.session_manager = None;
+        self.begin_session_switch(session);
+        let _ = self.poll_session_switch(ctx);
     }
 
-    fn prepare_session_switch(&mut self) -> Result<(), String> {
+    fn begin_session_switch(&mut self, session: &ResolvedSession) {
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,
@@ -233,19 +232,35 @@ impl HorizonApp {
         // terminal filter, so a key-up after the switch cannot leak into a
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
-        if self.session_switch_shutdown_progress.is_none() {
-            self.session_switch_shutdown_progress = Some(self.board.begin_async_shutdown());
+        self.pending_session_switch = Some(PendingSessionSwitch {
+            shutdown_progress: self.board.begin_async_shutdown(),
+            target: session.clone(),
+        });
+    }
+
+    /// Polls an in-flight switch without blocking egui's event thread.
+    ///
+    /// Returns `true` while the old board is still releasing its resources.
+    pub(super) fn poll_session_switch(&mut self, ctx: &Context) -> bool {
+        let Some(pending) = self.pending_session_switch.as_ref() else {
+            return false;
+        };
+        if !pending.shutdown_progress.is_complete() {
+            ctx.request_repaint_after(Duration::from_millis(32));
+            return true;
         }
-        let shutdown_complete = self
-            .session_switch_shutdown_progress
-            .as_ref()
-            .is_some_and(|progress| progress.wait_for_completion(SESSION_SWITCH_SHUTDOWN_WAIT));
-        if !shutdown_complete {
-            return Err(
-                "Timed out waiting for the current session's browser panels to close; retry the switch".to_string(),
-            );
-        }
-        self.session_switch_shutdown_progress = None;
+
+        let Some(pending) = self.pending_session_switch.take() else {
+            return false;
+        };
+        self.finish_session_switch();
+        self.activate_persistent_session(&pending.target);
+        self.restore_window_viewport(ctx);
+        self.session_manager = None;
+        false
+    }
+
+    fn finish_session_switch(&mut self) {
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
@@ -273,7 +288,34 @@ impl HorizonApp {
         self.workspace_screen_rects.clear();
         self.file_drop_highlight = None;
         self.file_hover_positions.clear();
-        Ok(())
+    }
+
+    pub(super) fn render_session_switch_overlay(&self, ui: &mut egui::Ui) {
+        let Some(progress) = self
+            .pending_session_switch
+            .as_ref()
+            .map(|pending| &pending.shutdown_progress)
+        else {
+            return;
+        };
+        let completed = progress.panels_completed();
+        let total = progress.panel_count();
+        let timed_out = progress.started_at().elapsed() > SESSION_SWITCH_SHUTDOWN_WAIT;
+        let detail = if timed_out {
+            "Shutdown is taking longer than expected; the new session will open as soon as every panel releases its resources."
+                .to_string()
+        } else {
+            format!("{completed} / {total} panels shut down")
+        };
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            loading_spinner::show_with_detail(
+                ui,
+                Id::new("session_switch_spinner"),
+                "Closing current session safely\u{2026}",
+                &detail,
+            );
+        });
     }
 }
 

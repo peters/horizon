@@ -100,8 +100,7 @@ impl ChromeProcess {
             .stderr(Stdio::piped())
             .spawn()?;
         let Some(stderr) = child.stderr.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = kill_and_reap(&mut child, Duration::from_secs(3));
             return Err(std::io::Error::other("failed to capture chrome stderr").into());
         };
 
@@ -133,8 +132,7 @@ impl ChromeProcess {
             }
         });
         if let Err(error) = stderr_reader {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = kill_and_reap(&mut child, Duration::from_secs(3));
             return Err(error.into());
         }
 
@@ -196,14 +194,14 @@ impl ChromeProcess {
         if self.child_status().is_some() {
             return;
         }
-        let _ = self.child.kill();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.child_status().is_none() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        // Final reap in case it exited between our last poll and now.
-        if self.child_status().is_none() {
-            self.exit_status = self.child.wait().ok();
+        match kill_and_reap(&mut self.child, Duration::from_secs(3)) {
+            Ok(Some(status)) => self.exit_status = Some(status),
+            Ok(None) => {
+                tracing::warn!(pid = self.child.id(), "Chrome did not exit within the reap deadline");
+            }
+            Err(error) => {
+                tracing::warn!(pid = self.child.id(), "failed to kill or reap Chrome: {error}");
+            }
         }
     }
 
@@ -212,6 +210,25 @@ impl ChromeProcess {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .to_string()
+    }
+}
+
+/// Kill and reap a child using only non-blocking status polls. A process that
+/// cannot be killed must not strand browser teardown indefinitely.
+fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
+    if let Some(status) = child.try_wait()? {
+        return Ok(Some(status));
+    }
+    child.kill()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
