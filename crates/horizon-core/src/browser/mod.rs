@@ -85,6 +85,20 @@ impl Default for BrowserConfig {
     }
 }
 
+pub(crate) fn profile_dir_for_home(
+    config: &BrowserConfig,
+    home: &crate::horizon_home::HorizonHome,
+    panel_local_id: &str,
+) -> PathBuf {
+    // The configured value is a root: every panel still gets its own safely
+    // encoded directory, or concurrent panels would share Chrome's lock.
+    match &config.profile_root {
+        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy())
+            .join(crate::horizon_home::safe_local_id(panel_local_id)),
+        None => home.browser_profile_dir(panel_local_id),
+    }
+}
+
 /// Coarse liveness of the panel's browser session.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum BrowserStatus {

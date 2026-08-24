@@ -80,6 +80,7 @@ pub(crate) struct ChromeProcessControl {
 struct ChromeProcessControlState {
     child: Option<Arc<Mutex<Child>>>,
     force_requested: bool,
+    registration_settled: bool,
 }
 
 impl ChromeProcessControl {
@@ -87,11 +88,19 @@ impl ChromeProcessControl {
         let force_requested = {
             let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.child = Some(Arc::clone(child));
+            state.registration_settled = true;
             state.force_requested
         };
         if force_requested {
             let _ = self.terminate(Duration::from_secs(3));
         }
+    }
+
+    pub(super) fn mark_registration_settled(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .registration_settled = true;
     }
 
     fn clear(&self, child: &Arc<Mutex<Child>>) {
@@ -148,16 +157,28 @@ impl ChromeProcessControl {
     /// registration immediately terminates that child.
     pub(crate) fn terminate(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        let child = {
+        let child = loop {
             let Some(mut state) = lock_until(&self.inner, deadline) else {
                 tracing::warn!("timed out waiting for Chrome process-control state");
                 return false;
             };
             state.force_requested = true;
-            state.child.clone()
-        };
-        let Some(child) = child else {
-            return true;
+            if let Some(child) = state.child.clone() {
+                break child;
+            }
+            if state.registration_settled {
+                return true;
+            }
+            drop(state);
+            if Instant::now() >= deadline {
+                tracing::warn!("Chrome process registration did not settle before the shutdown deadline");
+                return false;
+            }
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(10)),
+            );
         };
         let Some(mut child_guard) = lock_until(&child, deadline) else {
             tracing::warn!("timed out waiting for the exact Chrome child handle");
@@ -739,6 +760,80 @@ mod tests {
         assert!(elapsed < Duration::from_millis(500));
         drop(child_guard);
         assert!(control.terminate(Duration::from_secs(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_control_waits_for_late_child_registration_before_succeeding() {
+        use std::os::unix::process::CommandExt;
+
+        let control = ChromeProcessControl::default();
+        let worker_control = control.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = started_tx.send(());
+            let _ = result_tx.send(worker_control.terminate(Duration::from_secs(2)));
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_else(|error| panic!("wait for cleanup worker: {error}"));
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]).process_group(0);
+        let child = Arc::new(Mutex::new(
+            command
+                .spawn()
+                .unwrap_or_else(|error| panic!("spawn late test child: {error}")),
+        ));
+        control.register(&child);
+
+        assert!(
+            result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap_or_else(|error| panic!("wait for forced cleanup: {error}"))
+        );
+        worker.join().unwrap_or_else(|error| std::panic::resume_unwind(error));
+        assert!(control.is_reaped());
+        assert!(
+            child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .try_wait()
+                .is_ok_and(|status| status.is_some())
+        );
+    }
+
+    #[test]
+    fn process_control_succeeds_after_spawn_settles_without_a_child() {
+        let control = ChromeProcessControl::default();
+        let worker_control = control.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = started_tx.send(());
+            let _ = result_tx.send(worker_control.terminate(Duration::from_secs(2)));
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_else(|error| panic!("wait for cleanup worker: {error}"));
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        control.mark_registration_settled();
+
+        assert!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or_else(|error| panic!("wait for settled cleanup: {error}"))
+        );
+        worker.join().unwrap_or_else(|error| std::panic::resume_unwind(error));
     }
 
     #[test]

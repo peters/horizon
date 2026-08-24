@@ -41,8 +41,9 @@ motion is never eaten (fail-open above threshold).
 
 ### A2 — Partial (dirty-rect) texture upload  [bigger win, bigger lift]
 Hypothesis: for local changes (typing, one updating widget) most of the
-texture is unchanged; egui's `TextureHandle::update` re-uploads the whole
-panel-sized RGB8 every frame (fullscreen = 5.5 MB ≈ 330 MB/s at 60 fps).
+texture is unchanged; the decoded RGB frame becomes an egui `ColorImage`
+and is uploaded as RGBA8, so `TextureHandle::update` re-uploads the whole
+image every frame (1840×1000 fullscreen = 7.36 MB ≈ 442 MB/s at 60 fps).
 Research: derive merged dirty rects from the A1 diff grid on the driver,
 and either (a) push a custom wgpu texture update for those rects around
 the egui texture, or (b) split the egui texture into a coarse tile grid
@@ -84,7 +85,7 @@ with 3 browser panels under a scripted pointer-move storm (xdotool on X11)
 if this path changes again.
 
 ### B2 — Texture upload off the UI thread (only if A2/A1 aren't enough)
-Fullscreen 60 fps = 330 MB/s of synchronous CPU→GPU upload inside the
+Fullscreen 1840×1000 at 60 fps = about 442 MB/s of synchronous CPU→GPU upload inside the
 UI frame. If B1 + A1/A2 leave the UI thread contending, move frame
 uploads to a worker owning a wgpu queue with a triple-buffered frame
 handoff (the `FrameSlot` double-buffer becomes the handoff protocol).

@@ -29,6 +29,7 @@ pub fn show_body(
     panel_id: horizon_core::PanelId,
     browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
+    interactive: bool,
 ) -> BodyOutput {
     let available = ui.available_rect_before_wrap();
     if available.size().x.min(available.size().y) < 24.0 {
@@ -50,7 +51,7 @@ pub fn show_body(
         // allocating the body rect — allocating first would push the
         // placeholder's widgets past the clip rect (painter-drawn frames
         // are unaffected, which is why this only bites without frames).
-        let retry = placeholder(ui, panel_id, browser, available);
+        let retry = placeholder(ui, panel_id, browser, available, interactive);
         return BodyOutput {
             image_rect: None,
             frame_size: None,
@@ -65,7 +66,11 @@ pub fn show_body(
     let body_response = ui.interact(
         body_rect,
         ui.make_persistent_id(("browser_body", panel_id.0)),
-        Sense::click_and_drag(),
+        if interactive {
+            Sense::click_and_drag()
+        } else {
+            Sense::hover()
+        },
     );
     let body_clicked = body_response.clicked();
     if body_clicked {
@@ -143,6 +148,7 @@ fn placeholder(
     _panel_id: horizon_core::PanelId,
     browser: &mut BrowserPanelState,
     available: Rect,
+    interactive: bool,
 ) -> bool {
     let message = match &browser.status {
         BrowserStatus::Starting => "Starting browser…".to_string(),
@@ -161,8 +167,10 @@ fn placeholder(
             ui.add_space(12.0);
             let retry_ready = browser.retry_ready();
             let response = ui
-                .add_enabled(retry_ready, egui::Button::new("Retry"))
-                .on_hover_text(if retry_ready {
+                .add_enabled(interactive && retry_ready, egui::Button::new("Retry"))
+                .on_hover_text(if !interactive {
+                    "Browser controls are unavailable in this view"
+                } else if retry_ready {
                     "Restart the browser"
                 } else {
                     "Waiting for the previous browser to finish shutting down"

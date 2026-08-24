@@ -111,7 +111,7 @@ impl<'a> BrowserView<'a> {
             let Some(browser) = self.panel.browser_mut() else {
                 return false;
             };
-            render::show_body(ui, panel_id, browser, state)
+            render::show_body(ui, panel_id, browser, state, interactive)
         };
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui

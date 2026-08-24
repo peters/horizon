@@ -40,7 +40,7 @@ pub fn show(
 
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
-        clicked |= handoff_banner(ui, browser, &reason);
+        clicked |= handoff_banner(ui, browser, &reason, interactive);
     }
     (url_focused, clicked)
 }
@@ -116,7 +116,7 @@ fn ownership_chip(ui: &mut Ui, browser: &BrowserPanelState) {
     ui.label(RichText::new(label).size(10.0).color(color).strong());
 }
 
-fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) -> bool {
+fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, interactive: bool) -> bool {
     let mut clicked = false;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(theme::PALETTE_YELLOW());
@@ -129,7 +129,7 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) ->
                 };
                 clicked = ui
                     .add_enabled(
-                        !browser.handoff_resolution_pending,
+                        interactive && !browser.handoff_resolution_pending,
                         egui::Button::new(RichText::new(button_label).size(11.0))
                             .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
                             .corner_radius(6),

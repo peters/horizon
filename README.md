@@ -317,6 +317,34 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ---
 
+## Browser Panels
+
+Browser panels render a real headless Chromium page inside the Horizon canvas. Add one from the built-in **Browser** (`web`) preset, or declare one in a workspace and use `command` as its initial URL:
+
+```yaml
+workspaces:
+  - name: Web
+    panels:
+      - name: App
+        kind: browser
+        command: http://127.0.0.1:3000
+```
+
+Chrome, Chromium, Microsoft Edge, or Brave must be installed. Horizon discovers their normal executable names and standard macOS/Windows install locations; set `browser.command` when the executable is elsewhere. The remaining browser settings control screencast quality/rate and the per-panel private Chrome profiles:
+
+```yaml
+browser:
+  command: /path/to/chrome       # omit for automatic discovery
+  extra_args: []                 # optional Chrome command-line arguments
+  quality: 60                    # JPEG screencast quality, 1–100
+  every_nth_frame: 1             # 1 = every frame, 2 = every second frame
+  profile_root: ~/.horizon/browser-profiles
+```
+
+Each Browser panel receives a separate directory beneath `profile_root`, so cookies and page storage persist for that saved panel without sharing Chrome's profile lock. Permanently closing the panel or deleting its saved session removes that profile.
+
+---
+
 ## Speech Input (opt-in)
 
 Dictate straight into a terminal or a browser page: terminal-backed and Browser panels get a mic button in their title bar (Editor, Git Changes, and Usage panels do not), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.

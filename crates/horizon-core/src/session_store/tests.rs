@@ -83,6 +83,44 @@ fn delete_session_removes_saved_state_and_updates_index() {
 }
 
 #[test]
+fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
+    let root = test_root("delete-browser-profiles");
+    let home = HorizonHome::from_root(root.clone());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let configured_profile_root = root.join("custom-browser-profiles");
+    let browser_id = "saved/browser-id";
+    let runtime_state = RuntimeState {
+        browser: crate::browser::BrowserConfig {
+            profile_root: Some(configured_profile_root),
+            ..crate::browser::BrowserConfig::default()
+        },
+        workspaces: vec![WorkspaceState {
+            panels: vec![PanelState {
+                local_id: browser_id.to_string(),
+                name: "Browser".to_string(),
+                kind: PanelKind::Browser,
+                ..PanelState::default()
+            }],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let session = store
+        .create_session_from_runtime(runtime_state.clone())
+        .expect("create browser session");
+    let profile_dir = crate::browser::profile_dir_for_home(&runtime_state.browser, &home, browser_id);
+    std::fs::create_dir_all(&profile_dir).expect("create browser profile");
+    std::fs::write(profile_dir.join("Preferences"), b"browser state").expect("write browser profile");
+
+    store
+        .delete_session(&session.session_id)
+        .expect("delete browser session");
+
+    assert!(!profile_dir.exists());
+    assert!(!home.session_dir(&session.session_id).exists());
+}
+
+#[test]
 fn delete_session_rejects_live_sessions() {
     let root = test_root("delete-live-store");
     let home = HorizonHome::from_root(root.clone());

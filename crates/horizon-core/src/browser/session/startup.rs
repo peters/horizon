@@ -14,12 +14,17 @@ use super::{
     run_loop,
 };
 
-/// Resolves the driver's teardown signal exactly once, on thread exit.
-struct DriverCompletion(Option<mpsc::Sender<()>>);
+/// Settles process registration and resolves the driver's teardown signal
+/// exactly once, on thread exit.
+struct DriverCompletion {
+    completion_tx: Option<mpsc::Sender<()>>,
+    process_control: ChromeProcessControl,
+}
 
 impl Drop for DriverCompletion {
     fn drop(&mut self) {
-        if let Some(tx) = self.0.take() {
+        self.process_control.mark_registration_settled();
+        if let Some(tx) = self.completion_tx.take() {
             let _ = tx.send(());
         }
     }
@@ -197,7 +202,10 @@ pub(super) fn run_driver(
     completion_tx: mpsc::Sender<()>,
     process_control: ChromeProcessControl,
 ) {
-    let _completion = DriverCompletion(Some(completion_tx));
+    let _completion = DriverCompletion {
+        completion_tx: Some(completion_tx),
+        process_control: process_control.clone(),
+    };
     let _manifest_lifetime = DriverManifestLifetime::start(&config.panel_local_id);
     let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
         return;
@@ -273,14 +281,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::browser::process
 
 pub(in crate::browser) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> std::path::PathBuf {
     let home = crate::horizon_home::HorizonHome::resolve();
-    // The configured value is a *root*: every panel still gets its own
-    // profile directory, or concurrent panels would fight over Chrome's
-    // profile lock.
-    match &config.profile_root {
-        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy())
-            .join(crate::horizon_home::safe_local_id(panel_local_id)),
-        None => home.browser_profile_dir(panel_local_id),
-    }
+    super::super::profile_dir_for_home(config, &home, panel_local_id)
 }
 
 #[cfg(all(test, unix))]

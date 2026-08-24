@@ -283,10 +283,10 @@ impl HorizonApp {
                 let error = self.session_manager.as_ref().and_then(|state| state.error.clone());
                 self.finish_aborted_session_switch();
                 self.reload_session_manager(preferred_selection, error);
-            } else {
-                ctx.request_repaint_after(Duration::from_millis(100));
+                return false;
             }
-            return false;
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return true;
         }
         let timed_out = pending.shutdown_progress.started_at().elapsed() > SESSION_SWITCH_SHUTDOWN_WAIT;
         match session_switch_shutdown_state(
@@ -322,7 +322,7 @@ impl HorizonApp {
                             .to_string(),
                     ),
                 );
-                return false;
+                return true;
             }
         }
 

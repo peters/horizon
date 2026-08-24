@@ -76,7 +76,13 @@ pub(super) fn events(
     }
 }
 
-pub(super) fn browser_shortcut_events(events: &[Event], browser: &BrowserPanelState, state: &mut BrowserUiState) {
+pub(super) fn browser_shortcut_events(
+    events: &[Event],
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    shortcuts: &AppShortcuts,
+    exit_fullscreen_shortcut_active: bool,
+) {
     for event in events {
         let Event::Key {
             key,
@@ -100,7 +106,7 @@ pub(super) fn browser_shortcut_events(events: &[Event], browser: &BrowserPanelSt
                     repeat: *repeat,
                     modifiers: *modifiers,
                     key_text: None,
-                    app_shortcut: false,
+                    app_shortcut: app_shortcut_press(event, shortcuts, exit_fullscreen_shortcut_active),
                 },
             );
         }
@@ -450,6 +456,9 @@ fn key_to_browser_key(key: Key) -> Option<BrowserKey> {
         Key::F10 => BrowserKey::F10,
         Key::F11 => BrowserKey::F11,
         Key::F12 => BrowserKey::F12,
+        Key::F13 => BrowserKey::F13,
+        Key::F14 => BrowserKey::F14,
+        Key::F15 => BrowserKey::F15,
         Key::A => BrowserKey::Char('a'),
         Key::B => BrowserKey::Char('b'),
         Key::C => BrowserKey::Char('c'),
@@ -570,6 +579,32 @@ mod tests {
         assert!(!app_shortcut_press(&escape, &shortcuts, false));
         assert!(app_shortcut_press(&escape, &shortcuts, true));
         assert!(!app_shortcut_press(&save_editor, &shortcuts, false));
+    }
+
+    #[test]
+    fn configured_app_reload_key_stays_app_owned_while_the_url_is_focused() {
+        let shortcuts = AppShortcuts {
+            fullscreen_panel: horizon_core::ShortcutBinding::new(
+                horizon_core::ShortcutModifiers::NONE,
+                horizon_core::ShortcutKey::Function(5),
+            ),
+            ..AppShortcuts::default()
+        };
+        let f5 = press(Key::F5, false);
+
+        assert!(should_route_key_while_url_focused(
+            &BrowserUiState::default(),
+            Key::F5,
+            Modifiers::NONE
+        ));
+        assert!(app_shortcut_press(&f5, &shortcuts, false));
+    }
+
+    #[test]
+    fn extended_function_keys_map_to_cdp_keys() {
+        assert_eq!(key_to_browser_key(Key::F13), Some(BrowserKey::F13));
+        assert_eq!(key_to_browser_key(Key::F14), Some(BrowserKey::F14));
+        assert_eq!(key_to_browser_key(Key::F15), Some(BrowserKey::F15));
     }
 
     #[test]

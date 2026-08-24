@@ -70,7 +70,13 @@ pub fn handle(
         state.pointer_modifiers = keyboard::key_modifiers(ui);
     }
     if matches!(flags.keyboard_target, KeyboardTarget::Url) {
-        keyboard::browser_shortcut_events(flags.events, browser, state);
+        keyboard::browser_shortcut_events(
+            flags.events,
+            browser,
+            state,
+            flags.shortcuts,
+            matches!(flags.exit_fullscreen_shortcut_owner, ShortcutOwner::App),
+        );
     } else if page_keyboard_active {
         let exit_fullscreen_shortcut_active = matches!(flags.exit_fullscreen_shortcut_owner, ShortcutOwner::App);
         keyboard::events(

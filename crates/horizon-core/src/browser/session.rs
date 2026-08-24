@@ -160,11 +160,13 @@ impl BrowserShutdownSignal {
     pub(crate) fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
         let (completion_tx, completion_rx) = mpsc::channel();
         drop(completion_tx);
+        let process_control = ChromeProcessControl::default();
+        process_control.mark_registration_settled();
         Self {
             completion_rx,
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
-            process_control: ChromeProcessControl::default(),
+            process_control,
             panel_local_id: None,
             profile_cleanup: Mutex::new(ProfileCleanupState::Pending(profile_dir)),
         }
@@ -271,11 +273,13 @@ impl BrowserShutdownSignal {
 
     #[cfg(test)]
     pub(crate) fn for_test(completion_rx: mpsc::Receiver<()>) -> Self {
+        let process_control = ChromeProcessControl::default();
+        process_control.mark_registration_settled();
         Self {
             completion_rx,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
-            process_control: ChromeProcessControl::default(),
+            process_control,
             panel_local_id: None,
             profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
