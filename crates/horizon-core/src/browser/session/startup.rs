@@ -100,11 +100,10 @@ fn initialize_driver(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
+    initialize_target(event_tx, stop_requested, chrome, link, ws_url)
 }
 
 fn initialize_target(
-    config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
     mut chrome: ChromeProcess,
@@ -135,7 +134,7 @@ fn initialize_target(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let Some(target_id) = existing_target.or_else(|| create_page_target(&mut link, config, stop_requested)) else {
+    let Some(target_id) = existing_target.or_else(|| create_page_target(&mut link, stop_requested)) else {
         if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
             return None;
         }
@@ -245,21 +244,12 @@ fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<
 }
 
 /// Create a fresh page target as a fallback (browser opened without one).
-fn create_page_target(
-    link: &mut CdpLink,
-    config: &BrowserSessionConfig,
-    stop_requested: &AtomicBool,
-) -> Option<String> {
-    let url = config
-        .initial_url
-        .clone()
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| "about:blank".to_string());
+fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
     let result = call_during_startup(
         link,
         stop_requested,
         "Target.createTarget",
-        &serde_json::json!({ "url": url }),
+        &serde_json::json!({ "url": "about:blank" }),
     )
     .ok()?;
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)

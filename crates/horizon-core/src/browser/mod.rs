@@ -111,7 +111,10 @@ pub struct BrowserPanelState {
     pub title: String,
     pub loading: bool,
     pub frame_slot: Arc<FrameSlot>,
-    session: Option<BrowserSession>,
+    session: Option<Box<BrowserSession>>,
+    /// Outlives the session handle so a final driver-side navigation can be
+    /// folded into persistence after browser teardown completes.
+    committed_url: session::CommittedUrl,
     /// Driver teardown that must finish before Retry or application exit can
     /// reuse/release this panel's Chrome profile.
     teardown_signal: Option<std::sync::mpsc::Receiver<()>>,
@@ -158,6 +161,7 @@ impl BrowserPanelState {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
             requested_url: initial_url.clone(),
@@ -190,7 +194,7 @@ impl BrowserPanelState {
         // gone: the replacement reuses the same profile directory, and a
         // second instance would lose the profile lock race.
         if let Some(session) = self.session.take() {
-            self.teardown_signal = Some(BrowserSession::shutdown_signal(session));
+            self.teardown_signal = Some(BrowserSession::shutdown_signal(*session));
         }
         if !self.retry_ready() {
             self.pending_relaunch = Some(PendingRelaunch { initial_url });
@@ -215,10 +219,11 @@ impl BrowserPanelState {
         };
         match session::start_session(session_config) {
             Ok(handle) => {
+                self.committed_url = handle.committed_url();
                 self.clear_agent_state_for_relaunch();
                 self.status = BrowserStatus::Starting;
                 self.loading = true;
-                self.session = Some(handle);
+                self.session = Some(Box::new(handle));
             }
             Err(message) => {
                 self.status = BrowserStatus::Error { message };
@@ -250,7 +255,7 @@ impl BrowserPanelState {
 
     #[must_use]
     pub fn needs_event_waker(&self) -> bool {
-        self.session.as_ref().is_some_and(BrowserSession::needs_event_waker)
+        self.session.as_ref().is_some_and(|session| session.needs_event_waker())
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {
@@ -302,7 +307,7 @@ impl BrowserPanelState {
     pub fn request_shutdown(&mut self) {
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
-            self.teardown_signal = Some(session.shutdown_signal());
+            self.teardown_signal = Some((*session).shutdown_signal());
         }
         if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
             self.status = BrowserStatus::Stopped { code: None };
@@ -356,12 +361,6 @@ impl BrowserPanelState {
             .as_ref()
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        if events.is_empty() {
-            return BrowserDrainOutput {
-                had_output: relaunched,
-                ..BrowserDrainOutput::default()
-            };
-        }
         let mut output = BrowserDrainOutput {
             had_output: relaunched,
             ..BrowserDrainOutput::default()
@@ -404,7 +403,7 @@ impl BrowserPanelState {
                 }
                 BrowserEvent::Stopped { code } => {
                     if let Some(session) = self.session.take() {
-                        self.teardown_signal = Some(session.completion_signal());
+                        self.teardown_signal = Some((*session).completion_signal());
                     }
                     // Drop the stale frame so the placeholder (with Retry)
                     // is shown instead of a frozen last frame.
@@ -454,7 +453,21 @@ impl BrowserPanelState {
                 }
             }
         }
+        self.sync_committed_url(&mut output);
         output
+    }
+
+    fn sync_committed_url(&mut self, output: &mut BrowserDrainOutput) {
+        let Some(url) = self.committed_url.snapshot() else {
+            return;
+        };
+        if self.url == url {
+            return;
+        }
+        self.url = url;
+        self.navigation_error = None;
+        output.url_changed = true;
+        output.had_output = true;
     }
 }
 
@@ -527,6 +540,7 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(completion_rx),
             pending_relaunch: None,
             panel_local_id: "retry-test".to_string(),
@@ -557,6 +571,7 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(completion_rx),
             pending_relaunch: None,
             panel_local_id: "shutdown-wait-test".to_string(),
@@ -592,6 +607,7 @@ mod tests {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(completion_rx),
             pending_relaunch: Some(PendingRelaunch { initial_url: None }),
             panel_local_id: "queued-retry-test".to_string(),
@@ -647,6 +663,7 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
             panel_local_id: "handoff-test".to_string(),
@@ -668,6 +685,39 @@ mod tests {
     }
 
     #[test]
+    fn committed_url_is_applied_after_the_session_event_receiver_is_gone() {
+        let committed_url = session::CommittedUrl::default();
+        committed_url.publish("https://example.com/final");
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Stopped { code: None },
+            url: "https://example.com/old".to_string(),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            committed_url,
+            teardown_signal: None,
+            pending_relaunch: None,
+            panel_local_id: "final-url-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: Some("stale error".to_string()),
+            config: BrowserConfig::default(),
+        };
+
+        let output = state.drain_events();
+
+        assert_eq!(state.url, "https://example.com/final");
+        assert!(state.navigation_error.is_none());
+        assert!(output.url_changed);
+        assert!(output.had_output);
+    }
+
+    #[test]
     fn relaunch_clears_agent_state_from_the_stopped_driver() {
         let mut state = BrowserPanelState {
             status: BrowserStatus::Stopped { code: None },
@@ -676,6 +726,7 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
             panel_local_id: "relaunch-test".to_string(),

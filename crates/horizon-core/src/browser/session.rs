@@ -116,6 +116,23 @@ pub struct BrowserSession {
     /// Resolved when the driver thread has finished tearing down Chrome.
     completion_rx: mpsc::Receiver<()>,
     event_wake: BrowserEventWake,
+    committed_url: CommittedUrl,
+}
+
+/// Latest URL that the driver has observed Chrome commit. This survives the
+/// event receiver being dropped during shutdown so the panel can persist the
+/// driver's final state after teardown completes.
+#[derive(Clone, Default)]
+pub(super) struct CommittedUrl(Arc<Mutex<Option<String>>>);
+
+impl CommittedUrl {
+    pub(super) fn publish(&self, url: &str) {
+        *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_string());
+    }
+
+    pub(super) fn snapshot(&self) -> Option<String> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
 }
 
 /// UI callback invoked after the driver queues an event. Keeping this generic
@@ -155,10 +172,14 @@ impl BrowserEventWake {
 struct BrowserEventSender {
     tx: mpsc::Sender<BrowserEvent>,
     wake: BrowserEventWake,
+    committed_url: CommittedUrl,
 }
 
 impl BrowserEventSender {
     fn send(&self, event: BrowserEvent) -> Result<(), mpsc::SendError<BrowserEvent>> {
+        if let BrowserEvent::UrlChanged(url) = &event {
+            self.committed_url.publish(url);
+        }
         self.tx.send(event)?;
         self.wake.wake();
         Ok(())
@@ -200,6 +221,10 @@ impl BrowserSession {
     pub fn completion_signal(self) -> mpsc::Receiver<()> {
         self.frame_slot.release_notification();
         self.completion_rx
+    }
+
+    pub(super) fn committed_url(&self) -> CommittedUrl {
+        self.committed_url.clone()
     }
 }
 
@@ -256,9 +281,11 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
     let (raw_event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
     let event_wake = BrowserEventWake::default();
+    let committed_url = CommittedUrl::default();
     let event_tx = BrowserEventSender {
         tx: raw_event_tx,
         wake: event_wake.clone(),
+        committed_url: committed_url.clone(),
     };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
     let stop_requested = Arc::new(AtomicBool::new(false));
@@ -284,6 +311,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, Str
         event_rx,
         completion_rx,
         event_wake,
+        committed_url,
     })
 }
 
@@ -298,11 +326,15 @@ fn run_loop(
     loop {
         // 1. Commands from the UI.
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
+            state.capture_final_url(link, event_tx, frame_slot);
             // Ask Chrome to exit cleanly so it marks its profile session
             // complete (kill alone leaves a "crashed" state that makes the
             // next launch restore stale tabs); the kill below is the
             // fallback for an uncooperative process.
-            let _ = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
+            let outcome = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
+            for message in outcome.drained {
+                state.handle_message(link, event_tx, frame_slot, message);
+            }
             chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
@@ -393,7 +425,7 @@ struct DriverState {
     last_signal_check: Instant,
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
-    handoff_seen: Option<i64>,
+    handoff_seen: Option<String>,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -462,6 +494,53 @@ impl DriverState {
             self.handle_message(link, event_tx, frame_slot, message);
         }
         outcome.result
+    }
+
+    /// Freeze an in-flight navigation, route every event received while that
+    /// happens, then ask the target for its authoritative committed URL.
+    fn capture_final_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
+        if let Some(session_id) = self.session_id.clone() {
+            let outcome = link.call_and_drain(
+                Duration::from_secs(1),
+                "Page.stopLoading",
+                &serde_json::json!({}),
+                Some(session_id.as_str()),
+            );
+            for message in outcome.drained {
+                self.handle_message(link, event_tx, frame_slot, message);
+            }
+        }
+        let Some(target_id) = self.target_id.clone() else {
+            return;
+        };
+        let outcome = link.call_and_drain(
+            Duration::from_secs(1),
+            "Target.getTargetInfo",
+            &serde_json::json!({ "targetId": target_id }),
+            None,
+        );
+        for message in outcome.drained {
+            self.handle_message(link, event_tx, frame_slot, message);
+        }
+        let Some(url) = outcome
+            .result
+            .ok()
+            .and_then(|result| {
+                result
+                    .pointer("/targetInfo/url")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .filter(|url| !url.is_empty() && url != "about:blank")
+        else {
+            return;
+        };
+        if self.url != url {
+            self.url = url;
+            self.manifest_dirty = true;
+            self.write_manifest(true);
+        }
+        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
     }
 
     fn send_page_command(
@@ -534,10 +613,33 @@ mod tests {
             counted.fetch_add(1, Ordering::Relaxed);
         }));
         let (tx, rx) = mpsc::channel();
-        let sender = BrowserEventSender { tx, wake };
+        let sender = BrowserEventSender {
+            tx,
+            wake,
+            committed_url: CommittedUrl::default(),
+        };
 
         assert!(sender.send(BrowserEvent::Ready).is_ok());
         assert_eq!(rx.recv(), Ok(BrowserEvent::Ready));
         assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn committed_url_survives_a_dropped_event_receiver() {
+        let committed_url = CommittedUrl::default();
+        let (tx, rx) = mpsc::channel();
+        let sender = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: committed_url.clone(),
+        };
+        drop(rx);
+
+        assert!(
+            sender
+                .send(BrowserEvent::UrlChanged("https://example.com/final".to_string()))
+                .is_err()
+        );
+        assert_eq!(committed_url.snapshot().as_deref(), Some("https://example.com/final"));
     }
 }

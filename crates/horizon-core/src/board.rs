@@ -26,9 +26,6 @@ use crate::workspace::{Workspace, WorkspaceId};
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-/// Covers one in-flight five-second CDP startup call plus Chrome's bounded
-/// kill/reap fallback. Healthy sessions normally finish in under a second.
-const BROWSER_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(9);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
@@ -276,14 +273,8 @@ impl Board {
         // so this synchronous exit path does not orphan a still-running
         // Chrome (and its locked profile).
         for panel in &mut self.panels {
-            if let Some(signal) = panel.browser_shutdown_signal()
-                && signal.recv_timeout(BROWSER_PANEL_SHUTDOWN_TIMEOUT).is_err()
-            {
-                tracing::warn!(
-                    panel_id = panel.id.0,
-                    timeout_ms = BROWSER_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
-                    "timed out waiting for browser panel shutdown"
-                );
+            if let Some(signal) = panel.browser_shutdown_signal() {
+                let _ = signal.recv();
             }
         }
     }

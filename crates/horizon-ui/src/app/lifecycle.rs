@@ -6,19 +6,17 @@ use egui::Context;
 use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
-use crate::{loading_spinner, theme};
+use crate::theme;
 
 use super::canvas::CanvasGridCache;
 use super::speech::SpeechEvent;
 use super::{HorizonApp, attention_feed};
 
+mod shutdown;
 mod startup_workspace;
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Exceeds the core browser teardown bound, including a cancellable startup
-/// call and Chrome's kill/reap fallback.
-const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
@@ -180,102 +178,6 @@ impl HorizonApp {
         self.begin_shutdown();
     }
 
-    /// Starts asynchronous panel shutdown. State is saved immediately, and
-    /// background threads join terminal event loops and browser drivers. The
-    /// UI shows a progress overlay until every panel is done or the budget
-    /// expires.
-    #[profiling::function]
-    fn begin_shutdown(&mut self) {
-        if self.shutdown_progress.is_some() {
-            return;
-        }
-
-        // A browser navigation can commit between the preceding frame and
-        // the close request. Fold queued driver events into panel state before
-        // serializing the final runtime snapshot.
-        let _ = self.drain_panel_output();
-        let _ = self.auto_save_runtime_state();
-        self.git_watchers.clear();
-        let mut progress = self
-            .pending_session_switch
-            .take()
-            .map(|pending| pending.shutdown_progress)
-            .unwrap_or_else(|| self.board.begin_async_shutdown());
-        progress.restart_timeout_window();
-        self.shutdown_progress = Some(progress);
-    }
-
-    #[profiling::function]
-    pub(super) fn poll_shutdown_progress(&mut self) {
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-
-        if progress.is_complete() || progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT {
-            self.exit_cleanup_complete = true;
-            self.release_active_session_lease();
-            std::process::exit(0);
-        }
-    }
-
-    #[profiling::function]
-    pub(super) fn render_shutdown_overlay(&self, ui: &mut egui::Ui) {
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-        let completed = progress.panels_completed();
-        let total = progress.panel_count();
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            if total > 0 {
-                loading_spinner::show_with_detail(
-                    ui,
-                    egui::Id::new("shutdown_spinner"),
-                    "Closing Horizon\u{2026}",
-                    &format!("{completed} / {total} panels shut down"),
-                );
-            } else {
-                loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
-            }
-        });
-    }
-
-    /// Synchronous fallback for the `on_exit` eframe callback.
-    #[profiling::function]
-    pub(super) fn run_exit_cleanup(&mut self) {
-        if self.exit_cleanup_complete {
-            return;
-        }
-
-        self.exit_cleanup_complete = true;
-        let _ = self.drain_panel_output();
-        let _ = self.auto_save_runtime_state();
-        if let Some(progress) = self
-            .pending_session_switch
-            .take()
-            .map(|pending| pending.shutdown_progress)
-            && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
-        {
-            tracing::warn!(
-                completed = progress.panels_completed(),
-                total = progress.panel_count(),
-                "timed out waiting for session-switch panel shutdown during exit"
-            );
-        }
-        self.board.shutdown_terminal_panels();
-        if let Some(progress) = &self.shutdown_progress
-            && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
-        {
-            tracing::warn!(
-                completed = progress.panels_completed(),
-                total = progress.panel_count(),
-                "timed out waiting for asynchronous panel shutdown during exit"
-            );
-        }
-        self.git_watchers.clear();
-        self.release_active_session_lease();
-    }
-
     #[profiling::function]
     pub(super) fn prepare_frame(&mut self, ui: &mut egui::Ui) -> bool {
         let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
@@ -285,7 +187,6 @@ impl HorizonApp {
             self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
             self.panel_render_caches.editor_preview_cache.clear();
-            self.panel_render_caches.browser_ui_state.clear();
         }
 
         if !self.prepare_startup_bootstrap(ui) {

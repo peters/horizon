@@ -93,6 +93,15 @@ impl ShutdownProgress {
         }
         self.is_complete()
     }
+
+    /// Block until every browser driver has released its Chrome process and
+    /// profile lock. Browser I/O and process termination are independently
+    /// bounded, so application exit must never bypass this ownership gate.
+    pub fn wait_for_browser_shutdown(&self) {
+        while !self.browser_shutdown_is_complete() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 #[cfg(test)]

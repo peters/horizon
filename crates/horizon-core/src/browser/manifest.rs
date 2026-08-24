@@ -24,6 +24,7 @@ use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 /// lock held for this long cannot still represent a healthy transaction.
 const REMOVE_STALE_LOCK_AGE: Duration = Duration::from_secs(1);
 const LOCK_RETRY: Duration = Duration::from_millis(5);
+static HANDOFF_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestOwner {
@@ -55,6 +57,11 @@ pub struct ManifestOwner {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestHandoff {
+    /// Collision-resistant identity generated for each request (for example,
+    /// a UUID). A replacement request must always use a new value, even when
+    /// its reason and millisecond timestamp match the previous request.
+    #[serde(default)]
+    pub request_id: String,
     pub reason: String,
     pub requested_at: i64,
     /// Set by the UI when the user clicks "hand back".
@@ -106,6 +113,18 @@ pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Generate an opaque identity for one handoff request. The nanosecond clock,
+/// process id, and per-process counter keep identities distinct across rapid
+/// replacements and concurrent agent processes without another dependency.
+#[must_use]
+pub fn new_handoff_request_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let sequence = HANDOFF_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{nanos:x}-{sequence:x}", std::process::id())
 }
 
 #[must_use]
@@ -612,6 +631,7 @@ mod tests {
         write_at(&path, &sample("p2")).unwrap();
         update_at(&path, "p2", |manifest| {
             manifest.handoff = Some(ManifestHandoff {
+                request_id: "request-1".to_string(),
                 reason: "captcha".to_string(),
                 requested_at: now_millis(),
                 done: false,
@@ -625,5 +645,10 @@ mod tests {
         .unwrap();
         assert!(read_at(&path).unwrap().handoff_pending().is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn handoff_request_ids_are_unique_for_same_millisecond_requests() {
+        assert_ne!(new_handoff_request_id(), new_handoff_request_id());
     }
 }

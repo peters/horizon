@@ -51,6 +51,7 @@ pub fn handle(
         release_pressed_keys(browser, state, key_modifiers(ui));
     }
     if !flags.interactive {
+        cancel_pointer_capture(browser, state, body, frame_size);
         return;
     }
     if matches!(flags.pointer_viewport, PointerViewportState::Ready)

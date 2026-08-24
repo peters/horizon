@@ -86,9 +86,6 @@ impl ChromeProcess {
             "--no-default-browser-check".to_string(),
             "--disable-gpu".to_string(),
             format!("--window-size={},{}", launch.width, launch.height),
-            // Chrome >= 111 rejects DevTools clients without an allowed
-            // origin. Local tooling only.
-            "--remote-allow-origins=*".to_string(),
             "--disable-features=TranslateUI".to_string(),
         ];
         // A disposable per-panel profile must never block startup on a

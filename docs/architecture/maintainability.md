@@ -43,7 +43,8 @@ back into large multi-purpose modules.
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
-  - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
+  - `lifecycle`: frame orchestration and repaint pacing, with application-exit
+    ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
