@@ -126,9 +126,16 @@ pub struct BrowserSession {
 /// terminate/reap the owned process and remove its dead manifest.
 pub(crate) struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
+    process_complete: AtomicBool,
     process_control: ChromeProcessControl,
     panel_local_id: Option<String>,
-    profile_cleanup: Mutex<Option<std::path::PathBuf>>,
+    profile_cleanup: Mutex<ProfileCleanupState>,
+}
+
+enum ProfileCleanupState {
+    NotRequired,
+    Pending(std::path::PathBuf),
+    Running(mpsc::Receiver<()>),
 }
 
 impl BrowserShutdownSignal {
@@ -136,68 +143,128 @@ impl BrowserShutdownSignal {
         *self
             .profile_cleanup
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(profile_dir);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = ProfileCleanupState::Pending(profile_dir);
         self
+    }
+
+    pub(crate) fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
+        let (completion_tx, completion_rx) = mpsc::channel();
+        drop(completion_tx);
+        Self {
+            completion_rx,
+            process_complete: AtomicBool::new(true),
+            process_control: ChromeProcessControl::default(),
+            panel_local_id: None,
+            profile_cleanup: Mutex::new(ProfileCleanupState::Pending(profile_dir)),
+        }
     }
 
     #[must_use]
     pub(crate) fn is_complete(&self) -> bool {
-        let complete = matches!(
-            self.completion_rx.try_recv(),
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
-        );
-        if complete {
-            self.schedule_profile_cleanup();
-        }
-        complete
+        self.process_is_complete() && self.profile_cleanup_is_complete()
     }
 
     #[must_use]
     pub(crate) fn wait(&self, timeout: Duration) -> bool {
-        let complete = matches!(
-            self.completion_rx.recv_timeout(timeout),
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-        );
-        if complete {
-            self.schedule_profile_cleanup();
+        let deadline = Instant::now() + timeout;
+        if !self.process_complete.load(Ordering::Acquire)
+            && !matches!(
+                self.completion_rx.recv_timeout(timeout),
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
+            )
+        {
+            return false;
         }
-        complete
+        self.process_complete.store(true, Ordering::Release);
+        self.wait_for_profile_cleanup(deadline.saturating_duration_since(Instant::now()))
     }
 
-    /// Emergency cleanup after the normal driver deadline. Returns only
-    /// after Chrome has been reaped (or no child was ever spawned).
+    /// Emergency cleanup after the normal driver deadline. Returns only after
+    /// Chrome has been reaped (or no child was ever spawned) and any permanent
+    /// panel-close profile removal has finished.
     #[must_use]
     pub(crate) fn force_cleanup(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
         if !self.process_control.terminate(timeout) {
             return false;
         }
         if let Some(panel_local_id) = &self.panel_local_id {
             crate::browser::manifest::remove(panel_local_id);
         }
-        self.schedule_profile_cleanup();
-        true
+        self.process_complete.store(true, Ordering::Release);
+        self.wait_for_profile_cleanup(deadline.saturating_duration_since(Instant::now()))
     }
 
-    fn schedule_profile_cleanup(&self) {
-        let profile_dir = self
+    fn process_is_complete(&self) -> bool {
+        if self.process_complete.load(Ordering::Acquire) {
+            return true;
+        }
+        let complete = matches!(
+            self.completion_rx.try_recv(),
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
+        );
+        if complete {
+            self.process_complete.store(true, Ordering::Release);
+        }
+        complete
+    }
+
+    fn profile_cleanup_is_complete(&self) -> bool {
+        let mut cleanup = self
             .profile_cleanup
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(profile_dir) = profile_dir {
-            super::schedule_profile_removal(profile_dir);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        start_profile_cleanup(&mut cleanup);
+        let complete = match &*cleanup {
+            ProfileCleanupState::NotRequired => true,
+            ProfileCleanupState::Pending(_) => false,
+            ProfileCleanupState::Running(completion_rx) => {
+                matches!(completion_rx.try_recv(), Ok(()) | Err(mpsc::TryRecvError::Disconnected))
+            }
+        };
+        if complete {
+            *cleanup = ProfileCleanupState::NotRequired;
         }
+        complete
+    }
+
+    fn wait_for_profile_cleanup(&self, timeout: Duration) -> bool {
+        let mut cleanup = self
+            .profile_cleanup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        start_profile_cleanup(&mut cleanup);
+        let complete = match &*cleanup {
+            ProfileCleanupState::NotRequired => true,
+            ProfileCleanupState::Pending(_) => false,
+            ProfileCleanupState::Running(completion_rx) => matches!(
+                completion_rx.recv_timeout(timeout),
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
+            ),
+        };
+        if complete {
+            *cleanup = ProfileCleanupState::NotRequired;
+        }
+        complete
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(completion_rx: mpsc::Receiver<()>) -> Self {
         Self {
             completion_rx,
+            process_complete: AtomicBool::new(false),
             process_control: ChromeProcessControl::default(),
             panel_local_id: None,
-            profile_cleanup: Mutex::new(None),
+            profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
     }
+}
+
+fn start_profile_cleanup(cleanup: &mut ProfileCleanupState) {
+    let ProfileCleanupState::Pending(profile_dir) = std::mem::replace(cleanup, ProfileCleanupState::NotRequired) else {
+        return;
+    };
+    *cleanup = ProfileCleanupState::Running(super::schedule_profile_removal(profile_dir));
 }
 
 /// Latest URL that the driver has observed Chrome commit. This survives the
@@ -295,9 +362,10 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal {
             completion_rx: self.completion_rx,
+            process_complete: AtomicBool::new(false),
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
-            profile_cleanup: Mutex::new(None),
+            profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
     }
 
@@ -308,9 +376,10 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal {
             completion_rx: self.completion_rx,
+            process_complete: AtomicBool::new(false),
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
-            profile_cleanup: Mutex::new(None),
+            profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
     }
 

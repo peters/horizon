@@ -74,10 +74,14 @@ fn close_panel_removes_panel_attention() {
 #[test]
 fn global_shutdown_inherits_browser_teardown_from_an_already_closed_panel() {
     let mut board = Board::new();
+    let root = tempfile::tempdir().expect("temp dir");
+    let profile_dir = root.path().join("retired-browser-profile");
+    std::fs::create_dir(&profile_dir).expect("profile dir");
+    std::fs::write(profile_dir.join("Preferences"), b"state").expect("profile state");
     let (completion_tx, completion_rx) = std::sync::mpsc::channel();
     board
         .retired_browser_shutdown_signals
-        .push(crate::browser::BrowserShutdownSignal::for_test(completion_rx));
+        .push(crate::browser::BrowserShutdownSignal::for_test(completion_rx).with_profile_cleanup(profile_dir.clone()));
 
     let progress = board.begin_async_shutdown();
 
@@ -86,6 +90,7 @@ fn global_shutdown_inherits_browser_teardown_from_an_already_closed_panel() {
     assert!(completion_tx.send(()).is_ok());
     assert!(progress.wait_for_browser_shutdown(Duration::from_secs(1)));
     assert!(progress.is_complete());
+    assert!(!profile_dir.exists());
 }
 
 #[test]

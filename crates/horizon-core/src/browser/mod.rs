@@ -358,14 +358,13 @@ impl BrowserPanelState {
 
     /// Permanently close this panel and remove its persistent Chrome profile
     /// only after the driver has released the profile lock.
-    pub(crate) fn close_permanently(&mut self) -> Option<BrowserShutdownSignal> {
+    pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
         self.request_shutdown();
         let profile_dir = session::profile_dir(&self.config, &self.panel_local_id);
         if let Some(signal) = self.take_shutdown_signal() {
-            Some(signal.with_profile_cleanup(profile_dir))
+            signal.with_profile_cleanup(profile_dir)
         } else {
-            schedule_profile_removal(profile_dir);
-            None
+            BrowserShutdownSignal::completed_with_profile_cleanup(profile_dir)
         }
     }
 
@@ -509,13 +508,12 @@ impl Drop for BrowserPanelState {
     }
 }
 
-fn schedule_profile_removal(profile_dir: PathBuf) {
+fn schedule_profile_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<()> {
+    let fallback_profile_dir = profile_dir.clone();
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
     let cleanup = move || {
-        if let Err(error) = std::fs::remove_dir_all(&profile_dir)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %profile_dir.display(), "failed to remove browser profile: {error}");
-        }
+        remove_browser_profile(&profile_dir);
+        let _ = completion_tx.send(());
     };
 
     if let Err(error) = std::thread::Builder::new()
@@ -523,6 +521,16 @@ fn schedule_profile_removal(profile_dir: PathBuf) {
         .spawn(cleanup)
     {
         tracing::warn!("failed to start browser profile cleanup: {error}");
+        remove_browser_profile(&fallback_profile_dir);
+    }
+    completion_rx
+}
+
+fn remove_browser_profile(profile_dir: &std::path::Path) {
+    if let Err(error) = std::fs::remove_dir_all(profile_dir)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %profile_dir.display(), "failed to remove browser profile: {error}");
     }
 }
 
@@ -676,11 +684,6 @@ mod tests {
         assert!(profile_dir.exists());
         assert_eq!(completion_tx.send(()), Ok(()));
         assert!(signal.wait(std::time::Duration::from_secs(1)));
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while profile_dir.exists() && std::time::Instant::now() < deadline {
-            std::thread::yield_now();
-        }
         assert!(!profile_dir.exists());
     }
 
