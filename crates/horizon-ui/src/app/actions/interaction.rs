@@ -293,9 +293,10 @@ impl HorizonApp {
         // The push-to-talk chord is an app-level control on the root viewport
         // (where the hotkey handler listens); keep its presses, repeats, and
         // release out of the PTY stream without swallowing unrelated keys.
-        // Detached viewports never start root-scoped hotkeys, but they must
-        // consume a chord already held when focus moved there. Escape also
-        // cancels a recording started from a detached mic button.
+        // Detached viewports never start main-window-scoped hotkeys, but the
+        // configured chords remain app-owned there: consume fresh presses as
+        // well as a chord already held when focus moved. Escape also cancels
+        // a recording started from a detached mic button.
         if viewport_id != egui::ViewportId::ROOT {
             if let Some(filtered) = self.filter_detached_speech_events(ctx, events) {
                 return terminal_input_events(&filtered, frame_keyboard_events);
@@ -404,7 +405,21 @@ impl HorizonApp {
             self.speech_engaged_profile = None;
             self.speech_escape_release_deadline = None;
         }
-        if !escape_cancelled && !self.speech_escape_release_pending && self.speech_held_bindings.is_empty() {
+        let bindings = self
+            .speech
+            .as_ref()
+            .map_or(&[][..], super::super::speech::SpeechSystem::profile_bindings);
+        let fresh_hotkey_press = events.iter().any(|event| {
+            matches!(event, Event::Key { pressed: true, .. })
+                && bindings
+                    .iter()
+                    .any(|(_, binding)| shortcut_event_matches(event, *binding))
+        });
+        if !escape_cancelled
+            && !self.speech_escape_release_pending
+            && self.speech_held_bindings.is_empty()
+            && !fresh_hotkey_press
+        {
             return None;
         }
 
@@ -415,14 +430,20 @@ impl HorizonApp {
                 if swallow_correlated_shift_text(&mut swallow_next_shift_text, event) {
                     return false;
                 }
-                if swallow_cancel_escape_event(escape_cancelled, &mut self.speech_escape_release_pending, event) {
-                    return false;
-                }
-                !swallow_held_speech_hotkey_event(&mut self.speech_held_bindings, &mut swallow_next_shift_text, event)
+                !swallow_speech_hotkey_event(
+                    &mut self.speech_held_bindings,
+                    escape_cancelled,
+                    &mut self.speech_escape_release_pending,
+                    &mut swallow_next_shift_text,
+                    event,
+                    bindings,
+                )
             })
             .cloned()
             .collect();
-        self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        if !ctx.input(|input| input.viewport().focused.unwrap_or(true)) {
+            self.arm_speech_release_ownership(ctx, std::time::Instant::now());
+        }
         self.clear_speech_release_ownership_if_idle();
         Some(filtered)
     }
@@ -1067,6 +1088,32 @@ mod tests {
             &mut shift_text_pending,
             &fresh_press,
         ));
+    }
+
+    #[test]
+    fn detached_viewport_reserves_a_fresh_main_window_speech_hotkey() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(9));
+        let bindings = [(0, binding)];
+        let mut held = Vec::new();
+        let mut escape_release_pending = false;
+        let mut shift_text_pending = false;
+
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::F9, Some(Key::F9), true, Modifiers::NONE),
+            &bindings,
+        ));
+        assert_eq!(held, vec![HeldSpeechBinding::new(binding)]);
+        assert!(speech_event_swallowed(
+            &mut held,
+            &mut escape_release_pending,
+            &mut shift_text_pending,
+            &key_event(Key::F9, Some(Key::F9), false, Modifiers::NONE),
+            &bindings,
+        ));
+        assert!(held.is_empty());
     }
 
     #[test]
