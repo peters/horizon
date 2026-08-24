@@ -208,6 +208,7 @@ pub enum BrowserInput {
         x: f64,
         y: f64,
         buttons: u32,
+        modifiers: BrowserModifiers,
     },
     MousePress {
         x: f64,
@@ -249,9 +250,7 @@ pub enum BrowserInput {
         modifiers: BrowserModifiers,
     },
     /// Paste-style raw text insertion (IME path; also used for pasting).
-    InsertText {
-        text: String,
-    },
+    InsertText { text: String },
 }
 
 impl BrowserInput {
@@ -259,13 +258,19 @@ impl BrowserInput {
     #[must_use]
     pub fn cdp(self) -> (&'static str, Value) {
         match self {
-            Self::MouseMove { x, y, buttons } => (
+            Self::MouseMove {
+                x,
+                y,
+                buttons,
+                modifiers,
+            } => (
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": "mouseMoved",
                     "x": x,
                     "y": y,
                     "buttons": buttons,
+                    "modifiers": modifiers.cdp_bits(),
                 }),
             ),
             Self::MousePress {
@@ -686,6 +691,19 @@ mod tests {
         assert_eq!(params["type"], "mousePressed");
         assert_eq!(params["button"], "left");
         assert_eq!(params["x"], 10.0);
+
+        let (_, moved) = BrowserInput::MouseMove {
+            x: 30.0,
+            y: 40.0,
+            buttons: 1,
+            modifiers: BrowserModifiers {
+                shift: true,
+                ..BrowserModifiers::none()
+            },
+        }
+        .cdp();
+        assert_eq!(moved["type"], "mouseMoved");
+        assert_eq!(moved["modifiers"], 8);
     }
 
     #[test]

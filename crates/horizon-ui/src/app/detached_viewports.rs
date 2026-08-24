@@ -6,7 +6,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, Layout, Panel, Pos2, Rect, Stroke, Vec2, ViewportBuilder,
     ViewportCommand, ViewportId,
 };
-use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
+use horizon_core::{CanvasViewState, PanelKind, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
@@ -395,9 +395,26 @@ impl HorizonApp {
         panel_ids.sort_by_key(|panel_id| Some(*panel_id) == focused);
 
         let canvas_rect = detached_canvas_rect(ctx);
+        let has_browser = panel_ids.iter().any(|panel_id| {
+            self.board
+                .panel(*panel_id)
+                .is_some_and(|panel| panel.kind == PanelKind::Browser)
+        });
+        let browser_events = if has_browser {
+            ctx.input(|input| input.events.clone())
+        } else {
+            Vec::new()
+        };
         self.panels_to_close.clear();
         for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspace_collision_ids,
+                &browser_events,
+            ) {
                 self.panels_to_close.push(panel_id);
             }
         }

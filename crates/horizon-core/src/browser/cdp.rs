@@ -48,6 +48,8 @@ pub enum CdpError {
     Timeout { method: String },
     #[error("websocket connection closed while waiting for {method}")]
     Closed { method: String },
+    #[error("cancelled while waiting for CDP response to {method}")]
+    Cancelled { method: String },
     #[error("no active page session for {method}")]
     NoPageSession { method: String },
 }
@@ -285,6 +287,28 @@ impl CdpLink {
         params: &Value,
         session_id: Option<&str>,
     ) -> CdpCallOutcome {
+        self.call_and_drain_until(timeout, method, params, session_id, || false)
+    }
+
+    /// Cancellation-aware variant of [`Self::call_and_drain`]. The predicate
+    /// is checked at least once per socket read timeout, so browser shutdown
+    /// does not wait through a sequence of full CDP call deadlines.
+    pub(crate) fn call_and_drain_until(
+        &mut self,
+        timeout: Duration,
+        method: &str,
+        params: &Value,
+        session_id: Option<&str>,
+        mut is_cancelled: impl FnMut() -> bool,
+    ) -> CdpCallOutcome {
+        if is_cancelled() {
+            return CdpCallOutcome {
+                result: Err(CdpError::Cancelled {
+                    method: method.to_string(),
+                }),
+                drained: Vec::new(),
+            };
+        }
         let id = match self.send_request(method, params, session_id) {
             Ok(id) => id,
             Err(error) => {
@@ -297,6 +321,14 @@ impl CdpLink {
         let started = Instant::now();
         let mut drained = Vec::new();
         loop {
+            if is_cancelled() {
+                return CdpCallOutcome {
+                    result: Err(CdpError::Cancelled {
+                        method: method.to_string(),
+                    }),
+                    drained,
+                };
+            }
             if started.elapsed() > timeout {
                 return CdpCallOutcome {
                     result: Err(CdpError::Timeout {
@@ -599,8 +631,10 @@ mod tests {
                     let resp = json!({ "id": id, "result": { "ok": true } });
                     ws.send(Message::Text(tungstenite::Utf8Bytes::from(resp.to_string())))
                         .unwrap();
-                    let event =
-                        json!({ "method": "Page.titleUpdated", "params": { "title": "hi" }, "sessionId": "S1" });
+                    let event = json!({
+                        "method": "Target.targetInfoChanged",
+                        "params": { "targetInfo": { "targetId": "T1", "title": "hi" } }
+                    });
                     ws.send(Message::Text(tungstenite::Utf8Bytes::from(event.to_string())))
                         .unwrap();
                 }
@@ -612,19 +646,23 @@ mod tests {
         let outcome = link.call_and_drain(Duration::from_secs(5), "Page.enable", &json!({}), None);
         let result = outcome.result.unwrap();
         assert_eq!(result, json!({ "ok": true }));
-        // The title event rides right behind the response; it is either in
+        // The target-info event rides right behind the response; it is either in
         // `drained` (read before the match) or still buffered in the link.
-        let is_title = |event: CdpEvent| event.method == "Page.titleUpdated" && event.session_id == Some("S1");
-        let mut got_title = outcome.drained.iter().find_map(CdpMsg::event).is_some_and(is_title);
+        let is_target_info = |event: CdpEvent| event.method == "Target.targetInfoChanged" && event.session_id.is_none();
+        let mut got_target_info = outcome
+            .drained
+            .iter()
+            .find_map(CdpMsg::event)
+            .is_some_and(is_target_info);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !got_title && Instant::now() < deadline {
+        while !got_target_info && Instant::now() < deadline {
             match link.read_one() {
-                Ok(Some(msg)) => got_title = msg.event().is_some_and(is_title),
+                Ok(Some(msg)) => got_target_info = msg.event().is_some_and(is_target_info),
                 Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                 Err(_) => break,
             }
         }
-        assert!(got_title, "title event");
+        assert!(got_target_info, "target-info event");
 
         let ack = link
             .call_and_drain(
@@ -637,6 +675,32 @@ mod tests {
             .unwrap();
         assert_eq!(ack, json!({}));
         let _ = server.join();
+    }
+
+    #[test]
+    fn link_roundtrip_honors_cancellation() {
+        use std::net::TcpListener;
+        use tungstenite::accept;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            let mut ws = accept(tcp).unwrap();
+            assert!(ws.read().is_ok());
+            std::thread::sleep(Duration::from_millis(100));
+        });
+
+        let mut link =
+            CdpLink::connect_with_timeout(&format!("ws://{addr}/devtools/page/x"), Duration::from_millis(10)).unwrap();
+        let checks = std::cell::Cell::new(0_u32);
+        let outcome = link.call_and_drain_until(Duration::from_secs(5), "Page.enable", &json!({}), None, || {
+            checks.set(checks.get() + 1);
+            checks.get() > 2
+        });
+
+        assert!(matches!(outcome.result, Err(CdpError::Cancelled { .. })));
+        assert!(server.join().is_ok());
     }
 
     #[test]

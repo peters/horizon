@@ -245,9 +245,13 @@ impl BrowserPanelState {
     }
 
     pub fn send(&self, command: BrowserCommand) {
-        if let Some(session) = &self.session {
-            let _ = session.send(command);
-        }
+        let _ = self.try_send(command);
+    }
+
+    /// Queue a command only when the driver session currently exists.
+    #[must_use]
+    pub fn try_send(&self, command: BrowserCommand) -> bool {
+        self.session.as_ref().is_some_and(|session| session.send(command))
     }
 
     /// Take page text copied by headless Chrome for the UI's host clipboard.

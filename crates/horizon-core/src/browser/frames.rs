@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use base64::Engine;
 use zune_jpeg::JpegDecoder;
 
+const MAX_RETIRED_FRAMES: usize = 2;
+
 /// A single decoded frame (RGB8, top-down, tightly packed).
 #[derive(Debug, Clone)]
 pub struct FrameData {
@@ -35,6 +37,10 @@ pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
     /// Reused decode target so steady-state frames do not allocate.
     decode_buffer: Vec<u8>,
+    /// Recently replaced frames whose pixels are still borrowed by the UI.
+    /// Keeping a bounded set lets a later decode reclaim their allocations
+    /// once the UI releases its `Arc`.
+    retired_frames: Vec<Arc<FrameData>>,
     next_seq: u64,
 }
 
@@ -67,7 +73,7 @@ impl FrameSlot {
         })?;
         let mut buffer = {
             let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut inner.decode_buffer)
+            take_decode_buffer(&mut inner)
         };
         buffer.resize(output_size, 0);
         if decoder.decode_into(&mut buffer).is_err() {
@@ -88,10 +94,8 @@ impl FrameSlot {
             seq: inner.next_seq,
         });
         let old = inner.data.replace(frame);
-        if let Some(old) = old
-            && let Ok(old) = Arc::try_unwrap(old)
-        {
-            inner.decode_buffer = old.rgb;
+        if let Some(old) = old {
+            retain_frame_buffer(&mut inner, old);
         }
         Some(inner.next_seq)
     }
@@ -105,17 +109,17 @@ impl FrameSlot {
 
     fn return_decode_buffer(&self, buffer: Vec<u8>) {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.decode_buffer = buffer;
+        if buffer.capacity() > inner.decode_buffer.capacity() {
+            inner.decode_buffer = buffer;
+        }
     }
 
     /// Drop the stored frame (e.g. when the session stops) so the UI falls
     /// back to its placeholder instead of showing stale content.
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(data) = inner.data.take()
-            && let Ok(data) = Arc::try_unwrap(data)
-        {
-            inner.decode_buffer = data.rgb;
+        if let Some(data) = inner.data.take() {
+            retain_frame_buffer(&mut inner, data);
         }
     }
 
@@ -141,6 +145,37 @@ impl FrameSlot {
     /// Let a later frame enqueue the next UI wake-up.
     pub(crate) fn release_notification(&self) {
         self.notification_pending.store(false, Ordering::Release);
+    }
+}
+
+fn take_decode_buffer(inner: &mut FrameSlotInner) -> Vec<u8> {
+    if !inner.decode_buffer.is_empty() {
+        return std::mem::take(&mut inner.decode_buffer);
+    }
+    let Some(index) = inner
+        .retired_frames
+        .iter()
+        .position(|frame| Arc::strong_count(frame) == 1)
+    else {
+        return Vec::new();
+    };
+    let frame = inner.retired_frames.swap_remove(index);
+    Arc::try_unwrap(frame).map_or_else(|_| Vec::new(), |frame| frame.rgb)
+}
+
+fn retain_frame_buffer(inner: &mut FrameSlotInner, frame: Arc<FrameData>) {
+    match Arc::try_unwrap(frame) {
+        Ok(frame) => {
+            if frame.rgb.capacity() > inner.decode_buffer.capacity() {
+                inner.decode_buffer = frame.rgb;
+            }
+        }
+        Err(frame) => {
+            inner.retired_frames.push(frame);
+            if inner.retired_frames.len() > MAX_RETIRED_FRAMES {
+                inner.retired_frames.remove(0);
+            }
+        }
     }
 }
 
@@ -185,6 +220,20 @@ mod tests {
         drop(data);
         let seq2 = slot.store_jpeg(JPEG_1X1).unwrap();
         assert_eq!(seq2, 2);
+    }
+
+    #[test]
+    fn reuses_a_retired_frame_after_the_ui_releases_it() {
+        let slot = FrameSlot::new();
+        assert_eq!(slot.store_jpeg(JPEG_1X1), Some(1));
+        let first = slot.latest().unwrap();
+        let first_buffer = first.rgb.as_ptr();
+
+        assert_eq!(slot.store_jpeg(JPEG_1X1), Some(2));
+        drop(first);
+        assert_eq!(slot.store_jpeg(JPEG_1X1), Some(3));
+
+        assert_eq!(slot.latest().unwrap().rgb.as_ptr(), first_buffer);
     }
 
     #[test]

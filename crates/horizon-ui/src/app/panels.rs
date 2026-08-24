@@ -178,6 +178,7 @@ fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state:
 
 struct PanelBodyContext<'a> {
     keyboard_events: &'a [TerminalInputEvent],
+    browser_events: &'a [egui::Event],
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
     local_ssh_reconnect_enabled: bool,
@@ -211,7 +212,7 @@ fn show_panel_body_contents(
                 return false;
             };
             crate::browser_widget::BrowserView::new(panel, state, shortcuts, body_context.browser_fullscreen_active)
-                .show(ui, is_focused, interactive)
+                .show(ui, body_context.browser_events, is_focused, interactive)
         }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
@@ -301,6 +302,9 @@ impl HorizonApp {
             .panel(panel_id)
             .is_some_and(|panel| panel.kind == PanelKind::Browser)
             .then(|| self.shortcuts.clone());
+        let browser_events = browser_shortcuts
+            .as_ref()
+            .map_or_else(Vec::new, |_| ui.ctx().input(|input| input.events.clone()));
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
@@ -340,6 +344,7 @@ impl HorizonApp {
                                 true,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
+                                    browser_events: &browser_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
@@ -396,11 +401,28 @@ impl HorizonApp {
             .sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
         let canvas_rect = self.canvas_rect(ctx);
+        let has_browser = self.panel_render_order.iter().any(|(panel_id, _)| {
+            self.board
+                .panel(*panel_id)
+                .is_some_and(|panel| panel.kind == PanelKind::Browser)
+        });
+        let browser_events = if has_browser {
+            ctx.input(|input| input.events.clone())
+        } else {
+            Vec::new()
+        };
         let mut panels_to_close = Vec::new();
 
         for i in 0..self.panel_render_order.len() {
             let (panel_id, fallback_index) = self.panel_render_order[i];
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                fallback_index,
+                &workspace_collision_ids,
+                &browser_events,
+            ) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -416,11 +438,12 @@ impl HorizonApp {
         panel_id: PanelId,
         _fallback_index: usize,
         workspace_collision_ids: &[WorkspaceId],
+        browser_events: &[egui::Event],
     ) -> bool {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, browser_events);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
@@ -472,6 +495,7 @@ impl HorizonApp {
         canvas_rect: Rect,
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
+        browser_events: &[egui::Event],
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
@@ -678,6 +702,7 @@ impl HorizonApp {
                                 interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
+                                    browser_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,

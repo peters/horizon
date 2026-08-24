@@ -105,7 +105,9 @@ struct ActiveSession {
 
 struct PendingSessionSwitch {
     shutdown_progress: ShutdownProgress,
-    target: ResolvedSession,
+    /// `None` after a timed-out browser teardown aborts the switch. The
+    /// progress remains as a profile-lock guard until the driver exits.
+    target: Option<ResolvedSession>,
 }
 
 struct StartupChooserState {

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
-use super::{BrowserEvent, DriverState, publish_frame};
+use super::{BrowserEvent, DriverState, TITLE_BINDING_NAME, publish_frame};
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -30,9 +30,8 @@ impl DriverState {
         self.fetch_title(link, event_tx, frame_slot);
     }
 
-    /// Best-effort current title: `Page.titleUpdated` only fires on
-    /// *changes*, so a page whose title is static (or that loaded before we
-    /// attached) reports none — read it directly instead.
+    /// Best-effort current title for initial attach and navigation, where a
+    /// browser-level target-info change may not have been observed yet.
     pub(super) fn fetch_title(
         &mut self,
         link: &mut CdpLink,
@@ -86,6 +85,10 @@ impl DriverState {
         let Some(title) = parsed.pointer("/t").and_then(|v| v.as_str()) else {
             return;
         };
+        self.update_title(event_tx, title);
+    }
+
+    fn update_title(&mut self, event_tx: &mpsc::Sender<BrowserEvent>, title: &str) {
         if title == self.title {
             return;
         }
@@ -257,6 +260,19 @@ impl DriverState {
                     ));
                 }
             }
+            "Target.targetInfoChanged" => {
+                if let Some(title) = title_for_bound_target(event.params, self.target_id.as_deref()) {
+                    self.update_title(event_tx, title);
+                }
+            }
+            "Runtime.bindingCalled" => {
+                if on_page_session
+                    && let Some((title, href)) = title_from_binding(event.params)
+                    && href_matches_url(&href, &self.url)
+                {
+                    self.update_title(event_tx, &title);
+                }
+            }
             "Page.frameNavigated" => self.handle_frame_navigated(event_tx, event, on_page_session),
             "Page.navigatedWithinDocument" => {
                 self.handle_same_document_navigation(event_tx, event, on_page_session);
@@ -271,19 +287,6 @@ impl DriverState {
             "Runtime.executionContextCreated" | "Runtime.executionContextDestroyed" => {
                 if on_page_session {
                     self.note_execution_context(&event);
-                }
-            }
-            "Page.titleUpdated" => {
-                if !on_page_session {
-                    return;
-                }
-                if let Some(title) = event.params.get("title").and_then(|t| t.as_str())
-                    && title != self.title
-                {
-                    self.title = title.to_string();
-                    self.manifest_dirty = true;
-                    self.write_manifest(false);
-                    let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
                 }
             }
             "Page.screencastFrame" => Self::handle_screencast_frame(link, event_tx, frame_slot, event),
@@ -402,6 +405,25 @@ fn clipboard_text_from_evaluation(result: Option<&serde_json::Value>) -> Option<
     result?.pointer("/result/value")?.as_str()
 }
 
+fn title_for_bound_target<'a>(params: &'a serde_json::Value, target_id: Option<&str>) -> Option<&'a str> {
+    let target_info = params.get("targetInfo")?;
+    let changed_target_id = target_info.get("targetId")?.as_str()?;
+    (Some(changed_target_id) == target_id)
+        .then(|| target_info.get("title").and_then(serde_json::Value::as_str))
+        .flatten()
+}
+
+fn title_from_binding(params: &serde_json::Value) -> Option<(String, String)> {
+    if params.get("name")?.as_str()? != TITLE_BINDING_NAME {
+        return None;
+    }
+    let payload = params.get("payload")?.as_str()?;
+    let payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+    let title = payload.get("title")?.as_str()?.to_string();
+    let href = payload.get("href")?.as_str()?.to_string();
+    Some((title, href))
+}
+
 fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Option<&str>) -> Option<u64> {
     let context = params.get("context")?;
     let is_default = context.pointer("/auxData/isDefault")?.as_bool()?;
@@ -414,7 +436,9 @@ fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{clipboard_text_from_evaluation, default_context_id_for_frame};
+    use super::{
+        clipboard_text_from_evaluation, default_context_id_for_frame, title_for_bound_target, title_from_binding,
+    };
 
     #[test]
     fn title_context_accepts_only_the_main_frames_default_context() {
@@ -442,5 +466,35 @@ mod tests {
         assert_eq!(clipboard_text_from_evaluation(Some(&value)), Some("selected"));
         assert_eq!(clipboard_text_from_evaluation(Some(&exception)), None);
         assert_eq!(clipboard_text_from_evaluation(None), None);
+    }
+
+    #[test]
+    fn target_title_updates_only_match_the_bound_page() {
+        let params = serde_json::json!({
+            "targetInfo": { "targetId": "bound", "type": "page", "title": "Updated" }
+        });
+
+        assert_eq!(title_for_bound_target(&params, Some("bound")), Some("Updated"));
+        assert_eq!(title_for_bound_target(&params, Some("other")), None);
+        assert_eq!(title_for_bound_target(&params, None), None);
+    }
+
+    #[test]
+    fn title_binding_accepts_only_the_horizon_payload() {
+        let params = serde_json::json!({
+            "name": "__horizonBrowserTitleChanged",
+            "payload": r#"{"title":"Updated","href":"https://example.test/page"}"#,
+        });
+        let other_binding = serde_json::json!({
+            "name": "pageBinding",
+            "payload": r#"{"title":"Wrong","href":"https://example.test/page"}"#,
+        });
+
+        assert_eq!(
+            title_from_binding(&params),
+            Some(("Updated".to_string(), "https://example.test/page".to_string()))
+        );
+        assert_eq!(title_from_binding(&other_binding), None);
+        assert_eq!(title_from_binding(&serde_json::json!({})), None);
     }
 }

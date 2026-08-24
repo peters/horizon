@@ -11,10 +11,11 @@ Measured baseline (2026-08-24, this machine, real page content, JPEG q60 screenc
 | **Driver total** | **~0.15 ms** | **~2.0 ms** |
 | Budget at 60 fps | 16.7 ms | 16.7 ms |
 
-Reference points: idle page = exactly zero cost (change-driven screencast);
+Reference points: an idle page has zero frame decode/upload cost
+(change-driven screencast), while low-rate manifest polling remains;
 zune-jpeg is ~30% faster than system libjpeg on the same frames; texture
-upload only happens on `seq` change. Items are ordered by expected
-CPU/energy yield per unit of risk, not by novelty.
+upload only happens on `seq` change. Items are ordered by expected CPU/energy
+yield per unit of risk, not by novelty.
 
 Method (per repo perf rules): each item ships with a workload script
 (Xvfb + Xvfb `import` FPS trace or `tracing` span under
@@ -74,16 +75,13 @@ on viewport change; only the `deviceScaleFactor` field is new.
 
 ## B. UI thread
 
-### B1 — One event-list scan per frame, not per panel  [quick fix]
-`browser_widget/input.rs` calls `ctx.input(|i| i.events.clone())` once
-per frame *per browser panel* (pointer replay and keyboard paths). With N
-browser panels the frame's event list is cloned N times even though the
-same list is already read by the terminal path.
-Research/fix: hoist a single per-frame event snapshot into the app
-update (it already happens for the terminal keyboard path) and pass the
-borrowed slice into `input::handle`.
-Measure: `horizon::app::update` span with 3 browser panels under a
-scripted pointer-move storm (xdotool on X11), before/after.
+### B1 — One event-list scan per frame, not per panel  [implemented]
+Browser events are now snapshotted once per rendered viewport when that
+viewport contains a browser panel, then passed as a borrowed slice through
+every browser view. Pointer and focused-keyboard handling share that slice;
+there is no per-panel event-list clone. Re-measure `horizon::app::update`
+with 3 browser panels under a scripted pointer-move storm (xdotool on X11)
+if this path changes again.
 
 ### B2 — Texture upload off the UI thread (only if A2/A1 aren't enough)
 Fullscreen 60 fps = 330 MB/s of synchronous CPU→GPU upload inside the

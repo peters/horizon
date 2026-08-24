@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, RichText, Stroke, Vec2};
-use horizon_core::{ResolvedSession, SessionSummary};
+use horizon_core::{Board, ResolvedSession, SessionSummary};
 
 use crate::{loading_spinner, theme};
 
@@ -11,6 +11,27 @@ use super::{HorizonApp, PanelRenderCaches, PendingSessionSwitch};
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
 const SESSION_SWITCH_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionSwitchShutdownState {
+    Waiting,
+    Complete,
+    AbortForBrowser,
+}
+
+const fn session_switch_shutdown_state(
+    complete: bool,
+    browser_shutdown_complete: bool,
+    timed_out: bool,
+) -> SessionSwitchShutdownState {
+    if complete || (timed_out && browser_shutdown_complete) {
+        SessionSwitchShutdownState::Complete
+    } else if timed_out {
+        SessionSwitchShutdownState::AbortForBrowser
+    } else {
+        SessionSwitchShutdownState::Waiting
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeSessionManagerState {
@@ -208,8 +229,19 @@ impl HorizonApp {
             tracing::debug!("session switch ignored while the root viewport is stabilizing");
             return;
         }
-        if self.pending_session_switch.is_some() {
+        if self
+            .pending_session_switch
+            .as_ref()
+            .is_some_and(|pending| pending.target.is_some())
+        {
             tracing::debug!("session switch ignored while another switch is in progress");
+            return;
+        }
+        if !self.retired_browser_shutdown_ready() {
+            self.set_session_manager_error(
+                "The previous browser is still releasing its profile; retry the session switch in a moment."
+                    .to_string(),
+            );
             return;
         }
         self.begin_session_switch(session);
@@ -234,7 +266,7 @@ impl HorizonApp {
         self.speech_engaged_profile = None;
         self.pending_session_switch = Some(PendingSessionSwitch {
             shutdown_progress: self.board.begin_async_shutdown(),
-            target: session.clone(),
+            target: Some(session.clone()),
         });
     }
 
@@ -245,25 +277,96 @@ impl HorizonApp {
         let Some(pending) = self.pending_session_switch.as_ref() else {
             return false;
         };
-        if !pending.shutdown_progress.is_complete() {
-            ctx.request_repaint_after(Duration::from_millis(32));
-            return true;
+        if pending.target.is_none() {
+            if pending.shutdown_progress.browser_shutdown_is_complete() {
+                self.pending_session_switch = None;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            return false;
+        }
+        let timed_out = pending.shutdown_progress.started_at().elapsed() > SESSION_SWITCH_SHUTDOWN_WAIT;
+        match session_switch_shutdown_state(
+            pending.shutdown_progress.is_complete(),
+            pending.shutdown_progress.browser_shutdown_is_complete(),
+            timed_out,
+        ) {
+            SessionSwitchShutdownState::Waiting => {
+                ctx.request_repaint_after(Duration::from_millis(32));
+                return true;
+            }
+            SessionSwitchShutdownState::Complete => {}
+            SessionSwitchShutdownState::AbortForBrowser => {
+                let Some(pending) = self.pending_session_switch.take() else {
+                    return false;
+                };
+                let target_session_id = pending.target.as_ref().map(|target| target.session_id.clone());
+                let completed = pending.shutdown_progress.panels_completed();
+                let total = pending.shutdown_progress.panel_count();
+                tracing::warn!(
+                    completed,
+                    total,
+                    "aborting session switch because browser teardown exceeded its deadline"
+                );
+                self.finish_session_switch();
+                self.board = Board::new();
+                self.board.attention_enabled = self.template_config.features.attention_feed;
+                self.pending_session_switch = Some(PendingSessionSwitch {
+                    shutdown_progress: pending.shutdown_progress,
+                    target: None,
+                });
+                self.reload_session_manager(
+                    target_session_id,
+                    Some(
+                        "Session switch stopped because a browser did not release its profile in time. Retry after cleanup completes."
+                            .to_string(),
+                    ),
+                );
+                return false;
+            }
         }
 
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
+        if !pending.shutdown_progress.is_complete() {
+            tracing::warn!(
+                completed = pending.shutdown_progress.panels_completed(),
+                total = pending.shutdown_progress.panel_count(),
+                "continuing session switch after detached terminal teardown exceeded its deadline"
+            );
+        }
+        let Some(target) = pending.target else {
+            return false;
+        };
         self.finish_session_switch();
-        self.activate_persistent_session(&pending.target);
+        self.activate_persistent_session(&target);
         self.restore_window_viewport(ctx);
         self.session_manager = None;
         false
+    }
+
+    fn retired_browser_shutdown_ready(&mut self) -> bool {
+        let ready = self
+            .pending_session_switch
+            .as_ref()
+            .is_none_or(|pending| pending.target.is_some() || pending.shutdown_progress.browser_shutdown_is_complete());
+        if ready
+            && self
+                .pending_session_switch
+                .as_ref()
+                .is_some_and(|pending| pending.target.is_none())
+        {
+            self.pending_session_switch = None;
+        }
+        ready
     }
 
     fn finish_session_switch(&mut self) {
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
+        self.transcript_root = None;
         self.last_panel_output_at = None;
         self.fullscreen_panel = None;
         // Numeric panel ids restart in the replacement board. Drop every
@@ -291,22 +394,13 @@ impl HorizonApp {
     }
 
     pub(super) fn render_session_switch_overlay(&self, ui: &mut egui::Ui) {
-        let Some(progress) = self
-            .pending_session_switch
-            .as_ref()
-            .map(|pending| &pending.shutdown_progress)
-        else {
+        let Some(pending) = self.pending_session_switch.as_ref() else {
             return;
         };
+        let progress = &pending.shutdown_progress;
         let completed = progress.panels_completed();
         let total = progress.panel_count();
-        let timed_out = progress.started_at().elapsed() > SESSION_SWITCH_SHUTDOWN_WAIT;
-        let detail = if timed_out {
-            "Shutdown is taking longer than expected; the new session will open as soon as every panel releases its resources."
-                .to_string()
-        } else {
-            format!("{completed} / {total} panels shut down")
-        };
+        let detail = format!("{completed} / {total} panels shut down");
 
         egui::CentralPanel::default().show(ui, |ui| {
             loading_spinner::show_with_detail(

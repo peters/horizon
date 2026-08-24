@@ -11,7 +11,7 @@ pub use shutdown::ShutdownProgress;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -296,6 +296,7 @@ impl Board {
     pub fn begin_async_shutdown(&mut self) -> ShutdownProgress {
         let completed = Arc::new(AtomicUsize::new(0));
         let mut panel_count = 0;
+        let mut browser_shutdown_signals = Vec::new();
 
         for panel in &mut self.panels {
             panel.request_shutdown();
@@ -312,18 +313,11 @@ impl Board {
             // while a driver still holds the profile lock.
             if let Some(signal) = panel.browser_shutdown_signal() {
                 panel_count += 1;
-                let completed = Arc::clone(&completed);
-                std::thread::Builder::new()
-                    .name("browser-shutdown-join".into())
-                    .spawn(move || {
-                        let _ = signal.recv();
-                        completed.fetch_add(1, Ordering::Relaxed);
-                    })
-                    .ok();
+                browser_shutdown_signals.push(signal);
             }
         }
 
-        ShutdownProgress::new(panel_count, completed)
+        ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
     }
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
