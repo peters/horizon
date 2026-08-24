@@ -331,7 +331,9 @@ fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option
 fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
     let process_group = format!("-{}", child.id());
     let tree_killed = Command::new("/bin/kill")
-        .args(["-KILL", process_group.as_str()])
+        // GNU kill otherwise accepts a negative PID as another option and
+        // can report success without signaling the process group.
+        .args(["-KILL", "--", process_group.as_str()])
         .status()
         .is_ok_and(|status| status.success());
     if tree_killed || child.try_wait()?.is_some() {
