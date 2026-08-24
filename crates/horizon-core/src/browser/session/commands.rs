@@ -8,7 +8,10 @@ use crate::browser::cdp::CdpLink;
 use crate::browser::frames::FrameSlot;
 use crate::browser::manifest;
 
-use super::{BrowserCommand, BrowserEventSender, DriverState, USER_ACTIVE_STAMP_INTERVAL};
+use super::{
+    BrowserCommand, BrowserEventSender, DriverState, USER_ACTIVE_STAMP_INTERVAL, VIEWPORT_CAPTURE_DELAY,
+    VIEWPORT_RETRY_DELAY,
+};
 
 const SELECTED_TEXT_EXPRESSION: &str = r#"(() => {
   const selectedText = (document) => {
@@ -98,28 +101,80 @@ impl DriverState {
         width: u32,
         height: u32,
     ) {
-        if width == 0 || height == 0 || (width, height) == (self.viewport_w, self.viewport_h) {
+        if !self.queue_viewport(width, height) {
             return;
         }
+        self.apply_pending_viewport(link, event_tx, frame_slot);
+    }
+
+    fn queue_viewport(&mut self, width: u32, height: u32) -> bool {
+        if width == 0 || height == 0 {
+            return false;
+        }
+        if (width, height) == (self.viewport_w, self.viewport_h) {
+            self.pending_viewport = None;
+            self.viewport_retry_at = None;
+            return false;
+        }
+        self.pending_viewport = Some((width, height));
+        self.viewport_retry_at = None;
+        true
+    }
+
+    pub(super) fn tick_viewport_resize(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        if self.pending_viewport.is_none() || self.viewport_retry_at.is_some_and(|retry_at| Instant::now() < retry_at) {
+            return;
+        }
+        self.apply_pending_viewport(link, event_tx, frame_slot);
+    }
+
+    fn apply_pending_viewport(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        let Some((width, height)) = self.pending_viewport else {
+            return;
+        };
+        match self.send_page_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Emulation.setDeviceMetricsOverride",
+            &serde_json::json!({
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": false,
+            }),
+        ) {
+            Ok(_) => {
+                self.commit_viewport(width, height);
+                self.pending_viewport_capture_at = Some(Instant::now() + VIEWPORT_CAPTURE_DELAY);
+            }
+            Err(error) => {
+                self.viewport_retry_at = Some(Instant::now() + VIEWPORT_RETRY_DELAY);
+                tracing::debug!(
+                    target: "browser",
+                    width,
+                    height,
+                    "viewport resize failed and will retry: {error}"
+                );
+            }
+        }
+    }
+
+    fn commit_viewport(&mut self, width: u32, height: u32) {
         self.viewport_w = width;
         self.viewport_h = height;
-        if self
-            .send_page_command(
-                link,
-                event_tx,
-                frame_slot,
-                "Emulation.setDeviceMetricsOverride",
-                &serde_json::json!({
-                    "width": width,
-                    "height": height,
-                    "deviceScaleFactor": 1,
-                    "mobile": false,
-                }),
-            )
-            .is_ok()
-        {
-            self.pending_viewport_capture_at = Some(Instant::now() + super::VIEWPORT_CAPTURE_DELAY);
-        }
+        self.pending_viewport = None;
+        self.viewport_retry_at = None;
     }
 
     /// Chrome sometimes applies device metrics without emitting a new
@@ -225,5 +280,56 @@ impl DriverState {
             Ok(()) => self.last_user_active_stamp = Some(stamped_at),
             Err(error) => tracing::warn!(target: "browser", "failed to stamp user activity: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use crate::browser::frames::FrameSlot;
+    use crate::browser::{BrowserConfig, session::BrowserSessionConfig};
+
+    use super::DriverState;
+
+    fn driver_state() -> DriverState {
+        DriverState::new(
+            &BrowserSessionConfig {
+                browser: BrowserConfig::default(),
+                panel_local_id: "panel-1".to_string(),
+                initial_url: None,
+                width: 1280,
+                height: 800,
+                frame_slot: Arc::new(FrameSlot::new()),
+            },
+            "ws://127.0.0.1/devtools/browser/test",
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[test]
+    fn viewport_resize_becomes_authoritative_only_after_acknowledgement() {
+        let mut state = driver_state();
+
+        assert!(state.queue_viewport(900, 600));
+        assert_eq!((state.viewport_w, state.viewport_h), (1280, 800));
+        assert_eq!(state.pending_viewport, Some((900, 600)));
+
+        state.commit_viewport(900, 600);
+
+        assert_eq!((state.viewport_w, state.viewport_h), (900, 600));
+        assert_eq!(state.pending_viewport, None);
+    }
+
+    #[test]
+    fn latest_viewport_request_replaces_a_pending_retry() {
+        let mut state = driver_state();
+
+        assert!(state.queue_viewport(900, 600));
+        assert!(state.queue_viewport(720, 480));
+
+        assert_eq!((state.viewport_w, state.viewport_h), (1280, 800));
+        assert_eq!(state.pending_viewport, Some((720, 480)));
     }
 }

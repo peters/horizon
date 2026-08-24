@@ -296,15 +296,20 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
+        let raw_events = ui.ctx().input(|input| input.events.clone());
+        self.terminal_keyboard_events = self.terminal_events_for_viewport(ui.ctx(), &raw_events);
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = self
             .board
             .panel(panel_id)
             .is_some_and(|panel| panel.kind == PanelKind::Browser)
             .then(|| self.shortcuts.clone());
-        let browser_events = browser_shortcuts
-            .as_ref()
-            .map_or_else(Vec::new, |_| ui.ctx().input(|input| input.events.clone()));
+        let browser_events = browser_shortcuts.as_ref().map_or_else(Vec::new, |_| {
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
+        });
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
@@ -407,7 +412,10 @@ impl HorizonApp {
                 .is_some_and(|panel| panel.kind == PanelKind::Browser)
         });
         let browser_events = if has_browser {
-            ctx.input(|input| input.events.clone())
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
         } else {
             Vec::new()
         };

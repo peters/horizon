@@ -488,6 +488,7 @@ const USER_ACTIVE_STAMP_INTERVAL: Duration = Duration::from_secs(1);
 /// screenshot. Chrome can update device metrics without emitting a
 /// screencast frame, which otherwise leaves the previous frame stretched.
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
+const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const TITLE_BINDING_NAME: &str = "__horizonBrowserTitleChanged";
 const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
     if (window !== top || window.__horizonBrowserTitleObserver) return;
@@ -609,7 +610,9 @@ fn run_loop(
         // 3b. Delayed post-load title fetch.
         state.tick_title_fetch(link, event_tx, frame_slot);
 
-        // 3c. One fresh frame after a viewport-resize burst settles.
+        // 3c. Retry a transiently rejected viewport command, then capture one
+        //     fresh frame after the resize burst settles.
+        state.tick_viewport_resize(link, event_tx, frame_slot);
         state.tick_viewport_capture(link);
 
         // 4. Backoff-retried screencast restart / re-attach.
@@ -639,6 +642,8 @@ struct DriverState {
     main_frame_id: Option<String>,
     viewport_w: u32,
     viewport_h: u32,
+    pending_viewport: Option<(u32, u32)>,
+    viewport_retry_at: Option<Instant>,
     pending_viewport_capture_at: Option<Instant>,
     viewport_capture_request_id: Option<u64>,
     clipboard_read_request_ids: std::collections::HashSet<u64>,
@@ -685,6 +690,8 @@ impl DriverState {
             main_frame_id: None,
             viewport_w: config.width,
             viewport_h: config.height,
+            pending_viewport: None,
+            viewport_retry_at: None,
             pending_viewport_capture_at: None,
             viewport_capture_request_id: None,
             clipboard_read_request_ids: std::collections::HashSet::new(),

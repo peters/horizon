@@ -283,7 +283,11 @@ impl HorizonApp {
         }
     }
 
-    fn terminal_events_for_viewport(&mut self, ctx: &Context, events: &[Event]) -> Vec<TerminalInputEvent> {
+    pub(in crate::app) fn terminal_events_for_viewport(
+        &mut self,
+        ctx: &Context,
+        events: &[Event],
+    ) -> Vec<TerminalInputEvent> {
         let viewport_id = ctx.viewport_id();
         let frame_keyboard_events = self.frame_keyboard_events.remove(&viewport_id).unwrap_or_default();
         // The push-to-talk chord is an app-level control on the root viewport

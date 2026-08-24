@@ -810,7 +810,11 @@ impl HorizonApp {
         }
 
         let workspace_bounds = self.board.workspace_bounds_map();
-        if !root_interaction_suppressed {
+        if root_interaction_suppressed {
+            // The viewport stabilizer owns this frame's input. Do not leave
+            // a prior frame's filtered events available to panel widgets.
+            self.terminal_keyboard_events.clear();
+        } else {
             self.handle_canvas_pan(ui);
         }
         self.render_toolbar(ui);

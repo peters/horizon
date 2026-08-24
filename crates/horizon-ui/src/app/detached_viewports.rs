@@ -401,7 +401,10 @@ impl HorizonApp {
                 .is_some_and(|panel| panel.kind == PanelKind::Browser)
         });
         let browser_events = if has_browser {
-            ctx.input(|input| input.events.clone())
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
         } else {
             Vec::new()
         };
