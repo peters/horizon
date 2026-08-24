@@ -531,19 +531,24 @@ impl Drop for BrowserPanelState {
 }
 
 fn schedule_profile_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
-    let fallback_profile_dir = profile_dir.clone();
-    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
-    let worker_completion_tx = completion_tx.clone();
-    let cleanup = move || {
-        let _ = worker_completion_tx.send(remove_browser_profile(&profile_dir));
-    };
+    schedule_profile_removal_with(profile_dir, |profile_dir, completion_tx| {
+        std::thread::Builder::new()
+            .name("browser-profile-cleanup".into())
+            .spawn(move || {
+                let _ = completion_tx.send(remove_browser_profile(&profile_dir));
+            })
+            .map(|_| ())
+    })
+}
 
-    if let Err(error) = std::thread::Builder::new()
-        .name("browser-profile-cleanup".into())
-        .spawn(cleanup)
-    {
+fn schedule_profile_removal_with(
+    profile_dir: PathBuf,
+    spawn_worker: impl FnOnce(PathBuf, std::sync::mpsc::Sender<std::io::Result<()>>) -> std::io::Result<()>,
+) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    if let Err(error) = spawn_worker(profile_dir, completion_tx.clone()) {
         tracing::warn!("failed to start browser profile cleanup: {error}");
-        let _ = completion_tx.send(remove_browser_profile(&fallback_profile_dir));
+        let _ = completion_tx.send(Err(error));
     }
     completion_rx
 }
@@ -725,6 +730,27 @@ mod tests {
         std::fs::remove_file(&profile_path).expect("remove profile placeholder");
         assert!(signal.force_cleanup(std::time::Duration::from_secs(1)));
         assert!(!profile_path.exists());
+    }
+
+    #[test]
+    fn profile_cleanup_spawn_failure_leaves_filesystem_work_for_an_async_retry() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let profile_dir = root.path().join("panel-profile");
+        std::fs::create_dir(&profile_dir).expect("profile dir");
+        std::fs::write(profile_dir.join("Preferences"), b"state").expect("profile state");
+
+        let completion_rx = schedule_profile_removal_with(profile_dir.clone(), |_, _| {
+            Err(std::io::Error::other("worker unavailable"))
+        });
+
+        let outcome = completion_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("spawn failure is reported");
+        assert_eq!(
+            outcome.expect_err("cleanup was not run").kind(),
+            std::io::ErrorKind::Other
+        );
+        assert!(profile_dir.exists());
     }
 
     #[test]
