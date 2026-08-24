@@ -28,6 +28,8 @@ const MAX_OUTPUT_SAMPLES: usize = MAX_RECORD_SECONDS * TARGET_SAMPLE_RATE as usi
 /// the microphone must not stay open, so the capture thread self-cancels.
 const HEARTBEAT_STALE: Duration = Duration::from_millis(1500);
 const HEARTBEAT_POLL: Duration = Duration::from_millis(250);
+#[cfg(target_os = "linux")]
+const PULSE_CAPTURE_BUFFER_FRAMES: cpal::FrameCount = 1_024;
 
 pub enum CaptureCmd {
     /// Begin recording under the given generation.
@@ -503,6 +505,38 @@ fn resolve_input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cp
         .ok_or_else(|| "no microphone found (no default input device)".to_string())
 }
 
+#[cfg(target_os = "linux")]
+fn pulse_capture_buffer_size(supported: cpal::SupportedBufferSize) -> cpal::BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            cpal::BufferSize::Fixed(PULSE_CAPTURE_BUFFER_FRAMES.max(min).min(max))
+        }
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn capture_stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    let buffer_size = if host.id() == cpal::HostId::PulseAudio {
+        // PipeWire's Pulse compatibility layer defaults record fragments to
+        // two seconds. A push-to-talk release drops the stream immediately,
+        // so any fragment not delivered yet would be lost. Request a common
+        // 1,024-frame quantum to keep that tail around 21 ms at 48 kHz.
+        pulse_capture_buffer_size(*supported.buffer_size())
+    } else {
+        cpal::BufferSize::Default
+    };
+    cpal::StreamConfig {
+        buffer_size,
+        ..supported.config()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn capture_stream_config(_host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    supported.config()
+}
+
 fn start_recording(
     generation: u64,
     pcm_tx: Sender<(u64, Result<CapturedAudio, String>)>,
@@ -520,7 +554,7 @@ fn start_recording(
     let sample_rate = supported.sample_rate();
     let channels = usize::from(supported.channels());
     let sample_format = supported.sample_format();
-    let config: cpal::StreamConfig = supported.into();
+    let config = capture_stream_config(&host, supported);
 
     // Pre-size for ~30 s of 16 kHz mono so the audio callback does not
     // reallocate (and memcpy) tens of MiB mid-capture.
@@ -701,6 +735,31 @@ mod tests {
         CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio, MonoResampler, TARGET_SAMPLE_RATE,
         deduplicate_device_names, device_identity_key, to_mono_16k,
     };
+    #[cfg(target_os = "linux")]
+    use super::{PULSE_CAPTURE_BUFFER_FRAMES, pulse_capture_buffer_size};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pulse_capture_buffer_is_bounded_and_clamped_to_device_support() {
+        use cpal::{BufferSize, SupportedBufferSize};
+
+        assert_eq!(
+            pulse_capture_buffer_size(SupportedBufferSize::Range { min: 1, max: 1_048_576 }),
+            BufferSize::Fixed(PULSE_CAPTURE_BUFFER_FRAMES)
+        );
+        assert_eq!(
+            pulse_capture_buffer_size(SupportedBufferSize::Range { min: 2_048, max: 4_096 }),
+            BufferSize::Fixed(2_048)
+        );
+        assert_eq!(
+            pulse_capture_buffer_size(SupportedBufferSize::Range { min: 128, max: 512 }),
+            BufferSize::Fixed(512)
+        );
+        assert_eq!(
+            pulse_capture_buffer_size(SupportedBufferSize::Unknown),
+            BufferSize::Default
+        );
+    }
 
     #[test]
     fn device_identity_key_converges_across_backend_namings() {
