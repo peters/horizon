@@ -151,20 +151,35 @@ pub fn write(manifest: &BrowserManifest) -> std::io::Result<()> {
 
 /// Write to an explicit path (used by tests).
 ///
+/// The manifest carries a live CDP endpoint, so the temp file is created
+/// `0600` from the first byte — never world-readable under a common umask.
+///
 /// # Errors
-/// Fails on filesystem errors.
+/// Fails on filesystem errors (including the permission tightening, which
+/// also covers a stale temp file left behind by a crashed run — `mode()`
+/// only applies at creation).
 pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
     let temp = path.with_extension(format!("json.tmp.{}", std::process::id()));
-    std::fs::write(&temp, raw.as_bytes())?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(raw.as_bytes())?;
     }
+    #[cfg(not(unix))]
+    std::fs::write(&temp, raw.as_bytes())?;
     replace_file(&temp, path)?;
     Ok(())
 }
