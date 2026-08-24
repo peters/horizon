@@ -24,12 +24,14 @@
 //! resurrect a dead panel.
 
 use std::fs::{OpenOptions, TryLockError};
-#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
 use crate::horizon_home::{HorizonHome, safe_local_id};
@@ -275,23 +277,13 @@ fn mutate_at(
 
 fn write_at_locked(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> {
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let temp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(raw.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    std::fs::write(&temp, raw.as_bytes())?;
-    replace_file(&temp, path)?;
-    Ok(())
+    options.mode(0o600);
+    AtomicFile::new(path, AllowOverwrite)
+        .write_with_options(|file| file.write_all(raw.as_bytes()), options)
+        .map_err(Into::into)
 }
 
 struct ManifestLock {
@@ -327,19 +319,6 @@ impl ManifestLock {
                 Err(TryLockError::Error(error)) => return Err(error),
             }
         }
-    }
-}
-
-/// Atomic replace that also works on Windows, where `std::fs::rename` does
-/// not overwrite an existing destination (delete first, then retry once).
-fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
-    if std::fs::rename(temp, path).is_err() {
-        let _ = std::fs::remove_file(path);
-        std::fs::rename(temp, path).inspect_err(|_| {
-            let _ = std::fs::remove_file(temp);
-        })
-    } else {
-        Ok(())
     }
 }
 

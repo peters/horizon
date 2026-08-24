@@ -300,9 +300,16 @@ impl ChromeProcess {
 
 fn validate_extra_args(extra_args: &[String]) -> Result<()> {
     for argument in extra_args {
-        let switch = argument.split_once('=').map_or(argument.as_str(), |(name, _)| name);
-        if switch.starts_with("--remote-debugging-") || matches!(switch, "--remote-allow-origins" | "--user-data-dir") {
-            return Err(ChromeError::ProtectedExtraArg(switch.to_string()));
+        let Some(switch) = argument
+            .strip_prefix("--")
+            .or_else(|| argument.strip_prefix('-'))
+            .or_else(|| argument.strip_prefix('/'))
+        else {
+            continue;
+        };
+        let name = switch.split(['=', ':']).next().unwrap_or(switch);
+        if name.starts_with("remote-debugging-") || matches!(name, "remote-allow-origins" | "user-data-dir") {
+            return Err(ChromeError::ProtectedExtraArg(argument.clone()));
         }
     }
     Ok(())
@@ -618,10 +625,15 @@ mod tests {
     fn rejects_extra_args_that_override_managed_browser_switches() {
         for arguments in [
             vec!["--remote-debugging-port=9222".to_string()],
+            vec!["-remote-debugging-address=0.0.0.0".to_string()],
+            vec!["/remote-debugging-address=0.0.0.0".to_string()],
+            vec!["/remote-debugging-port:9222".to_string()],
             vec!["--remote-debugging-address".to_string(), "0.0.0.0".to_string()],
             vec!["--remote-debugging-pipe".to_string()],
             vec!["--remote-allow-origins=https://example.com".to_string()],
+            vec!["-remote-allow-origins=https://example.com".to_string()],
             vec!["--user-data-dir".to_string(), "/tmp/shared".to_string()],
+            vec!["/user-data-dir=C:\\shared".to_string()],
         ] {
             assert!(matches!(
                 validate_extra_args(&arguments),

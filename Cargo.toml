@@ -43,6 +43,10 @@ wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulka
 egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 tempfile = "3.27.0"
+# `std::fs::rename` cannot atomically replace an existing file on Windows.
+# Browser manifests need replace-existing semantics without exposing a gap to
+# lock-free readers.
+atomicwrites = "0.4.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }

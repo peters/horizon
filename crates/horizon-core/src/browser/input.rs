@@ -67,9 +67,9 @@ impl BrowserButton {
 }
 
 /// Keyboard keys with a distinct CDP representation. Printable characters
-/// ride on a `keyDown` event carrying `text` (Chrome then synthesizes the
-/// full keydown/keypress/input DOM sequence); non-printable keys use
-/// `rawKeyDown` with a virtual-key code.
+/// and unmodified Enter ride on a `keyDown` event carrying `text` (Chrome then
+/// synthesizes the full keydown/keypress/input DOM sequence); other
+/// non-printable keys use `rawKeyDown` with a virtual-key code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BrowserKey {
     ArrowUp,
@@ -371,6 +371,9 @@ fn key_down_cdp(
     repeat: bool,
     edit_command: Option<BrowserEditCommand>,
 ) -> (&'static str, Value) {
+    let text = text.or_else(|| {
+        (key == BrowserKey::Enter && !modifiers.ctrl && !modifiers.alt && !modifiers.meta).then(|| "\r".to_string())
+    });
     // Printable keys (`text` present) use `keyDown` so Chrome runs the normal
     // keydown→keypress→input pipeline; other keys use `rawKeyDown`.
     let ty = if text.is_some() { "keyDown" } else { "rawKeyDown" };
@@ -610,10 +613,11 @@ fn char_code_name(c: char) -> &'static str {
 }
 
 fn dispatch_dom_key(key: BrowserKey, text: Option<&str>, shift: bool) -> std::borrow::Cow<'_, str> {
-    if let Some(text) = text
-        && text.chars().count() == 1
-    {
-        return std::borrow::Cow::Borrowed(text);
+    if let Some(text) = text {
+        let mut characters = text.chars();
+        if characters.next().is_some_and(|character| !character.is_control()) && characters.next().is_none() {
+            return std::borrow::Cow::Borrowed(text);
+        }
     }
     if shift && let Some(character) = key.printable_char_with_shift(true) {
         return std::borrow::Cow::Owned(character.to_string());
@@ -737,6 +741,52 @@ mod tests {
         assert_eq!(params["type"], "rawKeyDown");
         assert!(params.get("text").is_none());
         assert_eq!(params["autoRepeat"], true);
+    }
+
+    #[test]
+    fn unmodified_enter_sends_text_for_chromiums_keypress_pipeline() {
+        let (_, params) = BrowserInput::KeyDown {
+            key: BrowserKey::Enter,
+            text: None,
+            modifiers: BrowserModifiers::none(),
+            repeat: false,
+            edit_command: None,
+        }
+        .cdp();
+
+        assert_eq!(params["type"], "keyDown");
+        assert_eq!(params["text"], "\r");
+        assert_eq!(params["key"], "Enter");
+    }
+
+    #[test]
+    fn shortcut_enter_remains_non_textual() {
+        for modifiers in [
+            BrowserModifiers {
+                ctrl: true,
+                ..BrowserModifiers::none()
+            },
+            BrowserModifiers {
+                alt: true,
+                ..BrowserModifiers::none()
+            },
+            BrowserModifiers {
+                meta: true,
+                ..BrowserModifiers::none()
+            },
+        ] {
+            let (_, params) = BrowserInput::KeyDown {
+                key: BrowserKey::Enter,
+                text: None,
+                modifiers,
+                repeat: false,
+                edit_command: None,
+            }
+            .cdp();
+
+            assert_eq!(params["type"], "rawKeyDown");
+            assert!(params.get("text").is_none());
+        }
     }
 
     #[test]

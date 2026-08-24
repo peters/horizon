@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::browser::BrowserShutdownSignal;
 
-const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+pub(super) const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 /// Tracks the progress of an asynchronous panel shutdown.
 ///

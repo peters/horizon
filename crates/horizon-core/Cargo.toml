@@ -30,6 +30,7 @@ uuid.workspace = true
 comrak = { version = "0.54", default-features = false }
 git2.workspace = true
 regex.workspace = true
+atomicwrites.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
