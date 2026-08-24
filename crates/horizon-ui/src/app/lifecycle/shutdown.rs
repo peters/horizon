@@ -1,13 +1,26 @@
 use std::time::Duration;
 
+use horizon_core::ForcedBrowserShutdownStatus;
+
 use super::HorizonApp;
 use crate::loading_spinner;
 
 const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
-const fn shutdown_ready_to_exit(complete: bool, browser_shutdown_complete: bool, timed_out: bool) -> bool {
-    browser_shutdown_complete && (complete || timed_out)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BrowserShutdownOutcome {
+    Pending,
+    Complete,
+    ForcedCleanupFailed,
+}
+
+const fn shutdown_ready_to_exit(complete: bool, timed_out: bool, browser: BrowserShutdownOutcome) -> bool {
+    match browser {
+        BrowserShutdownOutcome::Pending => false,
+        BrowserShutdownOutcome::Complete => complete || timed_out,
+        BrowserShutdownOutcome::ForcedCleanupFailed => timed_out,
+    }
 }
 
 impl HorizonApp {
@@ -38,11 +51,19 @@ impl HorizonApp {
         };
         let complete = progress.is_complete();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
-        let mut browser_shutdown_complete = progress.browser_shutdown_is_complete();
-        if timed_out && !browser_shutdown_complete {
-            browser_shutdown_complete = progress.force_browser_shutdown(FORCED_BROWSER_SHUTDOWN_WAIT);
+        let mut browser_outcome = if progress.browser_shutdown_is_complete() {
+            BrowserShutdownOutcome::Complete
+        } else {
+            BrowserShutdownOutcome::Pending
+        };
+        if timed_out && browser_outcome == BrowserShutdownOutcome::Pending {
+            browser_outcome = match progress.force_browser_shutdown_in_background(FORCED_BROWSER_SHUTDOWN_WAIT) {
+                ForcedBrowserShutdownStatus::NotStarted | ForcedBrowserShutdownStatus::Running => return,
+                ForcedBrowserShutdownStatus::Succeeded => BrowserShutdownOutcome::Complete,
+                ForcedBrowserShutdownStatus::Failed => BrowserShutdownOutcome::ForcedCleanupFailed,
+            };
         }
-        if !shutdown_ready_to_exit(complete, browser_shutdown_complete, timed_out) {
+        if !shutdown_ready_to_exit(complete, timed_out, browser_outcome) {
             return;
         }
 
@@ -53,6 +74,10 @@ impl HorizonApp {
         let _ = self.auto_save_runtime_state();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
+        if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
+            tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
+            std::process::exit(1);
+        }
         std::process::exit(0);
     }
 
@@ -126,13 +151,27 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
-    use super::shutdown_ready_to_exit;
+    use super::{BrowserShutdownOutcome, shutdown_ready_to_exit};
 
     #[test]
     fn timeout_never_bypasses_browser_teardown() {
-        assert!(!shutdown_ready_to_exit(false, false, true));
-        assert!(!shutdown_ready_to_exit(true, false, false));
-        assert!(shutdown_ready_to_exit(false, true, true));
-        assert!(shutdown_ready_to_exit(true, true, false));
+        assert!(!shutdown_ready_to_exit(false, true, BrowserShutdownOutcome::Pending));
+        assert!(!shutdown_ready_to_exit(true, false, BrowserShutdownOutcome::Pending));
+        assert!(shutdown_ready_to_exit(false, true, BrowserShutdownOutcome::Complete));
+        assert!(shutdown_ready_to_exit(true, false, BrowserShutdownOutcome::Complete));
+    }
+
+    #[test]
+    fn failed_forced_cleanup_has_a_bounded_terminal_outcome() {
+        assert!(!shutdown_ready_to_exit(
+            false,
+            false,
+            BrowserShutdownOutcome::ForcedCleanupFailed
+        ));
+        assert!(shutdown_ready_to_exit(
+            false,
+            true,
+            BrowserShutdownOutcome::ForcedCleanupFailed
+        ));
     }
 }

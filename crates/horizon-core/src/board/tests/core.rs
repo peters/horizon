@@ -94,6 +94,32 @@ fn global_shutdown_inherits_browser_teardown_from_an_already_closed_panel() {
 }
 
 #[test]
+fn retired_browser_cleanup_remains_pollable_after_the_last_panel_closes() {
+    let mut board = Board::new();
+    let root = tempfile::tempdir().expect("temp dir");
+    let profile_dir = root.path().join("last-browser-profile");
+    std::fs::create_dir(&profile_dir).expect("profile dir");
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    board
+        .retired_browser_shutdown_signals
+        .push(crate::browser::BrowserShutdownSignal::for_test(completion_rx).with_profile_cleanup(profile_dir.clone()));
+
+    assert!(board.panels.is_empty());
+    assert!(board.has_pending_browser_cleanup());
+    let _ = board.process_output();
+    assert!(board.has_pending_browser_cleanup());
+    assert!(completion_tx.send(()).is_ok());
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while board.has_pending_browser_cleanup() && std::time::Instant::now() < deadline {
+        let _ = board.process_output();
+        std::thread::yield_now();
+    }
+
+    assert!(!board.has_pending_browser_cleanup());
+}
+
+#[test]
 fn resolve_attention_marks_item_resolved() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("frontend");

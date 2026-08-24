@@ -6,6 +6,19 @@ use crate::browser::BrowserShutdownSignal;
 
 pub(super) const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
+const FORCE_NOT_STARTED: usize = 0;
+const FORCE_RUNNING: usize = 1;
+const FORCE_SUCCEEDED: usize = 2;
+const FORCE_FAILED: usize = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForcedBrowserShutdownStatus {
+    NotStarted,
+    Running,
+    Succeeded,
+    Failed,
+}
+
 /// Tracks the progress of an asynchronous panel shutdown.
 ///
 /// Created by [`crate::Board::begin_async_shutdown`] and polled each frame to
@@ -15,8 +28,9 @@ pub struct ShutdownProgress {
     panel_count: usize,
     terminal_joins_completed: Arc<AtomicUsize>,
     browser_count: usize,
-    browser_shutdown_signals: Mutex<Vec<BrowserShutdownSignal>>,
-    browsers_completed: AtomicUsize,
+    browser_shutdown_signals: Arc<Mutex<Vec<BrowserShutdownSignal>>>,
+    browsers_completed: Arc<AtomicUsize>,
+    forced_browser_shutdown_status: Arc<AtomicUsize>,
 }
 
 impl ShutdownProgress {
@@ -31,8 +45,9 @@ impl ShutdownProgress {
             panel_count,
             terminal_joins_completed,
             browser_count,
-            browser_shutdown_signals: Mutex::new(browser_shutdown_signals),
-            browsers_completed: AtomicUsize::new(0),
+            browser_shutdown_signals: Arc::new(Mutex::new(browser_shutdown_signals)),
+            browsers_completed: Arc::new(AtomicUsize::new(0)),
+            forced_browser_shutdown_status: Arc::new(AtomicUsize::new(FORCE_NOT_STARTED)),
         }
     }
 
@@ -108,28 +123,113 @@ impl ShutdownProgress {
         while !self.browser_shutdown_is_complete() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        self.browser_shutdown_is_complete() || self.force_browser_shutdown(FORCED_BROWSER_SHUTDOWN_WAIT)
+        if self.browser_shutdown_is_complete() {
+            return true;
+        }
+        match self.forced_browser_shutdown_status() {
+            ForcedBrowserShutdownStatus::NotStarted => self.force_browser_shutdown(FORCED_BROWSER_SHUTDOWN_WAIT),
+            ForcedBrowserShutdownStatus::Running => {
+                let deadline = Instant::now() + FORCED_BROWSER_SHUTDOWN_WAIT;
+                while self.forced_browser_shutdown_status() == ForcedBrowserShutdownStatus::Running
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                self.forced_browser_shutdown_status() == ForcedBrowserShutdownStatus::Succeeded
+            }
+            ForcedBrowserShutdownStatus::Succeeded => true,
+            ForcedBrowserShutdownStatus::Failed => false,
+        }
+    }
+
+    /// Start the one allowed forced browser cleanup attempt on a background
+    /// thread and report its current state. The frame thread only starts and
+    /// polls this work; it never waits on process termination or profile I/O.
+    #[must_use]
+    pub fn force_browser_shutdown_in_background(&self, timeout: Duration) -> ForcedBrowserShutdownStatus {
+        if self
+            .forced_browser_shutdown_status
+            .compare_exchange(FORCE_NOT_STARTED, FORCE_RUNNING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let signals = Arc::clone(&self.browser_shutdown_signals);
+            let completed = Arc::clone(&self.browsers_completed);
+            let status = Arc::clone(&self.forced_browser_shutdown_status);
+            let browser_count = self.browser_count;
+            let spawn_result = std::thread::Builder::new()
+                .name("browser-force-shutdown".to_string())
+                .spawn(move || {
+                    let succeeded = if let Ok(succeeded) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            force_browser_shutdown_signals(&signals, &completed, browser_count, timeout)
+                        })) {
+                        succeeded
+                    } else {
+                        tracing::error!("forced browser cleanup thread panicked");
+                        false
+                    };
+                    status.store(
+                        if succeeded { FORCE_SUCCEEDED } else { FORCE_FAILED },
+                        Ordering::Release,
+                    );
+                });
+            if let Err(error) = spawn_result {
+                tracing::error!("failed to start forced browser cleanup: {error}");
+                self.forced_browser_shutdown_status
+                    .store(FORCE_FAILED, Ordering::Release);
+            }
+        }
+        self.forced_browser_shutdown_status()
+    }
+
+    #[must_use]
+    pub fn forced_browser_shutdown_status(&self) -> ForcedBrowserShutdownStatus {
+        match self.forced_browser_shutdown_status.load(Ordering::Acquire) {
+            FORCE_NOT_STARTED => ForcedBrowserShutdownStatus::NotStarted,
+            FORCE_RUNNING => ForcedBrowserShutdownStatus::Running,
+            FORCE_SUCCEEDED => ForcedBrowserShutdownStatus::Succeeded,
+            _ => ForcedBrowserShutdownStatus::Failed,
+        }
     }
 
     /// Emergency process cleanup for frame-polled shutdown after its normal
     /// deadline. The timeout is shared across all pending browser processes.
     #[must_use]
     pub fn force_browser_shutdown(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        let mut signals = self
-            .browser_shutdown_signals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        signals.retain(|signal| {
-            let complete =
-                signal.is_complete() || signal.force_cleanup(deadline.saturating_duration_since(Instant::now()));
-            if complete {
-                self.browsers_completed.fetch_add(1, Ordering::Relaxed);
-            }
-            !complete
-        });
-        self.browsers_completed.load(Ordering::Relaxed) >= self.browser_count
+        force_browser_shutdown_signals(
+            &self.browser_shutdown_signals,
+            &self.browsers_completed,
+            self.browser_count,
+            timeout,
+        )
     }
+}
+
+fn force_browser_shutdown_signals(
+    signals: &Mutex<Vec<BrowserShutdownSignal>>,
+    browsers_completed: &AtomicUsize,
+    browser_count: usize,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    let mut pending = {
+        let mut signals = signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *signals)
+    };
+    pending.retain(|signal| {
+        let complete = signal.is_complete() || signal.force_cleanup(deadline.saturating_duration_since(Instant::now()));
+        if complete {
+            browsers_completed.fetch_add(1, Ordering::Relaxed);
+        }
+        !complete
+    });
+    if !pending.is_empty() {
+        signals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append(&mut pending);
+    }
+    browsers_completed.load(Ordering::Relaxed) >= browser_count
 }
 
 #[cfg(test)]
@@ -182,5 +282,39 @@ mod tests {
 
         assert!(progress.wait_for_browser_shutdown(Duration::ZERO));
         assert!(progress.is_complete());
+    }
+
+    #[test]
+    fn background_browser_force_is_one_shot_and_completes_without_blocking_the_caller() {
+        let (_completed_tx, completed_rx) = mpsc::channel();
+        let progress = ShutdownProgress::new(
+            1,
+            Arc::new(AtomicUsize::new(0)),
+            vec![BrowserShutdownSignal::for_test(completed_rx)],
+        );
+        let started = Instant::now();
+
+        let initial = progress.force_browser_shutdown_in_background(Duration::from_secs(3));
+
+        assert!(matches!(
+            initial,
+            ForcedBrowserShutdownStatus::Running | ForcedBrowserShutdownStatus::Succeeded
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while progress.forced_browser_shutdown_status() == ForcedBrowserShutdownStatus::Running
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            progress.forced_browser_shutdown_status(),
+            ForcedBrowserShutdownStatus::Succeeded
+        );
+        assert_eq!(
+            progress.force_browser_shutdown_in_background(Duration::from_secs(3)),
+            ForcedBrowserShutdownStatus::Succeeded
+        );
+        assert!(progress.browser_shutdown_is_complete());
     }
 }

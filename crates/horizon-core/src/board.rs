@@ -7,7 +7,7 @@ mod workspaces;
 
 pub use arrangement::WorkspaceAlignment;
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
-pub use shutdown::ShutdownProgress;
+pub use shutdown::{ForcedBrowserShutdownStatus, ShutdownProgress};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -360,6 +360,14 @@ impl Board {
         // the attention-feed feature flag.
         self.update_agent_status();
         output
+    }
+
+    /// Whether a browser removed from the board still has process or profile
+    /// cleanup in flight. The UI must keep polling output even when no panels
+    /// remain so completion can be observed and retired state released.
+    #[must_use]
+    pub fn has_pending_browser_cleanup(&self) -> bool {
+        !self.retired_browser_shutdown_signals.is_empty()
     }
 
     pub fn focus(&mut self, id: PanelId) {
