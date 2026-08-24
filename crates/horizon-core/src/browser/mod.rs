@@ -62,6 +62,10 @@ pub struct BrowserConfig {
     pub extra_args: Vec<String>,
     /// JPEG quality 1-100 for screencast frames.
     pub quality: u32,
+    /// Deliver every Nth screencast frame (1 = all frames, 2 = half rate).
+    /// Chrome's only frame-rate knob; useful on animation-heavy pages to
+    /// halve decode + texture-upload cost at a perceived 30 fps.
+    pub every_nth_frame: u32,
     /// Override the per-panel profile root (default
     /// `~/.horizon/browser-profiles/<panel_id>`).
     pub profile_root: Option<PathBuf>,
@@ -73,6 +77,7 @@ impl Default for BrowserConfig {
             command: None,
             extra_args: Vec::new(),
             quality: 60,
+            every_nth_frame: 1,
             profile_root: None,
         }
     }
@@ -469,6 +474,7 @@ mod tests {
     fn config_defaults() {
         let config = BrowserConfig::default();
         assert_eq!(config.quality, 60);
+        assert_eq!(config.every_nth_frame, 1);
         assert!(config.command.is_none());
     }
 

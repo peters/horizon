@@ -674,7 +674,7 @@ impl DriverState {
         serde_json::json!({
             "format": "jpeg",
             "quality": self.config.browser.quality,
-            "everyNthFrame": 1,
+            "everyNthFrame": self.config.browser.every_nth_frame.max(1),
         })
     }
 
