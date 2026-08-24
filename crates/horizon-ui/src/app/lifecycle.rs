@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Context;
+use horizon_core::browser::{BrowserCommand, BrowserInput};
 use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
@@ -38,7 +39,7 @@ fn hold_hotkey_transition(
     released: bool,
     engaged_profile: Option<usize>,
     activity: SpeechActivity,
-    focused_terminal: Option<PanelId>,
+    focused_text_panel: Option<PanelId>,
 ) -> HoldHotkeyTransition {
     let mut engaged_profile = if activity == SpeechActivity::Recording {
         engaged_profile
@@ -46,7 +47,7 @@ fn hold_hotkey_transition(
         None
     };
     let start_target = if pressed && engaged_profile.is_none() && activity == SpeechActivity::Idle {
-        focused_terminal
+        focused_text_panel
     } else {
         None
     };
@@ -86,7 +87,7 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
         SpeechActivity::Busy => {
             "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
         }
-        SpeechActivity::Idle => "Focus a terminal panel to dictate into it.",
+        SpeechActivity::Idle => "Focus a terminal or browser panel to dictate into it.",
     };
     SpeechEvent::Notice(message.to_string())
 }
@@ -106,10 +107,16 @@ fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing
     }
 }
 
+fn browser_speech_command(text: &str) -> BrowserCommand {
+    BrowserCommand::Input(BrowserInput::InsertText {
+        text: format!("{text} "),
+    })
+}
+
 fn handle_profile_hotkeys(
     ctx: &Context,
     speech: &mut super::speech::SpeechSystem,
-    focused_terminal: Option<PanelId>,
+    focused_text_panel: Option<PanelId>,
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
     events: &mut Vec<SpeechEvent>,
@@ -123,7 +130,7 @@ fn handle_profile_hotkeys(
             tracing::info!(
                 profile,
                 activity = ?speech_activity(speech),
-                terminal_focused = focused_terminal.is_some(),
+                text_panel_focused = focused_text_panel.is_some(),
                 "speech hotkey pressed"
             );
         }
@@ -135,7 +142,7 @@ fn handle_profile_hotkeys(
                     released,
                     engaged_profile,
                     speech_activity(speech),
-                    focused_terminal,
+                    focused_text_panel,
                 );
                 if let Some(focused) = transition.start_target {
                     speech.start(focused, profile);
@@ -154,7 +161,7 @@ fn handle_profile_hotkeys(
                     } else if speech_activity(speech) != SpeechActivity::Idle {
                         // `start` below no-ops outside Idle; explain instead.
                         events.push(no_start_notice(speech_activity(speech)));
-                    } else if let Some(focused) = focused_terminal {
+                    } else if let Some(focused) = focused_text_panel {
                         speech.start(focused, profile);
                     } else {
                         events.push(no_start_notice(SpeechActivity::Idle));
@@ -265,7 +272,7 @@ impl HorizonApp {
     }
 
     /// Push-to-talk hotkey handling plus draining speech results into the
-    /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
+    /// target panel's terminal or browser text input.
     ///
     /// The hotkey listens on the root viewport only; panels in detached
     /// windows still dictate via their mic button.
@@ -273,13 +280,13 @@ impl HorizonApp {
         let now = Instant::now();
         self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
-        // The hotkey targets the focused panel, but only terminal-backed
-        // panels can receive typed text.
-        let focused_terminal = self.board.focused.filter(|id| {
+        // The root-viewport hotkey targets the focused terminal or browser.
+        let focused_text_panel = self.board.focused.filter(|id| {
             self.board.panel(*id).is_some_and(|panel| {
                 // The root-viewport hotkey must not dictate into a panel
                 // living in a detached window (documented main-window scope).
-                panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
+                (panel.terminal().is_some() || panel.browser().is_some())
+                    && !self.workspace_is_detached(panel.workspace_id)
             })
         });
         // Capture-state hygiene must run even without a speech runtime
@@ -389,7 +396,7 @@ impl HorizonApp {
         self.speech_engaged_profile = handle_profile_hotkeys(
             ctx,
             speech,
-            focused_terminal,
+            focused_text_panel,
             !capturing_hotkey && !text_surface_active,
             self.speech_engaged_profile,
             &mut events,
@@ -453,8 +460,8 @@ impl HorizonApp {
         self.inject_speech_events(events);
     }
 
-    /// Deliver transcripts into their target panels (mirrors
-    /// `poll_primary_selection_paste`); errors are logged.
+    /// Deliver transcripts into their target panel's PTY or focused browser
+    /// page element; errors are logged.
     fn inject_speech_events(&mut self, events: Vec<super::speech::SpeechEvent>) {
         for event in events {
             match event {
@@ -463,12 +470,19 @@ impl HorizonApp {
                         tracing::warn!("speech target panel closed before transcription finished");
                         continue;
                     };
-                    let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                        continue;
-                    };
-                    // Trailing space so consecutive dictations don't fuse words.
-                    let bytes = input::paste_bytes(&format!("{text} "), mode, true);
-                    panel.write_input(&bytes);
+                    if let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) {
+                        // Trailing space so consecutive dictations don't fuse words.
+                        let text = format!("{text} ");
+                        let bytes = input::paste_bytes(&text, mode, true);
+                        panel.write_input(&bytes);
+                    } else if let Some(browser) = panel.browser()
+                        && !browser.try_send(browser_speech_command(&text))
+                    {
+                        tracing::warn!(
+                            panel_id = target.0,
+                            "browser stopped before speech text could be inserted"
+                        );
+                    }
                 }
                 super::speech::SpeechEvent::Notice(message) => {
                     tracing::info!(%message, "speech notice");
@@ -1274,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
+    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_text_panel() {
         let focused = PanelId(7);
         let starts = HoldHotkeyTransition {
             start_target: Some(focused),
@@ -1299,6 +1313,17 @@ mod tests {
             hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, None),
             ignored
         );
+    }
+
+    #[test]
+    fn browser_speech_uses_cdp_text_insertion_with_a_separator() {
+        let super::BrowserCommand::Input(input) = super::browser_speech_command("spoken words") else {
+            panic!("speech must produce browser input");
+        };
+        let (method, params) = input.cdp();
+
+        assert_eq!(method, "Input.insertText");
+        assert_eq!(params["text"], "spoken words ");
     }
 
     #[test]

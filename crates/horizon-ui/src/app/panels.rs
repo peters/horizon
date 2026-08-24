@@ -531,15 +531,9 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
-                // Dictation needs a PTY to type into: Editor/GitChanges/Usage
-                // and Browser panels have no terminal, so they get no mic
-                // control (injecting a transcript into a browser panel is
-                // not wired up in this PR).
-                let mic_eligible = self.speech.is_some()
-                    && !matches!(
-                        snapshot.kind,
-                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser
-                    );
+                // Terminal panels dictate through their PTY; browser panels
+                // dispatch text to the focused page element through CDP.
+                let mic_eligible = self.speech.is_some() && snapshot.kind.accepts_text_input();
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();
                     let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));

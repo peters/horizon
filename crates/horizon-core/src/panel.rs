@@ -61,6 +61,14 @@ impl PanelKind {
         agent_definition(self).is_some()
     }
 
+    /// Whether this panel owns a text-input surface that can receive typed
+    /// or dictated text. Terminal-backed panels write to their PTY; browser
+    /// panels dispatch text to the focused page element through CDP.
+    #[must_use]
+    pub const fn accepts_text_input(self) -> bool {
+        !matches!(self, Self::Editor | Self::GitChanges | Self::Usage)
+    }
+
     #[must_use]
     pub fn supports_session_binding(self) -> bool {
         agent_definition(self).is_some_and(crate::AgentDefinition::supports_session_binding)
@@ -881,6 +889,22 @@ mod tests {
         assert!(PanelKind::Pi.is_agent());
         assert!(PanelKind::Pi.supports_session_binding());
         assert_eq!(PanelKind::Pi.display_name(), "Pi");
+    }
+
+    #[test]
+    fn terminal_and_browser_panels_accept_text_input() {
+        for kind in [
+            PanelKind::Shell,
+            PanelKind::Ssh,
+            PanelKind::Codex,
+            PanelKind::Command,
+            PanelKind::Browser,
+        ] {
+            assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
+        }
+        for kind in [PanelKind::Editor, PanelKind::GitChanges, PanelKind::Usage] {
+            assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
+        }
     }
 
     #[test]
