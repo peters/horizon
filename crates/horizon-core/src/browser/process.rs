@@ -21,6 +21,8 @@ pub enum ChromeError {
     NoDevtools(String),
     #[error("timed out waiting for the DevTools endpoint (stderr: {0})")]
     DevtoolsTimeout(String),
+    #[error("browser.extra_args cannot override Horizon-managed Chrome switch `{0}`")]
+    ProtectedExtraArg(String),
 }
 
 pub type Result<T> = std::result::Result<T, ChromeError>;
@@ -49,6 +51,7 @@ pub struct ChromeLaunch {
     pub width: u32,
     pub height: u32,
     /// Extra CLI arguments appended verbatim (config `browser.extra_args`).
+    /// Horizon-managed profile and `DevTools` switches are rejected.
     pub extra_args: Vec<String>,
 }
 
@@ -69,14 +72,15 @@ impl ChromeProcess {
     /// # Errors
     /// Fails when the binary is missing or the process cannot start.
     pub fn spawn(launch: &ChromeLaunch) -> Result<Self> {
+        validate_extra_args(&launch.extra_args)?;
         let command = resolve_binary(&launch.command)?;
         std::fs::create_dir_all(&launch.profile_dir)?;
 
         let mut args: Vec<String> = vec![
             "--headless=new".to_string(),
             // Port 0: the OS picks a free port; we learn it from stderr.
-            // Bound to 127.0.0.1 by default — never exposed beyond loopback.
             "--remote-debugging-port=0".to_string(),
+            "--remote-debugging-address=127.0.0.1".to_string(),
             format!("--user-data-dir={}", launch.profile_dir.display()),
             "--no-first-run".to_string(),
             "--no-default-browser-check".to_string(),
@@ -211,6 +215,16 @@ impl ChromeProcess {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .to_string()
     }
+}
+
+fn validate_extra_args(extra_args: &[String]) -> Result<()> {
+    for argument in extra_args {
+        let switch = argument.split_once('=').map_or(argument.as_str(), |(name, _)| name);
+        if switch.starts_with("--remote-debugging-") || matches!(switch, "--remote-allow-origins" | "--user-data-dir") {
+            return Err(ChromeError::ProtectedExtraArg(switch.to_string()));
+        }
+    }
+    Ok(())
 }
 
 /// Kill and reap a child using only non-blocking status polls. A process that
@@ -434,5 +448,32 @@ mod tests {
             Some("ws://127.0.0.1:37677/devtools/browser/70f45c84-x".to_string())
         );
         assert_eq!(parse_devtools_ws_url("something else"), None);
+    }
+
+    #[test]
+    fn rejects_extra_args_that_override_managed_browser_switches() {
+        for arguments in [
+            vec!["--remote-debugging-port=9222".to_string()],
+            vec!["--remote-debugging-address".to_string(), "0.0.0.0".to_string()],
+            vec!["--remote-debugging-pipe".to_string()],
+            vec!["--remote-allow-origins=https://example.com".to_string()],
+            vec!["--user-data-dir".to_string(), "/tmp/shared".to_string()],
+        ] {
+            assert!(matches!(
+                validate_extra_args(&arguments),
+                Err(ChromeError::ProtectedExtraArg(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn accepts_unmanaged_extra_args() {
+        assert!(
+            validate_extra_args(&[
+                "--force-device-scale-factor=2".to_string(),
+                "--disable-extensions".to_string(),
+            ])
+            .is_ok()
+        );
     }
 }
