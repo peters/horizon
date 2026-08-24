@@ -1,7 +1,8 @@
 //! File-based ownership/handoff manifest for browser panels.
 //!
 //! Each browser panel writes a small JSON file under
-//! `~/.horizon/runtime/browsers/<panel_local_id>.json` while it is alive.
+//! `~/.horizon/runtime/browsers/<encoded-panel-local-id>.json` while it is
+//! alive.
 //! It is the shared channel between three parties:
 //!
 //! - the **panel driver** (writes `browser_ws`, `target_id`, `url`,
@@ -134,7 +135,8 @@ pub fn read_at(path: &Path) -> Option<BrowserManifest> {
     serde_json::from_str(&raw).ok()
 }
 
-/// List panel local ids that currently have a manifest.
+/// List panel local ids that currently have a valid, canonically named
+/// manifest.
 #[must_use]
 pub fn list_panels_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -144,8 +146,9 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
         .flatten()
         .filter_map(|entry| {
             let file_name = entry.file_name().to_string_lossy().to_string();
-            let id = file_name.strip_suffix(".json")?;
-            Some(id.to_string())
+            let encoded_id = file_name.strip_suffix(".json")?;
+            let manifest = read_at(&entry.path())?;
+            (safe_local_id(&manifest.panel_local_id) == encoded_id).then_some(manifest.panel_local_id)
         })
         .collect()
 }
@@ -354,6 +357,35 @@ mod tests {
             manifest_path_for_root(&root, "a_b")
         );
         assert_ne!(manifest_path_for_root(&root, ""), manifest_path_for_root(&root, "_"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unsafe_ids_list_as_the_original_id_and_reopen() {
+        let root = test_root();
+        let manifest_dir = root.join("runtime").join("browsers");
+        let original_id = "../unsafe panel";
+        let path = manifest_path_for_root(&root, original_id);
+        write_at(&path, &sample(original_id)).unwrap();
+
+        let listed = list_panels_in(&manifest_dir);
+
+        assert_eq!(listed, [original_id]);
+        assert_eq!(
+            read_at(&manifest_path_for_root(&root, &listed[0])),
+            Some(sample(original_id))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_ignores_a_manifest_with_a_mismatched_filename() {
+        let root = test_root();
+        let manifest_dir = root.join("runtime").join("browsers");
+        let path = manifest_dir.join("wrong-id.json");
+        write_at(&path, &sample("actual-id")).unwrap();
+
+        assert!(list_panels_in(&manifest_dir).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
