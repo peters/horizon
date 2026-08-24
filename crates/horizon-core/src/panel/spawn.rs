@@ -191,7 +191,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
                 ..
             } = opts;
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
-            Ok(spawn_browser(seed, command, browser_config))
+            spawn_browser(seed, command, browser_config)
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -636,7 +636,7 @@ fn spawn_browser(
     mut seed: StaticPanelSeed,
     initial_url: Option<String>,
     browser_config: Option<crate::browser::BrowserConfig>,
-) -> Panel {
+) -> Result<Panel> {
     let initial_url = initial_url.filter(|url| !url.trim().is_empty());
     let (title, has_custom_name) = seed.take_title(|| {
         initial_url
@@ -647,17 +647,17 @@ fn spawn_browser(
         seed.local_id.clone(),
         &browser_config.unwrap_or_default(),
         initial_url.clone(),
-    );
+    )?;
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
 
-    seed.into_panel(
+    Ok(seed.into_panel(
         title,
         PanelKind::Browser,
         PanelContent::Browser(browser),
         initial_url,
         None,
         has_custom_name,
-    )
+    ))
 }
 
 pub(super) fn resolve_launch_command(

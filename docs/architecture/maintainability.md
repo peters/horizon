@@ -19,9 +19,12 @@ back into large multi-purpose modules.
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
 - `browser/session.rs` owns driver lifecycle and shared state; UI-command
-  dispatch belongs in `browser/session/commands.rs`, CDP response/event
-  transitions in `browser/session/events.rs`, and locked manifest/handoff
-  persistence in `browser/session/manifest_io.rs`.
+  dispatch belongs in `browser/session/commands.rs`, frame-aware clipboard
+  capture in `browser/session/clipboard.rs`, CDP response/event transitions in
+  `browser/session/events.rs`, and locked manifest/handoff persistence in
+  `browser/session/manifest_io.rs`. Launch-time browser-profile path resolution
+  belongs in `browser/profile.rs` so launch, persistence, and deletion share
+  one root invariant.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in

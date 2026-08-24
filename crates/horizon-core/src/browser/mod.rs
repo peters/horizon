@@ -17,6 +17,7 @@ pub mod frames;
 pub mod input;
 pub mod manifest;
 pub mod process;
+mod profile;
 pub mod session;
 
 use std::path::{Path, PathBuf};
@@ -31,6 +32,8 @@ pub(crate) use session::BrowserShutdownSignal;
 pub use session::{BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
+
+pub(crate) use profile::profile_dir_for_home;
 
 /// Default emulated viewport for a freshly created browser panel.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
@@ -89,20 +92,6 @@ impl Default for BrowserConfig {
             every_nth_frame: 1,
             profile_root: None,
         }
-    }
-}
-
-pub(crate) fn profile_dir_for_home(
-    config: &BrowserConfig,
-    home: &crate::horizon_home::HorizonHome,
-    panel_local_id: &str,
-) -> PathBuf {
-    // The configured value is a root: every panel still gets its own safely
-    // encoded directory, or concurrent panels would share Chrome's lock.
-    match &config.profile_root {
-        Some(root) => crate::config::Config::expand_tilde(&root.to_string_lossy())
-            .join(crate::horizon_home::safe_local_id(panel_local_id)),
-        None => home.browser_profile_dir(panel_local_id),
     }
 }
 
@@ -178,8 +167,18 @@ pub struct BrowserDrainOutput {
 
 impl BrowserPanelState {
     /// Create the state and start the driver thread.
-    pub fn start(panel_local_id: impl Into<String>, config: &BrowserConfig, initial_url: Option<String>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a relative profile root cannot be resolved from
+    /// the process launch directory.
+    pub fn start(
+        panel_local_id: impl Into<String>,
+        config: &BrowserConfig,
+        initial_url: Option<String>,
+    ) -> crate::error::Result<Self> {
         let panel_local_id = panel_local_id.into();
+        let config = config.resolved_for_launch()?;
         let mut state = Self {
             status: BrowserStatus::Starting,
             url: None,
@@ -198,10 +197,10 @@ impl BrowserPanelState {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
-            config: config.clone(),
+            config,
         };
         state.launch_session(initial_url);
-        state
+        Ok(state)
     }
 
     /// (Re)start the driver — used for the Retry action after a failure.

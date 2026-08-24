@@ -32,8 +32,24 @@ impl DriverState {
         session: &str,
         target: &str,
     ) -> bool {
+        if self.session_id.as_deref() != Some(session) {
+            self.reset_clipboard_tracking();
+        }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
+        // Browser-level auto-attach does not recurse into site-isolated child
+        // targets. Enable it on the bound page session as well so OOPIF
+        // execution contexts remain available to frame-aware input bridges.
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Target.setAutoAttach",
+            &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
+            Some(session),
+        ) {
+            return false;
+        }
         if !self.setup_command(
             link,
             event_tx,
@@ -139,6 +155,7 @@ impl DriverState {
             Err(error) => {
                 self.session_id = None;
                 self.screencast_on = false;
+                self.reset_clipboard_tracking();
                 self.pending_reattach = self.target_id.is_some();
                 frame_slot.clear();
                 let message = format!("browser setup failed at {method}: {error}; retry to restart");

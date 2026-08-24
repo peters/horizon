@@ -24,12 +24,14 @@
 //! - the screencast is implicitly terminated by navigation, so it is
 //!   restarted on every top-level `Page.frameNavigated`.
 
+mod clipboard;
 mod commands;
 mod events;
 mod lifecycle;
 mod manifest_io;
 mod startup;
 
+use clipboard::ClipboardState;
 pub(super) use startup::profile_dir;
 use startup::run_driver;
 
@@ -650,7 +652,7 @@ struct DriverState {
     viewport_retry_at: Option<Instant>,
     pending_viewport_capture_at: Option<Instant>,
     viewport_capture_request_id: Option<u64>,
-    clipboard_read_request_ids: std::collections::HashSet<u64>,
+    clipboard: ClipboardState,
     url: String,
     title: String,
     initial_navigated: bool,
@@ -698,7 +700,7 @@ impl DriverState {
             viewport_retry_at: None,
             pending_viewport_capture_at: None,
             viewport_capture_request_id: None,
-            clipboard_read_request_ids: std::collections::HashSet::new(),
+            clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
             url: String::new(),

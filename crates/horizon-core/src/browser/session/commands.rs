@@ -13,24 +13,6 @@ use super::{
     VIEWPORT_RETRY_DELAY,
 };
 
-const SELECTED_TEXT_EXPRESSION: &str = r#"(() => {
-  const selectedText = (document) => {
-    const active = document.activeElement;
-    if (active?.tagName === "IFRAME") {
-      try {
-        const nested = active.contentDocument && selectedText(active.contentDocument);
-        if (nested) return nested;
-      } catch (_) {}
-    }
-    if (active && active.type !== "password" && typeof active.value === "string"
-        && Number.isInteger(active.selectionStart) && Number.isInteger(active.selectionEnd)) {
-      return active.value.slice(active.selectionStart, active.selectionEnd);
-    }
-    return document.getSelection()?.toString() || "";
-  };
-  return selectedText(document);
-})()"#;
-
 impl DriverState {
     /// Process every pending UI command. Returns `true` when `Stop` arrived.
     pub(super) fn drain_commands(
@@ -72,25 +54,6 @@ impl DriverState {
             }
         }
         false
-    }
-
-    fn request_clipboard_text(&mut self, link: &mut CdpLink) {
-        let Some(session) = self.session_id.clone() else {
-            return;
-        };
-        match link.send_request(
-            "Runtime.evaluate",
-            &serde_json::json!({
-                "expression": SELECTED_TEXT_EXPRESSION,
-                "returnByValue": true,
-            }),
-            Some(session.as_str()),
-        ) {
-            Ok(request_id) => {
-                self.clipboard_read_request_ids.insert(request_id);
-            }
-            Err(error) => tracing::debug!(target: "browser", "clipboard selection capture failed: {error}"),
-        }
     }
 
     fn set_viewport(

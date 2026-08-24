@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::browser::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::browser::frames::FrameSlot;
 
+use super::clipboard::target_event_session_id;
 use super::{
     BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, normalized_committed_url, publish_frame,
 };
@@ -108,6 +109,8 @@ impl DriverState {
             && let Some(id) = default_context_id_for_frame(event.params, self.main_frame_id.as_deref())
         {
             self.title_context_id = Some(id);
+        } else if event.method == "Runtime.executionContextsCleared" {
+            self.title_context_id = None;
         } else if let Some(id) = event
             .params
             .get("executionContextId")
@@ -132,14 +135,7 @@ impl DriverState {
         let CdpMsg::Response { id, result, error, .. } = message else {
             return;
         };
-        if self.clipboard_read_request_ids.remove(&id) {
-            if let Some(error) = error {
-                tracing::debug!(target: "browser", "clipboard selection capture rejected: {error}");
-            } else if let Some(text) = clipboard_text_from_evaluation(result.as_ref())
-                && !text.is_empty()
-            {
-                let _ = event_tx.send(BrowserEvent::ClipboardText(text.to_string()));
-            }
+        if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
             return;
         }
         if self.viewport_capture_request_id == Some(id) {
@@ -199,6 +195,9 @@ impl DriverState {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         match event.method {
             "Target.attachedToTarget" => {
+                if self.note_clipboard_target_attachment(link, &event) {
+                    return;
+                }
                 // Popups and agent-opened tabs must not steal the binding;
                 // it is only replaced after it dies or a forced re-attach.
                 if self.session_id.is_some() {
@@ -213,12 +212,13 @@ impl DriverState {
                 self.attach_setup(link, event_tx, frame_slot, session, target_id);
             }
             "Target.detachedFromTarget" => {
-                if on_page_session {
+                self.note_clipboard_target_detachment(&event);
+                if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
                     self.session_id = None;
                     self.screencast_on = false;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
-                    self.clipboard_read_request_ids.clear();
+                    self.reset_clipboard_tracking();
                     // Drop the tracked context: the next title fetch must
                     // use a fresh default context, not a dead contextId.
                     self.title_context_id = None;
@@ -274,10 +274,13 @@ impl DriverState {
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
                 }
             }
-            "Runtime.executionContextCreated" | "Runtime.executionContextDestroyed" => {
+            "Runtime.executionContextCreated"
+            | "Runtime.executionContextDestroyed"
+            | "Runtime.executionContextsCleared" => {
                 if on_page_session {
                     self.note_execution_context(&event);
                 }
+                self.note_clipboard_execution_context(&event);
             }
             "Page.screencastFrame" => Self::handle_screencast_frame(link, event_tx, frame_slot, event),
             _ => {}
@@ -297,7 +300,7 @@ impl DriverState {
         self.screencast_on = false;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
-        self.clipboard_read_request_ids.clear();
+        self.reset_clipboard_tracking();
         self.pending_reattach = false;
         self.manifest_dirty = true;
         true
@@ -405,10 +408,6 @@ fn href_matches_url(href: &str, url: &str) -> bool {
     href == url
 }
 
-fn clipboard_text_from_evaluation(result: Option<&serde_json::Value>) -> Option<&str> {
-    result?.pointer("/result/value")?.as_str()
-}
-
 fn title_for_bound_target<'a>(params: &'a serde_json::Value, target_id: Option<&str>) -> Option<&'a str> {
     let target_info = params.get("targetInfo")?;
     let changed_target_id = target_info.get("targetId")?.as_str()?;
@@ -456,8 +455,8 @@ mod tests {
     use crate::browser::{BrowserConfig, session::BrowserSessionConfig};
 
     use super::{
-        DriverState, attached_bound_page_target, clipboard_text_from_evaluation, default_context_id_for_frame,
-        title_for_bound_target, title_from_binding,
+        DriverState, attached_bound_page_target, default_context_id_for_frame, title_for_bound_target,
+        title_from_binding,
     };
 
     fn driver_state() -> DriverState {
@@ -491,16 +490,6 @@ mod tests {
         assert_eq!(default_context_id_for_frame(&iframe, Some("main")), None);
         assert_eq!(default_context_id_for_frame(&isolated, Some("main")), None);
         assert_eq!(default_context_id_for_frame(&main, None), None);
-    }
-
-    #[test]
-    fn clipboard_text_reads_runtime_evaluation_values_only() {
-        let value = serde_json::json!({ "result": { "type": "string", "value": "selected" } });
-        let exception = serde_json::json!({ "exceptionDetails": { "text": "failed" } });
-
-        assert_eq!(clipboard_text_from_evaluation(Some(&value)), Some("selected"));
-        assert_eq!(clipboard_text_from_evaluation(Some(&exception)), None);
-        assert_eq!(clipboard_text_from_evaluation(None), None);
     }
 
     #[test]
