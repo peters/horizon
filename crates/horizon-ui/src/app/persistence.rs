@@ -52,12 +52,13 @@ impl HorizonApp {
             })
             .collect();
 
-        let runtime_state = RuntimeState::from_board_with_detached_workspaces(
+        let mut runtime_state = RuntimeState::from_board_with_detached_workspaces(
             &self.board,
             self.window_config.clone(),
             self.canvas_view,
             detached_workspaces,
         );
+        runtime_state.browser = self.template_config.browser.clone();
         if let Err(error) = self
             .session_store
             .save_runtime_state(&active_session.session_id, &runtime_state)
@@ -95,5 +96,38 @@ impl HorizonApp {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{Config, RuntimeState, StartupDecision};
+
+    use super::super::test_support::test_app_with_config_and_startup;
+
+    #[test]
+    fn auto_save_persists_the_active_browser_profile_configuration() {
+        let profile_root = tempfile::tempdir().expect("profile temp dir");
+        let mut config = Config::default();
+        config.browser.profile_root = Some(profile_root.path().join("browser-profiles"));
+        config.browser.quality = 73;
+        let (_temp, _ctx, mut app) = test_app_with_config_and_startup(
+            &config,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+        );
+        let session = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .expect("create persistent session");
+        app.activate_persistent_session(&session);
+
+        assert!(app.auto_save_runtime_state());
+
+        let saved = RuntimeState::load(&session.runtime_state_path)
+            .expect("load saved runtime")
+            .expect("saved runtime exists");
+        assert_eq!(saved.browser, config.browser);
     }
 }
