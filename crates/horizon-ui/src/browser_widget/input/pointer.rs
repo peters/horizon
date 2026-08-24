@@ -3,13 +3,13 @@
 use egui::{Event, PointerButton, Ui};
 use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserInput, BrowserModifiers, BrowserPanelState};
 
-use super::keyboard::key_modifiers;
+use super::keyboard::{key_modifiers, to_browser_modifiers};
 use crate::browser_widget::{BrowserPointerClick, BrowserUiState};
 
 /// CDP `buttons` bitmask for currently-down mouse buttons.
 const BUTTON_LEFT: u32 = 1;
-const BUTTON_MIDDLE: u32 = 2;
-const BUTTON_RIGHT: u32 = 4;
+const BUTTON_RIGHT: u32 = 2;
+const BUTTON_MIDDLE: u32 = 4;
 
 pub(super) fn events(
     ui: &Ui,
@@ -28,16 +28,9 @@ pub(super) fn events(
     let from_global = ctx.layer_transform_from_global(ui.layer_id());
     let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
     let frame_pos = ctx.input(|i| i.pointer.interact_pos());
-    let modifiers = key_modifiers(ui);
+    let frame_final_modifiers = key_modifiers(ui);
     let event_time = ctx.input(|input| input.time);
-    let (max_click_dist, max_click_duration, max_double_click_delay) = ctx.options(|options| {
-        let input = &options.input_options;
-        (
-            input.max_click_dist,
-            input.max_click_duration,
-            input.max_double_click_delay,
-        )
-    });
+    let click_thresholds = click_thresholds(ctx);
     // Frame-end pointer position: only used for wheel events, which carry
     // no per-event position.
     let wheel_pos = frame_pos.map(transform).filter(|p| pointer_target && rect.contains(*p));
@@ -51,8 +44,15 @@ pub(super) fn events(
     // mouseMoved messages, so only the final move in each adjacent run is
     // forwarded while button and wheel ordering is preserved.
     let mut event_buttons = captured_buttons(state);
+    let mut event_modifiers = state.pointer_modifiers;
     let mut pending_move: Option<(f64, f64, u32, BrowserModifiers)> = None;
     for event in events {
+        if let Some(modifiers) = modifiers_for_event(event) {
+            // A pending move precedes this modifier-bearing event, so emit it
+            // with the state that was active when the move occurred.
+            flush_pending_move(browser, &mut pending_move);
+            event_modifiers = to_browser_modifiers(modifiers);
+        }
         match event {
             Event::PointerButton {
                 pos, button, pressed, ..
@@ -73,10 +73,10 @@ pub(super) fn events(
                         pressed: *pressed,
                         pointer_target,
                         event_time,
-                        max_click_dist,
-                        max_click_duration,
-                        max_double_click_delay,
-                        modifiers,
+                        max_click_dist: click_thresholds.distance,
+                        max_click_duration: click_thresholds.duration,
+                        max_double_click_delay: click_thresholds.double_click_delay,
+                        modifiers: event_modifiers,
                         rect,
                         frame_size,
                     },
@@ -91,7 +91,7 @@ pub(super) fn events(
                 if tracking && state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
                     let (x, y) = to_page_coords(rect, frame_size, p);
                     state.last_mouse = Some(p);
-                    pending_move = Some((x, y, event_buttons, modifiers));
+                    pending_move = Some((x, y, event_buttons, event_modifiers));
                 }
             }
             // The pointer left the window mid-drag: end the drag where we
@@ -111,7 +111,7 @@ pub(super) fn events(
                         button: click.button,
                         click_count: click.count,
                         buttons: event_buttons,
-                        modifiers,
+                        modifiers: event_modifiers,
                     }));
                 }
                 state.last_mouse = None;
@@ -131,7 +131,7 @@ pub(super) fn events(
                         y,
                         delta_x,
                         delta_y,
-                        modifiers,
+                        modifiers: event_modifiers,
                     }));
                 }
             }
@@ -139,6 +139,34 @@ pub(super) fn events(
         }
     }
     flush_pending_move(browser, &mut pending_move);
+    state.pointer_modifiers = frame_final_modifiers;
+}
+
+#[derive(Clone, Copy)]
+struct ClickThresholds {
+    distance: f32,
+    duration: f64,
+    double_click_delay: f64,
+}
+
+fn click_thresholds(ctx: &egui::Context) -> ClickThresholds {
+    ctx.options(|options| {
+        let input = &options.input_options;
+        ClickThresholds {
+            distance: input.max_click_dist,
+            duration: input.max_click_duration,
+            double_click_delay: input.max_double_click_delay,
+        }
+    })
+}
+
+fn modifiers_for_event(event: &Event) -> Option<egui::Modifiers> {
+    match event {
+        Event::Key { modifiers, .. } | Event::PointerButton { modifiers, .. } | Event::MouseWheel { modifiers, .. } => {
+            Some(*modifiers)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -353,6 +381,28 @@ mod tests {
     }
 
     #[test]
+    fn pointer_events_keep_their_modifier_snapshots() {
+        let shift_click = Event::PointerButton {
+            pos: egui::Pos2::ZERO,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::SHIFT,
+        };
+        let later_unmodified_key = Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        assert_eq!(modifiers_for_event(&shift_click), Some(egui::Modifiers::SHIFT));
+        assert_eq!(modifiers_for_event(&later_unmodified_key), Some(egui::Modifiers::NONE));
+        assert!(to_browser_modifiers(egui::Modifiers::SHIFT).shift);
+        assert!(!to_browser_modifiers(egui::Modifiers::NONE).shift);
+    }
+
+    #[test]
     fn simultaneous_button_captures_keep_each_button_down() {
         let mut state = BrowserUiState::default();
         state.captured_clicks[button_index(BrowserButton::Left)] = Some(BrowserPointerClick {
@@ -372,6 +422,13 @@ mod tests {
         assert!(has_pointer_capture(&state));
         let _ = state.captured_clicks[button_index(BrowserButton::Left)].take();
         assert_eq!(captured_buttons(&state), BUTTON_RIGHT);
+    }
+
+    #[test]
+    fn button_masks_follow_the_cdp_buttons_bitfield() {
+        assert_eq!(button_mask(BrowserButton::Left), 1);
+        assert_eq!(button_mask(BrowserButton::Right), 2);
+        assert_eq!(button_mask(BrowserButton::Middle), 4);
     }
 
     #[test]

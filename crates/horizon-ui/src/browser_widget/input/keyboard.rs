@@ -357,7 +357,7 @@ fn app_shortcut_press(event: &Event, shortcuts: &AppShortcuts, exit_fullscreen_s
         .any(|binding| crate::app::shortcuts::shortcut_event_matches(event, binding))
 }
 
-fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
+pub(super) fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
     BrowserModifiers {
         alt: modifiers.alt,
         ctrl: modifiers.ctrl,

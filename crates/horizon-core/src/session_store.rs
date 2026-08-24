@@ -132,8 +132,9 @@ impl SessionStore {
     /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
         let source_runtime_path = self.home.session_runtime_path(source_session_id);
-        let runtime_state = RuntimeState::load(&source_runtime_path)?
+        let mut runtime_state = RuntimeState::load(&source_runtime_path)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {source_session_id}")))?;
+        runtime_state.regenerate_browser_local_ids();
         let session = self.create_session_from_runtime(runtime_state)?;
         copy_directory_recursive(
             &self.home.session_transcripts_dir(source_session_id),

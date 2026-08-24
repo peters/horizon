@@ -56,12 +56,15 @@ pub fn handle(
     }
     if !flags.interactive {
         pointer::cancel_pointer_capture(browser, state, body, frame_size);
+        state.pointer_modifiers = keyboard::key_modifiers(ui);
         return;
     }
     if matches!(flags.pointer_viewport, PointerViewportState::Ready)
         && let (Some(rect), Some(frame_size)) = (body, frame_size)
     {
         pointer::events(ui, flags.events, browser, state, rect, frame_size, pointer_target);
+    } else {
+        state.pointer_modifiers = keyboard::key_modifiers(ui);
     }
     if matches!(flags.keyboard_target, KeyboardTarget::Url) {
         keyboard::browser_shortcut_events(flags.events, browser, state);

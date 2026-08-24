@@ -41,7 +41,12 @@ pub const OWNER_TTL_MILLIS: i64 = 10_000;
 /// How long the driver's `user_active` signal stays true without another
 /// qualifying interaction.
 pub const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
+#[cfg(not(test))]
 const LOCK_WAIT: Duration = Duration::from_secs(2);
+// Concurrency tests intentionally serialize many fsync-backed replacements;
+// their purpose is transaction correctness, not a loaded runner's disk speed.
+#[cfg(test)]
+const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_RETRY: Duration = Duration::from_millis(5);
 static HANDOFF_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 

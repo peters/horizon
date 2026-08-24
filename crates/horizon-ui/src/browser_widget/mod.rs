@@ -10,7 +10,7 @@ mod input;
 mod render;
 
 use egui::{Event, Pos2, TextureHandle, Ui};
-use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserKey};
+use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
 use horizon_core::{AppShortcuts, Panel};
 
 /// Per-panel UI state that must survive across frames.
@@ -23,6 +23,9 @@ pub struct BrowserUiState {
     last_viewport: (u32, u32),
     /// Last mouse position forwarded to the page (movement dedup).
     last_mouse: Option<Pos2>,
+    /// Modifier state at the end of the preceding frame. Pointer moves do
+    /// not carry their own snapshot, so ordered event replay starts here.
+    pointer_modifiers: BrowserModifiers,
     /// Presses captured by this panel (drags must deliver each release even
     /// when it lands outside the rect). Counts are reused on release.
     captured_clicks: [Option<BrowserPointerClick>; 3],

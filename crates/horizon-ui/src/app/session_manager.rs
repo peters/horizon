@@ -279,7 +279,10 @@ impl HorizonApp {
         };
         if pending.target.is_none() {
             if pending.shutdown_progress.browser_shutdown_is_complete() {
-                self.pending_session_switch = None;
+                let preferred_selection = self.session_manager_selected_id();
+                let error = self.session_manager.as_ref().and_then(|state| state.error.clone());
+                self.finish_aborted_session_switch();
+                self.reload_session_manager(preferred_selection, error);
             } else {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
@@ -297,10 +300,10 @@ impl HorizonApp {
             }
             SessionSwitchShutdownState::Complete => {}
             SessionSwitchShutdownState::AbortForBrowser => {
-                let Some(pending) = self.pending_session_switch.take() else {
+                let Some(mut pending) = self.pending_session_switch.take() else {
                     return false;
                 };
-                let target_session_id = pending.target.as_ref().map(|target| target.session_id.clone());
+                let target_session_id = pending.target.take().map(|target| target.session_id);
                 let completed = pending.shutdown_progress.panels_completed();
                 let total = pending.shutdown_progress.panel_count();
                 tracing::warn!(
@@ -308,13 +311,10 @@ impl HorizonApp {
                     total,
                     "aborting session switch because browser teardown exceeded its deadline"
                 );
-                self.finish_session_switch();
-                self.board = Board::new();
-                self.board.attention_enabled = self.template_config.features.attention_feed;
-                self.pending_session_switch = Some(PendingSessionSwitch {
-                    shutdown_progress: pending.shutdown_progress,
-                    target: None,
-                });
+                // Keep the source board and active session until the delayed
+                // driver resolves. Its final committed URL is published just
+                // before that signal and must still be drained and persisted.
+                self.pending_session_switch = Some(pending);
                 self.reload_session_manager(
                     target_session_id,
                     Some(
@@ -352,6 +352,21 @@ impl HorizonApp {
         false
     }
 
+    fn finish_aborted_session_switch(&mut self) {
+        let Some(pending) = self.pending_session_switch.take() else {
+            return;
+        };
+        debug_assert!(pending.target.is_none());
+        debug_assert!(pending.shutdown_progress.browser_shutdown_is_complete());
+        // The source board remained alive specifically so this final event
+        // drain can fold the browser's last committed URL into persistence.
+        let _ = self.drain_panel_output();
+        let _ = self.auto_save_runtime_state();
+        self.finish_session_switch();
+        self.board = Board::new();
+        self.board.attention_enabled = self.template_config.features.attention_feed;
+    }
+
     fn retired_browser_shutdown_ready(&mut self) -> bool {
         let ready = self
             .pending_session_switch
@@ -363,7 +378,7 @@ impl HorizonApp {
                 .as_ref()
                 .is_some_and(|pending| pending.target.is_none())
         {
-            self.pending_session_switch = None;
+            self.finish_aborted_session_switch();
         }
         ready
     }

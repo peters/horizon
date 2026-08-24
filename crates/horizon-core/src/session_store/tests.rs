@@ -1,4 +1,5 @@
 use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
+use crate::{PanelKind, PanelState, WorkspaceState};
 
 #[test]
 fn empty_store_creates_new_session() {
@@ -95,6 +96,70 @@ fn delete_session_rejects_live_sessions() {
 
     assert!(error.to_string().contains("cannot delete live session"));
     assert!(home.session_dir(&created.session_id).exists());
+}
+
+#[test]
+fn duplicated_sessions_regenerate_browser_artifact_ids() {
+    let root = test_root("duplicate-browser-ids");
+    let home = HorizonHome::from_root(root);
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let browser_id = "shared-browser-id".to_string();
+    let editor_id = "copied-editor-id".to_string();
+    let runtime_state = RuntimeState {
+        focused_panel_local_id: Some(browser_id.clone()),
+        workspaces: vec![WorkspaceState {
+            local_id: "workspace-id".to_string(),
+            name: "Workspace".to_string(),
+            panels: vec![
+                PanelState {
+                    local_id: browser_id.clone(),
+                    name: "Browser".to_string(),
+                    kind: PanelKind::Browser,
+                    browser_url: Some("https://example.com".to_string()),
+                    ..PanelState::default()
+                },
+                PanelState {
+                    local_id: editor_id.clone(),
+                    name: "Editor".to_string(),
+                    kind: PanelKind::Editor,
+                    ..PanelState::default()
+                },
+            ],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let source = store
+        .create_session_from_runtime(runtime_state)
+        .expect("create source session");
+    std::fs::write(
+        source.transcript_root.join(format!("{editor_id}.bin")),
+        b"editor transcript",
+    )
+    .expect("write source transcript");
+
+    let duplicated = store.duplicate_session(&source.session_id).expect("duplicate session");
+    let panels = &duplicated.runtime_state.workspaces[0].panels;
+    let duplicated_browser = panels
+        .iter()
+        .find(|panel| panel.kind == PanelKind::Browser)
+        .expect("duplicated browser");
+    let duplicated_editor = panels
+        .iter()
+        .find(|panel| panel.kind == PanelKind::Editor)
+        .expect("duplicated editor");
+
+    assert_ne!(duplicated_browser.local_id, browser_id);
+    assert_eq!(duplicated_browser.browser_url.as_deref(), Some("https://example.com"));
+    assert_eq!(
+        duplicated.runtime_state.focused_panel_local_id.as_deref(),
+        Some(duplicated_browser.local_id.as_str())
+    );
+    assert_eq!(duplicated_editor.local_id, editor_id);
+    assert_eq!(
+        std::fs::read(duplicated.transcript_root.join(format!("{editor_id}.bin"))).expect("read copied transcript"),
+        b"editor transcript"
+    );
 }
 
 fn test_root(label: &str) -> std::path::PathBuf {

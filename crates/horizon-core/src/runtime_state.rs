@@ -142,6 +142,25 @@ impl RuntimeState {
         }
     }
 
+    /// Give browser panels fresh process-artifact identities when a persisted
+    /// session is copied. Browser profiles and live manifests are keyed by
+    /// panel local id, while duplicated sessions can run alongside their
+    /// source; retaining those ids would make both Chrome drivers share and
+    /// remove each other's files.
+    pub(crate) fn regenerate_browser_local_ids(&mut self) {
+        for workspace in &mut self.workspaces {
+            for panel in &mut workspace.panels {
+                if panel.kind != PanelKind::Browser {
+                    continue;
+                }
+                let old_local_id = std::mem::replace(&mut panel.local_id, new_local_id());
+                if self.focused_panel_local_id.as_deref() == Some(old_local_id.as_str()) {
+                    self.focused_panel_local_id.clone_from(&Some(panel.local_id.clone()));
+                }
+            }
+        }
+    }
+
     pub fn migrate_canvas_view(&mut self) {
         self.canvas_view = Some(self.canvas_view_or_default());
         self.pan_offset = None;
