@@ -109,7 +109,10 @@ impl BrowserStatus {
 /// Panel content for `PanelKind::Browser` panels.
 pub struct BrowserPanelState {
     pub status: BrowserStatus,
-    pub url: String,
+    /// Last URL Chrome actually committed. `Some("")` is a committed blank
+    /// target; `None` means the requested startup navigation is still only a
+    /// request and must not enter persistence.
+    pub url: Option<String>,
     pub title: String,
     pub loading: bool,
     pub frame_slot: Arc<FrameSlot>,
@@ -119,7 +122,7 @@ pub struct BrowserPanelState {
     committed_url: session::CommittedUrl,
     /// Driver teardown that must finish before Retry or application exit can
     /// reuse/release this panel's Chrome profile.
-    teardown_signal: Option<BrowserShutdownSignal>,
+    teardown_signal: Option<Box<BrowserShutdownSignal>>,
     /// One-click Retry waits for the prior Chrome profile lock to be released,
     /// then starts this replacement automatically.
     pending_relaunch: Option<PendingRelaunch>,
@@ -158,7 +161,7 @@ impl BrowserPanelState {
         let panel_local_id = panel_local_id.into();
         let mut state = Self {
             status: BrowserStatus::Starting,
-            url: initial_url.clone().filter(|u| u != "about:blank").unwrap_or_default(),
+            url: None,
             title: String::new(),
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
@@ -185,9 +188,32 @@ impl BrowserPanelState {
     /// browser returns the user to where they were rather than the panel's
     /// initial URL.
     pub fn relaunch(&mut self) {
-        let resume = (!self.url.is_empty()).then(|| self.url.clone());
-        let initial_url = resume.or_else(|| self.requested_url.clone().filter(|u| !u.is_empty()));
+        let initial_url = match &self.url {
+            Some(url) => (!url.is_empty()).then(|| url.clone()),
+            None => self.requested_url.clone().filter(|url| !url.is_empty()),
+        };
         self.launch_session(initial_url);
+    }
+
+    /// URL shown in browser chrome. Before Chrome commits anything, preserve
+    /// the requested startup target as editable UI without treating it as
+    /// persisted browser history.
+    #[must_use]
+    pub fn display_url(&self) -> &str {
+        self.url.as_deref().unwrap_or_else(|| {
+            self.requested_url
+                .as_deref()
+                .filter(|url| *url != "about:blank")
+                .unwrap_or_default()
+        })
+    }
+
+    /// Last URL Chrome actually committed. `Some("")` means Chrome committed
+    /// a blank target; `None` means the requested startup navigation has not
+    /// committed and must not enter runtime persistence yet.
+    #[must_use]
+    pub fn committed_url_for_persistence(&self) -> Option<&str> {
+        self.url.as_deref()
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {
@@ -196,7 +222,7 @@ impl BrowserPanelState {
         // gone: the replacement reuses the same profile directory, and a
         // second instance would lose the profile lock race.
         if let Some(session) = self.session.take() {
-            self.teardown_signal = Some(BrowserSession::shutdown_signal(*session));
+            self.teardown_signal = Some(Box::new(BrowserSession::shutdown_signal(*session)));
         }
         if !self.retry_ready() {
             self.pending_relaunch = Some(PendingRelaunch { initial_url });
@@ -309,7 +335,7 @@ impl BrowserPanelState {
     pub fn request_shutdown(&mut self) {
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
-            self.teardown_signal = Some((*session).shutdown_signal());
+            self.teardown_signal = Some(Box::new((*session).shutdown_signal()));
         }
         if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
             self.status = BrowserStatus::Stopped { code: None };
@@ -319,7 +345,7 @@ impl BrowserPanelState {
     /// Take the stored teardown-completion signal, if a shutdown was
     /// requested and not yet joined.
     pub(crate) fn take_shutdown_signal(&mut self) -> Option<BrowserShutdownSignal> {
-        self.teardown_signal.take()
+        self.teardown_signal.take().map(|signal| *signal)
     }
 
     /// Request driver shutdown and wait up to `timeout` for Chrome teardown.
@@ -332,10 +358,15 @@ impl BrowserPanelState {
 
     /// Permanently close this panel and remove its persistent Chrome profile
     /// only after the driver has released the profile lock.
-    pub fn close_permanently(&mut self) {
+    pub(crate) fn close_permanently(&mut self) -> Option<BrowserShutdownSignal> {
         self.request_shutdown();
         let profile_dir = session::profile_dir(&self.config, &self.panel_local_id);
-        schedule_profile_cleanup(profile_dir, self.take_shutdown_signal());
+        if let Some(signal) = self.take_shutdown_signal() {
+            Some(signal.with_profile_cleanup(profile_dir))
+        } else {
+            schedule_profile_removal(profile_dir);
+            None
+        }
     }
 
     /// Whether a failed/stopped session has fully released its Chrome
@@ -379,8 +410,8 @@ impl BrowserPanelState {
                     }
                 }
                 BrowserEvent::UrlChanged(url) => {
-                    if self.url != url {
-                        self.url = url;
+                    if self.url.as_deref() != Some(url.as_str()) {
+                        self.url = Some(url);
                         output.url_changed = true;
                     }
                     self.navigation_error = None;
@@ -404,7 +435,7 @@ impl BrowserPanelState {
                 }
                 BrowserEvent::Stopped { code } => {
                     if let Some(session) = self.session.take() {
-                        self.teardown_signal = Some((*session).completion_signal());
+                        self.teardown_signal = Some(Box::new((*session).completion_signal()));
                     }
                     // Drop the stale frame so the placeholder (with Retry)
                     // is shown instead of a frozen last frame.
@@ -462,10 +493,10 @@ impl BrowserPanelState {
         let Some(url) = self.committed_url.snapshot() else {
             return;
         };
-        if self.url == url {
+        if self.url.as_deref() == Some(url.as_str()) {
             return;
         }
-        self.url = url;
+        self.url = Some(url);
         self.navigation_error = None;
         output.url_changed = true;
         output.had_output = true;
@@ -478,13 +509,8 @@ impl Drop for BrowserPanelState {
     }
 }
 
-fn schedule_profile_cleanup(profile_dir: PathBuf, teardown_signal: Option<BrowserShutdownSignal>) {
+fn schedule_profile_removal(profile_dir: PathBuf) {
     let cleanup = move || {
-        if let Some(signal) = teardown_signal
-            && !signal.wait(std::time::Duration::from_secs(10))
-        {
-            let _ = signal.force_cleanup(FORCED_CHROME_SHUTDOWN_WAIT);
-        }
         if let Err(error) = std::fs::remove_dir_all(&profile_dir)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -538,13 +564,13 @@ mod tests {
             status: BrowserStatus::Error {
                 message: "stopped".to_string(),
             },
-            url: String::new(),
+            url: None,
             title: String::new(),
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
+            teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: None,
             panel_local_id: "retry-test".to_string(),
             requested_url: None,
@@ -569,13 +595,13 @@ mod tests {
         let (start_tx, start_rx) = std::sync::mpsc::channel();
         let mut state = BrowserPanelState {
             status: BrowserStatus::Ready,
-            url: String::new(),
+            url: None,
             title: String::new(),
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
+            teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: None,
             panel_local_id: "shutdown-wait-test".to_string(),
             requested_url: None,
@@ -605,13 +631,13 @@ mod tests {
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
         let mut state = BrowserPanelState {
             status: BrowserStatus::Starting,
-            url: String::new(),
+            url: None,
             title: String::new(),
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
             committed_url: session::CommittedUrl::default(),
-            teardown_signal: Some(BrowserShutdownSignal::for_test(completion_rx)),
+            teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: Some(PendingRelaunch { initial_url: None }),
             panel_local_id: "queued-retry-test".to_string(),
             requested_url: None,
@@ -646,12 +672,10 @@ mod tests {
         std::fs::write(profile_dir.join("Preferences"), b"state").expect("profile state");
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
 
-        schedule_profile_cleanup(
-            profile_dir.clone(),
-            Some(BrowserShutdownSignal::for_test(completion_rx)),
-        );
+        let signal = BrowserShutdownSignal::for_test(completion_rx).with_profile_cleanup(profile_dir.clone());
         assert!(profile_dir.exists());
         assert_eq!(completion_tx.send(()), Ok(()));
+        assert!(signal.wait(std::time::Duration::from_secs(1)));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while profile_dir.exists() && std::time::Instant::now() < deadline {
@@ -664,7 +688,7 @@ mod tests {
     fn failed_hand_back_keeps_the_retry_affordance() {
         let mut state = BrowserPanelState {
             status: BrowserStatus::Stopped { code: None },
-            url: String::new(),
+            url: None,
             title: String::new(),
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
@@ -696,7 +720,7 @@ mod tests {
         committed_url.publish("https://example.com/final");
         let mut state = BrowserPanelState {
             status: BrowserStatus::Stopped { code: None },
-            url: "https://example.com/old".to_string(),
+            url: Some("https://example.com/old".to_string()),
             title: String::new(),
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
@@ -717,17 +741,51 @@ mod tests {
 
         let output = state.drain_events();
 
-        assert_eq!(state.url, "https://example.com/final");
+        assert_eq!(state.url.as_deref(), Some("https://example.com/final"));
         assert!(state.navigation_error.is_none());
         assert!(output.url_changed);
         assert!(output.had_output);
     }
 
     #[test]
+    fn requested_url_stays_out_of_persistence_until_chrome_commits() {
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Starting,
+            url: None,
+            title: String::new(),
+            loading: true,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            committed_url: session::CommittedUrl::default(),
+            teardown_signal: None,
+            pending_relaunch: None,
+            panel_local_id: "requested-url-test".to_string(),
+            requested_url: Some("https://example.com/requested".to_string()),
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            config: BrowserConfig::default(),
+        };
+
+        assert_eq!(state.display_url(), "https://example.com/requested");
+        assert_eq!(state.committed_url_for_persistence(), None);
+
+        state.committed_url.publish("");
+        let output = state.drain_events();
+
+        assert_eq!(state.display_url(), "");
+        assert_eq!(state.committed_url_for_persistence(), Some(""));
+        assert!(output.url_changed);
+    }
+
+    #[test]
     fn relaunch_clears_agent_state_from_the_stopped_driver() {
         let mut state = BrowserPanelState {
             status: BrowserStatus::Stopped { code: None },
-            url: String::new(),
+            url: None,
             title: String::new(),
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),

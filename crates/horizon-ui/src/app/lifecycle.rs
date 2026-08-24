@@ -241,7 +241,7 @@ impl HorizonApp {
 
     /// Drain terminal and browser events, promoting persistence-relevant
     /// changes into the app's runtime dirty state.
-    fn drain_panel_output(&mut self) -> bool {
+    pub(super) fn drain_panel_output(&mut self) -> bool {
         let panel_output = self.board.process_output();
         if panel_output.persisted_state_changed {
             self.mark_runtime_dirty();

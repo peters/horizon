@@ -204,7 +204,9 @@ impl RuntimeState {
                             // `Some("")` is meaningful: Chrome committed its
                             // blank startup target, so restore must not fall
                             // back to the requested/configured URL.
-                            browser_url: panel.browser().map(|browser| browser.url.clone()),
+                            browser_url: panel
+                                .browser()
+                                .and_then(|browser| browser.committed_url_for_persistence().map(str::to_string)),
                         }
                     })
                     .collect();

@@ -90,6 +90,10 @@ pub struct Board {
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
     panel_attention_signals: HashMap<PanelId, String>,
+    /// Browser panels already removed from the board whose exact Chrome
+    /// process is still retiring. Global shutdown must inherit these signals
+    /// instead of losing them in detached cleanup work.
+    retired_browser_shutdown_signals: Vec<crate::browser::BrowserShutdownSignal>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
@@ -114,6 +118,7 @@ impl Board {
             workspaces: Vec::new(),
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
+            retired_browser_shutdown_signals: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
@@ -285,6 +290,11 @@ impl Board {
                 );
             }
         }
+        for signal in self.retired_browser_shutdown_signals.drain(..) {
+            if !signal.wait(BROWSER_PANEL_SHUTDOWN_TIMEOUT) && !signal.force_cleanup(FORCED_BROWSER_SHUTDOWN_TIMEOUT) {
+                tracing::warn!("failed to terminate a retired Chrome after the browser shutdown deadline");
+            }
+        }
     }
 
     /// Begins shutting down all panels asynchronously.
@@ -315,6 +325,10 @@ impl Board {
                 browser_shutdown_signals.push(signal);
             }
         }
+        for signal in self.retired_browser_shutdown_signals.drain(..) {
+            panel_count += 1;
+            browser_shutdown_signals.push(signal);
+        }
 
         ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
     }
@@ -322,6 +336,8 @@ impl Board {
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {
+        self.retired_browser_shutdown_signals
+            .retain(|signal| !signal.is_complete());
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
             let panel_output: PanelProcessOutput = panel.process_output();

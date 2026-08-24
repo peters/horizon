@@ -339,6 +339,12 @@ impl HorizonApp {
         let Some(target) = pending.target else {
             return false;
         };
+        // Browser teardown publishes its final committed URL before the
+        // shutdown signal resolves. Fold that state into the old board and
+        // persist it while the source session is still active, before the
+        // replacement board/session takes ownership.
+        let _ = self.drain_panel_output();
+        let _ = self.auto_save_runtime_state();
         self.finish_session_switch();
         self.activate_persistent_session(&target);
         self.restore_window_viewport(ctx);

@@ -77,9 +77,11 @@ fn url_bar(
     interactive: bool,
 ) -> (bool, bool) {
     let id = ui.make_persistent_id(("browser-url-bar", panel_id));
+    let display_url = browser.display_url();
     // Keep the buffer in sync with the live URL while unfocused.
-    if ui.memory(|m| m.focused() != Some(id)) && state.url_buffer != browser.url {
-        state.url_buffer.clone_from(&browser.url);
+    if ui.memory(|m| m.focused() != Some(id)) && state.url_buffer != display_url {
+        state.url_buffer.clear();
+        state.url_buffer.push_str(display_url);
     }
     let response = ui.add_enabled(
         interactive,
@@ -96,7 +98,7 @@ fn url_bar(
     if submitted {
         state.url_submit_enter_pending = !ui.input(|i| i.key_released(egui::Key::Enter));
         let url = state.url_buffer.trim().to_string();
-        if !url.is_empty() && url != browser.url {
+        if !url.is_empty() && browser.committed_url_for_persistence() != Some(url.as_str()) {
             browser.send(BrowserCommand::Navigate(url));
         }
     }

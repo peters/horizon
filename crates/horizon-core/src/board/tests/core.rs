@@ -72,6 +72,23 @@ fn close_panel_removes_panel_attention() {
 }
 
 #[test]
+fn global_shutdown_inherits_browser_teardown_from_an_already_closed_panel() {
+    let mut board = Board::new();
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    board
+        .retired_browser_shutdown_signals
+        .push(crate::browser::BrowserShutdownSignal::for_test(completion_rx));
+
+    let progress = board.begin_async_shutdown();
+
+    assert_eq!(progress.panel_count(), 1);
+    assert!(!progress.browser_shutdown_is_complete());
+    assert!(completion_tx.send(()).is_ok());
+    assert!(progress.wait_for_browser_shutdown(Duration::from_secs(1)));
+    assert!(progress.is_complete());
+}
+
+#[test]
 fn resolve_attention_marks_item_resolved() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("frontend");

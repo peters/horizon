@@ -128,23 +128,40 @@ pub(crate) struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     process_control: ChromeProcessControl,
     panel_local_id: Option<String>,
+    profile_cleanup: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl BrowserShutdownSignal {
+    pub(crate) fn with_profile_cleanup(self, profile_dir: std::path::PathBuf) -> Self {
+        *self
+            .profile_cleanup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(profile_dir);
+        self
+    }
+
     #[must_use]
     pub(crate) fn is_complete(&self) -> bool {
-        matches!(
+        let complete = matches!(
             self.completion_rx.try_recv(),
             Ok(()) | Err(mpsc::TryRecvError::Disconnected)
-        )
+        );
+        if complete {
+            self.schedule_profile_cleanup();
+        }
+        complete
     }
 
     #[must_use]
     pub(crate) fn wait(&self, timeout: Duration) -> bool {
-        matches!(
+        let complete = matches!(
             self.completion_rx.recv_timeout(timeout),
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-        )
+        );
+        if complete {
+            self.schedule_profile_cleanup();
+        }
+        complete
     }
 
     /// Emergency cleanup after the normal driver deadline. Returns only
@@ -157,7 +174,19 @@ impl BrowserShutdownSignal {
         if let Some(panel_local_id) = &self.panel_local_id {
             crate::browser::manifest::remove(panel_local_id);
         }
+        self.schedule_profile_cleanup();
         true
+    }
+
+    fn schedule_profile_cleanup(&self) {
+        let profile_dir = self
+            .profile_cleanup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(profile_dir) = profile_dir {
+            super::schedule_profile_removal(profile_dir);
+        }
     }
 
     #[cfg(test)]
@@ -166,6 +195,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             process_control: ChromeProcessControl::default(),
             panel_local_id: None,
+            profile_cleanup: Mutex::new(None),
         }
     }
 }
@@ -267,6 +297,7 @@ impl BrowserSession {
             completion_rx: self.completion_rx,
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
+            profile_cleanup: Mutex::new(None),
         }
     }
 
@@ -279,6 +310,7 @@ impl BrowserSession {
             completion_rx: self.completion_rx,
             process_control: self.process_control,
             panel_local_id: Some(self.panel_local_id),
+            profile_cleanup: Mutex::new(None),
         }
     }
 
