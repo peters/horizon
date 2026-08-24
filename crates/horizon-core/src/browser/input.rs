@@ -106,6 +106,28 @@ pub enum BrowserKey {
     Char(char),
 }
 
+/// Chromium editing command attached to a synthetic key-down.
+///
+/// Clipboard pseudo-events need the explicit command because modifier bits
+/// alone do not invoke the platform editing action in every headless Chrome
+/// build (notably on macOS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserEditCommand {
+    Copy,
+    Cut,
+    SelectAll,
+}
+
+impl BrowserEditCommand {
+    const fn cdp_name(self) -> &'static str {
+        match self {
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
+            Self::SelectAll => "SelectAll",
+        }
+    }
+}
+
 impl BrowserKey {
     /// Windows virtual-key code, as CDP expects on all platforms.
     #[must_use]
@@ -218,6 +240,7 @@ pub enum BrowserInput {
         text: Option<String>,
         modifiers: BrowserModifiers,
         repeat: bool,
+        edit_command: Option<BrowserEditCommand>,
     },
     KeyUp {
         key: BrowserKey,
@@ -305,7 +328,8 @@ impl BrowserInput {
                 text,
                 modifiers,
                 repeat,
-            } => key_down_cdp(key, text, modifiers, repeat),
+                edit_command,
+            } => key_down_cdp(key, text, modifiers, repeat, edit_command),
             Self::KeyUp { key, text, modifiers } => key_up_cdp(key, text.as_deref(), modifiers),
             Self::InsertText { text } => ("Input.insertText", json!({ "text": text })),
         }
@@ -319,6 +343,20 @@ impl BrowserInput {
             Self::MousePress { .. } | Self::Wheel { .. } | Self::KeyDown { .. } | Self::InsertText { .. }
         )
     }
+
+    /// Whether this key-down asks Chrome to copy the current page selection.
+    /// The driver snapshots that selection before dispatch so the UI can
+    /// bridge headless Chrome's private clipboard to the host clipboard.
+    #[must_use]
+    pub const fn copies_selection(&self) -> bool {
+        matches!(
+            self,
+            Self::KeyDown {
+                edit_command: Some(BrowserEditCommand::Copy | BrowserEditCommand::Cut),
+                ..
+            }
+        )
+    }
 }
 
 fn key_down_cdp(
@@ -326,6 +364,7 @@ fn key_down_cdp(
     text: Option<String>,
     modifiers: BrowserModifiers,
     repeat: bool,
+    edit_command: Option<BrowserEditCommand>,
 ) -> (&'static str, Value) {
     // Printable keys (`text` present) use `keyDown` so Chrome runs the normal
     // keydown→keypress→input pipeline; other keys use `rawKeyDown`.
@@ -341,6 +380,9 @@ fn key_down_cdp(
     });
     if let Some(text) = text {
         params["text"] = json!(text);
+    }
+    if let Some(command) = edit_command {
+        params["commands"] = json!([command.cdp_name()]);
     }
     ("Input.dispatchKeyEvent", params)
 }
@@ -653,6 +695,7 @@ mod tests {
             text: Some("h".to_string()),
             modifiers: BrowserModifiers::none(),
             repeat: false,
+            edit_command: None,
         }
         .cdp();
         assert_eq!(method, "Input.dispatchKeyEvent");
@@ -670,6 +713,7 @@ mod tests {
             text: None,
             modifiers: BrowserModifiers::none(),
             repeat: true,
+            edit_command: None,
         }
         .cdp();
         assert_eq!(params["type"], "rawKeyDown");
@@ -688,6 +732,7 @@ mod tests {
             text: Some("A".to_string()),
             modifiers,
             repeat: false,
+            edit_command: None,
         }
         .cdp();
         assert_eq!(params["key"], "A");
@@ -702,10 +747,63 @@ mod tests {
                 ..modifiers
             },
             repeat: false,
+            edit_command: None,
         }
         .cdp();
         assert_eq!(shortcut["key"], "!");
         assert_eq!(shortcut["code"], "Digit1");
+    }
+
+    #[test]
+    fn editing_keydowns_carry_chromium_edit_commands() {
+        let (_, params) = BrowserInput::KeyDown {
+            key: BrowserKey::Char('x'),
+            text: None,
+            modifiers: BrowserModifiers {
+                meta: true,
+                ..BrowserModifiers::none()
+            },
+            repeat: false,
+            edit_command: Some(BrowserEditCommand::Cut),
+        }
+        .cdp();
+
+        assert_eq!(params["type"], "rawKeyDown");
+        assert_eq!(params["commands"], json!(["Cut"]));
+
+        let (_, select_all) = BrowserInput::KeyDown {
+            key: BrowserKey::Char('a'),
+            text: None,
+            modifiers: BrowserModifiers {
+                meta: true,
+                ..BrowserModifiers::none()
+            },
+            repeat: false,
+            edit_command: Some(BrowserEditCommand::SelectAll),
+        }
+        .cdp();
+        assert_eq!(select_all["commands"], json!(["SelectAll"]));
+    }
+
+    #[test]
+    fn only_copying_edit_commands_request_a_selection_snapshot() {
+        let cut = BrowserInput::KeyDown {
+            key: BrowserKey::Char('x'),
+            text: None,
+            modifiers: BrowserModifiers::none(),
+            repeat: false,
+            edit_command: Some(BrowserEditCommand::Cut),
+        };
+        let select_all = BrowserInput::KeyDown {
+            key: BrowserKey::Char('a'),
+            text: None,
+            modifiers: BrowserModifiers::none(),
+            repeat: false,
+            edit_command: Some(BrowserEditCommand::SelectAll),
+        };
+
+        assert!(cut.copies_selection());
+        assert!(!select_all.copies_selection());
     }
 
     #[test]

@@ -170,9 +170,18 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         self.request_shutdown();
 
-        // Detach the event loop thread instead of joining it; joining can
-        // block the main thread indefinitely if the child process is still
-        // starting up or the PTY is stuck on I/O.
-        drop(self.event_loop_handle.take());
+        let Some(handle) = self.event_loop_handle.take() else {
+            return;
+        };
+
+        // A finished JoinHandle can own the returned EventLoop. Dropping that
+        // handle here would then drop its PTY synchronously, which waits for
+        // the child and can block the caller indefinitely. Move both joining
+        // and result disposal off the current thread.
+        let _ = std::thread::Builder::new()
+            .name("terminal-drop-join".into())
+            .spawn(move || {
+                let _ = handle.join();
+            });
     }
 }

@@ -3,7 +3,7 @@
 use egui::{Event, Key, Modifiers, PointerButton, Ui};
 use horizon_core::AppShortcuts;
 use horizon_core::browser::{
-    BrowserButton, BrowserCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
+    BrowserButton, BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
 };
 
 use crate::browser_widget::BrowserUiState;
@@ -35,13 +35,14 @@ pub fn handle(
     state: &mut BrowserUiState,
     body: Option<egui::Rect>,
     frame_size: Option<[f32; 2]>,
+    pointer_target: bool,
     flags: InputFlags<'_>,
 ) {
     if !flags.interactive {
         return;
     }
     if let (Some(rect), Some(frame_size)) = (body, frame_size) {
-        pointer_events(ui, browser, state, rect, frame_size);
+        pointer_events(ui, browser, state, rect, frame_size, pointer_target);
     }
     if flags.is_focused && !flags.url_focused {
         keyboard_events(
@@ -60,6 +61,7 @@ fn pointer_events(
     state: &mut BrowserUiState,
     rect: egui::Rect,
     frame_size: [f32; 2],
+    pointer_target: bool,
 ) {
     let ctx = ui.ctx();
     // Pointer positions arrive in global (window) space; the body rect is
@@ -72,7 +74,7 @@ fn pointer_events(
     let modifiers = key_modifiers(ui);
     // Frame-end pointer position: only used for wheel events, which carry
     // no per-event position.
-    let wheel_pos = frame_pos.map(transform).filter(|p| rect.contains(*p));
+    let wheel_pos = frame_pos.map(transform).filter(|p| pointer_target && rect.contains(*p));
 
     // Replay this frame's pointer events with their own positions. A fast
     // gesture (press, moves, release) can be batched into a single
@@ -96,7 +98,7 @@ fn pointer_events(
                 let p = transform(pos);
                 let (x, y) = to_page_coords(rect, frame_size, p);
                 if pressed {
-                    if rect.contains(p) {
+                    if pointer_target && rect.contains(p) {
                         state.captured_button = Some(browser_button);
                         state.last_mouse = Some(p);
                         event_buttons |= button_mask(browser_button);
@@ -125,7 +127,7 @@ fn pointer_events(
             }
             Event::PointerMoved(pos) => {
                 let p = transform(pos);
-                let tracking = rect.contains(p) || state.captured_button.is_some();
+                let tracking = should_track_pointer(pointer_target, rect.contains(p), state.captured_button.is_some());
                 // Movement dedup: only forward real movement. `None` (the
                 // first move, or the first after PointerGone) must be
                 // forwarded, or hover would be dead until a click.
@@ -185,6 +187,10 @@ fn flush_pending_move(browser: &BrowserPanelState, pending_move: &mut Option<(f6
     }
 }
 
+const fn should_track_pointer(pointer_target: bool, inside_rect: bool, captured: bool) -> bool {
+    (pointer_target && inside_rect) || captured
+}
+
 /// egui mouse button → CDP button (mouse-only; touch is not forwarded).
 fn egui_button(button: PointerButton) -> Option<BrowserButton> {
     match button {
@@ -224,6 +230,20 @@ fn keyboard_events(
             Event::Ime(egui::ImeEvent::Commit(text)) | Event::Paste(text) if !text.is_empty() => {
                 browser.send(BrowserCommand::Input(BrowserInput::InsertText { text }));
             }
+            Event::Copy => send_clipboard_shortcut(
+                browser,
+                state,
+                BrowserKey::Char('c'),
+                BrowserEditCommand::Copy,
+                clipboard_modifiers(ui),
+            ),
+            Event::Cut => send_clipboard_shortcut(
+                browser,
+                state,
+                BrowserKey::Char('x'),
+                BrowserEditCommand::Cut,
+                clipboard_modifiers(ui),
+            ),
             Event::Key {
                 key,
                 pressed,
@@ -245,6 +265,29 @@ fn keyboard_events(
             _ => {}
         }
     }
+}
+
+fn send_clipboard_shortcut(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    key: BrowserKey,
+    edit_command: BrowserEditCommand,
+    modifiers: BrowserModifiers,
+) {
+    state.clipboard_release_keys.insert(key);
+    state.pressed_key_text.remove(&key);
+    browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        key,
+        text: None,
+        modifiers,
+        repeat: false,
+        edit_command: Some(edit_command),
+    }));
+    browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+        key,
+        text: None,
+        modifiers,
+    }));
 }
 
 struct KeyboardFrameEvents {
@@ -346,6 +389,9 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
     }
     let reload_shortcut = key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.mac_cmd));
     let browser_key = key_to_browser_key(key);
+    if consume_clipboard_release(state, browser_key, pressed) {
+        return;
+    }
     if app_shortcut {
         if let Some(browser_key) = browser_key {
             state.suppressed_shortcut_keys.insert(browser_key);
@@ -386,6 +432,7 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
         return;
     };
     let modifiers = to_browser_modifiers(modifiers);
+    let edit_command = editing_command(key, modifiers);
     let text = key_text
         .map(|character| character.to_string())
         .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
@@ -399,7 +446,25 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
         text,
         modifiers,
         repeat,
+        edit_command,
     }));
+}
+
+fn editing_command(key: Key, modifiers: BrowserModifiers) -> Option<BrowserEditCommand> {
+    let primary = if cfg!(target_os = "macos") {
+        modifiers.meta
+    } else {
+        modifiers.ctrl
+    };
+    (primary && !modifiers.alt && !modifiers.shift && key == Key::A).then_some(BrowserEditCommand::SelectAll)
+}
+
+fn consume_clipboard_release(state: &mut BrowserUiState, key: Option<BrowserKey>, pressed: bool) -> bool {
+    let Some(key) = key.filter(|key| state.clipboard_release_keys.contains(key)) else {
+        return false;
+    };
+    state.clipboard_release_keys.remove(&key);
+    !pressed
 }
 
 fn consume_suppressed_key(state: &mut BrowserUiState, key: Option<BrowserKey>, pressed: bool) -> bool {
@@ -446,6 +511,24 @@ fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
 
 fn key_modifiers(ui: &Ui) -> BrowserModifiers {
     ui.input(|i| to_browser_modifiers(i.modifiers))
+}
+
+fn clipboard_modifiers(ui: &Ui) -> BrowserModifiers {
+    ensure_clipboard_primary(key_modifiers(ui))
+}
+
+fn ensure_clipboard_primary(mut modifiers: BrowserModifiers) -> BrowserModifiers {
+    if !modifiers.ctrl && !modifiers.meta {
+        #[cfg(target_os = "macos")]
+        {
+            modifiers.meta = true;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            modifiers.ctrl = true;
+        }
+    }
+    modifiers
 }
 
 fn to_page_coords(rect: egui::Rect, frame_size: [f32; 2], pos: egui::Pos2) -> (f64, f64) {
@@ -621,5 +704,81 @@ mod tests {
         assert!(consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
         assert!(!state.suppressed_shortcut_keys.contains(&BrowserKey::Char('r')));
         assert!(!consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+    }
+
+    #[test]
+    fn covered_panel_ignores_pointer_until_it_owns_capture() {
+        assert!(!should_track_pointer(false, true, false));
+        assert!(should_track_pointer(true, true, false));
+        assert!(should_track_pointer(false, false, true));
+    }
+
+    #[test]
+    fn clipboard_shortcuts_suppress_their_later_native_release() {
+        let mut state = BrowserUiState::default();
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+        state.clipboard_release_keys.insert(BrowserKey::Char('x'));
+
+        assert!(consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('c')),
+            false
+        ));
+        assert!(consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('x')),
+            false
+        ));
+        assert!(state.clipboard_release_keys.is_empty());
+    }
+
+    #[test]
+    fn a_new_clipboard_key_press_retires_stale_release_suppression() {
+        let mut state = BrowserUiState::default();
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+
+        assert!(!consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('c')),
+            true
+        ));
+        assert!(state.clipboard_release_keys.is_empty());
+    }
+
+    #[test]
+    fn clipboard_pseudo_events_restore_a_released_primary_modifier() {
+        let modifiers = ensure_clipboard_primary(BrowserModifiers::default());
+
+        #[cfg(target_os = "macos")]
+        assert!(modifiers.meta);
+        #[cfg(not(target_os = "macos"))]
+        assert!(modifiers.ctrl);
+    }
+
+    #[test]
+    fn primary_a_requests_chromium_select_all() {
+        let modifiers = if cfg!(target_os = "macos") {
+            BrowserModifiers {
+                meta: true,
+                ..BrowserModifiers::none()
+            }
+        } else {
+            BrowserModifiers {
+                ctrl: true,
+                ..BrowserModifiers::none()
+            }
+        };
+
+        assert_eq!(editing_command(Key::A, modifiers), Some(BrowserEditCommand::SelectAll));
+        assert_eq!(
+            editing_command(
+                Key::A,
+                BrowserModifiers {
+                    shift: true,
+                    ..modifiers
+                }
+            ),
+            None
+        );
     }
 }

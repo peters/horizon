@@ -12,8 +12,17 @@
 //!
 //! File-based on purpose: no new IPC mechanism, works across process
 //! boundaries, and every field is observable with plain shell tooling.
+//! Every update to an existing manifest must use [`update`] (or implement its
+//! adjacent `<panel>.json.lock` protocol around both the read and the write).
+//! This serializes read-modify-write transactions across the driver and agent
+//! processes so ownership/handoff fields cannot be lost. [`write`] is only a
+//! full replacement for initialization when no concurrent writer exists.
 
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +30,12 @@ use crate::horizon_home::HorizonHome;
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
+/// How long the driver's `user_active` signal stays true without another
+/// qualifying interaction.
+pub const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
+const LOCK_RETRY: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestOwner {
@@ -70,6 +85,13 @@ impl BrowserManifest {
     #[must_use]
     pub fn handoff_pending(&self) -> Option<&ManifestHandoff> {
         self.handoff.as_ref().filter(|h| !h.done)
+    }
+
+    /// Whether the user-activity signal is both asserted and fresh.
+    #[must_use]
+    pub fn user_is_active(&self, now_millis: i64) -> bool {
+        let ttl_millis = i64::try_from(USER_ACTIVE_TTL.as_millis()).unwrap_or(i64::MAX);
+        self.user_active && now_millis.saturating_sub(self.user_active_at) <= ttl_millis
     }
 }
 
@@ -137,11 +159,12 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Write the manifest atomically (temp file + rename), mode 0600.
+/// Write a complete manifest atomically (temp file + rename), mode 0600.
 ///
-/// The temp file is pid-unique: the driver, an external agent, and the UI can
-/// write the same manifest concurrently and must not clobber each other's
-/// temp contents.
+/// The adjacent inter-process lock serializes the replacement itself, and the
+/// pid-unique temp file keeps a crashed write from corrupting the live
+/// manifest. Callers deriving the new value from an existing manifest must
+/// use [`update`] so the read is covered by the same lock.
 ///
 /// # Errors
 /// Fails on filesystem errors.
@@ -162,12 +185,42 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let _lock = ManifestLock::acquire(path)?;
+    write_at_locked(path, manifest)
+}
+
+/// Atomically read, mutate, and replace one manifest while holding the
+/// inter-process manifest lock.
+///
+/// # Errors
+/// Fails when the lock or manifest write cannot be completed.
+pub fn update(panel_local_id: &str, update: impl FnOnce(&mut BrowserManifest)) -> std::io::Result<BrowserManifest> {
+    update_at(&default_manifest_path(panel_local_id), panel_local_id, update)
+}
+
+fn update_at(
+    path: &Path,
+    panel_local_id: &str,
+    update: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = ManifestLock::acquire(path)?;
+    let mut manifest = read_at(path).unwrap_or(BrowserManifest {
+        panel_local_id: panel_local_id.to_string(),
+        ..BrowserManifest::default()
+    });
+    update(&mut manifest);
+    write_at_locked(path, &manifest)?;
+    Ok(manifest)
+}
+
+fn write_at_locked(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> {
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
     let temp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     #[cfg(unix)]
     {
-        use std::fs::OpenOptions;
-        use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut file = OpenOptions::new()
             .create(true)
@@ -184,6 +237,49 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
     Ok(())
 }
 
+struct ManifestLock {
+    path: PathBuf,
+}
+
+impl ManifestLock {
+    fn acquire(manifest_path: &Path) -> std::io::Result<Self> {
+        let path = manifest_path.with_extension("json.lock");
+        let deadline = Instant::now() + LOCK_WAIT;
+        loop {
+            match OpenOptions::new().create_new(true).write(true).open(&path) {
+                Ok(_file) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_is_stale(&path) {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            format!("timed out waiting for manifest lock {}", path.display()),
+                        ));
+                    }
+                    std::thread::sleep(LOCK_RETRY);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+impl Drop for ManifestLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+        .is_ok_and(|age| age >= STALE_LOCK_AGE)
+}
+
 /// Atomic replace that also works on Windows, where `std::fs::rename` does
 /// not overwrite an existing destination (delete first, then retry once).
 fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
@@ -198,7 +294,11 @@ fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
 }
 
 pub fn remove(panel_local_id: &str) {
-    let _ = std::fs::remove_file(default_manifest_path(panel_local_id));
+    let path = default_manifest_path(panel_local_id);
+    let Ok(_lock) = ManifestLock::acquire(&path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(path);
 }
 
 #[cfg(test)]
@@ -272,21 +372,68 @@ mod tests {
     }
 
     #[test]
+    fn user_activity_requires_a_fresh_timestamp() {
+        let mut manifest = sample("active");
+        manifest.user_active = true;
+        manifest.user_active_at = 1_000;
+
+        assert!(manifest.user_is_active(5_999));
+        assert!(!manifest.user_is_active(6_001));
+        manifest.user_active = false;
+        assert!(!manifest.user_is_active(1_001));
+    }
+
+    #[test]
+    fn concurrent_updates_preserve_independent_fields() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "race");
+        write_at(&path, &sample("race")).unwrap();
+
+        std::thread::scope(|scope| {
+            let title_path = path.clone();
+            scope.spawn(move || {
+                for value in 0..50 {
+                    update_at(&title_path, "race", |manifest| {
+                        manifest.title = format!("title-{value}");
+                    })
+                    .unwrap();
+                }
+            });
+            let activity_path = path.clone();
+            scope.spawn(move || {
+                for value in 0..50 {
+                    update_at(&activity_path, "race", |manifest| {
+                        manifest.user_active_at = value;
+                    })
+                    .unwrap();
+                }
+            });
+        });
+
+        let manifest = read_at(&path).unwrap();
+        assert_eq!(manifest.title, "title-49");
+        assert_eq!(manifest.user_active_at, 49);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn handoff_lifecycle() {
         let root = test_root();
         let path = manifest_path_for_root(&root, "p2");
         write_at(&path, &sample("p2")).unwrap();
-        let mut m = read_at(&path).unwrap();
-        m.handoff = Some(ManifestHandoff {
-            reason: "captcha".to_string(),
-            requested_at: now_millis(),
-            done: false,
-        });
-        write_at(&path, &m).unwrap();
+        update_at(&path, "p2", |manifest| {
+            manifest.handoff = Some(ManifestHandoff {
+                reason: "captcha".to_string(),
+                requested_at: now_millis(),
+                done: false,
+            });
+        })
+        .unwrap();
         assert!(read_at(&path).unwrap().handoff_pending().is_some());
-        let mut m = read_at(&path).unwrap();
-        m.handoff.as_mut().unwrap().done = true;
-        write_at(&path, &m).unwrap();
+        update_at(&path, "p2", |manifest| {
+            manifest.handoff.as_mut().unwrap().done = true;
+        })
+        .unwrap();
         assert!(read_at(&path).unwrap().handoff_pending().is_none());
         let _ = std::fs::remove_dir_all(&root);
     }

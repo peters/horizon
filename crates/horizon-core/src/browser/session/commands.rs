@@ -10,6 +10,24 @@ use crate::browser::manifest;
 
 use super::{BrowserCommand, BrowserEvent, DriverState, USER_ACTIVE_STAMP_INTERVAL};
 
+const SELECTED_TEXT_EXPRESSION: &str = r#"(() => {
+  const selectedText = (document) => {
+    const active = document.activeElement;
+    if (active?.tagName === "IFRAME") {
+      try {
+        const nested = active.contentDocument && selectedText(active.contentDocument);
+        if (nested) return nested;
+      } catch (_) {}
+    }
+    if (active && active.type !== "password" && typeof active.value === "string"
+        && Number.isInteger(active.selectionStart) && Number.isInteger(active.selectionEnd)) {
+      return active.value.slice(active.selectionStart, active.selectionEnd);
+    }
+    return document.getSelection()?.toString() || "";
+  };
+  return selectedText(document);
+})()"#;
+
 impl DriverState {
     /// Process every pending UI command. Returns `true` when `Stop` arrived.
     pub(super) fn drain_commands(
@@ -36,6 +54,9 @@ impl DriverState {
                     // Input cannot block on a roundtrip: a detaching session
                     // would otherwise stall every frame for the call timeout.
                     let is_activity = input.is_activity();
+                    if input.copies_selection() {
+                        self.request_clipboard_text(link);
+                    }
                     let (method, params) = input.cdp();
                     if let Some(session) = self.session_id.clone() {
                         let _ = link.send_request(method, &params, Some(session.as_str()));
@@ -44,10 +65,29 @@ impl DriverState {
                         self.stamp_user_active();
                     }
                 }
-                BrowserCommand::HandoffDone => self.resolve_handoff(),
+                BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
             }
         }
         false
+    }
+
+    fn request_clipboard_text(&mut self, link: &mut CdpLink) {
+        let Some(session) = self.session_id.clone() else {
+            return;
+        };
+        match link.send_request(
+            "Runtime.evaluate",
+            &serde_json::json!({
+                "expression": SELECTED_TEXT_EXPRESSION,
+                "returnByValue": true,
+            }),
+            Some(session.as_str()),
+        ) {
+            Ok(request_id) => {
+                self.clipboard_read_request_ids.insert(request_id);
+            }
+            Err(error) => tracing::debug!(target: "browser", "clipboard selection capture failed: {error}"),
+        }
     }
 
     fn set_viewport(
@@ -177,10 +217,13 @@ impl DriverState {
         {
             return;
         }
-        self.last_user_active_stamp = Some(Instant::now());
-        self.write_manifest_extra(true, |manifest| {
+        let stamped_at = Instant::now();
+        match self.write_manifest_extra(true, |manifest| {
             manifest.user_active = true;
             manifest.user_active_at = manifest::now_millis();
-        });
+        }) {
+            Ok(()) => self.last_user_active_stamp = Some(stamped_at),
+            Err(error) => tracing::warn!(target: "browser", "failed to stamp user activity: {error}"),
+        }
     }
 }

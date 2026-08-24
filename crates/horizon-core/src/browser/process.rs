@@ -99,40 +99,44 @@ impl ChromeProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| std::io::Error::other("failed to capture chrome stderr"))?;
+        let Some(stderr) = child.stderr.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other("failed to capture chrome stderr").into());
+        };
 
         let (ws_url_tx, ws_url_rx) = mpsc::channel();
         let tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let stderr_tail = tail.clone();
-        std::thread::Builder::new()
-            .name("chrome-stderr".into())
-            .spawn(move || {
-                use std::io::{BufRead, BufReader};
-                for line in BufReader::new(stderr).lines() {
-                    let Ok(line) = line else {
+        let stderr_reader = std::thread::Builder::new().name("chrome-stderr".into()).spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if let Some(ws) = parse_devtools_ws_url(&line) {
+                    if ws_url_tx.send(ws).is_err() {
                         break;
-                    };
-                    if let Some(ws) = parse_devtools_ws_url(&line) {
-                        if ws_url_tx.send(ws).is_err() {
-                            break;
-                        }
-                        continue;
                     }
-                    // Keep a short stderr tail for diagnostics.
-                    let mut tail = tail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    tail.push_str(&line);
-                    tail.push('\n');
-                    if tail.len() > 8 * 1024 {
-                        // Keep the *newest* half, cut on a char boundary
-                        // (a blind byte split can panic on UTF-8).
-                        let cut = tail.floor_char_boundary(4 * 1024);
-                        tail.drain(..cut);
-                    }
+                    continue;
                 }
-            })?;
+                // Keep a short stderr tail for diagnostics.
+                let mut tail = tail.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                tail.push_str(&line);
+                tail.push('\n');
+                if tail.len() > 8 * 1024 {
+                    // Keep the *newest* half, cut on a char boundary
+                    // (a blind byte split can panic on UTF-8).
+                    let cut = tail.floor_char_boundary(4 * 1024);
+                    tail.drain(..cut);
+                }
+            }
+        });
+        if let Err(error) = stderr_reader {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
 
         Ok(Self {
             child,

@@ -118,17 +118,32 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str) ->
     let mut clicked = false;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(theme::PALETTE_YELLOW());
-        ui.horizontal(|ui| {
-            ui.add(egui::Label::new(
-                RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0),
-            ));
-            clicked = ui
-                .add(
-                    egui::Button::new(RichText::new("Done — hand back to agent").size(11.0))
-                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
-                        .corner_radius(6),
-                )
-                .clicked();
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(
+                    RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0),
+                ));
+                let button_label = if browser.handoff_resolution_pending {
+                    "Handing back…"
+                } else {
+                    "Done — hand back to agent"
+                };
+                clicked = ui
+                    .add_enabled(
+                        !browser.handoff_resolution_pending,
+                        egui::Button::new(RichText::new(button_label).size(11.0))
+                            .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
+                            .corner_radius(6),
+                    )
+                    .clicked();
+            });
+            if let Some(error) = &browser.handoff_error {
+                ui.label(
+                    RichText::new(format!("Could not hand back: {error}"))
+                        .size(10.5)
+                        .color(theme::PALETTE_RED()),
+                );
+            }
         });
     });
     if clicked {

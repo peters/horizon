@@ -127,6 +127,16 @@ impl DriverState {
         let CdpMsg::Response { id, result, error, .. } = message else {
             return;
         };
+        if self.clipboard_read_request_ids.remove(&id) {
+            if let Some(error) = error {
+                tracing::debug!(target: "browser", "clipboard selection capture rejected: {error}");
+            } else if let Some(text) = clipboard_text_from_evaluation(result.as_ref())
+                && !text.is_empty()
+            {
+                let _ = event_tx.send(BrowserEvent::ClipboardText(text.to_string()));
+            }
+            return;
+        }
         if self.viewport_capture_request_id == Some(id) {
             self.viewport_capture_request_id = None;
             if let Some(error) = error {
@@ -211,6 +221,7 @@ impl DriverState {
                     self.screencast_on = false;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
+                    self.clipboard_read_request_ids.clear();
                     // Drop the tracked context: the next title fetch must
                     // use a fresh default context, not a dead contextId.
                     self.title_context_id = None;
@@ -234,6 +245,7 @@ impl DriverState {
                     self.screencast_on = false;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
+                    self.clipboard_read_request_ids.clear();
                     self.pending_reattach = false;
                     // The page is gone (tab closed by another CDP client,
                     // navigation to a new target, …). Re-attach has
@@ -386,6 +398,10 @@ fn href_matches_url(href: &str, url: &str) -> bool {
     href == url
 }
 
+fn clipboard_text_from_evaluation(result: Option<&serde_json::Value>) -> Option<&str> {
+    result?.pointer("/result/value")?.as_str()
+}
+
 fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Option<&str>) -> Option<u64> {
     let context = params.get("context")?;
     let is_default = context.pointer("/auxData/isDefault")?.as_bool()?;
@@ -398,7 +414,7 @@ fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::default_context_id_for_frame;
+    use super::{clipboard_text_from_evaluation, default_context_id_for_frame};
 
     #[test]
     fn title_context_accepts_only_the_main_frames_default_context() {
@@ -416,5 +432,15 @@ mod tests {
         assert_eq!(default_context_id_for_frame(&iframe, Some("main")), None);
         assert_eq!(default_context_id_for_frame(&isolated, Some("main")), None);
         assert_eq!(default_context_id_for_frame(&main, None), None);
+    }
+
+    #[test]
+    fn clipboard_text_reads_runtime_evaluation_values_only() {
+        let value = serde_json::json!({ "result": { "type": "string", "value": "selected" } });
+        let exception = serde_json::json!({ "exceptionDetails": { "text": "failed" } });
+
+        assert_eq!(clipboard_text_from_evaluation(Some(&value)), Some("selected"));
+        assert_eq!(clipboard_text_from_evaluation(Some(&exception)), None);
+        assert_eq!(clipboard_text_from_evaluation(None), None);
     }
 }

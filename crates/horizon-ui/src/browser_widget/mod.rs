@@ -36,6 +36,9 @@ pub struct BrowserUiState {
     /// App-owned shortcuts and browser-local reload stay consumed through
     /// their release even if a later frame has different modifier state.
     suppressed_shortcut_keys: std::collections::HashSet<BrowserKey>,
+    /// Copy/Cut pseudo-events synthesize a complete CDP key pair; consume a
+    /// later native release, but abandon suppression if a new press starts.
+    clipboard_release_keys: std::collections::HashSet<BrowserKey>,
     /// Escape exits panel fullscreen after the app has already cleared the
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,
@@ -71,6 +74,11 @@ impl<'a> BrowserView<'a> {
         }
         let state = &mut *self.ui_state;
         let panel_id = self.panel.id;
+        if let Some(browser) = self.panel.browser_mut()
+            && let Some(text) = browser.take_clipboard_text()
+        {
+            ui.ctx().copy_text(text);
+        }
 
         let (url_focused, chrome_clicked) = {
             let Some(browser) = self.panel.browser_mut() else {
@@ -113,6 +121,7 @@ impl<'a> BrowserView<'a> {
                 state,
                 body.image_rect,
                 body.frame_size,
+                body.pointer_target,
                 input::InputFlags {
                     is_focused,
                     interactive,

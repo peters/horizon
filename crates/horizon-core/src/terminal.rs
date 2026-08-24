@@ -196,6 +196,55 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn dropping_a_finished_event_loop_does_not_wait_for_its_pty() {
+        let (dropped_tx, dropped_rx) = mpsc::sync_channel(1);
+
+        std::thread::spawn(move || {
+            let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+                program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+                args: Vec::new(),
+                cwd: None,
+                rows: 24,
+                cols: 80,
+                cell_width: 8,
+                cell_height: 16,
+                scrollback_limit: 256,
+                window_id: 42,
+                replay_bytes: Vec::new(),
+                env: HashMap::new(),
+                kitty_keyboard: true,
+            })
+            .expect("terminal should spawn");
+
+            terminal.request_shutdown();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !terminal
+                .event_loop_handle
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::yield_now();
+            }
+            assert!(
+                terminal
+                    .event_loop_handle
+                    .as_ref()
+                    .is_some_and(std::thread::JoinHandle::is_finished),
+                "event loop should stop before terminal teardown"
+            );
+
+            drop(terminal);
+            dropped_tx.send(()).expect("drop completion should send");
+        });
+
+        dropped_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal drop should not wait for PTY teardown");
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn current_cwd_for_pid_reads_procfs_cwd() {
         let cwd = current_cwd_for_pid(std::process::id()).expect("cwd");

@@ -284,6 +284,7 @@ pub struct HorizonApp {
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,
+    session_switch_shutdown_progress: Option<ShutdownProgress>,
     exit_cleanup_complete: bool,
 }
 
@@ -476,6 +477,7 @@ impl HorizonApp {
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,
+            session_switch_shutdown_progress: None,
             exit_cleanup_complete: false,
         }
     }

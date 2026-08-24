@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, RichText, Stroke, Vec2};
 use horizon_core::{ResolvedSession, SessionSummary};
@@ -10,6 +10,7 @@ use super::{HorizonApp, PanelRenderCaches};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
+const SESSION_SWITCH_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeSessionManagerState {
@@ -207,13 +208,16 @@ impl HorizonApp {
             tracing::debug!("session switch ignored while the root viewport is stabilizing");
             return;
         }
-        self.prepare_session_switch();
+        if let Err(error) = self.prepare_session_switch() {
+            self.set_session_manager_error(error);
+            return;
+        }
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
         self.session_manager = None;
     }
 
-    fn prepare_session_switch(&mut self) {
+    fn prepare_session_switch(&mut self) -> Result<(), String> {
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,
@@ -229,7 +233,19 @@ impl HorizonApp {
         // terminal filter, so a key-up after the switch cannot leak into a
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
-        let _ = self.board.begin_async_shutdown();
+        if self.session_switch_shutdown_progress.is_none() {
+            self.session_switch_shutdown_progress = Some(self.board.begin_async_shutdown());
+        }
+        let shutdown_complete = self
+            .session_switch_shutdown_progress
+            .as_ref()
+            .is_some_and(|progress| progress.wait_for_completion(SESSION_SWITCH_SHUTDOWN_WAIT));
+        if !shutdown_complete {
+            return Err(
+                "Timed out waiting for the current session's browser panels to close; retry the switch".to_string(),
+            );
+        }
+        self.session_switch_shutdown_progress = None;
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
@@ -257,6 +273,7 @@ impl HorizonApp {
         self.workspace_screen_rects.clear();
         self.file_drop_highlight = None;
         self.file_hover_positions.clear();
+        Ok(())
     }
 }
 

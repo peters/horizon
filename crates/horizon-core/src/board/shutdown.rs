@@ -26,6 +26,13 @@ impl ShutdownProgress {
         self.started_at
     }
 
+    /// Start a fresh outer timeout window while retaining the same in-flight
+    /// teardown counters (for example, when an interrupted session switch is
+    /// followed by application exit).
+    pub fn restart_timeout_window(&mut self) {
+        self.started_at = Instant::now();
+    }
+
     #[must_use]
     pub fn terminal_count(&self) -> usize {
         self.terminal_count

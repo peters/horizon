@@ -24,6 +24,7 @@
 
 mod commands;
 mod events;
+mod manifest_io;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -31,7 +32,6 @@ use std::time::{Duration, Instant};
 
 use crate::browser::cdp::{CdpError, CdpLink};
 use crate::browser::frames::FrameSlot;
-use crate::browser::manifest::{self, BrowserManifest};
 use crate::browser::process::ChromeProcess;
 use crate::browser::{BrowserConfig, BrowserInput};
 
@@ -58,6 +58,11 @@ pub enum BrowserEvent {
     HandoffRequested(String),
     /// The handoff was resolved (user handed back or agent cancelled).
     HandoffCleared,
+    /// A requested handoff acknowledgement could not be persisted.
+    HandoffResolutionFailed(String),
+    /// Selected page text copied by headless Chrome, ready for the host
+    /// clipboard bridge in the UI.
+    ClipboardText(String),
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
 }
@@ -348,7 +353,7 @@ fn run_driver(
     };
 
     let mut state = DriverState::new(config, &connection.ws_url);
-    state.write_manifest(true);
+    state.initialize_manifest();
     state.attach_setup(
         &mut connection.link,
         event_tx,
@@ -507,6 +512,7 @@ struct DriverState {
     viewport_h: u32,
     pending_viewport_capture_at: Option<Instant>,
     viewport_capture_request_id: Option<u64>,
+    clipboard_read_request_ids: std::collections::HashSet<u64>,
     url: String,
     title: String,
     initial_navigated: bool,
@@ -556,6 +562,7 @@ impl DriverState {
             viewport_h: config.height,
             pending_viewport_capture_at: None,
             viewport_capture_request_id: None,
+            clipboard_read_request_ids: std::collections::HashSet::new(),
             url,
             title: String::new(),
             initial_navigated: false,
@@ -841,94 +848,6 @@ impl DriverState {
         if self.session_id.is_some() {
             self.start_screencast(link, event_tx, frame_slot);
         }
-    }
-
-    /// User clicked "hand back": mark the pending handoff done so the
-    /// blocked agent process can continue.
-    fn resolve_handoff(&mut self) {
-        self.write_manifest_extra(true, |manifest| {
-            if let Some(handoff) = manifest.handoff.as_mut() {
-                handoff.done = true;
-            }
-        });
-        self.handoff_seen = None;
-    }
-
-    /// Poll the manifest for agent-side signals (owner heartbeat, handoff
-    /// requests). Cheap file read, throttled.
-    fn tick_signals(&mut self, tx: &mpsc::Sender<BrowserEvent>) {
-        if self.last_signal_check.elapsed() < SIGNAL_MIN_INTERVAL {
-            return;
-        }
-        self.last_signal_check = Instant::now();
-        let Some(manifest) = manifest::read(&self.config.panel_local_id) else {
-            return;
-        };
-        let now = manifest::now_millis();
-        let mut owner = manifest.live_owner(now).map(|owner| owner.name.clone());
-        if owner != self.owner_seen {
-            self.owner_seen = std::mem::take(&mut owner);
-            let _ = tx.send(BrowserEvent::OwnerChanged(owner));
-        }
-        match manifest.handoff_pending() {
-            Some(handoff) => {
-                if self.handoff_seen != Some(handoff.requested_at) {
-                    self.handoff_seen = Some(handoff.requested_at);
-                    let _ = tx.send(BrowserEvent::HandoffRequested(handoff.reason.clone()));
-                }
-            }
-            None => {
-                if self.handoff_seen.is_some() {
-                    self.handoff_seen = None;
-                    let _ = tx.send(BrowserEvent::HandoffCleared);
-                }
-            }
-        }
-    }
-
-    /// Persist the shared manifest, preserving agent-owned fields.
-    /// The driver's in-memory state is authoritative for the fields it
-    /// owns; the on-disk manifest is only the base for agent-owned fields
-    /// (`handoff`, `owner`, `user_active`). Every writer goes through here
-    /// so no write can clobber unflushed in-memory url/title.
-    fn write_manifest_extra(&mut self, force: bool, extra: impl FnOnce(&mut BrowserManifest)) {
-        if !force && !self.manifest_dirty {
-            return;
-        }
-        if !force && self.last_manifest_write.elapsed() < MANIFEST_MIN_INTERVAL {
-            self.manifest_dirty = true;
-            return;
-        }
-        self.manifest_dirty = false;
-        self.last_manifest_write = Instant::now();
-        let local_id = &self.config.panel_local_id;
-        let existing = manifest::read(local_id);
-        if existing.is_none() && !force {
-            // No manifest yet (agent may create it later); skip the write.
-            self.manifest_dirty = true;
-            return;
-        }
-        let mut manifest = existing.unwrap_or(BrowserManifest {
-            panel_local_id: local_id.clone(),
-            ..Default::default()
-        });
-        extra(&mut manifest);
-        manifest.browser_ws.clone_from(&self.browser_ws);
-        manifest
-            .target_id
-            .clone_from(&self.target_id.clone().unwrap_or_default());
-        manifest.url.clone_from(&self.url);
-        manifest.title.clone_from(&self.title);
-        manifest.updated_at = manifest::now_millis();
-        let _ = manifest::write(&manifest);
-    }
-
-    fn write_manifest(&mut self, force: bool) {
-        self.write_manifest_extra(force, |_| {});
-    }
-
-    fn remove_manifest(&self) {
-        manifest::remove(&self.config.panel_local_id);
     }
 }
 

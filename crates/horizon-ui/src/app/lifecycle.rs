@@ -190,7 +190,12 @@ impl HorizonApp {
 
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
-        self.shutdown_progress = Some(self.board.begin_async_shutdown());
+        let mut progress = self
+            .session_switch_shutdown_progress
+            .take()
+            .unwrap_or_else(|| self.board.begin_async_shutdown());
+        progress.restart_timeout_window();
+        self.shutdown_progress = Some(progress);
     }
 
     #[profiling::function]
@@ -237,6 +242,15 @@ impl HorizonApp {
 
         self.exit_cleanup_complete = true;
         let _ = self.auto_save_runtime_state();
+        if let Some(progress) = self.session_switch_shutdown_progress.take()
+            && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)
+        {
+            tracing::warn!(
+                completed = progress.terminals_completed(),
+                total = progress.terminal_count(),
+                "timed out waiting for session-switch panel shutdown during exit"
+            );
+        }
         self.board.shutdown_terminal_panels();
         if let Some(progress) = &self.shutdown_progress
             && !progress.wait_for_completion(MAX_SHUTDOWN_WAIT)

@@ -12,6 +12,9 @@ pub struct BodyOutput {
     pub image_rect: Option<Rect>,
     pub frame_size: Option<[f32; 2]>,
     pub viewport_size: Option<(u32, u32)>,
+    /// This body's egui response owns the current pointer hit. Raw geometry
+    /// alone is insufficient when browser panels overlap in different layers.
+    pub pointer_target: bool,
     pub retry_clicked: bool,
     pub body_clicked: bool,
 }
@@ -31,6 +34,7 @@ pub fn show_body(
             image_rect: None,
             frame_size: None,
             viewport_size: None,
+            pointer_target: false,
             retry_clicked: false,
             body_clicked: false,
         };
@@ -48,12 +52,17 @@ pub fn show_body(
             image_rect: None,
             frame_size: None,
             viewport_size: Some(viewport_size),
+            pointer_target: false,
             retry_clicked: retry,
             body_clicked: false,
         };
     };
-    let body_response = ui.allocate_rect(available, Sense::click());
+    let body_response = ui.allocate_rect(available, Sense::click_and_drag());
     let body_clicked = body_response.clicked();
+    let pointer_target = body_response.contains_pointer()
+        || body_response.is_pointer_button_down_on()
+        || body_response.drag_started()
+        || body_response.dragged();
     let width = data.width as usize;
     let height = data.height as usize;
     let frame_size = [
@@ -80,6 +89,7 @@ pub fn show_body(
             image_rect: None,
             frame_size: Some(frame_size),
             viewport_size: Some(viewport_size),
+            pointer_target,
             retry_clicked: false,
             body_clicked,
         };
@@ -107,6 +117,7 @@ pub fn show_body(
         image_rect: Some(rect),
         frame_size: Some(frame_size),
         viewport_size: Some(viewport_size),
+        pointer_target,
         retry_clicked: false,
         body_clicked,
     }

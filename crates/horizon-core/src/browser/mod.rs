@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub use frames::FrameSlot;
-pub use input::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
+pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use session::{BrowserCommand, BrowserEvent, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
@@ -117,6 +117,13 @@ pub struct BrowserPanelState {
     pub owner: Option<String>,
     /// Pending handoff request from the agent, with its reason.
     pub handoff_reason: Option<String>,
+    /// Manifest failure from the most recent hand-back attempt.
+    pub handoff_error: Option<String>,
+    /// The driver is persisting the user's hand-back acknowledgement.
+    pub handoff_resolution_pending: bool,
+    /// Latest page selection copied by Chrome and not yet written to the host
+    /// clipboard by the UI.
+    pending_clipboard_text: Option<String>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
     config: BrowserConfig,
@@ -144,6 +151,9 @@ impl BrowserPanelState {
             panel_local_id: panel_local_id.clone(),
             owner: None,
             handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
             navigation_error: None,
             config: config.clone(),
         };
@@ -189,6 +199,7 @@ impl BrowserPanelState {
         };
         match session::start_session(session_config) {
             Ok(handle) => {
+                self.clear_agent_state_for_relaunch();
                 self.status = BrowserStatus::Starting;
                 self.loading = true;
                 self.session = Some(handle);
@@ -199,18 +210,37 @@ impl BrowserPanelState {
         }
     }
 
+    fn clear_agent_state_for_relaunch(&mut self) {
+        self.owner = None;
+        self.handoff_reason = None;
+        self.handoff_error = None;
+        self.handoff_resolution_pending = false;
+    }
+
     pub fn send(&self, command: BrowserCommand) {
         if let Some(session) = &self.session {
             let _ = session.send(command);
         }
     }
 
+    /// Take page text copied by headless Chrome for the UI's host clipboard.
+    pub fn take_clipboard_text(&mut self) -> Option<String> {
+        self.pending_clipboard_text.take()
+    }
+
     /// Tell the driver the user handed the panel back to the agent.
     pub fn hand_back(&mut self) {
-        if let Some(session) = &self.session {
-            let _ = session.send(BrowserCommand::HandoffDone);
+        self.handoff_error = None;
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.send(BrowserCommand::HandoffDone))
+        {
+            self.handoff_resolution_pending = true;
+        } else {
+            self.handoff_resolution_pending = false;
+            self.handoff_error = Some("browser driver unavailable; retry after recovery".to_string());
         }
-        self.handoff_reason = None;
     }
 
     /// Stop the driver asynchronously (panel close during a session):
@@ -319,17 +349,35 @@ impl BrowserPanelState {
                     if !keep_error || code.is_some() {
                         self.status = BrowserStatus::Stopped { code };
                     }
+                    if self.handoff_resolution_pending {
+                        self.handoff_resolution_pending = false;
+                        self.handoff_error =
+                            Some("browser stopped before the hand-back acknowledgement was saved".to_string());
+                    }
                     output.had_output = true;
                 }
                 BrowserEvent::HandoffRequested(reason) => {
                     self.handoff_reason = Some(reason);
+                    self.handoff_error = None;
+                    self.handoff_resolution_pending = false;
                     output.had_output = true;
                 }
                 BrowserEvent::HandoffCleared => {
+                    self.handoff_error = None;
+                    self.handoff_resolution_pending = false;
                     if self.handoff_reason.is_some() {
                         self.handoff_reason = None;
                         output.had_output = true;
                     }
+                }
+                BrowserEvent::HandoffResolutionFailed(message) => {
+                    self.handoff_error = Some(message);
+                    self.handoff_resolution_pending = false;
+                    output.had_output = true;
+                }
+                BrowserEvent::ClipboardText(text) => {
+                    self.pending_clipboard_text = Some(text);
+                    output.had_output = true;
                 }
                 BrowserEvent::OwnerChanged(owner) => {
                     if self.owner != owner {
@@ -396,6 +444,9 @@ mod tests {
             requested_url: None,
             owner: None,
             handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
             navigation_error: None,
             config: BrowserConfig::default(),
         };
@@ -404,5 +455,62 @@ mod tests {
         assert_eq!(completion_tx.send(()), Ok(()));
         assert!(state.retry_ready());
         assert!(state.teardown_signal.is_none());
+    }
+
+    #[test]
+    fn failed_hand_back_keeps_the_retry_affordance() {
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Stopped { code: None },
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            teardown_signal: None,
+            panel_local_id: "handoff-test".to_string(),
+            requested_url: None,
+            owner: Some("agent".to_string()),
+            handoff_reason: Some("captcha".to_string()),
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            config: BrowserConfig::default(),
+        };
+
+        state.hand_back();
+
+        assert_eq!(state.handoff_reason.as_deref(), Some("captcha"));
+        assert!(state.handoff_error.is_some());
+        assert!(!state.handoff_resolution_pending);
+    }
+
+    #[test]
+    fn relaunch_clears_agent_state_from_the_stopped_driver() {
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Stopped { code: None },
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            teardown_signal: None,
+            panel_local_id: "relaunch-test".to_string(),
+            requested_url: None,
+            owner: Some("agent".to_string()),
+            handoff_reason: Some("captcha".to_string()),
+            handoff_error: Some("driver unavailable".to_string()),
+            handoff_resolution_pending: true,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            config: BrowserConfig::default(),
+        };
+
+        state.clear_agent_state_for_relaunch();
+
+        assert!(state.owner.is_none());
+        assert!(state.handoff_reason.is_none());
+        assert!(state.handoff_error.is_none());
+        assert!(!state.handoff_resolution_pending);
     }
 }
