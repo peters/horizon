@@ -288,17 +288,10 @@ impl HorizonApp {
 
     /// Push-to-talk hotkey handling plus draining speech results into the
     /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
-    ///
-    /// The hotkey listens on the root viewport only; panels in detached
-    /// windows still dictate via their mic button.
-    fn focused_root_terminal(&self) -> Option<PanelId> {
-        self.board.focused.filter(|id| {
-            self.board.panel(*id).is_some_and(|panel| {
-                // The root-viewport hotkey must not dictate into a panel
-                // living in a detached window (documented main-window scope).
-                panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
-            })
-        })
+    fn focused_horizon_terminal(&self) -> Option<PanelId> {
+        self.board
+            .focused
+            .filter(|id| self.board.panel(*id).is_some_and(|panel| panel.terminal().is_some()))
     }
 
     fn cancel_vanished_speech_target(&mut self) {
@@ -338,7 +331,8 @@ impl HorizonApp {
         // never arrive (Wayland/macOS), so recover the pending key here or it
         // would disable every shortcut indefinitely.
         let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
-        let sink = dictation_sink(self.focused_root_terminal(), desktop_injection, root_focused_now);
+        let horizon_focused = root_focused_now || self.any_detached_viewport_focused(ctx);
+        let sink = dictation_sink(self.focused_horizon_terminal(), desktop_injection, horizon_focused);
         if !root_focused_now {
             ctx.data_mut(|data| {
                 data.insert_temp(
@@ -348,13 +342,13 @@ impl HorizonApp {
             });
         }
 
-        if !root_focused_now {
+        if !horizon_focused {
             self.stop_hold_on_focus_loss(ctx, now);
         }
 
         if self.speech.is_none() {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
-            self.reset_speech_input_state(root_focused_now);
+            self.reset_speech_input_state(horizon_focused);
             return;
         }
 
@@ -364,11 +358,11 @@ impl HorizonApp {
             return;
         };
 
-        // Seed the per-frame focus aggregate with the root viewport; each
-        // detached viewport ORs itself in during rendering, and the privacy
-        // guard in `finalize_frame` cancels an unattended recording when no
-        // Horizon window has focus (see `cancel_unattended_recording`).
-        self.any_viewport_focused = root_focused_now;
+        // Seed the per-frame focus aggregate from every Horizon window so
+        // global PTT in a detached viewport is not treated as desktop
+        // dictation. Detached viewports still OR themselves in during
+        // rendering; `cancel_unattended_recording` consumes the result.
+        self.any_viewport_focused = horizon_focused;
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding. And while a

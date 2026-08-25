@@ -23,6 +23,14 @@ impl HorizonApp {
             .is_some_and(|workspace| self.detached_workspaces.contains_key(&workspace.local_id))
     }
 
+    pub(super) fn any_detached_viewport_focused(&self, ctx: &Context) -> bool {
+        self.detached_workspaces.keys().any(|local_id| {
+            ctx.input_for(detached_viewport_id(local_id), |input| {
+                input.viewport().focused.unwrap_or(false)
+            })
+        })
+    }
+
     /// Whether any workspace still lives in the root window. The root
     /// minimap renders only then; the overlay exclusion zone and every
     /// other consumer must share this predicate, or the minimap's corner

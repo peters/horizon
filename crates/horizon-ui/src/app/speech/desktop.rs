@@ -8,16 +8,17 @@ use super::SpeechSink;
 
 /// Choose the insert sink for a push-to-talk press.
 ///
-/// A logically focused Horizon panel is only used while the root OS window
-/// actually has focus. Otherwise a background instance would keep routing
-/// global PTT into its last selected panel instead of the focused client.
+/// A logically focused Horizon terminal (root or detached) is only used while
+/// some Horizon window has OS focus. Otherwise a background instance would
+/// keep routing global PTT into its last selected panel instead of the
+/// focused external client.
 #[must_use]
 pub(crate) fn dictation_sink(
     focused_terminal: Option<PanelId>,
     desktop_injection: bool,
-    root_focused: bool,
+    horizon_focused: bool,
 ) -> Option<SpeechSink> {
-    if desktop_injection && !root_focused {
+    if desktop_injection && !horizon_focused {
         Some(SpeechSink::Desktop)
     } else {
         focused_terminal.map(SpeechSink::Panel)
@@ -150,13 +151,19 @@ mod tests {
     }
 
     #[test]
-    fn unfocused_root_uses_desktop_when_injection_is_enabled() {
+    fn unfocused_horizon_uses_desktop_when_injection_is_enabled() {
         let panel = PanelId(3);
         assert_eq!(dictation_sink(Some(panel), true, false), Some(SpeechSink::Desktop));
         assert_eq!(
             dictation_sink(Some(panel), false, false),
             Some(SpeechSink::Panel(panel))
         );
+    }
+
+    #[test]
+    fn a_focused_horizon_window_keeps_its_terminal_including_detached() {
+        let panel = PanelId(9);
+        assert_eq!(dictation_sink(Some(panel), true, true), Some(SpeechSink::Panel(panel)));
     }
 
     #[test]
