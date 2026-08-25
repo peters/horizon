@@ -41,7 +41,9 @@ pub use agents::{
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
-pub use board::{Board, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout};
+pub use board::{
+    Board, ForcedBrowserShutdownStatus, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
+};
 pub use config::{
     AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig,
     SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig, WindowConfig,
@@ -61,8 +63,8 @@ pub use remote_hosts::{
 };
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionKey, AgentSessionRecord,
-    DetachedWorkspaceState, PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef,
-    live_claude_session_ids, new_local_id,
+    BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef, RuntimeState, WorkspaceState,
+    WorkspaceTemplateRef, live_claude_session_ids, new_local_id,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

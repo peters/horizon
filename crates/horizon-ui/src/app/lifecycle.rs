@@ -210,8 +210,8 @@ impl HorizonApp {
         let Some(progress) = &self.shutdown_progress else {
             return;
         };
-        let completed = progress.terminals_completed();
-        let total = progress.terminal_count();
+        let completed = progress.panels_completed();
+        let total = progress.panel_count();
 
         egui::CentralPanel::default().show(ui, |ui| {
             if total > 0 {
@@ -276,7 +276,7 @@ impl HorizonApp {
         if panel_output.cwd_changed {
             self.mark_runtime_dirty();
         }
-        let had_terminal_output = panel_output.had_terminal_output;
+        let had_terminal_output = panel_output.activity.terminal || panel_output.activity.browser;
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 pub use frames::FrameSlot;
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
-pub use session::BrowserShutdownSignal;
+pub(crate) use session::BrowserShutdownSignal;
 pub use session::{BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession};
 
 use crate::horizon_home::HorizonHome;
@@ -398,7 +398,7 @@ impl BrowserPanelState {
     /// must be polled or waited on (see [`BrowserShutdownSignal`]). Dropping
     /// it leaves the profile on disk permanently.
     #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
-    pub fn close_permanently(&mut self) -> BrowserShutdownSignal {
+    pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
         self.request_shutdown();
         let profile_dir = session::profile_dir(&self.config, &self.panel_local_id);
         if let Some(signal) = self.take_shutdown_signal() {

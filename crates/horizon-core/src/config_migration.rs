@@ -2,14 +2,14 @@ use std::path::Path;
 
 use crate::config::{
     Config, PresetConfig, default_claude_preset, default_codex_preset, default_kilo_preset, default_opencode_preset,
-    insert_missing_gemini_presets, insert_missing_grok_presets, insert_missing_kilo_presets,
-    insert_missing_opencode_presets, insert_missing_pi_presets,
+    insert_missing_browser_preset, insert_missing_gemini_presets, insert_missing_grok_presets,
+    insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 9;
+pub const CURRENT_CONFIG_VERSION: u32 = 10;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -34,6 +34,7 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
             6 => migrate_v6_to_v7(config),
             7 => migrate_v7_to_v8(config),
             8 => migrate_v8_to_v9(config),
+            9 => migrate_v9_to_v10(config),
             _ => {
                 return Err(Error::Config(format!(
                     "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
@@ -136,6 +137,11 @@ fn migrate_v7_to_v8(config: &mut Config) {
 /// v8 -> v9: add the default `Grok` coding-agent preset when it is missing.
 fn migrate_v8_to_v9(config: &mut Config) {
     insert_missing_grok_presets(&mut config.presets);
+}
+
+/// v9 -> v10: add the Browser preset without disturbing custom presets.
+fn migrate_v9_to_v10(config: &mut Config) {
+    insert_missing_browser_preset(&mut config.presets);
 }
 
 /// Remove every preset matching `should_remove`, then insert `replacement()`
@@ -375,7 +381,7 @@ presets:
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
         let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains("version: 9"));
+        assert!(reloaded.contains("version: 10"));
         assert!(reloaded.contains("Ctrl+Shift+K"));
         assert!(reloaded.contains("zoom_reset: Ctrl+0"));
         assert!(reloaded.contains("appearance:"));
@@ -384,7 +390,7 @@ presets:
     #[test]
     fn serialized_config_includes_version() {
         let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains("version: 9"));
+        assert!(yaml.contains("version: 10"));
     }
 
     #[test]
@@ -917,6 +923,64 @@ presets:
             let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
 
             migrate_v8_to_v9(&mut config);
+
+            assert_eq!(config.presets.len(), 1);
+        }
+    }
+
+    #[test]
+    fn migration_v9_to_v10_adds_missing_browser_preset() {
+        let mut config: Config = serde_yaml::from_str(
+            "\
+version: 9
+presets:
+  - name: Shell
+    alias: sh
+    kind: shell
+",
+        )
+        .expect("should deserialize");
+
+        migrate_v9_to_v10(&mut config);
+
+        let browser = config
+            .presets
+            .iter()
+            .find(|preset| preset.kind == PanelKind::Browser)
+            .expect("Browser preset");
+        assert_eq!(browser.name, "Browser");
+        assert_eq!(browser.alias.as_deref(), Some("web"));
+        assert_eq!(browser.resume, PanelResume::Fresh);
+    }
+
+    #[test]
+    fn migration_v9_to_v10_preserves_browser_conflicts() {
+        for existing in [
+            "\
+version: 9
+presets:
+  - name: Browser
+    alias: custom-web
+    kind: shell
+",
+            "\
+version: 9
+presets:
+  - name: My Browser
+    alias: web
+    kind: shell
+",
+            "\
+version: 9
+presets:
+  - name: Custom Browser
+    alias: custom
+    kind: browser
+",
+        ] {
+            let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
+
+            migrate_v9_to_v10(&mut config);
 
             assert_eq!(config.presets.len(), 1);
         }

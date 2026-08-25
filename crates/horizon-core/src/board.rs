@@ -6,7 +6,8 @@ mod shutdown;
 mod workspaces;
 
 pub use arrangement::WorkspaceAlignment;
-pub use shutdown::ShutdownProgress;
+use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
+pub use shutdown::{ForcedBrowserShutdownStatus, ShutdownProgress};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -19,20 +20,25 @@ use serde::{Deserialize, Serialize};
 use crate::attention::{AttentionItem, AttentionSeverity};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessOutput};
+use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
 use crate::runtime_state::{PanelState, RuntimeState};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
 const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const BROWSER_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
 }
 
-fn panel_restore_options(panel_state: &PanelState, transcript_root: Option<&Path>) -> PanelOptions {
-    let mut options = panel_state.to_panel_options();
+fn panel_restore_options(
+    panel_state: &PanelState,
+    transcript_root: Option<&Path>,
+    browser_config: &crate::browser::BrowserConfig,
+) -> PanelOptions {
+    let mut options = panel_state.to_panel_options(browser_config);
     options.transcript_root = transcript_root.map(Path::to_path_buf);
     options.restore_as_disconnected_snapshot = transcript_root.is_some() && panel_state.kind == PanelKind::Ssh;
     options
@@ -84,6 +90,10 @@ pub struct Board {
     pub workspaces: Vec<Workspace>,
     pub attention: Vec<AttentionItem>,
     panel_attention_signals: HashMap<PanelId, String>,
+    /// Browser panels already removed from the board whose exact Chrome
+    /// process is still retiring. Global shutdown must inherit these signals
+    /// instead of losing them in detached cleanup work.
+    retired_browser_shutdown_signals: Vec<crate::browser::BrowserShutdownSignal>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
@@ -95,8 +105,9 @@ pub struct Board {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoardProcessOutput {
-    pub had_terminal_output: bool,
+    pub activity: PanelProcessActivity,
     pub cwd_changed: bool,
+    pub persisted_state_changed: bool,
 }
 
 impl Board {
@@ -107,6 +118,7 @@ impl Board {
             workspaces: Vec::new(),
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
+            retired_browser_shutdown_signals: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
@@ -146,13 +158,14 @@ impl Board {
         for workspace_state in &state.workspaces {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
-                let options = panel_restore_options(panel_state, transcript_root);
+                let options = panel_restore_options(panel_state, transcript_root, &state.browser);
                 if let Err(error) = board.create_panel(options, ws_id) {
                     board.handle_panel_restore_failure(
                         &workspace_state.name,
                         panel_state,
                         ws_id,
                         transcript_root,
+                        &state.browser,
                         &error,
                     );
                 }
@@ -186,6 +199,7 @@ impl Board {
         panel_state: &PanelState,
         workspace_id: WorkspaceId,
         transcript_root: Option<&Path>,
+        browser_config: &crate::browser::BrowserConfig,
         error: &Error,
     ) {
         let panel_label = panel_restore_label(panel_state);
@@ -197,7 +211,7 @@ impl Board {
             "failed to restore panel"
         );
 
-        let options = panel_restore_options(panel_state, transcript_root);
+        let options = panel_restore_options(panel_state, transcript_root, browser_config);
         match self.create_failed_restore_panel(options, workspace_id, &error_message) {
             Ok(panel_id) => {
                 self.create_attention(
@@ -261,16 +275,38 @@ impl Board {
                 );
             }
         }
+
+        // Browser drivers tear down Chrome on their own threads. Collect every
+        // signal before waiting so all panels share one normal deadline and
+        // one forced-cleanup deadline instead of multiplying either timeout
+        // by the panel count.
+        let mut browser_shutdown_signals = Vec::new();
+        for panel in &mut self.panels {
+            if let Some(signal) = panel.browser_shutdown_signal() {
+                browser_shutdown_signals.push(signal);
+            }
+        }
+        browser_shutdown_signals.append(&mut self.retired_browser_shutdown_signals);
+        let browser_count = browser_shutdown_signals.len();
+        let shutdown = ShutdownProgress::new(browser_count, Arc::new(AtomicUsize::new(0)), browser_shutdown_signals);
+        if !shutdown.wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT) {
+            tracing::warn!(
+                browser_count,
+                forced_timeout_ms = FORCED_BROWSER_SHUTDOWN_WAIT.as_millis(),
+                "failed to terminate all Chrome processes after the shared browser shutdown deadlines"
+            );
+        }
     }
 
-    /// Begins shutting down all terminal panels asynchronously.
+    /// Begins shutting down all panels asynchronously.
     ///
     /// Sends shutdown signals to every terminal and spawns background threads
     /// to join their event loops. Returns a [`ShutdownProgress`] handle that
     /// can be polled each frame to track completion without blocking the UI.
     pub fn begin_async_shutdown(&mut self) -> ShutdownProgress {
         let completed = Arc::new(AtomicUsize::new(0));
-        let mut terminal_count = 0;
+        let mut panel_count = 0;
+        let mut browser_shutdown_signals = Vec::new();
 
         for panel in &mut self.panels {
             panel.request_shutdown();
@@ -280,27 +316,42 @@ impl Board {
             if let Some(terminal) = panel.terminal_mut()
                 && terminal.begin_async_join(&completed)
             {
-                terminal_count += 1;
+                panel_count += 1;
+            }
+            // Browser drivers tear down Chrome on their own threads; count
+            // that teardown in the shutdown progress so the app cannot exit
+            // while a driver still holds the profile lock.
+            if let Some(signal) = panel.browser_shutdown_signal() {
+                panel_count += 1;
+                browser_shutdown_signals.push(signal);
             }
         }
+        for signal in self.retired_browser_shutdown_signals.drain(..) {
+            panel_count += 1;
+            browser_shutdown_signals.push(signal);
+        }
 
-        ShutdownProgress::new(terminal_count, completed)
+        ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
     }
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {
+        self.retired_browser_shutdown_signals
+            .retain(|signal| !signal.is_complete());
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
             let panel_output: PanelProcessOutput = panel.process_output();
-            output.had_terminal_output |= panel_output.had_output;
+            output.activity.terminal |= panel_output.activity.terminal;
+            output.activity.browser |= panel_output.activity.browser;
             output.cwd_changed |= panel_output.cwd_changed;
+            output.persisted_state_changed |= panel_output.persisted_state_changed;
         }
         // Only run attention detection when terminals actually produced new
         // output.  The expensive path — `detect_attention()` — locks the
         // terminal mutex and iterates the full display, so skipping it on
         // idle frames is a significant CPU win.
-        if self.attention_enabled && output.had_terminal_output {
+        if self.attention_enabled && output.activity.terminal {
             self.update_attention();
         }
         // Working-status refresh runs every frame: the per-panel check is a
@@ -309,6 +360,14 @@ impl Board {
         // the attention-feed feature flag.
         self.update_agent_status();
         output
+    }
+
+    /// Whether a browser removed from the board still has process or profile
+    /// cleanup in flight. The UI must keep polling output even when no panels
+    /// remain so completion can be observed and retired state released.
+    #[must_use]
+    pub fn has_pending_browser_cleanup(&self) -> bool {
+        !self.retired_browser_shutdown_signals.is_empty()
     }
 
     pub fn focus(&mut self, id: PanelId) {

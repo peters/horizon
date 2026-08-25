@@ -202,6 +202,13 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
+        PanelKind::Browser => {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.label(egui::RichText::new("browser panel (UI lands in a later layer of the stack)").weak());
+            });
+            false
+        }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
             is_focused,

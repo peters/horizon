@@ -24,6 +24,8 @@ pub struct Config {
     pub overlays: OverlaysConfig,
     #[serde(default)]
     pub features: FeaturesConfig,
+    #[serde(default)]
+    pub browser: crate::browser::BrowserConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -46,6 +48,7 @@ impl Default for Config {
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
             features: FeaturesConfig::default(),
+            browser: crate::browser::BrowserConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -109,7 +112,10 @@ impl PresetConfig {
 
     #[must_use]
     pub fn requires_workspace_cwd(&self) -> bool {
-        !matches!(self.kind, PanelKind::Ssh)
+        // Browser panels never receive a cwd (Chrome is launched from the
+        // Horizon process), so a cwd-less workspace must not trigger a
+        // directory picker for them.
+        !matches!(self.kind, PanelKind::Ssh | PanelKind::Browser)
     }
 }
 
@@ -273,6 +279,34 @@ pub(crate) fn insert_missing_grok_presets(presets: &mut Vec<PresetConfig>) {
     }
 }
 
+pub(crate) fn default_browser_preset() -> PresetConfig {
+    PresetConfig {
+        name: "Browser".to_string(),
+        alias: Some("web".to_string()),
+        kind: PanelKind::Browser,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }
+}
+
+pub(crate) fn insert_missing_browser_preset(presets: &mut Vec<PresetConfig>) {
+    let default_preset = default_browser_preset();
+    let exists = presets.iter().any(|preset| {
+        preset.name.eq_ignore_ascii_case(&default_preset.name)
+            || preset
+                .alias
+                .as_deref()
+                .is_some_and(|alias| alias.eq_ignore_ascii_case("web"))
+            || preset.kind == PanelKind::Browser
+    });
+
+    if !exists {
+        presets.push(default_preset);
+    }
+}
+
 /// Single Codex preset. Codex 0.128's default invocation is auto mode
 /// (`--sandbox workspace-write --ask-for-approval on-request`), so
 /// `--no-alt-screen` is the only flag we need to set. Menu launches always
@@ -353,6 +387,7 @@ fn default_presets() -> Vec<PresetConfig> {
             ssh_connection: None,
         },
     ]);
+    insert_missing_browser_preset(&mut presets);
     presets
 }
 
@@ -661,6 +696,12 @@ impl Config {
     ///
     /// Returns an error if any configured shortcut is invalid or duplicated.
     pub fn validate(&self) -> Result<()> {
+        if !(1..=100).contains(&self.browser.quality) {
+            return Err(Error::Config(format!(
+                "browser.quality must be between 1 and 100 (got {})",
+                self.browser.quality
+            )));
+        }
         let shortcuts = self.shortcuts.resolve()?;
         crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
@@ -980,6 +1021,15 @@ mod tests {
 
         assert!(error.to_string().contains("conflicts with"));
         assert!(error.to_string().contains("toggle_sidebar"));
+    }
+
+    #[test]
+    fn browser_quality_must_fit_cdp_range() {
+        let error = Config::from_yaml("browser:\n  quality: 101\n").expect_err("quality must be rejected");
+        assert!(error.to_string().contains("browser.quality must be between 1 and 100"));
+
+        Config::from_yaml("browser:\n  quality: 1\n").expect("minimum quality should be accepted");
+        Config::from_yaml("browser:\n  quality: 100\n").expect("maximum quality should be accepted");
     }
 
     #[test]

@@ -126,7 +126,7 @@ pub struct BrowserSession {
 /// Completion signal paired with an exact Chrome child handle. Normal paths
 /// only poll the receiver; a hard application-exit deadline can explicitly
 /// terminate/reap the owned process and remove its dead manifest.
-pub struct BrowserShutdownSignal {
+pub(crate) struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
@@ -159,8 +159,7 @@ impl BrowserShutdownSignal {
         self
     }
 
-    #[must_use]
-    pub fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
+    pub(crate) fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
         let (completion_tx, completion_rx) = mpsc::channel();
         drop(completion_tx);
         let process_control = ChromeProcessControl::default();

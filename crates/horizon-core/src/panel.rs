@@ -52,12 +52,21 @@ pub enum PanelKind {
     Editor,
     GitChanges,
     Usage,
+    Browser,
 }
 
 impl PanelKind {
     #[must_use]
     pub fn is_agent(self) -> bool {
         agent_definition(self).is_some()
+    }
+
+    /// Whether this panel owns a text-input surface that can receive typed
+    /// or dictated text. Terminal-backed panels write to their PTY; browser
+    /// panels dispatch text to the focused page element through CDP.
+    #[must_use]
+    pub const fn accepts_text_input(self) -> bool {
+        !matches!(self, Self::Editor | Self::GitChanges | Self::Usage)
     }
 
     #[must_use]
@@ -83,6 +92,7 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
+            Self::Browser => "Browser",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
@@ -131,6 +141,9 @@ pub struct PanelOptions {
     pub local_id: Option<String>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
+    /// Active `browser` config section, so spawn honors `--config` and
+    /// in-memory config edits instead of re-reading the default path.
+    pub browser_config: Option<crate::browser::BrowserConfig>,
     pub transcript_root: Option<PathBuf>,
     pub restore_as_disconnected_snapshot: bool,
     /// True when this panel is being restored from persisted state rather
@@ -155,6 +168,7 @@ impl Default for PanelOptions {
             local_id: None,
             session_binding: None,
             template: None,
+            browser_config: None,
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: false,
@@ -196,9 +210,19 @@ pub struct Panel {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PanelProcessActivity {
+    /// New terminal-grid output that may require attention/agent scanning.
+    pub terminal: bool,
+    /// Browser state/frame activity that requires repainting but must not
+    /// trigger terminal-grid scans.
+    pub browser: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanelProcessOutput {
-    pub had_output: bool,
+    pub activity: PanelProcessActivity,
     pub cwd_changed: bool,
+    pub persisted_state_changed: bool,
 }
 
 impl Panel {
@@ -246,6 +270,17 @@ impl Panel {
         self.content.editor_mut()
     }
 
+    /// Convenience accessor for the browser content (if this panel holds one).
+    #[must_use]
+    pub fn browser(&self) -> Option<&crate::browser::BrowserPanelState> {
+        self.content.browser()
+    }
+
+    /// Mutable accessor for the browser content.
+    pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
+        self.content.browser_mut()
+    }
+
     /// Convenience accessor for the git changes content (if this panel holds one).
     #[must_use]
     pub fn git_changes(&self) -> Option<&DiffViewer> {
@@ -285,6 +320,25 @@ impl Panel {
     /// Drain pending terminal events. Returns `true` if any output was processed.
     #[profiling::function]
     pub fn process_output(&mut self) -> PanelProcessOutput {
+        if let Some(browser) = self.content.browser_mut() {
+            let browser_output = browser.drain_events();
+            // Feed page titles into the same runtime-title channel the
+            // terminal xterm-title sequence uses, so the titlebar tracks
+            // the page (custom names keep their "name — title" form).
+            if browser.title != self.terminal_title {
+                self.terminal_title = browser.title.clone();
+            }
+            self.had_recent_output = false;
+            return PanelProcessOutput {
+                activity: PanelProcessActivity {
+                    terminal: false,
+                    browser: browser_output.had_output,
+                },
+                cwd_changed: false,
+                persisted_state_changed: browser_output.url_changed,
+            };
+        }
+
         let should_track_live_cwd = matches!(self.kind, PanelKind::Shell | PanelKind::Command);
         let Some(terminal) = self.content.terminal_mut() else {
             self.had_recent_output = false;
@@ -313,9 +367,14 @@ impl Panel {
             }
         }
 
+        let cwd_changed = self.update_tracked_cwd(current_cwd);
         PanelProcessOutput {
-            had_output,
-            cwd_changed: self.update_tracked_cwd(current_cwd),
+            activity: PanelProcessActivity {
+                terminal: had_output,
+                browser: false,
+            },
+            cwd_changed,
+            persisted_state_changed: cwd_changed,
         }
     }
 
@@ -411,6 +470,18 @@ impl Panel {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
+            PanelContent::Browser(browser) => browser.request_shutdown(),
+        }
+    }
+
+    /// Take this panel's browser teardown-completion signal, if the browser
+    /// shutdown was requested and not yet joined.
+    #[must_use]
+    pub(crate) fn browser_shutdown_signal(&mut self) -> Option<crate::browser::BrowserShutdownSignal> {
+        if let Some(browser) = self.content.browser_mut() {
+            browser.take_shutdown_signal()
+        } else {
+            None
         }
     }
 
@@ -423,6 +494,7 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
 
@@ -435,6 +507,7 @@ impl Panel {
                 true
             }
             PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
 
@@ -446,15 +519,23 @@ impl Panel {
         self.layout.size = size;
     }
 
-    /// Restart the terminal process while keeping the same panel identity,
-    /// layout, and session binding. For agent panels this
-    /// resumes the existing session so no work is lost.
+    /// Restart panel content while keeping the same identity and layout.
+    /// Terminal agent panels resume their existing session. Browser panels
+    /// only schedule an asynchronous relaunch; `Ok(())` confirms that the
+    /// request was accepted, while launch failures arrive through Browser
+    /// status/events.
     ///
     /// # Errors
     ///
-    /// Returns an error if the new terminal cannot be spawned.
+    /// Returns an error if a terminal cannot be spawned or a file-backed
+    /// editor cannot be reopened.
     pub fn restart(&mut self) -> Result<()> {
         if let PanelContent::GitChanges(_) = &self.content {
+            return Ok(());
+        }
+
+        if let PanelContent::Browser(browser) = &mut self.content {
+            browser.relaunch();
             return Ok(());
         }
 
@@ -811,6 +892,22 @@ mod tests {
         assert!(PanelKind::Pi.is_agent());
         assert!(PanelKind::Pi.supports_session_binding());
         assert_eq!(PanelKind::Pi.display_name(), "Pi");
+    }
+
+    #[test]
+    fn terminal_and_browser_panels_accept_text_input() {
+        for kind in [
+            PanelKind::Shell,
+            PanelKind::Ssh,
+            PanelKind::Codex,
+            PanelKind::Command,
+            PanelKind::Browser,
+        ] {
+            assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
+        }
+        for kind in [PanelKind::Editor, PanelKind::GitChanges, PanelKind::Usage] {
+            assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
+        }
     }
 
     #[test]
