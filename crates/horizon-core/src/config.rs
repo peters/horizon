@@ -96,9 +96,12 @@ pub struct PresetConfig {
 }
 
 impl PresetConfig {
-    /// Convert this preset into `PanelOptions` for panel creation.
+    /// Convert this preset into `PanelOptions` for panel creation. Browser
+    /// presets carry the active browser config so a configured `command`,
+    /// `extra_args`, `quality`, `every_nth_frame`, or `profile_root` is
+    /// honored instead of silently falling back to defaults.
     #[must_use]
-    pub fn to_panel_options(&self) -> PanelOptions {
+    pub fn to_panel_options(&self, browser_config: &crate::browser::BrowserConfig) -> PanelOptions {
         PanelOptions {
             name: Some(self.name.clone()),
             command: self.command.clone(),
@@ -106,6 +109,7 @@ impl PresetConfig {
             ssh_connection: self.ssh_connection.clone(),
             kind: self.kind,
             resume: self.resume.clone(),
+            browser_config: (self.kind == PanelKind::Browser).then(|| browser_config.clone()),
             ..PanelOptions::default()
         }
     }

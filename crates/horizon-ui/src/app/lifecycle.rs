@@ -185,6 +185,11 @@ impl HorizonApp {
             return;
         }
 
+        // Fold queued browser events (URL/title changes) into panel state
+        // before the save: once shutdown begins, the overlay path no longer
+        // drains board output, so anything queued at close time would
+        // otherwise never reach the persisted runtime state.
+        let _ = self.board.process_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
         self.shutdown_progress = Some(self.board.begin_async_shutdown());
@@ -235,6 +240,7 @@ impl HorizonApp {
         }
 
         self.exit_cleanup_complete = true;
+        let _ = self.board.process_output();
         let _ = self.auto_save_runtime_state();
         self.board.shutdown_terminal_panels();
         self.git_watchers.clear();
@@ -894,7 +900,12 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
-        let has_live_terminals = !self.board.panels.is_empty();
+        let has_live_terminals = !self.board.panels.is_empty()
+            // A closed panel's Chrome/profile cleanup keeps retiring in the
+            // background: keep frames (and process_output) flowing so the
+            // retired signals are polled to completion instead of waiting
+            // for the next unrelated event or app exit.
+            || self.board.has_pending_browser_cleanup();
         let animating = self.pan_target.is_some();
         if animating {
             ctx.request_repaint();

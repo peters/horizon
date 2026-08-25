@@ -485,11 +485,12 @@ impl HorizonApp {
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
                 // Dictation needs a PTY to type into: Editor/GitChanges/Usage
-                // panels have no terminal, so they get no mic control.
+                // panels have no terminal, and Browser input dispatch is not
+                // wired yet, so a transcript would be silently discarded.
                 let mic_eligible = self.speech.is_some()
                     && !matches!(
                         snapshot.kind,
-                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
+                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser
                     );
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();
