@@ -1,8 +1,96 @@
 use super::{
-    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PtyOptions, ReplayRestoreState,
-    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, WindowSize,
-    drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
+    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, JoinHandle, Msg, Ordering, PtyOptions,
+    ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventLoop, TerminalEventLoopState,
+    TerminalEventProxy, TerminalSpawnOptions, WindowSize, drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
 };
+
+use std::sync::Mutex;
+
+type TerminalJoinHandle = JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>;
+
+enum JoinStatus {
+    Complete,
+    Panicked,
+}
+
+enum TerminalJoinCompletion {
+    Notify(mpsc::SyncSender<JoinStatus>),
+    Count(Arc<AtomicUsize>),
+    Detached,
+}
+
+struct TerminalJoinTask {
+    handle: TerminalJoinHandle,
+    completion: TerminalJoinCompletion,
+}
+
+impl TerminalJoinTask {
+    fn run(self) {
+        // The successful join value owns the event loop and PTY, so evaluating
+        // this on the worker also keeps their destructors off the UI thread.
+        let status = if self.handle.join().is_ok() {
+            JoinStatus::Complete
+        } else {
+            JoinStatus::Panicked
+        };
+
+        match self.completion {
+            TerminalJoinCompletion::Notify(sender) => {
+                let _ = sender.send(status);
+            }
+            TerminalJoinCompletion::Count(completed) => {
+                if matches!(status, JoinStatus::Panicked) {
+                    tracing::warn!("terminal event loop panicked during asynchronous shutdown");
+                }
+                completed.fetch_add(1, Ordering::Relaxed);
+            }
+            TerminalJoinCompletion::Detached => {
+                if matches!(status, JoinStatus::Panicked) {
+                    tracing::warn!("terminal event loop panicked during detached shutdown");
+                }
+            }
+        }
+    }
+}
+
+// Static storage is intentionally never dropped. If the OS refuses to create
+// a join worker, keeping the task here prevents caller-thread PTY teardown; a
+// later successful worker spawn can still drain it.
+static PENDING_TERMINAL_JOINS: Mutex<Vec<TerminalJoinTask>> = Mutex::new(Vec::new());
+
+fn enqueue_before_worker_spawn<T>(
+    queue: &Mutex<Vec<T>>,
+    task: T,
+    spawn_worker: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(task);
+    spawn_worker()
+}
+
+fn schedule_terminal_join(task: TerminalJoinTask) -> std::io::Result<()> {
+    enqueue_before_worker_spawn(&PENDING_TERMINAL_JOINS, task, || {
+        std::thread::Builder::new()
+            .name("terminal-join".to_string())
+            .spawn(drain_pending_terminal_joins)
+            .map(drop)
+    })
+}
+
+fn drain_pending_terminal_joins() {
+    loop {
+        let task = PENDING_TERMINAL_JOINS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop();
+        let Some(task) = task else {
+            return;
+        };
+        task.run();
+    }
+}
 
 impl Terminal {
     /// Spawn a terminal session backed by `alacritty_terminal`.
@@ -113,25 +201,17 @@ impl Terminal {
 
     #[must_use]
     pub fn wait_for_shutdown(&mut self, timeout: Duration) -> bool {
-        enum JoinStatus {
-            Complete,
-            Panicked,
-        }
-
         let Some(event_loop_handle) = self.event_loop_handle.take() else {
             return true;
         };
 
         let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            // Drop the joined event loop on this helper thread so PTY teardown
-            // cannot block the UI thread in `Pty::drop`.
-            let status = match event_loop_handle.join() {
-                Ok(_) => JoinStatus::Complete,
-                Err(_) => JoinStatus::Panicked,
-            };
-            let _ = shutdown_tx.send(status);
-        });
+        if let Err(error) = schedule_terminal_join(TerminalJoinTask {
+            handle: event_loop_handle,
+            completion: TerminalJoinCompletion::Notify(shutdown_tx),
+        }) {
+            tracing::warn!("failed to start terminal join worker; retained task for later cleanup: {error}");
+        }
 
         match shutdown_rx.recv_timeout(timeout) {
             Ok(JoinStatus::Complete) => true,
@@ -149,19 +229,18 @@ impl Terminal {
         self.wait_for_shutdown(timeout)
     }
 
-    /// Spawns a background thread to join the event-loop handle, incrementing
-    /// `completed` when done. Returns `true` if a join thread was spawned.
+    /// Queues the event-loop handle for a background join, incrementing
+    /// `completed` when done. Returns `true` if a handle was queued.
     pub(crate) fn begin_async_join(&mut self, completed: &Arc<AtomicUsize>) -> bool {
         let Some(handle) = self.event_loop_handle.take() else {
             return false;
         };
-        let done = Arc::clone(completed);
-        std::thread::spawn(move || {
-            // Join and drop on this helper thread so PTY teardown cannot block
-            // the UI thread.
-            let _ = handle.join();
-            done.fetch_add(1, Ordering::Relaxed);
-        });
+        if let Err(error) = schedule_terminal_join(TerminalJoinTask {
+            handle,
+            completion: TerminalJoinCompletion::Count(Arc::clone(completed)),
+        }) {
+            tracing::warn!("failed to start terminal join worker; retained task for later cleanup: {error}");
+        }
         true
     }
 }
@@ -170,9 +249,40 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         self.request_shutdown();
 
-        // Detach the event loop thread instead of joining it; joining can
-        // block the main thread indefinitely if the child process is still
-        // starting up or the PTY is stuck on I/O.
-        drop(self.event_loop_handle.take());
+        let Some(handle) = self.event_loop_handle.take() else {
+            return;
+        };
+
+        // Queue ownership before the fallible worker spawn. A finished handle
+        // can own the returned event loop, whose PTY destructor may otherwise
+        // block this thread indefinitely while waiting for the child.
+        if let Err(error) = schedule_terminal_join(TerminalJoinTask {
+            handle,
+            completion: TerminalJoinCompletion::Detached,
+        }) {
+            tracing::warn!("failed to start terminal join worker; retained task for later cleanup: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::enqueue_before_worker_spawn;
+
+    #[test]
+    fn failed_worker_spawn_retains_queued_ownership() {
+        let queue = Mutex::new(Vec::new());
+
+        let result = enqueue_before_worker_spawn(&queue, 42, || {
+            Err(std::io::Error::other("injected worker spawn failure"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            *queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![42]
+        );
     }
 }
