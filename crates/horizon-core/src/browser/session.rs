@@ -183,14 +183,8 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub(crate) fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        if !self.driver_complete.load(Ordering::Acquire) {
-            if !matches!(
-                self.completion_rx.recv_timeout(timeout),
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-            ) {
-                return false;
-            }
-            self.driver_complete.store(true, Ordering::Release);
+        if !self.wait_driver_completion(timeout) {
+            return false;
         }
         while !self.process_control.is_reaped() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -214,6 +208,12 @@ impl BrowserShutdownSignal {
         {
             return false;
         }
+        // The driver may still be running between Chrome's death and its own
+        // exit; wait for it before removing files it owns, or it could
+        // recreate the manifest after we delete it.
+        if !self.wait_driver_completion(deadline.saturating_duration_since(Instant::now())) {
+            return false;
+        }
         if let Some(panel_local_id) = &self.panel_local_id
             && !crate::browser::manifest::remove_with_timeout(
                 panel_local_id,
@@ -225,6 +225,22 @@ impl BrowserShutdownSignal {
         self.process_complete.store(true, Ordering::Release);
         self.retry_failed_profile_cleanup_now();
         self.wait_for_profile_cleanup(deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Block until the driver thread has exited (its completion signal
+    /// fires) or the timeout elapses.
+    fn wait_driver_completion(&self, timeout: Duration) -> bool {
+        if self.driver_complete.load(Ordering::Acquire) {
+            return true;
+        }
+        let complete = matches!(
+            self.completion_rx.recv_timeout(timeout),
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
+        );
+        if complete {
+            self.driver_complete.store(true, Ordering::Release);
+        }
+        complete
     }
 
     fn process_is_complete(&self) -> bool {

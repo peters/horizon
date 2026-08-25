@@ -347,10 +347,17 @@ impl BrowserPanelState {
     }
 
     /// Stop the driver asynchronously (panel close during a session):
-    /// the driver finishes its Chrome teardown on its own thread.
+    /// the driver finishes its Chrome teardown on its own thread. The
+    /// teardown-completion signal is preserved (as in
+    /// [`Self::request_shutdown`]) so a live state keeps process control
+    /// over the stopping driver and undrained frame notifications are
+    /// released.
     pub fn stop(&mut self) {
+        // A queued Retry must not survive an explicit stop: drain_events
+        // would otherwise relaunch Chrome after the caller stopped it.
+        self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
-            let _ = session.send(BrowserCommand::Stop);
+            self.teardown_signal = Some(Box::new((*session).shutdown_signal()));
         }
         if matches!(self.status, BrowserStatus::Starting | BrowserStatus::Ready) {
             self.status = BrowserStatus::Stopped { code: None };
