@@ -334,7 +334,7 @@ impl ChromeProcess {
             if cancelled() {
                 return Ok(None);
             }
-            if let Some(url) = self.ws_url.as_ref().cloned() {
+            if let Some(url) = self.ws_url.clone() {
                 return Ok(Some(url));
             }
             match self.ws_url_rx.recv_timeout(Duration::from_millis(50)) {

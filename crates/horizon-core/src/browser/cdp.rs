@@ -410,7 +410,7 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
         .parse::<SocketAddr>()
         .map_err(|_| CdpError::InvalidUrl(format!("invalid socket address {authority}")))?;
     match socket.ip() {
-        IpAddr::V4(ip) if ip == Ipv4Addr::new(127, 0, 0, 1) => Ok(socket.to_string()),
+        IpAddr::V4(ip) if ip == Ipv4Addr::LOCALHOST => Ok(socket.to_string()),
         _ => Err(CdpError::InvalidUrl(format!(
             "non-loopback address is not allowed: {}",
             socket.ip()
@@ -433,7 +433,7 @@ pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
             "devtools http: invalid socket address",
         )
     })?;
-    if socket.ip() != IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+    if socket.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "devtools http: non-loopback endpoint is not allowed",
