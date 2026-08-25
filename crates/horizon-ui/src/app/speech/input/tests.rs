@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "speech")]
 use crate::test_egui::DiscardTextures;
 use egui::Context;
 use horizon_core::PanelId;
 
-use super::{
-    HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, handle_profile_hotkeys,
-    hold_hotkey_transition,
-};
+#[cfg(feature = "speech")]
+use super::handle_profile_hotkeys;
+use super::{HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition};
 use crate::app::HeldSpeechBinding;
 use crate::app::speech::SpeechSink;
 use crate::app::test_support::test_app;
