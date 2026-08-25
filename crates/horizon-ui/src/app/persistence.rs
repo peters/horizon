@@ -52,12 +52,13 @@ impl HorizonApp {
             })
             .collect();
 
-        let runtime_state = RuntimeState::from_board_with_detached_workspaces(
+        let mut runtime_state = RuntimeState::from_board_with_detached_workspaces(
             &self.board,
             self.window_config.clone(),
             self.canvas_view,
             detached_workspaces,
         );
+        runtime_state.browser = self.template_config.browser.clone();
         if let Err(error) = self
             .session_store
             .save_runtime_state(&active_session.session_id, &runtime_state)

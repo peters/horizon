@@ -273,7 +273,7 @@ impl HorizonApp {
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
         let panel_output = self.board.process_output();
-        if panel_output.cwd_changed {
+        if panel_output.cwd_changed || panel_output.persisted_state_changed {
             self.mark_runtime_dirty();
         }
         let had_terminal_output = panel_output.activity.terminal || panel_output.activity.browser;
