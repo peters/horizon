@@ -37,6 +37,9 @@ pub enum SpeechEvent {
     Error(String),
 }
 
+mod input;
+pub(crate) use input::SPEECH_POLL_INTERVAL;
+
 #[cfg(feature = "speech")]
 mod capture;
 #[cfg(feature = "speech")]
