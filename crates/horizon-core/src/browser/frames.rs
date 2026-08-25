@@ -136,6 +136,7 @@ impl FrameSlot {
 
     /// Claim the single outstanding UI wake-up for this slot. Further
     /// frames remain coalesced in `latest` until the UI releases the claim.
+    #[must_use]
     pub(crate) fn claim_notification(&self) -> bool {
         self.notification_pending
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

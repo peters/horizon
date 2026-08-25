@@ -38,7 +38,7 @@ pub fn show(
         // Measure after the nav buttons so the cap fits the real remainder.
         // Without a chip the bar keeps its old full-width behavior.
         let url_max_width = if chip.is_some() {
-            (ui.available_width() - chip_width - 8.0).max(80.0)
+            (ui.available_width() - chip_width - 8.0).max(0.0)
         } else {
             f32::INFINITY
         };
@@ -156,16 +156,28 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
         // collapses in egui 0.36, growing the banner to the full body height
         // and hiding the page frame behind it.
         ui.horizontal(|ui| {
-            ui.add(
-                egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
-                    .wrap_mode(TextWrapMode::Truncate),
-            )
-            .on_hover_text(reason);
             let button_label = if browser.handoff_resolution_pending {
                 "Handing back…"
             } else {
                 "Done — hand back to agent"
             };
+            let button_width = ui
+                .painter()
+                .layout_no_wrap(
+                    button_label.to_owned(),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::WHITE,
+                )
+                .size()
+                .x
+                + (ui.spacing().button_padding.x * 2.0);
+            let label_width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(0.0);
+            ui.add_sized(
+                [label_width, 0.0],
+                egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
+                    .wrap_mode(TextWrapMode::Truncate),
+            )
+            .on_hover_text(reason);
             clicked = ui
                 .add_enabled(
                     interactive && !browser.handoff_resolution_pending,
