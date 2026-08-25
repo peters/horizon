@@ -21,15 +21,32 @@ pub fn show(
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
+        // Reserve the chip's natural width up front so the URL bar's
+        // expanding width cannot starve it (a trailing `right_to_left`
+        // scope gets zero remaining width and the chip renders invisibly).
+        let chip = ownership_chip_label(browser);
+        let chip_width = chip.as_ref().map_or(0.0, |(label, _)| {
+            ui.painter()
+                .layout_no_wrap(label.clone(), egui::FontId::proportional(10.0), egui::Color32::WHITE)
+                .size()
+                .x
+        });
         let mut clicked = false;
         clicked |= nav_button(ui, "←", "Back", browser, BrowserCommand::Back, interactive);
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
-        let (url_focused, url_clicked) = url_bar(ui, panel_id, browser, state, interactive);
+        // Measure after the nav buttons so the cap fits the real remainder.
+        // Without a chip the bar keeps its old full-width behavior.
+        let url_max_width = if chip.is_some() {
+            (ui.available_width() - chip_width - 8.0).max(80.0)
+        } else {
+            f32::INFINITY
+        };
+        let (url_focused, url_clicked) = url_bar(ui, panel_id, browser, state, interactive, url_max_width);
         clicked |= url_clicked;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ownership_chip(ui, browser);
-        });
+        if let Some((label, color)) = chip {
+            ui.label(RichText::new(label).size(10.0).color(color).strong());
+        }
         (url_focused, clicked)
     });
     let (url_focused, mut clicked) = chrome_row.inner;
@@ -81,6 +98,7 @@ fn url_bar(
     browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
     interactive: bool,
+    max_width: f32,
 ) -> (bool, bool) {
     let id = ui.make_persistent_id(("browser-url-bar", panel_id));
     let display_url = browser.display_url();
@@ -94,7 +112,7 @@ fn url_bar(
         TextEdit::singleline(&mut state.url_buffer)
             .id(id)
             .hint_text("https://…")
-            .desired_width(f32::INFINITY)
+            .desired_width(max_width)
             .font(egui::FontId::monospace(11.5)),
     );
     // egui's singleline TextEdit consumes Enter and drops its own focus
@@ -116,50 +134,54 @@ fn url_bar(
     (response.has_focus() || submitted, response.clicked())
 }
 
-fn ownership_chip(ui: &mut Ui, browser: &BrowserPanelState) {
-    let (label, color) = if browser.handoff_reason.is_some() {
-        (String::from("waiting"), theme::PALETTE_YELLOW())
-    } else if let Some(owner) = &browser.owner {
-        (format!("agent: {owner}"), theme::PALETTE_GREEN())
+/// The chip's label and color, or `None` when neither an agent owner nor a
+/// pending handoff should be surfaced.
+fn ownership_chip_label(browser: &BrowserPanelState) -> Option<(String, egui::Color32)> {
+    if browser.handoff_reason.is_some() {
+        Some((String::from("waiting"), theme::PALETTE_YELLOW()))
     } else {
-        return;
-    };
-    ui.label(RichText::new(label).size(10.0).color(color).strong());
+        browser
+            .owner
+            .as_ref()
+            .map(|owner| (format!("agent: {owner}"), theme::PALETTE_GREEN()))
+    }
 }
 
 fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, interactive: bool) -> bool {
     let mut clicked = false;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(theme::PALETTE_YELLOW());
-        ui.vertical(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let button_label = if browser.handoff_resolution_pending {
-                    "Handing back…"
-                } else {
-                    "Done — hand back to agent"
-                };
-                clicked = ui
-                    .add_enabled(
-                        interactive && !browser.handoff_resolution_pending,
-                        egui::Button::new(RichText::new(button_label).size(11.0))
-                            .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
-                            .corner_radius(6),
-                    )
-                    .clicked();
-                ui.add(
-                    egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
-                        .wrap_mode(TextWrapMode::Truncate),
+        // Single-line horizontal strip. Do not use a `right_to_left` row here:
+        // under a plain top-down parent the truncated label's wrap width
+        // collapses in egui 0.36, growing the banner to the full body height
+        // and hiding the page frame behind it.
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
+                    .wrap_mode(TextWrapMode::Truncate),
+            )
+            .on_hover_text(reason);
+            let button_label = if browser.handoff_resolution_pending {
+                "Handing back…"
+            } else {
+                "Done — hand back to agent"
+            };
+            clicked = ui
+                .add_enabled(
+                    interactive && !browser.handoff_resolution_pending,
+                    egui::Button::new(RichText::new(button_label).size(11.0))
+                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
+                        .corner_radius(6),
                 )
-                .on_hover_text(reason);
-            });
-            if let Some(error) = &browser.handoff_error {
-                ui.label(
-                    RichText::new(format!("Could not hand back: {error}"))
-                        .size(10.5)
-                        .color(theme::PALETTE_RED()),
-                );
-            }
+                .clicked();
         });
+        if let Some(error) = &browser.handoff_error {
+            ui.label(
+                RichText::new(format!("Could not hand back: {error}"))
+                    .size(10.5)
+                    .color(theme::PALETTE_RED()),
+            );
+        }
     });
     if clicked {
         browser.hand_back();
