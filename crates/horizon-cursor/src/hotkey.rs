@@ -94,13 +94,6 @@ impl GlobalHotkeys {
     }
 }
 
-fn invoke_wake(wake: &Mutex<Option<WakeFn>>) {
-    let callback = wake.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    if let Some(callback) = callback {
-        callback();
-    }
-}
-
 impl Drop for GlobalHotkeys {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
@@ -115,7 +108,7 @@ mod platform {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::channel;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::thread;
     use std::time::Duration;
 
@@ -184,7 +177,7 @@ mod platform {
                                 if tx.send(HotkeyEvent::Pressed(profile)).is_err() {
                                     break;
                                 }
-                                super::invoke_wake(&thread_wake);
+                                invoke_wake(&thread_wake);
                             }
                         }
                         Event::KeyRelease(release) => {
@@ -210,7 +203,7 @@ mod platform {
                                 if tx.send(HotkeyEvent::Released(profile)).is_err() {
                                     break;
                                 }
-                                super::invoke_wake(&thread_wake);
+                                invoke_wake(&thread_wake);
                             }
                         }
                         _ => {}
@@ -225,6 +218,13 @@ mod platform {
             thread: Some(thread),
             wake,
         })
+    }
+
+    fn invoke_wake(wake: &Mutex<Option<super::WakeFn>>) {
+        let callback = wake.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(callback) = callback {
+            callback();
+        }
     }
 
     fn lock_modifier_mask() -> u16 {
