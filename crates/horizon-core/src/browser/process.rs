@@ -72,7 +72,7 @@ pub struct ChromeProcess {
 /// teardown. Keeping the `Child` handle, rather than only its PID, prevents a
 /// timeout cleanup from targeting a later process that reused the number.
 #[derive(Clone, Default)]
-pub struct ChromeProcessControl {
+pub(crate) struct ChromeProcessControl {
     inner: Arc<Mutex<ChromeProcessControlState>>,
 }
 
@@ -96,7 +96,7 @@ impl ChromeProcessControl {
         }
     }
 
-    pub fn mark_registration_settled(&self) {
+    pub(super) fn mark_registration_settled(&self) {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -119,7 +119,7 @@ impl ChromeProcessControl {
     /// Whether no registered child remains alive. A driver completion signal
     /// is not sufficient: its final kill/reap can fail while this retained
     /// exact handle still owns a live Chrome process.
-    pub fn is_reaped(&self) -> bool {
+    pub(crate) fn is_reaped(&self) -> bool {
         let child = {
             let state = match self.inner.try_lock() {
                 Ok(state) => state,
@@ -239,7 +239,7 @@ impl ChromeProcess {
     ///
     /// # Errors
     /// Fails when the binary is missing or the process cannot start.
-    pub fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
+    pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
         validate_extra_args(&launch.extra_args)?;
         let command = resolve_binary(&launch.command)?;
         prepare_profile_dir(&launch.profile_dir)?;

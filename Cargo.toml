@@ -29,6 +29,7 @@ tungstenite = "0.30.0"
 # JPEG decoder for CDP screencast frames (change-driven video stream).
 zune-jpeg = "0.5.15"
 base64 = "0.23.1"
+atomicwrites = "0.4.4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
