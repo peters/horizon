@@ -731,8 +731,10 @@ mod tests {
                     let (sample_rate, channels, bits) = format.expect("fmt chunk before data");
                     assert_eq!(bits, 16, "fixture must be 16-bit PCM");
                     let samples: Vec<f32> = body
-                        .chunks_exact(2)
-                        .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32_768.0)
                         .collect();
                     return (samples, sample_rate, channels);
                 }
