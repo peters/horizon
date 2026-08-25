@@ -246,8 +246,7 @@ impl HorizonApp {
             // past the retirement guard and loads beside a still-resident
             // model.
             self.speech = None;
-            self.speech_global_hotkeys = None;
-            self.speech_global_hotkeys_tried = false;
+            self.reset_speech_global_hotkeys();
             self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
             // Held bindings persist until their release is consumed (kitty
             // release safety); only stop-attribution is reset.

@@ -1,8 +1,5 @@
 //! Desktop-window dictation: sink selection, clipboard paste, global PTT.
 
-use std::thread;
-use std::time::Duration;
-
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey};
 use horizon_cursor::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, send_paste_chord};
 
@@ -10,9 +7,19 @@ use super::super::HorizonApp;
 use super::SpeechSink;
 
 /// Choose the insert sink for a push-to-talk press.
+///
+/// A logically focused Horizon panel is only used while the root OS window
+/// actually has focus. Otherwise a background instance would keep routing
+/// global PTT into its last selected panel instead of the focused client.
 #[must_use]
-pub(crate) fn dictation_sink(focused_terminal: Option<PanelId>, desktop_injection: bool) -> Option<SpeechSink> {
-    if let Some(id) = focused_terminal {
+pub(crate) fn dictation_sink(
+    focused_terminal: Option<PanelId>,
+    desktop_injection: bool,
+    root_focused: bool,
+) -> Option<SpeechSink> {
+    if desktop_injection && !root_focused {
+        Some(SpeechSink::Desktop)
+    } else if let Some(id) = focused_terminal {
         Some(SpeechSink::Panel(id))
     } else if desktop_injection {
         Some(SpeechSink::Desktop)
@@ -26,24 +33,10 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
         return result;
     }
     let mut clipboard = arboard::Clipboard::new().map_err(|_| InjectError::Failed("clipboard unavailable"))?;
-    let previous = clipboard.get_text().ok();
     clipboard
         .set_text(text)
         .map_err(|_| InjectError::Failed("failed to copy transcript"))?;
-    match send_paste_chord() {
-        Ok(()) => {
-            if let Some(previous) = previous {
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(80));
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(previous);
-                    }
-                });
-            }
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
+    send_paste_chord()
 }
 
 pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
@@ -63,17 +56,21 @@ pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn reset_speech_global_hotkeys(&mut self) {
+        self.speech_global_hotkeys = None;
+        self.speech_global_hotkeys_tried = false;
+        self.speech_global_events_pending.clear();
+    }
+
     pub(in crate::app) fn sync_speech_global_hotkeys(&mut self) {
         let enabled = self.template_config.features.speech.desktop_injection && self.speech.is_some();
         if !enabled {
-            self.speech_global_hotkeys = None;
-            self.speech_global_hotkeys_tried = false;
+            self.reset_speech_global_hotkeys();
             return;
         }
         if self.speech_global_hotkeys.is_some() || self.speech_global_hotkeys_tried {
             return;
         }
-        self.speech_global_hotkeys_tried = true;
         let Some(speech) = self.speech.as_ref() else {
             return;
         };
@@ -82,6 +79,13 @@ impl HorizonApp {
             .iter()
             .filter_map(|(profile, binding)| hotkey_from_binding(*binding).map(|hotkey| (*profile, hotkey)))
             .collect();
+        if bindings.is_empty() {
+            // Leave local egui PTT enabled; an empty listener would swallow it.
+            self.speech_global_hotkeys = None;
+            self.speech_global_hotkeys_tried = true;
+            return;
+        }
+        self.speech_global_hotkeys_tried = true;
         match GlobalHotkeys::listen(&bindings) {
             Ok(hotkeys) => self.speech_global_hotkeys = Some(hotkeys),
             Err(HotkeyError::Unsupported) => {
@@ -134,16 +138,27 @@ mod tests {
     use crate::app::speech::SpeechSink;
 
     #[test]
-    fn focused_terminal_wins_over_desktop_flag() {
+    fn focused_terminal_wins_over_desktop_flag_while_root_is_focused() {
         let panel = PanelId(3);
-        assert_eq!(dictation_sink(Some(panel), true), Some(SpeechSink::Panel(panel)));
-        assert_eq!(dictation_sink(Some(panel), false), Some(SpeechSink::Panel(panel)));
+        assert_eq!(dictation_sink(Some(panel), true, true), Some(SpeechSink::Panel(panel)));
+        assert_eq!(dictation_sink(Some(panel), false, true), Some(SpeechSink::Panel(panel)));
+    }
+
+    #[test]
+    fn unfocused_root_uses_desktop_when_injection_is_enabled() {
+        let panel = PanelId(3);
+        assert_eq!(dictation_sink(Some(panel), true, false), Some(SpeechSink::Desktop));
+        assert_eq!(
+            dictation_sink(Some(panel), false, false),
+            Some(SpeechSink::Panel(panel))
+        );
     }
 
     #[test]
     fn desktop_flag_fills_in_when_no_terminal_is_focused() {
-        assert_eq!(dictation_sink(None, true), Some(SpeechSink::Desktop));
-        assert_eq!(dictation_sink(None, false), None);
+        assert_eq!(dictation_sink(None, true, true), Some(SpeechSink::Desktop));
+        assert_eq!(dictation_sink(None, true, false), Some(SpeechSink::Desktop));
+        assert_eq!(dictation_sink(None, false, true), None);
     }
 
     #[test]

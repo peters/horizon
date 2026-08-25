@@ -2,10 +2,12 @@
 //! another application has focus.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
+
+type WakeFn = Arc<dyn Fn() + Send + Sync>;
 
 /// One binding the listener should grab, tagged with the caller's profile index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,30 +57,47 @@ pub struct GlobalHotkeys {
     events: Receiver<HotkeyEvent>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    wake: Arc<Mutex<Option<WakeFn>>>,
 }
 
 impl GlobalHotkeys {
-    /// Grab `bindings` (profile index, spec). No-op empty list.
+    /// Grab `bindings` (profile index, spec).
     ///
     /// # Errors
-    /// Returns [`HotkeyError::Unsupported`] when this session has no X11 display,
-    /// or [`HotkeyError::Failed`] when the grab could not be established.
+    /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty or this
+    /// session has no X11 display, or [`HotkeyError::Failed`] when the grab
+    /// could not be established.
     pub fn listen(bindings: &[(usize, Hotkey)]) -> Result<Self, HotkeyError> {
         if bindings.is_empty() {
-            let (tx, events) = channel();
-            drop(tx);
-            return Ok(Self {
-                events,
-                shutdown: Arc::new(AtomicBool::new(false)),
-                thread: None,
-            });
+            return Err(HotkeyError::Unsupported);
         }
         platform::listen(bindings)
+    }
+
+    /// Ask the UI to repaint when a grabbed key is pressed or released.
+    /// Subsequent calls are ignored so the first installed waker wins.
+    pub fn set_wake(&self, wake: impl Fn() + Send + Sync + 'static) {
+        let mut slot = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(Arc::new(wake));
+        }
+    }
+
+    #[must_use]
+    pub fn has_wake(&self) -> bool {
+        self.wake.lock().unwrap_or_else(PoisonError::into_inner).is_some()
     }
 
     #[must_use]
     pub fn try_recv(&self) -> Option<HotkeyEvent> {
         self.events.try_recv().ok()
+    }
+}
+
+fn invoke_wake(wake: &Mutex<Option<WakeFn>>) {
+    let callback = wake.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    if let Some(callback) = callback {
+        callback();
     }
 }
 
@@ -94,9 +113,9 @@ impl Drop for GlobalHotkeys {
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
     use std::collections::HashMap;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::channel;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -119,13 +138,14 @@ mod platform {
             .map(|screen| screen.root)
             .ok_or(HotkeyError::Failed("X11 screen missing"))?;
 
-        let mut grabbed: HashMap<u8, usize> = HashMap::new();
+        let mut grabbed: HashMap<(u8, u16), usize> = HashMap::new();
         for (profile, hotkey) in bindings {
             let Some(keycode) = hotkey_keycode(&conn, *hotkey) else {
                 continue;
             };
-            grab_all_lock_variants(&conn, root, keycode, modifiers(*hotkey))?;
-            grabbed.insert(keycode, *profile);
+            let mods = modifiers(*hotkey);
+            grab_all_lock_variants(&conn, root, keycode, mods)?;
+            grabbed.insert(grab_key(keycode, mods), *profile);
         }
         if grabbed.is_empty() {
             return Err(HotkeyError::Failed("no speech hotkeys could be grabbed"));
@@ -135,10 +155,12 @@ mod platform {
         let (tx, events) = channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
+        let wake = Arc::new(Mutex::new(None));
+        let thread_wake = Arc::clone(&wake);
         let thread = thread::Builder::new()
             .name("horizon-speech-hotkeys".to_string())
             .spawn(move || {
-                let mut held: HashMap<u8, bool> = HashMap::new();
+                let mut held: HashMap<(u8, u16), bool> = HashMap::new();
                 let mut pending: Option<Event> = None;
                 while !thread_shutdown.load(Ordering::Relaxed) {
                     let event = match pending.take() {
@@ -154,13 +176,15 @@ mod platform {
                     };
                     match event {
                         Event::KeyPress(press) => {
-                            if let Some(&profile) = grabbed.get(&press.detail)
-                                && !held.get(&press.detail).copied().unwrap_or(false)
+                            let key = event_key(press.detail, press.state);
+                            if let Some(&profile) = grabbed.get(&key)
+                                && !held.get(&key).copied().unwrap_or(false)
                             {
-                                held.insert(press.detail, true);
+                                held.insert(key, true);
                                 if tx.send(HotkeyEvent::Pressed(profile)).is_err() {
                                     break;
                                 }
+                                super::invoke_wake(&thread_wake);
                             }
                         }
                         Event::KeyRelease(release) => {
@@ -179,11 +203,14 @@ mod platform {
                             if repeat {
                                 continue;
                             }
-                            if let Some(&profile) = grabbed.get(&release.detail)
-                                && held.insert(release.detail, false).unwrap_or(false)
-                                && tx.send(HotkeyEvent::Released(profile)).is_err()
+                            let key = event_key(release.detail, release.state);
+                            if let Some(&profile) = grabbed.get(&key)
+                                && held.insert(key, false).unwrap_or(false)
                             {
-                                break;
+                                if tx.send(HotkeyEvent::Released(profile)).is_err() {
+                                    break;
+                                }
+                                super::invoke_wake(&thread_wake);
                             }
                         }
                         _ => {}
@@ -196,7 +223,24 @@ mod platform {
             events,
             shutdown,
             thread: Some(thread),
+            wake,
         })
+    }
+
+    fn lock_modifier_mask() -> u16 {
+        u16::from(ModMask::LOCK) | u16::from(ModMask::M2)
+    }
+
+    fn normalized_mods(state: u16) -> u16 {
+        state & !lock_modifier_mask()
+    }
+
+    fn grab_key(keycode: u8, mods: ModMask) -> (u8, u16) {
+        (keycode, normalized_mods(u16::from(mods)))
+    }
+
+    fn event_key(keycode: u8, state: x11rb::protocol::xproto::KeyButMask) -> (u8, u16) {
+        (keycode, normalized_mods(u16::from(state)))
     }
 
     fn grab_all_lock_variants<C: x11rb::connection::Connection>(
@@ -256,7 +300,8 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
-        use super::{HotkeyKey, keysym};
+        use super::{Hotkey, HotkeyKey, grab_key, keysym, modifiers, normalized_mods};
+        use x11rb::protocol::xproto::ModMask;
 
         #[test]
         fn function_and_latin_keys_map_to_x11_keysyms() {
@@ -266,6 +311,32 @@ mod platform {
             assert_eq!(keysym(HotkeyKey::Digit(0)), Some(0x0030));
             assert_eq!(keysym(HotkeyKey::Function(0)), None);
         }
+
+        #[test]
+        fn modifier_masks_keep_ctrl_and_alt_bindings_distinct() {
+            let letter_k = Hotkey {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                super_: false,
+                key: HotkeyKey::Letter('k'),
+            };
+            let ctrl_k = Hotkey { ctrl: true, ..letter_k };
+            let alt_k = Hotkey { alt: true, ..letter_k };
+            assert_ne!(grab_key(45, modifiers(ctrl_k)), grab_key(45, modifiers(alt_k)));
+            let caps = u16::from(ModMask::CONTROL) | u16::from(ModMask::LOCK);
+            assert_eq!(normalized_mods(caps), u16::from(ModMask::CONTROL));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlobalHotkeys, HotkeyError};
+
+    #[test]
+    fn empty_binding_list_does_not_claim_a_listener() {
+        assert!(matches!(GlobalHotkeys::listen(&[]), Err(HotkeyError::Unsupported)));
     }
 }
 

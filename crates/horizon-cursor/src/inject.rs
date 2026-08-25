@@ -54,11 +54,11 @@ mod platform {
         let control = keysym_to_keycode(&conn, XK_CONTROL_L).ok_or(InjectError::Failed("Control keycode missing"))?;
         let vee = keysym_to_keycode(&conn, XK_V).ok_or(InjectError::Failed("V keycode missing"))?;
         fake_key(&conn, KEY_PRESS_EVENT, control)?;
-        fake_key(&conn, KEY_PRESS_EVENT, vee)?;
-        fake_key(&conn, KEY_RELEASE_EVENT, vee)?;
-        fake_key(&conn, KEY_RELEASE_EVENT, control)?;
-        conn.flush().map_err(|_| InjectError::Failed("X11 flush failed"))?;
-        Ok(())
+        let press_vee = fake_key(&conn, KEY_PRESS_EVENT, vee);
+        let release_vee = fake_key(&conn, KEY_RELEASE_EVENT, vee);
+        let release_control = fake_key(&conn, KEY_RELEASE_EVENT, control);
+        let flushed = conn.flush().map_err(|_| InjectError::Failed("X11 flush failed"));
+        press_vee.and(release_vee).and(release_control).and(flushed)
     }
 
     fn fake_key<C: x11rb::connection::Connection>(conn: &C, event_type: u8, keycode: u8) -> Result<(), InjectError> {

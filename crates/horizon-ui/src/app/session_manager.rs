@@ -224,8 +224,7 @@ impl HorizonApp {
         // and a preloader must find these workers already registered as
         // retiring.
         self.speech = None;
-        self.speech_global_hotkeys = None;
-        self.speech_global_hotkeys_tried = false;
+        self.reset_speech_global_hotkeys();
         self.speech = super::speech::SpeechSystem::from_config(&self.template_config.features.speech);
         self.sync_speech_global_hotkeys();
         // Held bindings persist until their release is consumed by the

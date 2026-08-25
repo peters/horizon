@@ -94,6 +94,17 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
 /// Which text surface ate a gated push-to-talk press, for the notice. The
 /// priority order mirrors `text_surface_active`; rename fields are the
 /// remaining case.
+fn clear_stale_hotkey_capture(ctx: &Context, settings_speech_tab_open: bool) -> bool {
+    let mut capturing_hotkey: bool = ctx
+        .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+        .unwrap_or(false);
+    if capturing_hotkey && !settings_speech_tab_open {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
+        capturing_hotkey = false;
+    }
+    capturing_hotkey
+}
+
 fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing: bool) -> &'static str {
     if settings_open {
         "the settings window is open"
@@ -165,15 +176,21 @@ fn handle_profile_hotkeys(
     engaged_profile
 }
 
-fn apply_global_hotkeys(
+fn apply_global_hotkey_events(
     speech: &mut SpeechSystem,
-    hotkeys: Option<&horizon_cursor::GlobalHotkeys>,
+    events: impl IntoIterator<Item = horizon_cursor::HotkeyEvent>,
     sink: Option<SpeechSink>,
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
-    events: &mut Vec<SpeechEvent>,
-) -> Option<usize> {
-    while let Some(event) = recv_global_hotkey(hotkeys) {
+    notices: &mut Vec<SpeechEvent>,
+) -> (Option<usize>, Vec<horizon_cursor::HotkeyEvent>) {
+    let mut deferred = Vec::new();
+    let mut started_this_drain = false;
+    for event in events {
+        if started_this_drain {
+            deferred.push(event);
+            continue;
+        }
         match event {
             horizon_cursor::HotkeyEvent::Pressed(profile) => {
                 tracing::info!(
@@ -183,7 +200,7 @@ fn apply_global_hotkeys(
                     "speech global hotkey pressed"
                 );
                 if !presses_allowed {
-                    events.push(no_start_notice(speech_activity(speech)));
+                    notices.push(no_start_notice(speech_activity(speech)));
                     continue;
                 }
                 match speech.hotkey_mode() {
@@ -198,8 +215,9 @@ fn apply_global_hotkeys(
                         );
                         if let Some(target) = transition.start_target {
                             speech.start(target, profile);
+                            started_this_drain = true;
                         } else {
-                            events.push(no_start_notice(speech_activity(speech)));
+                            notices.push(no_start_notice(speech_activity(speech)));
                         }
                         engaged_profile = transition.engaged_profile;
                     }
@@ -207,12 +225,13 @@ fn apply_global_hotkeys(
                         if speech.recording_sink().is_some() {
                             speech.stop();
                         } else if speech_activity(speech) != SpeechActivity::Idle {
-                            events.push(no_start_notice(speech_activity(speech)));
+                            notices.push(no_start_notice(speech_activity(speech)));
                         } else if let Some(target) = sink {
                             speech.start(target, profile);
                             engaged_profile = Some(profile);
+                            started_this_drain = true;
                         } else {
-                            events.push(no_start_notice(SpeechActivity::Idle));
+                            notices.push(no_start_notice(SpeechActivity::Idle));
                         }
                     }
                 }
@@ -225,6 +244,25 @@ fn apply_global_hotkeys(
             }
         }
     }
+    (engaged_profile, deferred)
+}
+
+fn apply_global_hotkeys(
+    speech: &mut SpeechSystem,
+    hotkeys: Option<&horizon_cursor::GlobalHotkeys>,
+    pending: &mut Vec<horizon_cursor::HotkeyEvent>,
+    sink: Option<SpeechSink>,
+    presses_allowed: bool,
+    engaged_profile: Option<usize>,
+    events: &mut Vec<SpeechEvent>,
+) -> Option<usize> {
+    let mut incoming = std::mem::take(pending);
+    while let Some(event) = recv_global_hotkey(hotkeys) {
+        incoming.push(event);
+    }
+    let (engaged_profile, deferred) =
+        apply_global_hotkey_events(speech, incoming, sink, presses_allowed, engaged_profile, events);
+    *pending = deferred;
     engaged_profile
 }
 
@@ -271,28 +309,32 @@ impl HorizonApp {
         }
     }
 
+    fn install_speech_global_wake(&self, ctx: &Context) {
+        if let Some(hotkeys) = self.speech_global_hotkeys.as_ref()
+            && !hotkeys.has_wake()
+        {
+            let ctx = ctx.clone();
+            hotkeys.set_wake(move || ctx.request_repaint());
+        }
+    }
+
     pub(in crate::app) fn handle_speech_input(&mut self, ctx: &Context) {
         let now = Instant::now();
         self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
         let desktop_injection = self.template_config.features.speech.desktop_injection;
         self.sync_speech_global_hotkeys();
-        let sink = dictation_sink(self.focused_root_terminal(), desktop_injection);
+        self.install_speech_global_wake(ctx);
         // Capture-state hygiene must run even without a speech runtime
         // (stub builds, or Speech Input disabled with Rebind still armed):
         // a stale flag would suppress global shortcuts indefinitely.
-        let mut capturing_hotkey: bool = ctx
-            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
-            .unwrap_or(false);
-        if capturing_hotkey && !self.settings_speech_tab_open() {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
-            capturing_hotkey = false;
-        }
+        let capturing_hotkey = clear_stale_hotkey_capture(ctx, self.settings_speech_tab_open());
         // A just-captured chord suppresses global shortcuts until its key
         // release is seen; if the window loses focus first, that release may
         // never arrive (Wayland/macOS), so recover the pending key here or it
         // would disable every shortcut indefinitely.
         let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let sink = dictation_sink(self.focused_root_terminal(), desktop_injection, root_focused_now);
         if !root_focused_now {
             ctx.data_mut(|data| {
                 data.insert_temp(
@@ -322,8 +364,7 @@ impl HorizonApp {
         // detached viewport ORs itself in during rendering, and the privacy
         // guard in `finalize_frame` cancels an unattended recording when no
         // Horizon window has focus (see `cancel_unattended_recording`).
-        let root_focused = root_focused_now;
-        self.any_viewport_focused = root_focused;
+        self.any_viewport_focused = root_focused_now;
 
         // While the settings binder is capturing a new hotkey, the pressed
         // chord must not also trigger the current binding. And while a
@@ -373,11 +414,15 @@ impl HorizonApp {
             self.speech_engaged_profile = apply_global_hotkeys(
                 speech,
                 self.speech_global_hotkeys.as_ref(),
+                &mut self.speech_global_events_pending,
                 sink,
                 presses_allowed,
                 self.speech_engaged_profile,
                 &mut events,
             );
+            if !self.speech_global_events_pending.is_empty() {
+                ctx.request_repaint();
+            }
         } else {
             self.speech_engaged_profile = handle_profile_hotkeys(
                 ctx,

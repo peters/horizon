@@ -44,9 +44,9 @@ impl SpeechSystem {
     }
 
     #[must_use]
-    #[cfg_attr(not(test), expect(dead_code, reason = "mirrors SpeechSystem"))]
+    #[allow(dead_code, reason = "mirrors SpeechSystem")]
     pub fn recording_target(&self) -> Option<PanelId> {
-        None
+        self.recording_sink().and_then(SpeechSink::panel)
     }
 
     #[must_use]
@@ -56,7 +56,7 @@ impl SpeechSystem {
 
     #[must_use]
     pub fn active_target(&self) -> Option<PanelId> {
-        None
+        self.active_sink().and_then(SpeechSink::panel)
     }
 
     #[must_use]
