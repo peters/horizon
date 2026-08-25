@@ -633,7 +633,7 @@ mod tests {
         let other = PanelId(8);
         let chord = horizon_core::ShortcutBinding::parse("F1").expect("valid test shortcut");
         let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
-        speech.start(target, 0);
+        speech.start(crate::app::speech::SpeechSink::Panel(target), 0);
         assert!(channels.capture_start_requested());
         app.speech = Some(speech);
         app.speech_engaged_profile = Some(0);

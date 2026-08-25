@@ -10,7 +10,8 @@ use horizon_core::PanelId;
 
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
-use super::{SpeechEvent, SpeechSystem};
+use super::desktop::{dictation_sink, inject_desktop_transcript, recv_global_hotkey};
+use super::{SpeechEvent, SpeechSink, SpeechSystem};
 use crate::input;
 use crate::theme;
 
@@ -19,7 +20,7 @@ const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
-    start_target: Option<PanelId>,
+    start_target: Option<SpeechSink>,
     stop: bool,
     engaged_profile: Option<usize>,
 }
@@ -37,7 +38,7 @@ fn hold_hotkey_transition(
     released: bool,
     engaged_profile: Option<usize>,
     activity: SpeechActivity,
-    focused_terminal: Option<PanelId>,
+    sink: Option<SpeechSink>,
 ) -> HoldHotkeyTransition {
     let mut engaged_profile = if activity == SpeechActivity::Recording {
         engaged_profile
@@ -45,7 +46,7 @@ fn hold_hotkey_transition(
         None
     };
     let start_target = if pressed && engaged_profile.is_none() && activity == SpeechActivity::Idle {
-        focused_terminal
+        sink
     } else {
         None
     };
@@ -64,7 +65,7 @@ fn hold_hotkey_transition(
 }
 
 fn speech_activity(speech: &SpeechSystem) -> SpeechActivity {
-    if speech.recording_target().is_some() {
+    if speech.recording_sink().is_some() {
         SpeechActivity::Recording
     } else if speech.is_active() {
         SpeechActivity::Busy
@@ -108,7 +109,7 @@ fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing
 fn handle_profile_hotkeys(
     ctx: &Context,
     speech: &mut SpeechSystem,
-    focused_terminal: Option<PanelId>,
+    sink: Option<SpeechSink>,
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
     events: &mut Vec<SpeechEvent>,
@@ -121,7 +122,7 @@ fn handle_profile_hotkeys(
             tracing::info!(
                 profile,
                 activity = ?speech_activity(speech),
-                terminal_focused = focused_terminal.is_some(),
+                desktop = matches!(sink, Some(SpeechSink::Desktop)),
                 "speech hotkey pressed"
             );
         }
@@ -133,10 +134,10 @@ fn handle_profile_hotkeys(
                     released,
                     engaged_profile,
                     speech_activity(speech),
-                    focused_terminal,
+                    sink,
                 );
-                if let Some(focused) = transition.start_target {
-                    speech.start(focused, profile);
+                if let Some(target) = transition.start_target {
+                    speech.start(target, profile);
                 } else if pressed {
                     events.push(no_start_notice(speech_activity(speech)));
                 }
@@ -147,16 +148,79 @@ fn handle_profile_hotkeys(
             }
             horizon_core::SpeechHotkeyMode::Toggle => {
                 if pressed {
-                    if speech.recording_target().is_some() {
+                    if speech.recording_sink().is_some() {
                         speech.stop();
                     } else if speech_activity(speech) != SpeechActivity::Idle {
                         // `start` below no-ops outside Idle; explain instead.
                         events.push(no_start_notice(speech_activity(speech)));
-                    } else if let Some(focused) = focused_terminal {
-                        speech.start(focused, profile);
+                    } else if let Some(target) = sink {
+                        speech.start(target, profile);
                     } else {
                         events.push(no_start_notice(SpeechActivity::Idle));
                     }
+                }
+            }
+        }
+    }
+    engaged_profile
+}
+
+fn apply_global_hotkeys(
+    speech: &mut SpeechSystem,
+    hotkeys: Option<&horizon_cursor::GlobalHotkeys>,
+    sink: Option<SpeechSink>,
+    presses_allowed: bool,
+    mut engaged_profile: Option<usize>,
+    events: &mut Vec<SpeechEvent>,
+) -> Option<usize> {
+    while let Some(event) = recv_global_hotkey(hotkeys) {
+        match event {
+            horizon_cursor::HotkeyEvent::Pressed(profile) => {
+                tracing::info!(
+                    profile,
+                    activity = ?speech_activity(speech),
+                    desktop = matches!(sink, Some(SpeechSink::Desktop)),
+                    "speech global hotkey pressed"
+                );
+                if !presses_allowed {
+                    events.push(no_start_notice(speech_activity(speech)));
+                    continue;
+                }
+                match speech.hotkey_mode() {
+                    horizon_core::SpeechHotkeyMode::Hold => {
+                        let transition = hold_hotkey_transition(
+                            profile,
+                            true,
+                            false,
+                            engaged_profile,
+                            speech_activity(speech),
+                            sink,
+                        );
+                        if let Some(target) = transition.start_target {
+                            speech.start(target, profile);
+                        } else {
+                            events.push(no_start_notice(speech_activity(speech)));
+                        }
+                        engaged_profile = transition.engaged_profile;
+                    }
+                    horizon_core::SpeechHotkeyMode::Toggle => {
+                        if speech.recording_sink().is_some() {
+                            speech.stop();
+                        } else if speech_activity(speech) != SpeechActivity::Idle {
+                            events.push(no_start_notice(speech_activity(speech)));
+                        } else if let Some(target) = sink {
+                            speech.start(target, profile);
+                            engaged_profile = Some(profile);
+                        } else {
+                            events.push(no_start_notice(SpeechActivity::Idle));
+                        }
+                    }
+                }
+            }
+            horizon_cursor::HotkeyEvent::Released(profile) => {
+                if speech.hotkey_mode() == horizon_core::SpeechHotkeyMode::Hold && engaged_profile == Some(profile) {
+                    speech.stop();
+                    engaged_profile = None;
                 }
             }
         }
@@ -185,19 +249,35 @@ impl HorizonApp {
     ///
     /// The hotkey listens on the root viewport only; panels in detached
     /// windows still dictate via their mic button.
-    pub(in crate::app) fn handle_speech_input(&mut self, ctx: &Context) {
-        let now = Instant::now();
-        self.expire_speech_release_ownership(now);
-        self.speech_escape_cancelled = false;
-        // The hotkey targets the focused panel, but only terminal-backed
-        // panels can receive typed text.
-        let focused_terminal = self.board.focused.filter(|id| {
+    fn focused_root_terminal(&self) -> Option<PanelId> {
+        self.board.focused.filter(|id| {
             self.board.panel(*id).is_some_and(|panel| {
                 // The root-viewport hotkey must not dictate into a panel
                 // living in a detached window (documented main-window scope).
                 panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
             })
-        });
+        })
+    }
+
+    fn cancel_vanished_speech_target(&mut self) {
+        let vanished_target = self
+            .speech
+            .as_ref()
+            .and_then(SpeechSystem::active_target)
+            .filter(|target| self.board.panel(*target).is_none());
+        if let Some(target) = vanished_target {
+            let _ = self.cancel_speech_target(target);
+            tracing::info!("recording target panel disappeared; recording cancelled");
+        }
+    }
+
+    pub(in crate::app) fn handle_speech_input(&mut self, ctx: &Context) {
+        let now = Instant::now();
+        self.expire_speech_release_ownership(now);
+        self.speech_escape_cancelled = false;
+        let desktop_injection = self.template_config.features.speech.desktop_injection;
+        self.sync_speech_global_hotkeys();
+        let sink = dictation_sink(self.focused_root_terminal(), desktop_injection);
         // Capture-state hygiene must run even without a speech runtime
         // (stub builds, or Speech Input disabled with Rebind still armed):
         // a stale flag would suppress global shortcuts indefinitely.
@@ -222,7 +302,7 @@ impl HorizonApp {
             });
         }
 
-        if !root_focused_now {
+        if !root_focused_now && !desktop_injection {
             self.stop_hold_on_focus_loss(ctx, now);
         }
 
@@ -232,20 +312,7 @@ impl HorizonApp {
             return;
         }
 
-        // Invariant: the active target panel must still exist — across
-        // Recording, AwaitingPcm, and Transcribing. Covers every removal
-        // path (single close, workspace bulk close, session teardown), so
-        // the mic can't stay open and a busy engine can't wedge behind a
-        // vanished panel while inference finishes into nothing.
-        let vanished_target = self
-            .speech
-            .as_ref()
-            .and_then(SpeechSystem::active_target)
-            .filter(|target| self.board.panel(*target).is_none());
-        if let Some(target) = vanished_target {
-            let _ = self.cancel_speech_target(target);
-            tracing::info!("recording target panel disappeared; recording cancelled");
-        }
+        self.cancel_vanished_speech_target();
 
         let Some(speech) = self.speech.as_mut() else {
             return;
@@ -300,14 +367,27 @@ impl HorizonApp {
                 events.push(SpeechEvent::Notice(format!("Push-to-talk press ignored: {surface}.")));
             }
         }
-        self.speech_engaged_profile = handle_profile_hotkeys(
-            ctx,
-            speech,
-            focused_terminal,
-            !capturing_hotkey && !text_surface_active,
-            self.speech_engaged_profile,
-            &mut events,
-        );
+        let global_ptt = self.speech_global_hotkeys.is_some();
+        if global_ptt {
+            let presses_allowed = !(capturing_hotkey || text_surface_active && root_focused_now);
+            self.speech_engaged_profile = apply_global_hotkeys(
+                speech,
+                self.speech_global_hotkeys.as_ref(),
+                sink,
+                presses_allowed,
+                self.speech_engaged_profile,
+                &mut events,
+            );
+        } else {
+            self.speech_engaged_profile = handle_profile_hotkeys(
+                ctx,
+                speech,
+                sink,
+                !capturing_hotkey && !text_surface_active,
+                self.speech_engaged_profile,
+                &mut events,
+            );
+        }
 
         // Escape cancels every active speech state, not just Recording:
         // AwaitingPcm and Transcribing cover the multi-second first-use
@@ -351,7 +431,7 @@ impl HorizonApp {
         // Capture/worker failures can end Recording during poll(), after the
         // transition above ran. Drop ownership before rendering can start a
         // new mic-button recording in this same frame.
-        let recording_finished = speech.recording_target().is_none();
+        let recording_finished = speech.recording_sink().is_none();
 
         match active_backend {
             Some(backend) => {
@@ -372,18 +452,36 @@ impl HorizonApp {
     fn inject_speech_events(&mut self, events: Vec<SpeechEvent>) {
         for event in events {
             match event {
-                SpeechEvent::Text { target, text } => {
-                    let Some(panel) = self.board.panel_mut(target) else {
-                        tracing::warn!("speech target panel closed before transcription finished");
-                        continue;
-                    };
-                    let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                        continue;
-                    };
-                    // Trailing space so consecutive dictations don't fuse words.
-                    let bytes = input::paste_bytes(&format!("{text} "), mode, true);
-                    panel.write_input(&bytes);
-                }
+                SpeechEvent::Text { target, text } => match target {
+                    SpeechSink::Panel(panel_id) => {
+                        let Some(panel) = self.board.panel_mut(panel_id) else {
+                            tracing::warn!("speech target panel closed before transcription finished");
+                            continue;
+                        };
+                        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+                            continue;
+                        };
+                        // Trailing space so consecutive dictations don't fuse words.
+                        let bytes = input::paste_bytes(&format!("{text} "), mode, true);
+                        panel.write_input(&bytes);
+                    }
+                    SpeechSink::Desktop => {
+                        let payload = format!("{text} ");
+                        match inject_desktop_transcript(&payload) {
+                            Ok(()) => {}
+                            Err(horizon_cursor::InjectError::Unsupported) => {
+                                self.show_speech_notice("Transcript copied — paste with Ctrl+V", false);
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "desktop speech inject failed");
+                                self.show_speech_notice(
+                                    format!("Transcript copied — paste with Ctrl+V ({error})"),
+                                    true,
+                                );
+                            }
+                        }
+                    }
+                },
                 SpeechEvent::Notice(message) => {
                     tracing::info!(%message, "speech notice");
                     self.show_speech_notice(message, false);
@@ -448,12 +546,12 @@ impl HorizonApp {
     /// root-viewport event at all. Evaluated after every viewport rendered:
     /// if no Horizon window has focus, the microphone must not stay open.
     pub(in crate::app) fn cancel_unattended_recording(&mut self) {
-        if self.any_viewport_focused {
+        if self.any_viewport_focused || self.template_config.features.speech.desktop_injection {
             return;
         }
         self.speech_engaged_profile = None;
         if let Some(speech) = self.speech.as_mut()
-            && speech.recording_target().is_some()
+            && speech.recording_sink().is_some()
         {
             speech.cancel();
             tracing::info!("all Horizon windows lost focus during dictation; recording cancelled");
@@ -467,6 +565,9 @@ impl HorizonApp {
     /// a detached viewport must still consume the physical key-up.
     pub(in crate::app) fn stop_hold_on_focus_loss(&mut self, ctx: &Context, now: Instant) {
         self.arm_speech_release_ownership(ctx, now);
+        if self.template_config.features.speech.desktop_injection {
+            return;
+        }
         let Some(speech) = self.speech.as_mut() else {
             return;
         };

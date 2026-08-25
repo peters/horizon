@@ -2,9 +2,14 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel, sync_channel};
 
 use horizon_core::{PanelId, SpeechHotkeyMode};
 
+use super::super::SpeechSink;
 use super::super::capture::{CaptureCmd, CaptureHandle, CapturedAudio};
 use super::super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
 use super::{MIN_PCM_SAMPLES, ProfileRuntime, SpeechEvent, SpeechSystem, State};
+
+fn panel(id: PanelId) -> SpeechSink {
+    SpeechSink::Panel(id)
+}
 
 struct Harness {
     capture_cmd_rx: Receiver<CaptureCmd>,
@@ -70,20 +75,32 @@ fn test_system() -> (SpeechSystem, Harness) {
 }
 
 fn start_and_stop(speech: &mut SpeechSystem, harness: &Harness, target: PanelId) -> u64 {
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
         CaptureCmd::Start(value) if value == generation
     ));
-    assert_eq!(speech.state, State::Recording { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: panel(target),
+            profile: 0
+        }
+    );
 
     speech.stop();
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("stop command"),
         CaptureCmd::Stop
     ));
-    assert_eq!(speech.state, State::AwaitingPcm { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::AwaitingPcm {
+            target: panel(target),
+            profile: 0
+        }
+    );
     generation
 }
 
@@ -95,13 +112,13 @@ fn submit_recording(speech: &mut SpeechSystem, harness: &Harness, target: PanelI
         .expect("queue PCM");
     assert!(speech.poll().is_empty());
     let job = harness.job_rx.try_recv().expect("worker job");
-    assert_eq!(job.target, target);
+    assert_eq!(job.target, panel(target));
     assert_eq!(job.generation, generation);
     assert_eq!(job.pcm.len(), MIN_PCM_SAMPLES);
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: panel(target),
             profile: 0,
             generation,
         }
@@ -189,7 +206,7 @@ fn cancel_returns_to_idle_from_recording_and_awaiting_pcm() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
 
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
         CaptureCmd::Start(1)
@@ -216,16 +233,16 @@ fn start_is_ignored_while_busy_and_for_unknown_profiles() {
     let first = PanelId(1);
     let second = PanelId(2);
 
-    speech.start(first, 0);
+    speech.start(panel(first), 0);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("first start"),
         CaptureCmd::Start(1)
     ));
-    speech.start(second, 1);
+    speech.start(panel(second), 1);
     assert_eq!(
         speech.state,
         State::Recording {
-            target: first,
+            target: panel(first),
             profile: 0
         }
     );
@@ -236,7 +253,7 @@ fn start_is_ignored_while_busy_and_for_unknown_profiles() {
         harness.capture_cmd_rx.try_recv().expect("cancel"),
         CaptureCmd::Cancel
     ));
-    speech.start(second, 99);
+    speech.start(panel(second), 99);
     assert_eq!(speech.state, State::Idle);
     assert!(matches!(harness.capture_cmd_rx.try_recv(), Err(TryRecvError::Empty)));
 }
@@ -252,7 +269,13 @@ fn toggle_stops_only_the_panel_that_owns_the_recording() {
         CaptureCmd::Start(1)
     ));
     speech.toggle(PanelId(4));
-    assert_eq!(speech.state, State::Recording { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: panel(target),
+            profile: 0
+        }
+    );
     assert!(matches!(harness.capture_cmd_rx.try_recv(), Err(TryRecvError::Empty)));
 
     speech.toggle(target);
@@ -260,7 +283,13 @@ fn toggle_stops_only_the_panel_that_owns_the_recording() {
         harness.capture_cmd_rx.try_recv().expect("stop command"),
         CaptureCmd::Stop
     ));
-    assert_eq!(speech.state, State::AwaitingPcm { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::AwaitingPcm {
+            target: panel(target),
+            profile: 0
+        }
+    );
 }
 
 #[test]
@@ -268,7 +297,7 @@ fn mic_button_reuses_the_last_hotkey_profile() {
     let (mut speech, harness) = test_system();
     let target = PanelId(5);
 
-    speech.start(target, 1);
+    speech.start(panel(target), 1);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("profile start"),
         CaptureCmd::Start(1)
@@ -284,14 +313,20 @@ fn mic_button_reuses_the_last_hotkey_profile() {
         harness.capture_cmd_rx.try_recv().expect("toggle start"),
         CaptureCmd::Start(2)
     ));
-    assert_eq!(speech.state, State::Recording { target, profile: 1 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: panel(target),
+            profile: 1
+        }
+    );
 }
 
 #[test]
 fn current_capture_error_cancels_recording_and_returns_to_idle() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
@@ -319,7 +354,7 @@ fn current_capture_error_cancels_recording_and_returns_to_idle() {
 #[test]
 fn disconnected_capture_worker_returns_recording_to_idle() {
     let (mut speech, harness) = test_system();
-    speech.start(PanelId(7), 0);
+    speech.start(panel(PanelId(7)), 0);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
         CaptureCmd::Start(1)
@@ -339,7 +374,7 @@ fn disconnected_capture_worker_returns_recording_to_idle() {
 fn auto_finalized_pcm_while_recording_is_submitted() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     let generation = speech.generation;
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("start command"),
@@ -353,13 +388,13 @@ fn auto_finalized_pcm_while_recording_is_submitted() {
     assert!(speech.poll().is_empty());
 
     let job = harness.job_rx.try_recv().expect("worker job");
-    assert_eq!(job.target, target);
+    assert_eq!(job.target, panel(target));
     assert_eq!(job.generation, generation);
     assert_eq!(job.pcm.len(), MIN_PCM_SAMPLES);
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: panel(target),
             profile: 0,
             generation,
         }
@@ -382,7 +417,7 @@ fn matching_worker_success_and_failure_complete_the_active_generation() {
     harness
         .worker_event_tx
         .send(WorkerEvent::Done {
-            target,
+            target: panel(target),
             generation: job.generation,
             text: "hello".to_string(),
         })
@@ -394,14 +429,14 @@ fn matching_worker_success_and_failure_complete_the_active_generation() {
     assert!(matches!(
         events.as_slice(),
         [SpeechEvent::Text { target: event_target, text }]
-            if *event_target == target && text == "hello"
+            if *event_target == panel(target) && text == "hello"
     ));
 
     let job = submit_recording(&mut speech, &harness, target);
     harness
         .worker_event_tx
         .send(WorkerEvent::Failed {
-            target,
+            target: panel(target),
             generation: job.generation,
             message: "failed".to_string(),
         })
@@ -427,12 +462,12 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
             backend: "stale backend".to_string(),
         },
         WorkerEvent::Done {
-            target,
+            target: panel(target),
             generation: old_job.generation,
             text: "stale".to_string(),
         },
         WorkerEvent::Failed {
-            target,
+            target: panel(target),
             generation: old_job.generation,
             message: "stale failure".to_string(),
         },
@@ -444,7 +479,7 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     assert_eq!(
         speech.state,
         State::Transcribing {
-            target,
+            target: panel(target),
             profile: 0,
             generation: current_job.generation,
         }
@@ -453,7 +488,7 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     harness
         .worker_event_tx
         .send(WorkerEvent::Done {
-            target,
+            target: panel(target),
             generation: current_job.generation,
             text: "current".to_string(),
         })
@@ -462,7 +497,7 @@ fn stale_worker_completion_cannot_finish_or_emit_into_new_generation() {
     assert!(matches!(
         events.as_slice(),
         [SpeechEvent::Text { target: event_target, text }]
-            if *event_target == target && text == "current"
+            if *event_target == panel(target) && text == "current"
     ));
     assert_eq!(speech.state, State::Idle);
 }
@@ -536,7 +571,7 @@ fn full_worker_queue_is_bounded_and_returns_to_idle() {
 fn cancelled_capture_generation_is_ignored_after_restart() {
     let (mut speech, harness) = test_system();
     let target = PanelId(7);
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("first start"),
         CaptureCmd::Start(1)
@@ -547,7 +582,7 @@ fn cancelled_capture_generation_is_ignored_after_restart() {
         CaptureCmd::Cancel
     ));
 
-    speech.start(target, 0);
+    speech.start(panel(target), 0);
     assert!(matches!(
         harness.capture_cmd_rx.try_recv().expect("second start"),
         CaptureCmd::Start(2)
@@ -557,6 +592,43 @@ fn cancelled_capture_generation_is_ignored_after_restart() {
         .send((1, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
         .expect("queue stale PCM");
     assert!(speech.poll().is_empty());
-    assert_eq!(speech.state, State::Recording { target, profile: 0 });
+    assert_eq!(
+        speech.state,
+        State::Recording {
+            target: panel(target),
+            profile: 0
+        }
+    );
     assert!(matches!(harness.job_rx.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn desktop_sink_is_echoed_through_transcription() {
+    let (mut speech, harness) = test_system();
+    speech.start(SpeechSink::Desktop, 0);
+    assert_eq!(speech.recording_sink(), Some(SpeechSink::Desktop));
+    assert_eq!(speech.recording_target(), None);
+    assert_eq!(speech.active_target(), None);
+    speech.stop();
+    harness
+        .pcm_tx
+        .send((speech.generation, Ok(captured(vec![0.0; MIN_PCM_SAMPLES]))))
+        .expect("queue PCM");
+    assert!(speech.poll().is_empty());
+    let job = harness.job_rx.try_recv().expect("worker job");
+    assert_eq!(job.target, SpeechSink::Desktop);
+    harness
+        .worker_event_tx
+        .send(WorkerEvent::Done {
+            target: SpeechSink::Desktop,
+            generation: job.generation,
+            text: "hello desktop".to_string(),
+        })
+        .expect("queue result");
+    let events = speech.poll();
+    assert!(matches!(
+        events.as_slice(),
+        [SpeechEvent::Text { target: SpeechSink::Desktop, text }] if text == "hello desktop"
+    ));
+    assert_eq!(speech.state, State::Idle);
 }

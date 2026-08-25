@@ -345,9 +345,12 @@ features:
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
     preload: false       # true = load the model at startup; first dictation becomes instant
+    desktop_injection: false  # true = PTT pastes into the focused OS window when Horizon isn't focused
 ```
 
 The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button.
+
+Set `desktop_injection: true` to dictate into other applications: click the target (a Teams chat, a browser field, another terminal), hold the push-to-talk key, speak, and release. Horizon must not steal focus. The transcript is pasted into whoever has keyboard focus. On Linux this uses X11 (clipboard + Ctrl+V); a Wayland session that cannot synthesize a paste chord copies the transcript and shows a notice to paste with Ctrl+V. The mic button always types into its Horizon panel.
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
 

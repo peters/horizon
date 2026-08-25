@@ -12,7 +12,7 @@ use horizon_core::{PanelId, ShortcutBinding, SpeechConfig, SpeechHotkeyMode};
 
 use super::capture::{CaptureCmd, CaptureHandle, CapturePoll, CapturedAudio};
 use super::worker::{Job, PRELOAD_GENERATION, WorkerEvent, WorkerHandle};
-use super::{MicState, SpeechEvent};
+use super::{MicState, SpeechEvent, SpeechSink};
 
 /// Recordings shorter than this are dropped as accidental taps.
 const MIN_PCM_SAMPLES: usize = 4_000; // 0.25 s at 16 kHz
@@ -30,19 +30,19 @@ fn seconds_of(samples: usize) -> f32 {
 enum State {
     Idle,
     Recording {
-        target: PanelId,
+        target: SpeechSink,
         profile: usize,
     },
     /// Mic stopped; awaiting the captured PCM from the capture thread. A
     /// capture error here still returns to Idle.
     AwaitingPcm {
-        target: PanelId,
+        target: SpeechSink,
         profile: usize,
     },
     /// The worker owns the job; only its Done/Failed returns to Idle, and a
     /// late capture stream-error is ignored.
     Transcribing {
-        target: PanelId,
+        target: SpeechSink,
         profile: usize,
         generation: u64,
     },
@@ -183,30 +183,53 @@ impl SpeechSystem {
     #[must_use]
     pub fn mic_state_for(&self, panel: PanelId) -> MicState {
         match self.state {
-            State::Recording { target, .. } if target == panel => MicState::Recording,
-            State::AwaitingPcm { target, .. } | State::Transcribing { target, .. } if target == panel => MicState::Busy,
+            State::Recording {
+                target: SpeechSink::Panel(id),
+                ..
+            } if id == panel => MicState::Recording,
+            State::AwaitingPcm {
+                target: SpeechSink::Panel(id),
+                ..
+            }
+            | State::Transcribing {
+                target: SpeechSink::Panel(id),
+                ..
+            } if id == panel => MicState::Busy,
             _ => MicState::Idle,
         }
     }
 
     #[must_use]
-    pub fn recording_target(&self) -> Option<PanelId> {
+    pub fn recording_sink(&self) -> Option<SpeechSink> {
         match self.state {
             State::Recording { target, .. } => Some(target),
             _ => None,
         }
     }
 
-    /// The target panel of any active state (recording, awaiting PCM, or
-    /// transcribing), for the "target must still exist" invariant.
     #[must_use]
-    pub fn active_target(&self) -> Option<PanelId> {
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by speech input tests"))]
+    pub fn recording_target(&self) -> Option<PanelId> {
+        self.recording_sink().and_then(SpeechSink::panel)
+    }
+
+    /// The target of any active state (recording, awaiting PCM, or
+    /// transcribing).
+    #[must_use]
+    pub fn active_sink(&self) -> Option<SpeechSink> {
         match self.state {
             State::Recording { target, .. }
             | State::AwaitingPcm { target, .. }
             | State::Transcribing { target, .. } => Some(target),
             State::Idle => None,
         }
+    }
+
+    /// The target panel of any active state, for the "target must still exist"
+    /// invariant. Desktop sinks have no panel to vanish.
+    #[must_use]
+    pub fn active_target(&self) -> Option<PanelId> {
+        self.active_sink().and_then(SpeechSink::panel)
     }
 
     /// Recording or transcribing — the frame loop keeps repainting (and thus
@@ -225,15 +248,16 @@ impl SpeechSystem {
     /// Mic-button semantics: start (with the last-used profile) when idle,
     /// stop when this panel is recording.
     pub fn toggle(&mut self, target: PanelId) {
+        let sink = SpeechSink::Panel(target);
         match self.state {
-            State::Idle => self.start(target, self.last_used),
-            State::Recording { target: current, .. } if current == target => self.stop(),
+            State::Idle => self.start(sink, self.last_used),
+            State::Recording { target: current, .. } if current == sink => self.stop(),
             // Recording another panel or transcription in flight: ignore.
             State::Recording { .. } | State::AwaitingPcm { .. } | State::Transcribing { .. } => {}
         }
     }
 
-    pub fn start(&mut self, target: PanelId, profile: usize) {
+    pub fn start(&mut self, target: SpeechSink, profile: usize) {
         if matches!(self.state, State::Idle) && profile < self.profiles.len() {
             self.generation += 1;
             self.last_used = profile;

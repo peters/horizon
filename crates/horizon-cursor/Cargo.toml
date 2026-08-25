@@ -5,14 +5,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Platform cursor position query for Horizon"
+description = "Platform cursor query, paste-chord injection, and global hotkeys for Horizon"
 repository.workspace = true
 
 [lints]
 workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-x11rb = { version = "0.14", default-features = false }
+x11rb = { version = "0.14", default-features = false, features = ["xtest"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

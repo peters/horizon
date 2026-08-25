@@ -9,6 +9,7 @@ use super::{
     hold_hotkey_transition,
 };
 use crate::app::HeldSpeechBinding;
+use crate::app::speech::SpeechSink;
 use crate::app::test_support::test_app;
 
 /// Root focus may move directly into a detached Horizon viewport. Keep
@@ -122,7 +123,14 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
     // A key with no profile binding must not engage anything.
     let _ = ctx
         .run_ui(frame(vec![press(Key::K)]), |ui| {
-            engaged = handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            engaged = handle_profile_hotkeys(
+                ui,
+                &mut speech,
+                Some(SpeechSink::Panel(target)),
+                true,
+                engaged,
+                &mut events,
+            );
         })
         .discard_textures();
     assert_eq!(engaged, None);
@@ -131,7 +139,14 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
     // F2 engages the second profile and starts capture into the target.
     let _ = ctx
         .run_ui(frame(vec![press(Key::F2)]), |ui| {
-            engaged = handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            engaged = handle_profile_hotkeys(
+                ui,
+                &mut speech,
+                Some(SpeechSink::Panel(target)),
+                true,
+                engaged,
+                &mut events,
+            );
         })
         .discard_textures();
     assert_eq!(engaged, Some(1));
@@ -142,7 +157,14 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
     // engine moves on to awaiting the captured PCM).
     let _ = ctx
         .run_ui(frame(vec![release(Key::F2)]), |ui| {
-            engaged = handle_profile_hotkeys(ui, &mut speech, Some(target), true, engaged, &mut events);
+            engaged = handle_profile_hotkeys(
+                ui,
+                &mut speech,
+                Some(SpeechSink::Panel(target)),
+                true,
+                engaged,
+                &mut events,
+            );
         })
         .discard_textures();
     assert_eq!(engaged, None);
@@ -155,7 +177,7 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
 
 #[test]
 fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
-    let focused = PanelId(7);
+    let focused = SpeechSink::Panel(PanelId(7));
     let starts = HoldHotkeyTransition {
         start_target: Some(focused),
         stop: false,
@@ -183,7 +205,7 @@ fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
 
 #[test]
 fn hold_hotkey_same_batch_tap_stops_only_its_own_recording() {
-    let focused = PanelId(7);
+    let focused = SpeechSink::Panel(PanelId(7));
     assert_eq!(
         hold_hotkey_transition(1, true, true, None, SpeechActivity::Idle, Some(focused)),
         HoldHotkeyTransition {
@@ -201,8 +223,27 @@ fn hold_hotkey_same_batch_tap_stops_only_its_own_recording() {
 }
 
 #[test]
+fn hold_hotkey_idle_without_a_terminal_can_start_desktop_dictation() {
+    assert_eq!(
+        hold_hotkey_transition(0, true, false, None, SpeechActivity::Idle, Some(SpeechSink::Desktop)),
+        HoldHotkeyTransition {
+            start_target: Some(SpeechSink::Desktop),
+            stop: false,
+            engaged_profile: Some(0),
+        }
+    );
+}
+
+#[test]
 fn hold_hotkey_drops_stale_ownership_after_recording_ends() {
-    let transition = hold_hotkey_transition(1, false, true, Some(1), SpeechActivity::Busy, Some(PanelId(7)));
+    let transition = hold_hotkey_transition(
+        1,
+        false,
+        true,
+        Some(1),
+        SpeechActivity::Busy,
+        Some(SpeechSink::Panel(PanelId(7))),
+    );
     assert_eq!(transition.engaged_profile, None);
     assert!(!transition.stop);
 }

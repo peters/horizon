@@ -187,6 +187,8 @@ pub struct HorizonApp {
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
     speech: Option<speech::SpeechSystem>,
+    speech_global_hotkeys: Option<horizon_cursor::GlobalHotkeys>,
+    speech_global_hotkeys_tried: bool,
     /// Every push-to-talk chord currently held (used to keep their key
     /// events, repeats, and releases out of the terminal input stream —
     /// multiple profile keys can be down simultaneously).
@@ -356,6 +358,7 @@ impl HorizonApp {
         app
     }
 
+    #[rustfmt::skip]
     fn initial_state(
         config: &Config,
         AppBootstrap {
@@ -405,10 +408,10 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
+            speech_global_hotkeys: None, speech_global_hotkeys_tried: false,
             speech_held_bindings: Vec::new(),
             speech_engaged_profile: None,
-            speech_escape_cancelled: false,
-            speech_escape_release_pending: false,
+            speech_escape_cancelled: false, speech_escape_release_pending: false,
             speech_escape_release_deadline: None,
             speech_notice: None,
             any_viewport_focused: true,

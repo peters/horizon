@@ -92,6 +92,20 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         return changed;
     }
 
+    ui.add_space(6.0);
+    changed |= ui
+        .checkbox(
+            &mut config.features.speech.desktop_injection,
+            egui::RichText::new("Paste into other apps")
+                .color(theme::FG())
+                .size(12.0),
+        )
+        .changed();
+    super::dim_label(
+        ui,
+        "When Horizon is not focused, push-to-talk pastes into the focused OS window. Linux X11 first; Wayland may copy to the clipboard instead.",
+    );
+
     // The microphone applies to every profile, so it renders in both the
     // profiles and the flat single-model layout. Backend and hotkey mode
     // are global too, but the flat grid below already hosts them — render
