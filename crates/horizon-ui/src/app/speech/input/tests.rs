@@ -3,9 +3,12 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "speech")]
 use crate::test_egui::DiscardTextures;
 use egui::Context;
-use horizon_core::PanelId;
+use horizon_core::{PanelId, WorkspaceId};
 
-use super::{HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition};
+use super::{
+    HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
+    terminal_matches_focused_viewport,
+};
 #[cfg(feature = "speech")]
 use super::{apply_global_hotkey_events, handle_profile_hotkeys};
 use crate::app::HeldSpeechBinding;
@@ -278,4 +281,14 @@ fn global_hold_defers_same_drain_release_until_the_next_batch() {
     assert_eq!(engaged, None);
     assert!(deferred.is_empty());
     assert_eq!(speech.recording_sink(), None);
+}
+
+#[test]
+fn terminal_matches_the_viewport_that_has_os_focus() {
+    let root = WorkspaceId(1);
+    let detached = WorkspaceId(2);
+    assert!(terminal_matches_focused_viewport(root, false, true, None));
+    assert!(!terminal_matches_focused_viewport(detached, true, true, None));
+    assert!(terminal_matches_focused_viewport(detached, true, false, Some(detached)));
+    assert!(!terminal_matches_focused_viewport(root, false, false, Some(detached)));
 }

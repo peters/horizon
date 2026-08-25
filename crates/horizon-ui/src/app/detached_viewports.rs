@@ -23,12 +23,17 @@ impl HorizonApp {
             .is_some_and(|workspace| self.detached_workspaces.contains_key(&workspace.local_id))
     }
 
-    pub(super) fn any_detached_viewport_focused(&self, ctx: &Context) -> bool {
-        self.detached_workspaces.keys().any(|local_id| {
-            ctx.input_for(detached_viewport_id(local_id), |input| {
+    pub(super) fn focused_detached_workspace_id(&self, ctx: &Context) -> Option<horizon_core::WorkspaceId> {
+        self.detached_workspaces.keys().find_map(|local_id| {
+            let focused = ctx.input_for(detached_viewport_id(local_id), |input| {
                 input.viewport().focused.unwrap_or(false)
-            })
+            });
+            focused.then(|| self.board.workspace_id_by_local_id(local_id)).flatten()
         })
+    }
+
+    pub(super) fn any_detached_viewport_focused(&self, ctx: &Context) -> bool {
+        self.focused_detached_workspace_id(ctx).is_some()
     }
 
     /// Whether any workspace still lives in the root window. The root

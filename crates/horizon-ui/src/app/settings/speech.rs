@@ -103,7 +103,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         .changed();
     super::dim_label(
         ui,
-        "When Horizon is not focused, push-to-talk pastes into the focused OS window. Linux X11 first; Wayland may copy to the clipboard instead.",
+        "When no Horizon window is focused, push-to-talk pastes into the focused OS window. Background dictation currently requires X11; it will not start on a pure Wayland session.",
     );
 
     // The microphone applies to every profile, so it renders in both the

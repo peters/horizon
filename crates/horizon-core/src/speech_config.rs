@@ -45,8 +45,9 @@ pub struct SpeechConfig {
     /// F1 = Norwegian via NB-Whisper, F2 = English via whisper-large-v3).
     /// When empty, the flat fields above act as a single unnamed profile.
     pub profiles: Vec<SpeechProfile>,
-    /// When true, push-to-talk with no focused Horizon terminal pastes into
-    /// the currently focused OS window. Mic-button dictation is unchanged.
+    /// When true, push-to-talk with no focused Horizon window pastes into
+    /// the currently focused OS window. Background dictation currently
+    /// requires an X11 global grab. Mic-button dictation is unchanged.
     pub desktop_injection: bool,
 }
 

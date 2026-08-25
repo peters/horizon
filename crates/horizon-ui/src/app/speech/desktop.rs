@@ -65,7 +65,29 @@ impl HorizonApp {
     pub(in crate::app) fn reset_speech_global_hotkeys(&mut self) {
         self.speech_global_hotkeys = None;
         self.speech_global_hotkeys_tried = false;
+        self.speech_global_hotkeys_suspended = false;
         self.speech_global_events_pending.clear();
+    }
+
+    pub(in crate::app) fn sync_speech_global_hotkeys_for_surfaces(
+        &mut self,
+        capturing_hotkey: bool,
+        text_surface_active: bool,
+        root_focused: bool,
+    ) {
+        let suspend = capturing_hotkey || (text_surface_active && root_focused);
+        if suspend {
+            if self.speech_global_hotkeys.is_some() {
+                self.speech_global_hotkeys = None;
+                self.speech_global_hotkeys_suspended = true;
+            }
+            return;
+        }
+        if self.speech_global_hotkeys_suspended {
+            self.speech_global_hotkeys_tried = false;
+            self.speech_global_hotkeys_suspended = false;
+        }
+        self.sync_speech_global_hotkeys();
     }
 
     pub(in crate::app) fn sync_speech_global_hotkeys(&mut self) {

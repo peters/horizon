@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::PanelId;
+use horizon_core::{PanelId, WorkspaceId};
 
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
@@ -103,6 +103,18 @@ fn clear_stale_hotkey_capture(ctx: &Context, settings_speech_tab_open: bool) -> 
         capturing_hotkey = false;
     }
     capturing_hotkey
+}
+
+fn terminal_matches_focused_viewport(
+    panel_workspace: WorkspaceId,
+    panel_is_detached: bool,
+    root_focused: bool,
+    focused_detached: Option<WorkspaceId>,
+) -> bool {
+    if let Some(detached) = focused_detached {
+        return panel_workspace == detached;
+    }
+    root_focused && !panel_is_detached
 }
 
 fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing: bool) -> &'static str {
@@ -288,10 +300,30 @@ impl HorizonApp {
 
     /// Push-to-talk hotkey handling plus draining speech results into the
     /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
-    fn focused_horizon_terminal(&self) -> Option<PanelId> {
-        self.board
-            .focused
-            .filter(|id| self.board.panel(*id).is_some_and(|panel| panel.terminal().is_some()))
+    fn focused_horizon_terminal(&self, ctx: &Context, root_focused: bool) -> Option<PanelId> {
+        let panel_id = self.board.focused?;
+        let panel = self.board.panel(panel_id)?;
+        panel.terminal()?;
+        terminal_matches_focused_viewport(
+            panel.workspace_id,
+            self.workspace_is_detached(panel.workspace_id),
+            root_focused,
+            self.focused_detached_workspace_id(ctx),
+        )
+        .then_some(panel_id)
+    }
+
+    fn speech_text_surface_active(&self) -> (bool, bool) {
+        let search_capturing = self
+            .search_overlay
+            .as_ref()
+            .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
+        let text_surface_active = self.settings.is_some()
+            || self.command_palette.is_some()
+            || search_capturing
+            || self.renaming_panel.is_some()
+            || self.renaming_workspace.is_some();
+        (text_surface_active, search_capturing)
     }
 
     fn cancel_vanished_speech_target(&mut self) {
@@ -320,8 +352,6 @@ impl HorizonApp {
         self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
         let desktop_injection = self.template_config.features.speech.desktop_injection;
-        self.sync_speech_global_hotkeys();
-        self.install_speech_global_wake(ctx);
         // Capture-state hygiene must run even without a speech runtime
         // (stub builds, or Speech Input disabled with Rebind still armed):
         // a stale flag would suppress global shortcuts indefinitely.
@@ -332,7 +362,14 @@ impl HorizonApp {
         // would disable every shortcut indefinitely.
         let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         let horizon_focused = root_focused_now || self.any_detached_viewport_focused(ctx);
-        let sink = dictation_sink(self.focused_horizon_terminal(), desktop_injection, horizon_focused);
+        let (text_surface_active, search_capturing) = self.speech_text_surface_active();
+        self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, root_focused_now);
+        self.install_speech_global_wake(ctx);
+        let sink = dictation_sink(
+            self.focused_horizon_terminal(ctx, root_focused_now),
+            desktop_injection,
+            horizon_focused,
+        );
         if !root_focused_now {
             ctx.data_mut(|data| {
                 data.insert_temp(
@@ -364,27 +401,6 @@ impl HorizonApp {
         // rendering; `cancel_unattended_recording` consumes the result.
         self.any_viewport_focused = horizon_focused;
 
-        // While the settings binder is capturing a new hotkey, the pressed
-        // chord must not also trigger the current binding. And while a
-        // text-entry surface is capturing keys (settings, command palette,
-        // a focused search input, rename), a printable hotkey belongs to
-        // that surface — engaging would both type and record. Terminal
-        // focus is NOT such a surface: dictating into the focused terminal
-        // is the normal case. Only new presses are gated; releases below
-        // always run so a hold started before opening a surface still
-        // stops. The search overlay OBJECT exists on every frame (the
-        // toolbar keeps an inactive one allocated), so it gates only while
-        // its input is actually focused — `is_some()` here once gated every
-        // press on every instance, permanently and silently.
-        let search_capturing = self
-            .search_overlay
-            .as_ref()
-            .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
-        let text_surface_active = self.settings.is_some()
-            || self.command_palette.is_some()
-            || search_capturing
-            || self.renaming_panel.is_some()
-            || self.renaming_workspace.is_some();
         let mut events = Vec::new();
         // A push-to-talk chord pressed while its presses are gated must not
         // read as a dead hotkey — say exactly which surface is eating the

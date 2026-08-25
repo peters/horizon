@@ -189,6 +189,7 @@ pub struct HorizonApp {
     speech: Option<speech::SpeechSystem>,
     speech_global_hotkeys: Option<horizon_cursor::GlobalHotkeys>,
     speech_global_hotkeys_tried: bool,
+    speech_global_hotkeys_suspended: bool,
     speech_global_events_pending: Vec<horizon_cursor::HotkeyEvent>,
     /// Every push-to-talk chord currently held (used to keep their key
     /// events, repeats, and releases out of the terminal input stream —
@@ -409,7 +410,7 @@ impl HorizonApp {
             transcript_root: None,
             template_config: config.clone(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
-            speech_global_hotkeys: None, speech_global_hotkeys_tried: false, speech_global_events_pending: Vec::new(),
+            speech_global_hotkeys: None, speech_global_hotkeys_tried: false, speech_global_hotkeys_suspended: false, speech_global_events_pending: Vec::new(),
             speech_held_bindings: Vec::new(),
             speech_engaged_profile: None,
             speech_escape_cancelled: false, speech_escape_release_pending: false,
