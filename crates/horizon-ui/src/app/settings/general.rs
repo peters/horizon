@@ -131,6 +131,18 @@ fn render_features_section(
         );
 
         ui.add_space(10.0);
+        changed |= ui
+            .checkbox(
+                &mut config.features.sidebar_accordion,
+                egui::RichText::new("Accordion Sidebar").color(theme::FG()).size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "Only the active workspace lists panels in the sidebar. Other workspaces collapse to a name and count.",
+        );
+
+        ui.add_space(10.0);
         changed |= super::speech::render(ui, config, model_info_cache);
     });
     changed

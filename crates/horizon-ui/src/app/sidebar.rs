@@ -36,6 +36,12 @@ struct SidebarPanelEntry {
     attention: Option<AttentionItem>,
 }
 
+#[derive(Clone, Copy)]
+struct SidebarWorkspaceRowInteraction {
+    hovered: bool,
+    clicked: bool,
+}
+
 #[derive(Clone, Copy, Default)]
 struct SidebarActions {
     create_workspace: bool,
@@ -248,6 +254,7 @@ impl HorizonApp {
         actions: &mut SidebarActions,
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
+        let accordion = self.template_config.features.sidebar_accordion;
         ui.add_space(4.0);
 
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
@@ -266,46 +273,9 @@ impl HorizonApp {
                 .max_rect(row_rect)
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                ui.add_space(14.0);
-
-                let bar_color = if workspace.attention_count > 0 {
-                    theme::PALETTE_RED()
-                } else {
-                    theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
-                };
-                let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
-                ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
-
-                ui.add_space(8.0);
-                let name_response = ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&workspace.name)
-                            .color(if workspace.is_active {
-                                theme::FG()
-                            } else {
-                                theme::FG_SOFT()
-                            })
-                            .size(13.0)
-                            .strong(),
-                    )
-                    .sense(Sense::click()),
-                );
-                click_target_hovered |= name_response.hovered();
-                row_clicked |= name_response.clicked();
-                if workspace.detached {
-                    ui.add_space(4.0);
-                    let detached_response = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("NEW WINDOW")
-                                .color(theme::FG_DIM())
-                                .size(8.5)
-                                .strong(),
-                        )
-                        .sense(Sense::click()),
-                    );
-                    click_target_hovered |= detached_response.hovered();
-                    row_clicked |= detached_response.clicked();
-                }
+                let interaction = render_sidebar_workspace_row_contents(ui, workspace, accordion);
+                click_target_hovered |= interaction.hovered;
+                row_clicked |= interaction.clicked;
             },
         );
 
@@ -328,9 +298,11 @@ impl HorizonApp {
         }
         Self::show_workspace_context_menu(&row_response, workspace, actions);
 
-        ui.add_space(2.0);
-        for panel in &workspace.panels {
-            self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
+        if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
+            ui.add_space(2.0);
+            for panel in &workspace.panels {
+                self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
+            }
         }
         ui.add_space(8.0);
     }
@@ -722,6 +694,87 @@ fn sidebar_workspace_drop_should_dock(target_detached: bool) -> bool {
     !target_detached
 }
 
+fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
+    is_active || !accordion
+}
+
+fn sidebar_workspace_name_width(available_width: f32, detached: bool) -> f32 {
+    let count_reserve = 28.0;
+    let detached_reserve = if detached { 62.0 } else { 0.0 };
+    (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
+}
+
+fn render_sidebar_workspace_row_contents(
+    ui: &mut egui::Ui,
+    workspace: &WorkspaceSidebarEntry,
+    accordion: bool,
+) -> SidebarWorkspaceRowInteraction {
+    let mut hovered = false;
+    let mut clicked = false;
+
+    ui.add_space(14.0);
+
+    let bar_color = if workspace.attention_count > 0 {
+        theme::PALETTE_RED()
+    } else {
+        theme::alpha(workspace.color, if workspace.is_active { 240 } else { 110 })
+    };
+    let bar_rect = ui.allocate_space(Vec2::new(3.0, 22.0)).1;
+    ui.painter().rect_filled(bar_rect, CornerRadius::same(2), bar_color);
+
+    ui.add_space(8.0);
+
+    let name = egui::RichText::new(&workspace.name)
+        .color(if workspace.is_active {
+            theme::FG()
+        } else {
+            theme::FG_SOFT()
+        })
+        .size(13.0)
+        .strong();
+    let name_response = if accordion {
+        let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached);
+        ui.add_sized(
+            Vec2::new(name_width, 18.0),
+            egui::Label::new(name).truncate().sense(Sense::click()),
+        )
+    } else {
+        ui.add(egui::Label::new(name).sense(Sense::click()))
+    };
+    hovered |= name_response.hovered();
+    clicked |= name_response.clicked();
+
+    if workspace.detached {
+        ui.add_space(4.0);
+        let detached_response = ui.add(
+            egui::Label::new(
+                egui::RichText::new("NEW WINDOW")
+                    .color(theme::FG_DIM())
+                    .size(8.5)
+                    .strong(),
+            )
+            .sense(Sense::click()),
+        );
+        hovered |= detached_response.hovered();
+        clicked |= detached_response.clicked();
+    }
+
+    if accordion {
+        let count_response = ui.add(
+            egui::Label::new(
+                egui::RichText::new(workspace.panels.len().to_string())
+                    .color(theme::FG_DIM())
+                    .size(11.0),
+            )
+            .sense(Sense::click()),
+        );
+        hovered |= count_response.hovered();
+        clicked |= count_response.clicked();
+    }
+
+    SidebarWorkspaceRowInteraction { hovered, clicked }
+}
+
 fn paint_workspace_row_bg(
     ui: &mut egui::Ui,
     workspace_rect: Rect,
@@ -808,7 +861,10 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
 
 #[cfg(test)]
 mod tests {
-    use super::{SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side};
+    use super::{
+        SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
+        sidebar_workspace_name_width, sidebar_workspace_shows_panels,
+    };
     use horizon_core::WorkspaceDockSide;
 
     #[test]
@@ -836,5 +892,29 @@ mod tests {
             sidebar_workspace_insert_dock_side(SidebarWorkspaceInsert::After),
             WorkspaceDockSide::Right
         );
+    }
+
+    #[test]
+    fn sidebar_keeps_panels_expanded_when_accordion_is_disabled() {
+        assert!(sidebar_workspace_shows_panels(false, false));
+        assert!(sidebar_workspace_shows_panels(true, false));
+    }
+
+    #[test]
+    fn sidebar_hides_panels_for_inactive_workspaces_when_accordion_is_enabled() {
+        assert!(!sidebar_workspace_shows_panels(false, true));
+    }
+
+    #[test]
+    fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
+        assert!(sidebar_workspace_shows_panels(true, true));
+    }
+
+    #[test]
+    fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
+        // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
+        let width = sidebar_workspace_name_width(143.0, true);
+        assert!(width < 48.0);
+        assert!((width - 43.0).abs() <= f32::EPSILON);
     }
 }
