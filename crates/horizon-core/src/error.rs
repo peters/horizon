@@ -14,6 +14,9 @@ pub enum Error {
     #[error("Editor error: {0}")]
     Editor(String),
 
+    #[error("Browser error: {0}")]
+    Browser(String),
+
     #[error("Git error: {0}")]
     Git(String),
 

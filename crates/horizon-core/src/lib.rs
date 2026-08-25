@@ -3,6 +3,7 @@
 mod agents;
 mod attention;
 mod board;
+pub mod browser;
 mod config;
 mod config_migration;
 pub mod dir_search;
