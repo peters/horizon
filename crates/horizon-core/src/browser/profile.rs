@@ -7,9 +7,19 @@ use std::path::PathBuf;
 use super::BrowserConfig;
 
 impl BrowserConfig {
+    /// Chrome rejects `Page.startScreencast` quality outside its range,
+    /// which would otherwise fail every screencast start and drive the
+    /// restart state machine without producing frames. Clamp once here so
+    /// every consumer sees an in-range value.
+    fn clamped(&self) -> Self {
+        let mut resolved = self.clone();
+        resolved.quality = resolved.quality.clamp(1, 100);
+        resolved
+    }
+
     pub(super) fn resolved_for_launch(&self) -> std::io::Result<Self> {
         let Some(configured_root) = &self.profile_root else {
-            return Ok(self.clone());
+            return Ok(self.clamped());
         };
         let expanded_root = crate::config::Config::expand_tilde(&configured_root.to_string_lossy());
         let absolute_root = if expanded_root.is_absolute() {
@@ -17,7 +27,7 @@ impl BrowserConfig {
         } else {
             std::env::current_dir()?.join(expanded_root)
         };
-        let mut resolved = self.clone();
+        let mut resolved = self.clamped();
         resolved.profile_root = Some(absolute_root);
         Ok(resolved)
     }
@@ -71,6 +81,21 @@ mod tests {
 
         assert_eq!(resolved.profile_root, Some(launch_dir.join("profiles/browser")));
         assert!(resolved.profile_root.is_some_and(|root| root.is_absolute()));
+    }
+
+    #[test]
+    fn screencast_quality_is_clamped_to_the_chrome_range() {
+        for (configured, expected) in [(0_u32, 1_u32), (1, 1), (100, 100), (101, 100), (255, 100)] {
+            let config = BrowserConfig {
+                quality: configured,
+                ..BrowserConfig::default()
+            };
+            let resolved = config.resolved_for_launch().expect("no profile root to resolve");
+            assert_eq!(
+                resolved.quality, expected,
+                "quality {configured} should clamp to {expected}"
+            );
+        }
     }
 
     #[test]

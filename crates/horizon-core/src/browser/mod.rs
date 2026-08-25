@@ -386,6 +386,11 @@ impl BrowserPanelState {
 
     /// Permanently close this panel and remove its persistent Chrome profile
     /// only after the driver has released the profile lock.
+    ///
+    /// The returned signal is what actually starts the profile deletion: it
+    /// must be polled or waited on (see [`BrowserShutdownSignal`]). Dropping
+    /// it leaves the profile on disk permanently.
+    #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
     pub fn close_permanently(&mut self) -> BrowserShutdownSignal {
         self.request_shutdown();
         let profile_dir = session::profile_dir(&self.config, &self.panel_local_id);

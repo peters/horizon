@@ -522,9 +522,18 @@ const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
 ///
+/// The launch config is resolved on the calling thread (profile root
+/// anchoring, quality clamping) so direct callers of this low-level entry
+/// point behave identically to `BrowserPanelState::start` instead of
+/// resolving a relative profile root against the driver thread's working
+/// directory.
+///
 /// # Errors
-/// Fails only when the OS thread cannot be spawned.
+/// Fails when the launch config cannot be resolved or the OS thread cannot
+/// be spawned.
 pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, String> {
+    let mut config = config;
+    config.browser = config.browser.resolved_for_launch().map_err(|err| err.to_string())?;
     let frame_slot = config.frame_slot.clone();
     let (command_tx, command_rx) = mpsc::channel::<BrowserCommand>();
     let (raw_event_tx, event_rx) = mpsc::channel::<BrowserEvent>();

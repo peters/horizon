@@ -408,8 +408,7 @@ fn transfer_speed_bytes_per_second(completed_bytes: u64, started_at: Instant, no
         return None;
     }
 
-    let elapsed_millis =
-        u64::try_from(now.saturating_duration_since(started_at).as_millis()).map_or(u64::MAX, |value| value);
+    let elapsed_millis = u64::try_from(now.saturating_duration_since(started_at).as_millis()).unwrap_or(u64::MAX);
     if elapsed_millis == 0 {
         return None;
     }

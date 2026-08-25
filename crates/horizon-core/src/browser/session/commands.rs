@@ -1,6 +1,7 @@
 //! UI-command handling for the browser driver: navigation, viewport, input,
 //! activity stamping, and stop/handoff requests.
 
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
@@ -22,7 +23,15 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) -> bool {
-        while let Ok(command) = command_rx.try_recv() {
+        loop {
+            let command = match command_rx.try_recv() {
+                Ok(command) => command,
+                Err(TryRecvError::Empty) => break,
+                // The last command sender dropped without sending Stop: no
+                // one left to service, so stop instead of spinning forever
+                // with the driver thread, Chrome, and profile lock alive.
+                Err(TryRecvError::Disconnected) => return true,
+            };
             match command {
                 BrowserCommand::Stop => return true,
                 BrowserCommand::Navigate(url) => self.navigate_to(link, event_tx, frame_slot, &url),
