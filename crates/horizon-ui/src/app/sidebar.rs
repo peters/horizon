@@ -254,6 +254,7 @@ impl HorizonApp {
         actions: &mut SidebarActions,
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
+        let accordion = self.template_config.features.sidebar_accordion;
         ui.add_space(4.0);
 
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), 32.0)).1;
@@ -272,7 +273,7 @@ impl HorizonApp {
                 .max_rect(row_rect)
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                let interaction = render_sidebar_workspace_row_contents(ui, workspace);
+                let interaction = render_sidebar_workspace_row_contents(ui, workspace, accordion);
                 click_target_hovered |= interaction.hovered;
                 row_clicked |= interaction.clicked;
             },
@@ -297,7 +298,7 @@ impl HorizonApp {
         }
         Self::show_workspace_context_menu(&row_response, workspace, actions);
 
-        if sidebar_workspace_shows_panels(workspace.is_active) {
+        if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
             ui.add_space(2.0);
             for panel in &workspace.panels {
                 self.render_sidebar_panel(ui, workspace, workspace_data, panel, actions);
@@ -693,13 +694,14 @@ fn sidebar_workspace_drop_should_dock(target_detached: bool) -> bool {
     !target_detached
 }
 
-fn sidebar_workspace_shows_panels(is_active: bool) -> bool {
-    is_active
+fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
+    is_active || !accordion
 }
 
 fn render_sidebar_workspace_row_contents(
     ui: &mut egui::Ui,
     workspace: &WorkspaceSidebarEntry,
+    accordion: bool,
 ) -> SidebarWorkspaceRowInteraction {
     let mut hovered = false;
     let mut clicked = false;
@@ -716,24 +718,25 @@ fn render_sidebar_workspace_row_contents(
 
     ui.add_space(8.0);
 
-    let count_reserve = 28.0;
-    let detached_reserve = if workspace.detached { 62.0 } else { 0.0 };
-    let name_width = (ui.available_width() - count_reserve - detached_reserve - 10.0).max(48.0);
-    let name_response = ui.add_sized(
-        Vec2::new(name_width, 18.0),
-        egui::Label::new(
-            egui::RichText::new(&workspace.name)
-                .color(if workspace.is_active {
-                    theme::FG()
-                } else {
-                    theme::FG_SOFT()
-                })
-                .size(13.0)
-                .strong(),
+    let name = egui::RichText::new(&workspace.name)
+        .color(if workspace.is_active {
+            theme::FG()
+        } else {
+            theme::FG_SOFT()
+        })
+        .size(13.0)
+        .strong();
+    let name_response = if accordion {
+        let count_reserve = 28.0;
+        let detached_reserve = if workspace.detached { 62.0 } else { 0.0 };
+        let name_width = (ui.available_width() - count_reserve - detached_reserve - 10.0).max(48.0);
+        ui.add_sized(
+            Vec2::new(name_width, 18.0),
+            egui::Label::new(name).truncate().sense(Sense::click()),
         )
-        .truncate()
-        .sense(Sense::click()),
-    );
+    } else {
+        ui.add(egui::Label::new(name).sense(Sense::click()))
+    };
     hovered |= name_response.hovered();
     clicked |= name_response.clicked();
 
@@ -752,16 +755,18 @@ fn render_sidebar_workspace_row_contents(
         clicked |= detached_response.clicked();
     }
 
-    let count_response = ui.add(
-        egui::Label::new(
-            egui::RichText::new(workspace.panels.len().to_string())
-                .color(theme::FG_DIM())
-                .size(11.0),
-        )
-        .sense(Sense::click()),
-    );
-    hovered |= count_response.hovered();
-    clicked |= count_response.clicked();
+    if accordion {
+        let count_response = ui.add(
+            egui::Label::new(
+                egui::RichText::new(workspace.panels.len().to_string())
+                    .color(theme::FG_DIM())
+                    .size(11.0),
+            )
+            .sense(Sense::click()),
+        );
+        hovered |= count_response.hovered();
+        clicked |= count_response.clicked();
+    }
 
     SidebarWorkspaceRowInteraction { hovered, clicked }
 }
@@ -886,12 +891,18 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_hides_panels_for_inactive_workspaces() {
-        assert!(!sidebar_workspace_shows_panels(false));
+    fn sidebar_keeps_panels_expanded_when_accordion_is_disabled() {
+        assert!(sidebar_workspace_shows_panels(false, false));
+        assert!(sidebar_workspace_shows_panels(true, false));
     }
 
     #[test]
-    fn sidebar_shows_panels_for_the_active_workspace() {
-        assert!(sidebar_workspace_shows_panels(true));
+    fn sidebar_hides_panels_for_inactive_workspaces_when_accordion_is_enabled() {
+        assert!(!sidebar_workspace_shows_panels(false, true));
+    }
+
+    #[test]
+    fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
+        assert!(sidebar_workspace_shows_panels(true, true));
     }
 }

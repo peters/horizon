@@ -492,6 +492,7 @@ pub struct FeaturesConfig {
     pub attention_feed: bool,
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
+    pub sidebar_accordion: bool,
     pub speech: SpeechConfig,
 }
 
@@ -500,6 +501,7 @@ impl Default for FeaturesConfig {
         Self {
             attention_feed: true,
             organize_workspaces_on_session_load: false,
+            sidebar_accordion: false,
             speech: SpeechConfig::default(),
         }
     }
@@ -831,6 +833,29 @@ mod tests {
     fn session_load_workspace_organization_defaults_disabled() {
         assert!(!FeaturesConfig::default().organize_workspaces_on_session_load);
         assert!(!Config::default().features.organize_workspaces_on_session_load);
+    }
+
+    #[test]
+    fn sidebar_accordion_defaults_disabled() {
+        assert!(!FeaturesConfig::default().sidebar_accordion);
+        assert!(!Config::default().features.sidebar_accordion);
+    }
+
+    #[test]
+    fn missing_sidebar_accordion_setting_keeps_it_disabled() {
+        let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("config should deserialize");
+
+        assert!(!config.features.sidebar_accordion);
+    }
+
+    #[test]
+    fn explicit_sidebar_accordion_true_is_preserved() {
+        let config = Config::from_yaml("features:\n  sidebar_accordion: true\n").expect("config should deserialize");
+
+        assert!(config.features.sidebar_accordion);
+        let yaml = config.to_yaml().expect("config should serialize");
+        let round_tripped = Config::from_yaml(&yaml).expect("serialized config should deserialize");
+        assert!(round_tripped.features.sidebar_accordion);
     }
 
     #[test]

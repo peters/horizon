@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Validate that the workspace sidebar collapses inactive workspaces so a board with many workspaces stays scannable, without changing click, drag, detach, or context-menu behavior.
+Validate that sidebar accordion is opt-in and off by default, and that enabling it collapses inactive workspaces without changing click, drag, detach, or context-menu behavior.
 
 ## Machine Requirements
 
@@ -24,6 +24,19 @@ Validate that the workspace sidebar collapses inactive workspaces so a board wit
 
 5. Keep the sidebar visible for the full pass (`Ctrl+Shift+B` if it is hidden).
 
+## Default-off Checks
+
+1. Confirm `features.sidebar_accordion` is absent or `false` in the smoke config.
+2. Create two workspaces with at least two panels each.
+3. Confirm **every** workspace still lists its panel rows.
+4. Confirm workspace rows do **not** show a panel count.
+5. Open Settings → General → Features and confirm **Accordion Sidebar** is unchecked.
+
+## Enable Accordion
+
+1. Enable **Accordion Sidebar** in Settings and save, or relaunch with `features.sidebar_accordion: true`.
+2. Confirm the setting stays on after save.
+
 ## Test Data Setup
 
 1. Create at least eight workspaces with **New**.
@@ -32,7 +45,7 @@ Validate that the workspace sidebar collapses inactive workspaces so a board wit
 4. Detach one workspace to a new window.
 5. If attention feed is enabled, produce at least one attention item in a non-active workspace.
 
-## Baseline
+## Baseline (accordion on)
 
 1. Confirm only the active workspace shows panel rows.
 2. Confirm every workspace row still shows its name, accent bar, and a panel count.
@@ -86,6 +99,7 @@ Accordion expansion is derived from the active workspace, not stored separately.
 
 ## Pass Criteria
 
-- Only the active workspace lists panels.
+- With the flag off, every workspace lists panels and rows have no panel count.
+- With the flag on, only the active workspace lists panels.
 - Click, drag, detach, and context-menu behavior from the workspace row still match pre-change behavior.
 - Panel counts and `NEW WINDOW` remain readable at the default sidebar width.
