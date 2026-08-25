@@ -698,6 +698,12 @@ fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
     is_active || !accordion
 }
 
+fn sidebar_workspace_name_width(available_width: f32, detached: bool) -> f32 {
+    let count_reserve = 28.0;
+    let detached_reserve = if detached { 62.0 } else { 0.0 };
+    (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
+}
+
 fn render_sidebar_workspace_row_contents(
     ui: &mut egui::Ui,
     workspace: &WorkspaceSidebarEntry,
@@ -727,9 +733,7 @@ fn render_sidebar_workspace_row_contents(
         .size(13.0)
         .strong();
     let name_response = if accordion {
-        let count_reserve = 28.0;
-        let detached_reserve = if workspace.detached { 62.0 } else { 0.0 };
-        let name_width = (ui.available_width() - count_reserve - detached_reserve - 10.0).max(48.0);
+        let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached);
         ui.add_sized(
             Vec2::new(name_width, 18.0),
             egui::Label::new(name).truncate().sense(Sense::click()),
@@ -859,7 +863,7 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
 mod tests {
     use super::{
         SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
-        sidebar_workspace_shows_panels,
+        sidebar_workspace_name_width, sidebar_workspace_shows_panels,
     };
     use horizon_core::WorkspaceDockSide;
 
@@ -904,5 +908,13 @@ mod tests {
     #[test]
     fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
         assert!(sidebar_workspace_shows_panels(true, true));
+    }
+
+    #[test]
+    fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
+        // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
+        let width = sidebar_workspace_name_width(143.0, true);
+        assert!(width < 48.0);
+        assert_eq!(width + 28.0 + 62.0 + 10.0, 143.0);
     }
 }
