@@ -334,7 +334,7 @@ impl ChromeProcess {
             if cancelled() {
                 return Ok(None);
             }
-            if let Some(url) = self.ws_url.take() {
+            if let Some(url) = self.ws_url.as_ref().cloned() {
                 return Ok(Some(url));
             }
             match self.ws_url_rx.recv_timeout(Duration::from_millis(50)) {
@@ -574,23 +574,22 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
     {
         return resolve_binary(command);
     }
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return Err(ChromeError::NoBinary);
-    };
-    for name in BINARY_CANDIDATES {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for name in BINARY_CANDIDATES {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join(name);
+                if is_executable_file(&candidate) {
+                    return Ok(candidate);
+                }
             }
         }
-    }
-    #[cfg(windows)]
-    for name in WINDOWS_BINARY_CANDIDATES {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Ok(candidate);
+        #[cfg(windows)]
+        for name in WINDOWS_BINARY_CANDIDATES {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }

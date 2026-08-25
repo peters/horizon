@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -401,11 +401,21 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
     let rest = ws_url
         .strip_prefix("ws://")
         .ok_or_else(|| CdpError::InvalidUrl(format!("{ws_url} (only ws:// is supported)")))?;
-    rest.split('/')
+    let authority = rest
+        .split('/')
         .next()
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| CdpError::InvalidUrl(format!("no host in {ws_url}")))
+        .ok_or_else(|| CdpError::InvalidUrl(format!("no host in {ws_url}")))?;
+    let socket = authority
+        .parse::<SocketAddr>()
+        .map_err(|_| CdpError::InvalidUrl(format!("invalid socket address {authority}")))?;
+    match socket.ip() {
+        IpAddr::V4(ip) if ip == Ipv4Addr::new(127, 0, 0, 1) => Ok(socket.to_string()),
+        _ => Err(CdpError::InvalidUrl(format!(
+            "non-loopback address is not allowed: {}",
+            socket.ip()
+        ))),
+    }
 }
 
 /// Fetch a JSON document from the `DevTools` HTTP endpoint.
@@ -417,7 +427,21 @@ fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
 /// Fails on any network or framing error, including a response header block
 /// that exceeds the 64 KB bound.
 pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
-    let mut stream = TcpStream::connect(host_port)?;
+    let socket = host_port.parse::<SocketAddr>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "devtools http: invalid socket address",
+        )
+    })?;
+    if socket.ip() != IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "devtools http: non-loopback endpoint is not allowed",
+        ));
+    }
+    let mut stream = TcpStream::connect_timeout(&socket, HANDSHAKE_TIMEOUT)?;
+    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let request = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes())?;
     let mut buf = Vec::new();
@@ -590,6 +614,14 @@ mod tests {
             "127.0.0.1:43977"
         );
         assert!(host_port_from_ws_url("http://x").is_err());
+        assert!(host_port_from_ws_url("ws://localhost:43977/devtools/page/xyz").is_err());
+        assert!(host_port_from_ws_url("ws://127.0.0.2:43977/devtools/page/xyz").is_err());
+    }
+
+    #[test]
+    fn fetch_json_rejects_non_loopback_endpoints() {
+        let err = fetch_json("192.168.0.1:9222", "/json/version").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

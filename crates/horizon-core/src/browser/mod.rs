@@ -1,5 +1,5 @@
-//! Browser panels: headless `Chrome` driven over the `CDP`
-//! Protocol, rendered inside Horizon as first-class panels.
+//! Browser-engine infrastructure for future Horizon browser panels:
+//! headless `Chrome` driven over the `CDP` protocol.
 //!
 //! Layout follows the module-boundary rules in
 //! `docs/architecture/maintainability.md`:
