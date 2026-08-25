@@ -915,6 +915,6 @@ mod tests {
         // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
         let width = sidebar_workspace_name_width(143.0, true);
         assert!(width < 48.0);
-        assert_eq!(width + 28.0 + 62.0 + 10.0, 143.0);
+        assert!((width - 43.0).abs() <= f32::EPSILON);
     }
 }
