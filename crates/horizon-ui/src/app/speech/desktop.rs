@@ -1,10 +1,14 @@
 //! Desktop-window dictation: sink selection, clipboard paste, global PTT.
 
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey};
 use horizon_cursor::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, send_paste_chord};
 
 use super::super::HorizonApp;
 use super::SpeechSink;
+
+static CLIPBOARD_OWNER: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
 
 /// Choose the insert sink for a push-to-talk press.
 ///
@@ -33,7 +37,32 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     clipboard
         .set_text(text)
         .map_err(|_| InjectError::Clipboard("failed to copy transcript"))?;
-    send_paste_chord()
+    let result = send_paste_chord();
+    retain_clipboard_owner(clipboard);
+    result
+}
+
+fn retain_clipboard_owner(clipboard: arboard::Clipboard) {
+    *CLIPBOARD_OWNER
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(clipboard);
+}
+
+/// Keep the X11 grab while a hold is in flight so a surface opening cannot
+/// drop a release that `XGrabKey` already consumed.
+fn keep_global_listener_while_suspending(engaged: Option<usize>, pending: &[HotkeyEvent]) -> bool {
+    if engaged.is_some() {
+        return true;
+    }
+    let mut held = 0i32;
+    for event in pending {
+        match event {
+            HotkeyEvent::Pressed(_) => held += 1,
+            HotkeyEvent::Released(_) => held -= 1,
+        }
+    }
+    held > 0
 }
 
 pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
@@ -77,6 +106,14 @@ impl HorizonApp {
     ) {
         let suspend = capturing_hotkey || (text_surface_active && root_focused);
         if suspend {
+            if let Some(hotkeys) = self.speech_global_hotkeys.as_ref() {
+                while let Some(event) = hotkeys.try_recv() {
+                    self.speech_global_events_pending.push(event);
+                }
+            }
+            if keep_global_listener_while_suspending(self.speech_engaged_profile, &self.speech_global_events_pending) {
+                return;
+            }
             if self.speech_global_hotkeys.is_some() {
                 self.speech_global_hotkeys = None;
                 self.speech_global_hotkeys_suspended = true;
@@ -200,7 +237,21 @@ mod tests {
         let binding = |key| horizon_core::ShortcutBinding::new(horizon_core::ShortcutModifiers::CTRL, key);
         assert!(super::hotkey_from_binding(binding(ShortcutKey::ArrowUp)).is_some());
         assert!(super::hotkey_from_binding(binding(ShortcutKey::Enter)).is_some());
+        assert!(super::hotkey_from_binding(binding(ShortcutKey::Function(35))).is_some());
         assert!(super::hotkey_from_binding(binding(ShortcutKey::Escape)).is_none());
+    }
+
+    #[test]
+    fn hold_in_flight_keeps_the_global_listener_while_suspending() {
+        use horizon_cursor::HotkeyEvent::{Pressed, Released};
+        assert!(super::keep_global_listener_while_suspending(Some(0), &[]));
+        assert!(!super::keep_global_listener_while_suspending(None, &[]));
+        assert!(super::keep_global_listener_while_suspending(None, &[Pressed(1)]));
+        assert!(!super::keep_global_listener_while_suspending(
+            None,
+            &[Pressed(1), Released(1)]
+        ));
+        assert!(!super::keep_global_listener_while_suspending(None, &[Released(1)]));
     }
 
     #[test]

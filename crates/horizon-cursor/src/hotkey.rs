@@ -75,8 +75,9 @@ impl GlobalHotkeys {
     ///
     /// # Errors
     /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty or this
-    /// session has no X11 display, or [`HotkeyError::Failed`] when the grab
-    /// could not be established.
+    /// session has no X11 display, or [`HotkeyError::Failed`] when none of the
+    /// bindings could be grabbed. Bindings that fail individually are omitted
+    /// from [`Self::profiles`] so local handling can keep them.
     pub fn listen(bindings: &[(usize, Hotkey)]) -> Result<Self, HotkeyError> {
         if bindings.is_empty() {
             return Err(HotkeyError::Unsupported);
@@ -134,7 +135,7 @@ mod platform {
     use x11rb::protocol::xproto::{ConnectionExt as _, GrabMode, ModMask};
 
     use super::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
-    use crate::inject::keysym_to_keycode;
+    use crate::inject::keysym_to_keycode_with_shift;
 
     const XK_F1: u32 = 0xffbe;
     const XK_0: u32 = 0x0030;
@@ -159,11 +160,12 @@ mod platform {
 
         let mut grabbed: HashMap<(u8, u16), usize> = HashMap::new();
         for (profile, hotkey) in bindings {
-            let Some(keycode) = hotkey_keycode(&conn, *hotkey) else {
+            let Some((keycode, mods)) = grab_spec(&conn, *hotkey) else {
                 continue;
             };
-            let mods = modifiers(*hotkey);
-            grab_all_lock_variants(&conn, root, keycode, mods)?;
+            if grab_all_lock_variants(&conn, root, keycode, mods).is_err() {
+                continue;
+            }
             grabbed.insert(grab_key(keycode, mods), *profile);
         }
         if grabbed.is_empty() {
@@ -296,11 +298,17 @@ mod platform {
             ModMask::M2,
             ModMask::LOCK | ModMask::M2,
         ];
-        for extra in extras {
-            conn.grab_key(true, root, base | extra, keycode, GrabMode::ASYNC, GrabMode::ASYNC)
-                .map_err(|_| HotkeyError::Failed("XGrabKey failed"))?
-                .check()
-                .map_err(|_| HotkeyError::Failed("XGrabKey denied"))?;
+        for (index, extra) in extras.iter().copied().enumerate() {
+            let grabbed = conn
+                .grab_key(true, root, base | extra, keycode, GrabMode::ASYNC, GrabMode::ASYNC)
+                .map_err(|_| HotkeyError::Failed("XGrabKey failed"))
+                .and_then(|cookie| cookie.check().map_err(|_| HotkeyError::Failed("XGrabKey denied")));
+            if grabbed.is_err() {
+                for extra in extras.iter().copied().take(index) {
+                    let _ = conn.ungrab_key(keycode, root, base | extra);
+                }
+                return grabbed;
+            }
         }
         Ok(())
     }
@@ -322,13 +330,18 @@ mod platform {
         mask
     }
 
-    fn hotkey_keycode<C: x11rb::connection::Connection>(conn: &C, hotkey: Hotkey) -> Option<u8> {
-        keysym_to_keycode(conn, keysym(hotkey.key)?)
+    fn grab_spec<C: x11rb::connection::Connection>(conn: &C, hotkey: Hotkey) -> Option<(u8, ModMask)> {
+        let (keycode, shift_level) = keysym_to_keycode_with_shift(conn, keysym(hotkey.key)?)?;
+        let mut mods = modifiers(hotkey);
+        if shift_level {
+            mods |= ModMask::SHIFT;
+        }
+        Some((keycode, mods))
     }
 
     fn keysym(key: HotkeyKey) -> Option<u32> {
         match key {
-            HotkeyKey::Function(index) => (1..=24)
+            HotkeyKey::Function(index) => (1..=35)
                 .contains(&index)
                 .then_some(XK_F1 + u32::from(index.saturating_sub(1))),
             HotkeyKey::Letter(letter) => {
@@ -360,11 +373,15 @@ mod platform {
         fn function_and_latin_keys_map_to_x11_keysyms() {
             assert_eq!(keysym(HotkeyKey::Function(1)), Some(0xffbe));
             assert_eq!(keysym(HotkeyKey::Function(9)), Some(0xffc6));
+            assert_eq!(keysym(HotkeyKey::Function(25)), Some(0xffd6));
+            assert_eq!(keysym(HotkeyKey::Function(35)), Some(0xffe0));
             assert_eq!(keysym(HotkeyKey::Letter('V')), Some(u32::from(b'v')));
             assert_eq!(keysym(HotkeyKey::Digit(0)), Some(0x0030));
             assert_eq!(keysym(HotkeyKey::Function(0)), None);
+            assert_eq!(keysym(HotkeyKey::Function(36)), None);
             assert_eq!(keysym(HotkeyKey::ArrowUp), Some(0xff52));
             assert_eq!(keysym(HotkeyKey::Enter), Some(0xff0d));
+            assert_eq!(keysym(HotkeyKey::Plus), Some(0x002b));
         }
 
         #[test]

@@ -25,7 +25,7 @@ impl fmt::Display for InjectError {
 impl std::error::Error for InjectError {}
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-pub(crate) use platform::keysym_to_keycode;
+pub(crate) use platform::keysym_to_keycode_with_shift;
 
 /// Send Ctrl+V (Cmd+V on macOS) to the focused client without changing focus.
 ///
@@ -72,6 +72,13 @@ mod platform {
     }
 
     pub(crate) fn keysym_to_keycode<C: x11rb::connection::Connection>(conn: &C, keysym: u32) -> Option<u8> {
+        keysym_to_keycode_with_shift(conn, keysym).map(|(keycode, _)| keycode)
+    }
+
+    pub(crate) fn keysym_to_keycode_with_shift<C: x11rb::connection::Connection>(
+        conn: &C,
+        keysym: u32,
+    ) -> Option<(u8, bool)> {
         let setup = conn.setup();
         let min = setup.min_keycode;
         let count = setup.max_keycode.checked_sub(min)?.saturating_add(1);
@@ -81,13 +88,20 @@ mod platform {
             return None;
         }
         mapping.keysyms.chunks(per).enumerate().find_map(|(index, keysyms)| {
-            if !keysyms.contains(&keysym) {
-                return None;
-            }
+            let shift = super::shift_required_for_keysym(keysyms, keysym)?;
             let offset = u8::try_from(index).ok()?;
-            Some(min.saturating_add(offset))
+            Some((min.saturating_add(offset), shift))
         })
     }
+}
+
+/// X11 keysym columns alternate unshifted/shifted. Column 1 and 3 need Shift.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn shift_required_for_keysym(keysyms: &[u32], keysym: u32) -> Option<bool> {
+    keysyms
+        .iter()
+        .position(|&candidate| candidate == keysym)
+        .map(|column| column % 2 == 1)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -110,6 +124,19 @@ mod tests {
             InjectError::Clipboard("clipboard unavailable"),
             InjectError::Failed("clipboard unavailable")
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn plus_on_the_shift_level_requires_shift() {
+        const XK_EQUAL: u32 = 0x003d;
+        const XK_PLUS: u32 = 0x002b;
+        assert_eq!(
+            super::shift_required_for_keysym(&[XK_EQUAL, XK_PLUS], XK_PLUS),
+            Some(true)
+        );
+        assert_eq!(super::shift_required_for_keysym(&[XK_PLUS], XK_PLUS), Some(false));
+        assert_eq!(super::shift_required_for_keysym(&[XK_EQUAL], XK_PLUS), None);
     }
 
     #[test]
