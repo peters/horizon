@@ -9,13 +9,15 @@ pub enum InjectError {
     Unsupported,
     /// The platform backend failed while sending the chord.
     Failed(&'static str),
+    /// The transcript never reached the clipboard, so there is nothing to paste.
+    Clipboard(&'static str),
 }
 
 impl fmt::Display for InjectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported => formatter.write_str("paste chord is not available on this display"),
-            Self::Failed(message) => formatter.write_str(message),
+            Self::Failed(message) | Self::Clipboard(message) => formatter.write_str(message),
         }
     }
 }
@@ -104,6 +106,10 @@ mod tests {
     #[test]
     fn unsupported_display_is_distinct_from_backend_failure() {
         assert_ne!(InjectError::Unsupported, InjectError::Failed("XTest fake_input failed"));
+        assert_ne!(
+            InjectError::Clipboard("clipboard unavailable"),
+            InjectError::Failed("clipboard unavailable")
+        );
     }
 
     #[test]

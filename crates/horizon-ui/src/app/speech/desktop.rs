@@ -19,12 +19,8 @@ pub(crate) fn dictation_sink(
 ) -> Option<SpeechSink> {
     if desktop_injection && !root_focused {
         Some(SpeechSink::Desktop)
-    } else if let Some(id) = focused_terminal {
-        Some(SpeechSink::Panel(id))
-    } else if desktop_injection {
-        Some(SpeechSink::Desktop)
     } else {
-        None
+        focused_terminal.map(SpeechSink::Panel)
     }
 }
 
@@ -32,10 +28,10 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    let mut clipboard = arboard::Clipboard::new().map_err(|_| InjectError::Failed("clipboard unavailable"))?;
+    let mut clipboard = arboard::Clipboard::new().map_err(|_| InjectError::Clipboard("clipboard unavailable"))?;
     clipboard
         .set_text(text)
-        .map_err(|_| InjectError::Failed("failed to copy transcript"))?;
+        .map_err(|_| InjectError::Clipboard("failed to copy transcript"))?;
     send_paste_chord()
 }
 
@@ -44,7 +40,16 @@ pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
         ShortcutKey::Function(index) => HotkeyKey::Function(index),
         ShortcutKey::Letter(letter) => HotkeyKey::Letter(letter),
         ShortcutKey::Digit(digit) => HotkeyKey::Digit(digit),
-        _ => return None,
+        ShortcutKey::ArrowDown => HotkeyKey::ArrowDown,
+        ShortcutKey::ArrowLeft => HotkeyKey::ArrowLeft,
+        ShortcutKey::ArrowRight => HotkeyKey::ArrowRight,
+        ShortcutKey::ArrowUp => HotkeyKey::ArrowUp,
+        ShortcutKey::Enter => HotkeyKey::Enter,
+        ShortcutKey::Tab => HotkeyKey::Tab,
+        ShortcutKey::Comma => HotkeyKey::Comma,
+        ShortcutKey::Minus => HotkeyKey::Minus,
+        ShortcutKey::Plus => HotkeyKey::Plus,
+        ShortcutKey::Escape => return None,
     };
     Some(Hotkey {
         ctrl: binding.modifiers.command() || binding.modifiers.ctrl(),
@@ -132,7 +137,7 @@ pub(crate) fn set_test_inject_hook(hook: Option<InjectHook>) {
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::PanelId;
+    use horizon_core::{PanelId, ShortcutKey};
 
     use super::dictation_sink;
     use crate::app::speech::SpeechSink;
@@ -156,9 +161,17 @@ mod tests {
 
     #[test]
     fn desktop_flag_fills_in_when_no_terminal_is_focused() {
-        assert_eq!(dictation_sink(None, true, true), Some(SpeechSink::Desktop));
+        assert_eq!(dictation_sink(None, true, true), None);
         assert_eq!(dictation_sink(None, true, false), Some(SpeechSink::Desktop));
         assert_eq!(dictation_sink(None, false, true), None);
+    }
+
+    #[test]
+    fn hotkey_from_binding_maps_every_accepted_speech_key() {
+        let binding = |key| horizon_core::ShortcutBinding::new(horizon_core::ShortcutModifiers::CTRL, key);
+        assert!(super::hotkey_from_binding(binding(ShortcutKey::ArrowUp)).is_some());
+        assert!(super::hotkey_from_binding(binding(ShortcutKey::Enter)).is_some());
+        assert!(super::hotkey_from_binding(binding(ShortcutKey::Escape)).is_none());
     }
 
     #[test]

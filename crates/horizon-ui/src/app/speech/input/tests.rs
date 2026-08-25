@@ -130,6 +130,7 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
                 true,
                 engaged,
                 &mut events,
+                &[],
             );
         })
         .discard_textures();
@@ -146,6 +147,7 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
                 true,
                 engaged,
                 &mut events,
+                &[],
             );
         })
         .discard_textures();
@@ -164,6 +166,7 @@ fn f_key_events_drive_profile_hold_dictation_end_to_end() {
                 true,
                 engaged,
                 &mut events,
+                &[],
             );
         })
         .discard_textures();

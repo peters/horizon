@@ -124,9 +124,13 @@ fn handle_profile_hotkeys(
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
     events: &mut Vec<SpeechEvent>,
+    skip_profiles: &[usize],
 ) -> Option<usize> {
     for index in 0..speech.profile_bindings().len() {
         let (profile, binding) = speech.profile_bindings()[index];
+        if skip_profiles.contains(&profile) {
+            continue;
+        }
         let (pressed, released) = ctx.input(|input| shortcuts::press_and_release_in_events(&input.events, binding));
         let pressed = pressed && presses_allowed;
         if pressed {
@@ -344,7 +348,7 @@ impl HorizonApp {
             });
         }
 
-        if !root_focused_now && !desktop_injection {
+        if !root_focused_now {
             self.stop_hold_on_focus_loss(ctx, now);
         }
 
@@ -408,31 +412,35 @@ impl HorizonApp {
                 events.push(SpeechEvent::Notice(format!("Push-to-talk press ignored: {surface}.")));
             }
         }
-        let global_ptt = self.speech_global_hotkeys.is_some();
-        if global_ptt {
+        let grabbed = self
+            .speech_global_hotkeys
+            .as_ref()
+            .map_or(Vec::new(), |hotkeys| hotkeys.profiles().to_vec());
+        let mut engaged = self.speech_engaged_profile;
+        if self.speech_global_hotkeys.is_some() {
             let presses_allowed = !(capturing_hotkey || text_surface_active && root_focused_now);
-            self.speech_engaged_profile = apply_global_hotkeys(
+            engaged = apply_global_hotkeys(
                 speech,
                 self.speech_global_hotkeys.as_ref(),
                 &mut self.speech_global_events_pending,
                 sink,
                 presses_allowed,
-                self.speech_engaged_profile,
+                engaged,
                 &mut events,
             );
             if !self.speech_global_events_pending.is_empty() {
                 ctx.request_repaint();
             }
-        } else {
-            self.speech_engaged_profile = handle_profile_hotkeys(
-                ctx,
-                speech,
-                sink,
-                !capturing_hotkey && !text_surface_active,
-                self.speech_engaged_profile,
-                &mut events,
-            );
         }
+        self.speech_engaged_profile = handle_profile_hotkeys(
+            ctx,
+            speech,
+            sink,
+            !capturing_hotkey && !text_surface_active,
+            engaged,
+            &mut events,
+            &grabbed,
+        );
 
         // Escape cancels every active speech state, not just Recording:
         // AwaitingPcm and Transcribing cover the multi-second first-use
@@ -517,6 +525,13 @@ impl HorizonApp {
                             Err(horizon_cursor::InjectError::Unsupported) => {
                                 self.show_speech_notice("Transcript copied — paste with Ctrl+V", false);
                             }
+                            Err(horizon_cursor::InjectError::Clipboard(message)) => {
+                                tracing::warn!(%message, "desktop speech clipboard failed");
+                                self.show_speech_notice(
+                                    format!("Speech input error: could not copy transcript ({message})"),
+                                    true,
+                                );
+                            }
                             Err(error) => {
                                 tracing::warn!(%error, "desktop speech inject failed");
                                 self.show_speech_notice(
@@ -591,7 +606,9 @@ impl HorizonApp {
     /// root-viewport event at all. Evaluated after every viewport rendered:
     /// if no Horizon window has focus, the microphone must not stay open.
     pub(in crate::app) fn cancel_unattended_recording(&mut self) {
-        if self.any_viewport_focused || self.template_config.features.speech.desktop_injection {
+        if self.any_viewport_focused
+            || self.speech.as_ref().and_then(SpeechSystem::recording_sink) == Some(SpeechSink::Desktop)
+        {
             return;
         }
         self.speech_engaged_profile = None;
@@ -609,10 +626,10 @@ impl HorizonApp {
     /// focus loss as the recording release, but retain terminal-filter state:
     /// a detached viewport must still consume the physical key-up.
     pub(in crate::app) fn stop_hold_on_focus_loss(&mut self, ctx: &Context, now: Instant) {
-        self.arm_speech_release_ownership(ctx, now);
-        if self.template_config.features.speech.desktop_injection {
+        if self.speech.as_ref().and_then(SpeechSystem::recording_sink) == Some(SpeechSink::Desktop) {
             return;
         }
+        self.arm_speech_release_ownership(ctx, now);
         let Some(speech) = self.speech.as_mut() else {
             return;
         };

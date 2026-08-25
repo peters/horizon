@@ -19,12 +19,21 @@ pub struct Hotkey {
     pub key: HotkeyKey,
 }
 
-/// Keys we can grab globally. Speech hotkeys are function keys or modified letters.
+/// Keys we can grab globally. Mirrors accepted speech [`ShortcutKey`] values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HotkeyKey {
     Function(u8),
     Letter(char),
     Digit(u8),
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    Enter,
+    Tab,
+    Comma,
+    Minus,
+    Plus,
 }
 
 /// A grabbed binding became active or inactive.
@@ -58,6 +67,7 @@ pub struct GlobalHotkeys {
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     wake: Arc<Mutex<Option<WakeFn>>>,
+    profiles: Vec<usize>,
 }
 
 impl GlobalHotkeys {
@@ -92,6 +102,13 @@ impl GlobalHotkeys {
     pub fn try_recv(&self) -> Option<HotkeyEvent> {
         self.events.try_recv().ok()
     }
+
+    /// Profiles whose bindings were actually grabbed. Bindings the backend
+    /// could not register are omitted so local egui handling can keep them.
+    #[must_use]
+    pub fn profiles(&self) -> &[usize] {
+        &self.profiles
+    }
 }
 
 impl Drop for GlobalHotkeys {
@@ -121,6 +138,15 @@ mod platform {
 
     const XK_F1: u32 = 0xffbe;
     const XK_0: u32 = 0x0030;
+    const XK_TAB: u32 = 0xff09;
+    const XK_RETURN: u32 = 0xff0d;
+    const XK_LEFT: u32 = 0xff51;
+    const XK_UP: u32 = 0xff52;
+    const XK_RIGHT: u32 = 0xff53;
+    const XK_DOWN: u32 = 0xff54;
+    const XK_COMMA: u32 = 0x002c;
+    const XK_MINUS: u32 = 0x002d;
+    const XK_PLUS: u32 = 0x002b;
 
     pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, HotkeyError> {
         let (conn, screen_num) = x11rb::connect(None).map_err(|_| HotkeyError::Unsupported)?;
@@ -143,6 +169,9 @@ mod platform {
         if grabbed.is_empty() {
             return Err(HotkeyError::Failed("no speech hotkeys could be grabbed"));
         }
+        let mut profiles: Vec<usize> = grabbed.values().copied().collect();
+        profiles.sort_unstable();
+        profiles.dedup();
         conn.flush().map_err(|_| HotkeyError::Failed("X11 flush failed"))?;
 
         let (tx, events) = channel();
@@ -153,7 +182,7 @@ mod platform {
         let thread = thread::Builder::new()
             .name("horizon-speech-hotkeys".to_string())
             .spawn(move || {
-                let mut held: HashMap<(u8, u16), bool> = HashMap::new();
+                let mut held: HashMap<u8, usize> = HashMap::new();
                 let mut pending: Option<Event> = None;
                 while !thread_shutdown.load(Ordering::Relaxed) {
                     let event = match pending.take() {
@@ -169,11 +198,7 @@ mod platform {
                     };
                     match event {
                         Event::KeyPress(press) => {
-                            let key = event_key(press.detail, press.state);
-                            if let Some(&profile) = grabbed.get(&key)
-                                && !held.get(&key).copied().unwrap_or(false)
-                            {
-                                held.insert(key, true);
+                            if let Some(profile) = activate_press(&grabbed, &mut held, press.detail, press.state) {
                                 if tx.send(HotkeyEvent::Pressed(profile)).is_err() {
                                     break;
                                 }
@@ -196,10 +221,7 @@ mod platform {
                             if repeat {
                                 continue;
                             }
-                            let key = event_key(release.detail, release.state);
-                            if let Some(&profile) = grabbed.get(&key)
-                                && held.insert(key, false).unwrap_or(false)
-                            {
+                            if let Some(profile) = activate_release(&mut held, release.detail) {
                                 if tx.send(HotkeyEvent::Released(profile)).is_err() {
                                     break;
                                 }
@@ -217,7 +239,26 @@ mod platform {
             shutdown,
             thread: Some(thread),
             wake,
+            profiles,
         })
+    }
+
+    fn activate_press(
+        grabbed: &HashMap<(u8, u16), usize>,
+        held: &mut HashMap<u8, usize>,
+        keycode: u8,
+        state: x11rb::protocol::xproto::KeyButMask,
+    ) -> Option<usize> {
+        let profile = *grabbed.get(&event_key(keycode, state))?;
+        if held.contains_key(&keycode) {
+            return None;
+        }
+        held.insert(keycode, profile);
+        Some(profile)
+    }
+
+    fn activate_release(held: &mut HashMap<u8, usize>, keycode: u8) -> Option<usize> {
+        held.remove(&keycode)
     }
 
     fn invoke_wake(wake: &Mutex<Option<super::WakeFn>>) {
@@ -295,12 +336,24 @@ mod platform {
                 lower.is_ascii_alphabetic().then_some(u32::from(lower as u8))
             }
             HotkeyKey::Digit(digit) => (digit <= 9).then_some(XK_0 + u32::from(digit)),
+            HotkeyKey::ArrowLeft => Some(XK_LEFT),
+            HotkeyKey::ArrowUp => Some(XK_UP),
+            HotkeyKey::ArrowRight => Some(XK_RIGHT),
+            HotkeyKey::ArrowDown => Some(XK_DOWN),
+            HotkeyKey::Enter => Some(XK_RETURN),
+            HotkeyKey::Tab => Some(XK_TAB),
+            HotkeyKey::Comma => Some(XK_COMMA),
+            HotkeyKey::Minus => Some(XK_MINUS),
+            HotkeyKey::Plus => Some(XK_PLUS),
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use super::{Hotkey, HotkeyKey, grab_key, keysym, modifiers, normalized_mods};
+        use super::{
+            Hotkey, HotkeyKey, activate_press, activate_release, grab_key, keysym, modifiers, normalized_mods,
+        };
+        use std::collections::HashMap;
         use x11rb::protocol::xproto::ModMask;
 
         #[test]
@@ -310,6 +363,39 @@ mod platform {
             assert_eq!(keysym(HotkeyKey::Letter('V')), Some(u32::from(b'v')));
             assert_eq!(keysym(HotkeyKey::Digit(0)), Some(0x0030));
             assert_eq!(keysym(HotkeyKey::Function(0)), None);
+            assert_eq!(keysym(HotkeyKey::ArrowUp), Some(0xff52));
+            assert_eq!(keysym(HotkeyKey::Enter), Some(0xff0d));
+        }
+
+        #[test]
+        fn release_uses_the_press_keycode_even_when_modifiers_have_changed() {
+            let mut grabbed = HashMap::new();
+            grabbed.insert(
+                grab_key(
+                    45,
+                    modifiers(Hotkey {
+                        ctrl: true,
+                        shift: false,
+                        alt: false,
+                        super_: false,
+                        key: HotkeyKey::Letter('k'),
+                    }),
+                ),
+                3,
+            );
+            let mut held = HashMap::new();
+            let control = u16::from(ModMask::CONTROL);
+            assert_eq!(
+                activate_press(
+                    &grabbed,
+                    &mut held,
+                    45,
+                    x11rb::protocol::xproto::KeyButMask::from(control)
+                ),
+                Some(3)
+            );
+            assert_eq!(activate_release(&mut held, 45), Some(3));
+            assert!(held.is_empty());
         }
 
         #[test]
@@ -357,7 +443,7 @@ mod live_tests {
                 key: HotkeyKey::Function(9),
             },
         )])
-        .expect("grab F24");
+        .expect("grab F9");
         std::thread::sleep(std::time::Duration::from_millis(200));
         let mut events = Vec::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
