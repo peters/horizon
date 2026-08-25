@@ -78,7 +78,7 @@ fn nav_widget_info(label: &str, enabled: bool) -> WidgetInfo {
 fn url_bar(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
-    browser: &BrowserPanelState,
+    browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
     interactive: bool,
 ) -> (bool, bool) {
@@ -105,7 +105,9 @@ fn url_bar(
         state.url_submit_enter_pending = !ui.input(|i| i.key_released(egui::Key::Enter));
         let url = state.url_buffer.trim().to_string();
         if !url.is_empty() && browser.committed_url_for_persistence() != Some(url.as_str()) {
-            browser.send(BrowserCommand::Navigate(url));
+            // A driver-less submission is retained as the relaunch target and
+            // surfaced via navigation_error instead of being dropped.
+            browser.submit_navigation(&url);
         }
     }
     (response.has_focus() || submitted, response.clicked())

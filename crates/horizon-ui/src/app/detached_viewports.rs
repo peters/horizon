@@ -191,7 +191,10 @@ impl HorizonApp {
             return;
         }
 
-        self.collect_detached_viewport_input(ctx);
+        // Keyboard/text events are collected exactly once, by
+        // handle_canvas_pan_in_rect below: a second pass would consume the
+        // one-shot frame keyboard metadata twice and re-run the stateful
+        // speech filter (leaking an orphan hotkey key-up).
         self.handle_detached_shortcuts(ctx, workspace_id);
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
@@ -356,11 +359,6 @@ impl HorizonApp {
         self.terminal_body_screen_rects = std::mem::take(&mut detached_state.terminal_body_screen_rects);
         self.panel_screen_order = std::mem::take(&mut detached_state.panel_screen_order);
         true
-    }
-
-    fn collect_detached_viewport_input(&mut self, ctx: &Context) {
-        let raw_events = ctx.input(|input| input.events.clone());
-        self.terminal_keyboard_events = self.terminal_events_for_viewport(ctx, &raw_events);
     }
 
     fn persist_detached_viewport_state(&mut self, workspace_local_id: &str) {
@@ -642,7 +640,13 @@ mod tests {
         input.viewports.entry(viewport_id).or_default();
 
         let _ = ctx
-            .run_ui(input, |ui| app.collect_detached_viewport_input(ui.ctx()))
+            .run_ui(input, |ui| {
+                app.handle_canvas_pan_in_rect(
+                    ui.ctx(),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0)),
+                    None,
+                );
+            })
             .discard_textures();
 
         let collected = app

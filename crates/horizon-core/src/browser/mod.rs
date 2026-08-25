@@ -152,6 +152,10 @@ pub struct BrowserPanelState {
     pending_clipboard_text: Option<String>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
+    /// User-typed navigation submitted while no driver session exists. Kept
+    /// as the display and relaunch target until a fresh session accepts it,
+    /// so the input is never silently discarded.
+    pending_user_navigation: Option<String>,
     config: BrowserConfig,
 }
 
@@ -197,6 +201,7 @@ impl BrowserPanelState {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config,
         };
         state.launch_session(initial_url);
@@ -208,18 +213,28 @@ impl BrowserPanelState {
     /// browser returns the user to where they were rather than the panel's
     /// initial URL.
     pub fn relaunch(&mut self) {
-        let initial_url = match &self.url {
-            Some(url) => (!url.is_empty()).then(|| url.clone()),
-            None => self.requested_url.clone().filter(|url| !url.is_empty()),
-        };
-        self.launch_session(initial_url);
+        self.launch_session(self.relaunch_target());
     }
 
-    /// URL shown in browser chrome. Before Chrome commits anything, preserve
-    /// the requested startup target as editable UI without treating it as
-    /// persisted browser history.
+    /// The URL the next relaunch should open: a navigation the user typed
+    /// while the driver was absent wins over the last committed URL, which
+    /// wins over the requested startup target.
+    fn relaunch_target(&self) -> Option<String> {
+        self.pending_user_navigation
+            .clone()
+            .or_else(|| self.url.clone().filter(|url| !url.is_empty()))
+            .or_else(|| self.requested_url.clone().filter(|url| !url.is_empty()))
+    }
+
+    /// URL shown in browser chrome. A navigation typed while the driver was
+    /// absent stays visible as the pending relaunch target; before Chrome
+    /// commits anything, preserve the requested startup target as editable
+    /// UI without treating it as persisted browser history.
     #[must_use]
     pub fn display_url(&self) -> &str {
+        if let Some(pending) = self.pending_user_navigation.as_deref().filter(|url| !url.is_empty()) {
+            return pending;
+        }
         self.url.as_deref().unwrap_or_else(|| {
             self.requested_url
                 .as_deref()
@@ -265,7 +280,9 @@ impl BrowserPanelState {
         let session_config = session::BrowserSessionConfig {
             browser: self.config.clone(),
             panel_local_id: self.panel_local_id.clone(),
-            initial_url,
+            // A navigation typed while the driver was absent takes precedence
+            // over the queued relaunch target: it is the freshest request.
+            initial_url: self.pending_user_navigation.clone().or(initial_url),
             width: DEFAULT_VIEWPORT.0,
             height: DEFAULT_VIEWPORT.1,
             // Reuse the panel's slot across (re)starts: frame sequence
@@ -276,6 +293,7 @@ impl BrowserPanelState {
         match session::start_session(session_config) {
             Ok(handle) => {
                 self.committed_url = handle.committed_url();
+                self.pending_user_navigation = None;
                 self.clear_agent_state_for_relaunch();
                 self.status = BrowserStatus::Starting;
                 self.loading = true;
@@ -324,6 +342,20 @@ impl BrowserPanelState {
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
         self.session.as_ref().is_some_and(|session| session.send(command))
+    }
+
+    /// Submit a user-typed navigation. Returns `true` when the driver
+    /// accepted it. When no session exists (stopped, or still waiting for a
+    /// prior teardown), the URL is retained as the display and relaunch
+    /// target and the failure is surfaced via `navigation_error` instead of
+    /// being silently discarded.
+    pub fn submit_navigation(&mut self, url: &str) -> bool {
+        if self.try_send(BrowserCommand::Navigate(url.to_string())) {
+            return true;
+        }
+        self.pending_user_navigation = Some(url.to_string());
+        self.navigation_error = Some("Browser is not running; press Retry to open the typed URL".to_string());
+        false
     }
 
     /// Take page text copied by headless Chrome for the UI's host clipboard.
@@ -630,6 +662,40 @@ mod tests {
     }
 
     #[test]
+    fn submission_without_a_driver_is_retained_and_surfaced() {
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Stopped { code: None },
+            url: Some("https://old.example/".to_string()),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            committed_url: session::CommittedUrl::default(),
+            teardown_signal: None,
+            pending_relaunch: None,
+            panel_local_id: "submit-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            pending_user_navigation: None,
+            config: BrowserConfig::default(),
+        };
+
+        assert!(!state.submit_navigation("https://typed.example/page"));
+        assert!(state.navigation_error.is_some());
+        // The typed URL stays visible in the URL bar even though the last
+        // committed URL is known, and becomes the relaunch target.
+        assert_eq!(state.display_url(), "https://typed.example/page");
+        assert_eq!(state.relaunch_target(), Some("https://typed.example/page".to_string()));
+        // Persistence semantics are untouched: only committed URLs persist.
+        assert_eq!(state.committed_url_for_persistence(), Some("https://old.example/"));
+    }
+
+    #[test]
     fn retry_stays_disabled_until_teardown_completes() {
         let (completion_tx, completion_rx) = std::sync::mpsc::channel();
         let mut state = BrowserPanelState {
@@ -652,6 +718,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
 
@@ -683,6 +750,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
         let completion = std::thread::spawn(move || {
@@ -719,6 +787,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig {
                 command: Some("/definitely/missing/chrome".to_string()),
                 ..BrowserConfig::default()
@@ -810,6 +879,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
 
@@ -842,6 +912,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: Some("stale error".to_string()),
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
 
@@ -873,6 +944,7 @@ mod tests {
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
 
@@ -907,6 +979,7 @@ mod tests {
             handoff_resolution_pending: true,
             pending_clipboard_text: None,
             navigation_error: None,
+            pending_user_navigation: None,
             config: BrowserConfig::default(),
         };
 
