@@ -437,11 +437,14 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    #[cfg(feature = "speech")]
     use std::time::Duration;
 
     use egui::Context;
+    #[cfg(feature = "speech")]
     use horizon_core::PanelId;
 
+    #[cfg(feature = "speech")]
     use crate::app::HeldSpeechBinding;
     use crate::app::test_support::test_app;
 
