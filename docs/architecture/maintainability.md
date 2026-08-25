@@ -18,6 +18,13 @@ back into large multi-purpose modules.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
+- `browser/session.rs` owns driver lifecycle and shared state; UI-command
+  dispatch belongs in `browser/session/commands.rs`, frame-aware clipboard
+  capture in `browser/session/clipboard.rs`, CDP response/event transitions in
+  `browser/session/events.rs`, and locked manifest/handoff persistence in
+  `browser/session/manifest_io.rs`. Launch-time browser-profile path resolution
+  belongs in `browser/profile.rs` so launch, persistence, and deletion share
+  one root invariant.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in
@@ -39,7 +46,8 @@ back into large multi-purpose modules.
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
   - `canvas`: canvas rendering and HUD
-  - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
+  - `lifecycle`: frame orchestration and repaint pacing, with application-exit
+    ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
@@ -55,7 +63,10 @@ back into large multi-purpose modules.
     paint/render/toolbar helpers split into `workspace/`
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
-  instead of extending a single file.
+  instead of extending a single file. Browser-widget input keeps frame-level
+  coordination in `browser_widget/input.rs`, with independent keyboard/IME and
+  pointer-capture state machines in `browser_widget/input/keyboard.rs` and
+  `browser_widget/input/pointer.rs`.
 
 ## File Size Policy
 

@@ -17,6 +17,7 @@ mod session;
 mod session_manager;
 mod settings;
 mod shortcut_inventory;
+pub(crate) use shortcut_inventory::global_shortcut_bindings;
 pub(crate) mod shortcuts;
 mod sidebar;
 pub(crate) mod speech;
@@ -102,6 +103,13 @@ struct ActiveSession {
     persistent: bool,
 }
 
+struct PendingSessionSwitch {
+    shutdown_progress: ShutdownProgress,
+    /// `None` after a timed-out browser teardown aborts the switch. The
+    /// progress remains as a profile-lock guard until the driver exits.
+    target: Option<ResolvedSession>,
+}
+
 struct StartupChooserState {
     chooser: StartupChooser,
     selected_session_id: Option<String>,
@@ -166,6 +174,14 @@ struct SpeechNotice {
     shown_at: Instant,
 }
 
+/// Per-panel UI caches that survive across frames.
+#[derive(Default)]
+pub struct PanelRenderCaches {
+    pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
+    pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
+    pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
@@ -212,8 +228,7 @@ pub struct HorizonApp {
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
     terminal_selection_drag: TerminalSelectionDragState,
-    terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
-    editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
+    panel_render_caches: PanelRenderCaches,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
@@ -250,7 +265,7 @@ pub struct HorizonApp {
     remote_hosts_refresh_in_flight: bool,
     remote_hosts_last_refresh: Option<Instant>,
     last_session_catalog_refresh: Option<Instant>,
-    last_terminal_output_at: Option<Instant>,
+    last_panel_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     session_manager: Option<RuntimeSessionManagerState>,
@@ -276,6 +291,7 @@ pub struct HorizonApp {
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,
+    pending_session_switch: Option<PendingSessionSwitch>,
     exit_cleanup_complete: bool,
 }
 
@@ -384,8 +400,7 @@ impl HorizonApp {
             panel_screen_order: Vec::new(),
             panel_render_order: Vec::new(),
             workspace_colors: Vec::new(),
-            terminal_grid_cache: HashMap::new(),
-            editor_preview_cache: HashMap::new(),
+            panel_render_caches: PanelRenderCaches::default(),
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
@@ -430,7 +445,7 @@ impl HorizonApp {
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
-            last_terminal_output_at: Some(Instant::now()),
+            last_panel_output_at: Some(Instant::now()),
             settings: None,
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
@@ -469,6 +484,7 @@ impl HorizonApp {
             config_last_mtime,
             config_last_check: None,
             shutdown_progress: None,
+            pending_session_switch: None,
             exit_cleanup_complete: false,
         }
     }
@@ -557,6 +573,12 @@ impl eframe::App for HorizonApp {
             return;
         }
 
+        if self.poll_session_switch(ctx) {
+            self.refresh_active_session_lease();
+            self.render_session_switch_overlay(ui);
+            return;
+        }
+
         if !self.prepare_frame(ui) {
             self.poll_speech_runtime(ctx, Vec::new());
             self.render_speech_notice(ctx);
@@ -577,7 +599,7 @@ impl eframe::App for HorizonApp {
         }
 
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
-        let had_terminal_output = self.process_frame_inputs(ctx);
+        let had_panel_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
@@ -596,7 +618,7 @@ impl eframe::App for HorizonApp {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
         self.render_speech_notice(ctx);
-        self.finalize_frame(ctx, had_terminal_output, workspace_count_before, panel_count_before);
+        self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

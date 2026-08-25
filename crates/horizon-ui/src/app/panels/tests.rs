@@ -130,6 +130,13 @@ fn mic_control_availability_matches_engine_and_viewport_state() {
 }
 
 #[test]
+fn browser_panels_are_eligible_for_dictation() {
+    assert!(PanelKind::Browser.accepts_text_input());
+    assert!(PanelKind::Shell.accepts_text_input());
+    assert!(!PanelKind::Editor.accepts_text_input());
+}
+
+#[test]
 fn focused_mic_activates_once_from_enter_or_space() {
     for key in [Key::Enter, Key::Space] {
         let ctx = Context::default();

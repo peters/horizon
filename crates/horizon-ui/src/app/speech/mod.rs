@@ -1,5 +1,6 @@
 //! Speech-to-text input: a per-panel mic button and a global push-to-talk
-//! hotkey that dictate into a terminal panel as if the text had been typed.
+//! hotkey that dictate into a terminal or browser panel as if the text had
+//! been typed.
 //!
 //! The whole subsystem is opt-in behind the `speech` cargo feature. Without
 //! the feature this module compiles down to an inert stub with the same API,
@@ -25,7 +26,7 @@ pub enum MicState {
 #[cfg_attr(not(feature = "speech"), allow(dead_code))]
 #[derive(Debug)]
 pub enum SpeechEvent {
-    /// Transcribed text ready to inject into `target`'s PTY input.
+    /// Transcribed text ready to inject into `target`'s text-input surface.
     Text {
         target: PanelId,
         text: String,

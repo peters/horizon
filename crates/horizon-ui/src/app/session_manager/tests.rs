@@ -1,5 +1,6 @@
 use horizon_core::{CanvasViewState, Config, RuntimeState, StartupDecision, WindowConfig};
 
+use super::super::session_manager::{SessionSwitchShutdownState, session_switch_shutdown_state};
 use super::super::test_support::{
     editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_config_and_startup,
 };
@@ -12,6 +13,26 @@ fn runtime_with_staggered_workspaces(prefix: &str) -> RuntimeState {
         ],
         ..RuntimeState::default()
     }
+}
+
+#[test]
+fn session_switch_timeout_detaches_terminals_but_never_bypasses_browser_cleanup() {
+    assert_eq!(
+        session_switch_shutdown_state(false, true, true),
+        SessionSwitchShutdownState::Complete
+    );
+    assert_eq!(
+        session_switch_shutdown_state(false, false, true),
+        SessionSwitchShutdownState::AbortForBrowser
+    );
+    assert_eq!(
+        session_switch_shutdown_state(false, false, false),
+        SessionSwitchShutdownState::Waiting
+    );
+    assert_eq!(
+        session_switch_shutdown_state(true, true, false),
+        SessionSwitchShutdownState::Complete
+    );
 }
 
 #[test]
@@ -59,7 +80,30 @@ fn persistent_session_switch_waits_for_viewport_before_finalizing_target() {
         .and_then(|id| app.board.workspace(id))
         .expect("target right");
     assert!((left.position[1] - right.position[1]).abs() <= 0.01);
-    assert!(app.runtime_dirty_since.is_some());
+    if app.runtime_dirty_since.is_some() {
+        app.runtime_dirty_since = Some(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .expect("test clock supports a one-second lookback"),
+        );
+        app.flush_runtime_if_dirty();
+    }
+    let saved_target = RuntimeState::load(&target.runtime_state_path)
+        .expect("load target runtime after switch")
+        .expect("target runtime exists after switch");
+    let saved_left = saved_target
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.local_id == "target-left")
+        .expect("saved target left");
+    let saved_right = saved_target
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.local_id == "target-right")
+        .expect("saved target right");
+    let saved_left_y = saved_left.position.expect("saved target left position")[1];
+    let saved_right_y = saved_right.position.expect("saved target right position")[1];
+    assert!((saved_left_y - saved_right_y).abs() <= 0.01);
     assert!(temp.path().join(".horizon").exists());
 }
 

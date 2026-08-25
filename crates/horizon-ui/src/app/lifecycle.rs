@@ -1,16 +1,19 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Context;
+use horizon_core::browser::{BrowserCommand, BrowserInput};
 use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
-use crate::{loading_spinner, theme};
+use crate::theme;
 
 use super::canvas::CanvasGridCache;
 use super::speech::SpeechEvent;
 use super::{HorizonApp, attention_feed};
 
+mod shutdown;
 mod startup_workspace;
 
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -36,7 +39,7 @@ fn hold_hotkey_transition(
     released: bool,
     engaged_profile: Option<usize>,
     activity: SpeechActivity,
-    focused_terminal: Option<PanelId>,
+    focused_text_panel: Option<PanelId>,
 ) -> HoldHotkeyTransition {
     let mut engaged_profile = if activity == SpeechActivity::Recording {
         engaged_profile
@@ -44,7 +47,7 @@ fn hold_hotkey_transition(
         None
     };
     let start_target = if pressed && engaged_profile.is_none() && activity == SpeechActivity::Idle {
-        focused_terminal
+        focused_text_panel
     } else {
         None
     };
@@ -84,7 +87,7 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
         SpeechActivity::Busy => {
             "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
         }
-        SpeechActivity::Idle => "Focus a terminal panel to dictate into it.",
+        SpeechActivity::Idle => "Focus a terminal or browser panel to dictate into it.",
     };
     SpeechEvent::Notice(message.to_string())
 }
@@ -104,10 +107,16 @@ fn gated_press_surface(settings_open: bool, palette_open: bool, search_capturing
     }
 }
 
+fn browser_speech_command(text: &str) -> BrowserCommand {
+    BrowserCommand::Input(BrowserInput::InsertText {
+        text: format!("{text} "),
+    })
+}
+
 fn handle_profile_hotkeys(
     ctx: &Context,
     speech: &mut super::speech::SpeechSystem,
-    focused_terminal: Option<PanelId>,
+    focused_text_panel: Option<PanelId>,
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
     events: &mut Vec<SpeechEvent>,
@@ -121,7 +130,7 @@ fn handle_profile_hotkeys(
             tracing::info!(
                 profile,
                 activity = ?speech_activity(speech),
-                terminal_focused = focused_terminal.is_some(),
+                text_panel_focused = focused_text_panel.is_some(),
                 "speech hotkey pressed"
             );
         }
@@ -133,7 +142,7 @@ fn handle_profile_hotkeys(
                     released,
                     engaged_profile,
                     speech_activity(speech),
-                    focused_terminal,
+                    focused_text_panel,
                 );
                 if let Some(focused) = transition.start_target {
                     speech.start(focused, profile);
@@ -152,7 +161,7 @@ fn handle_profile_hotkeys(
                     } else if speech_activity(speech) != SpeechActivity::Idle {
                         // `start` below no-ops outside Idle; explain instead.
                         events.push(no_start_notice(speech_activity(speech)));
-                    } else if let Some(focused) = focused_terminal {
+                    } else if let Some(focused) = focused_text_panel {
                         speech.start(focused, profile);
                     } else {
                         events.push(no_start_notice(SpeechActivity::Idle));
@@ -176,86 +185,15 @@ impl HorizonApp {
         self.begin_shutdown();
     }
 
-    /// Starts asynchronous terminal shutdown. State is saved immediately,
-    /// and background threads join each terminal event loop. The UI shows a
-    /// progress overlay until all terminals are done or the budget expires.
-    #[profiling::function]
-    fn begin_shutdown(&mut self) {
-        if self.shutdown_progress.is_some() {
-            return;
-        }
-
-        // Fold queued browser events (URL/title changes) into panel state
-        // before the save: once shutdown begins, the overlay path no longer
-        // drains board output, so anything queued at close time would
-        // otherwise never reach the persisted runtime state.
-        let _ = self.board.process_output();
-        let _ = self.auto_save_runtime_state();
-        self.git_watchers.clear();
-        self.shutdown_progress = Some(self.board.begin_async_shutdown());
-    }
-
-    #[profiling::function]
-    pub(super) fn poll_shutdown_progress(&mut self) {
-        const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
-
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-
-        if progress.is_complete() || progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT {
-            self.exit_cleanup_complete = true;
-            self.release_active_session_lease();
-            std::process::exit(0);
-        }
-    }
-
-    #[profiling::function]
-    pub(super) fn render_shutdown_overlay(&self, ui: &mut egui::Ui) {
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-        let completed = progress.panels_completed();
-        let total = progress.panel_count();
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            if total > 0 {
-                loading_spinner::show_with_detail(
-                    ui,
-                    egui::Id::new("shutdown_spinner"),
-                    "Closing Horizon\u{2026}",
-                    &format!("{completed} / {total} terminals shut down"),
-                );
-            } else {
-                loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
-            }
-        });
-    }
-
-    /// Synchronous fallback for the `on_exit` eframe callback.
-    #[profiling::function]
-    pub(super) fn run_exit_cleanup(&mut self) {
-        if self.exit_cleanup_complete {
-            return;
-        }
-
-        self.exit_cleanup_complete = true;
-        let _ = self.board.process_output();
-        let _ = self.auto_save_runtime_state();
-        self.board.shutdown_terminal_panels();
-        self.git_watchers.clear();
-        self.release_active_session_lease();
-    }
-
     #[profiling::function]
     pub(super) fn prepare_frame(&mut self, ui: &mut egui::Ui) -> bool {
         let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ui, self.appearance_theme);
             self.theme_applied = true;
-            self.terminal_grid_cache.clear();
+            self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
-            self.editor_preview_cache.clear();
+            self.panel_render_caches.editor_preview_cache.clear();
         }
 
         if !self.prepare_startup_bootstrap(ui) {
@@ -271,6 +209,21 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        if self.board.panels.iter().any(|panel| {
+            panel
+                .browser()
+                .is_some_and(horizon_core::browser::BrowserPanelState::needs_event_waker)
+        }) {
+            let repaint_ctx = ctx.clone();
+            let waker: horizon_core::browser::BrowserEventWaker = Arc::new(move || repaint_ctx.request_repaint());
+            for panel in &self.board.panels {
+                if let Some(browser) = panel.browser()
+                    && browser.needs_event_waker()
+                {
+                    browser.set_event_waker(Arc::clone(&waker));
+                }
+            }
+        }
         self.sync_panel_focus_from_pointer_press(ctx);
         // Speech runs before the fullscreen handler so that Escape cancels an
         // active recording instead of also exiting panel fullscreen.
@@ -278,11 +231,7 @@ impl HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
-        let panel_output = self.board.process_output();
-        if panel_output.cwd_changed || panel_output.persisted_state_changed {
-            self.mark_runtime_dirty();
-        }
-        let had_terminal_output = panel_output.activity.terminal || panel_output.activity.browser;
+        let had_panel_output = self.drain_panel_output();
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -294,7 +243,17 @@ impl HorizonApp {
         self.poll_update_check();
         self.maybe_start_update_check();
 
-        had_terminal_output
+        had_panel_output
+    }
+
+    /// Drain terminal and browser events, promoting persistence-relevant
+    /// changes into the app's runtime dirty state.
+    pub(super) fn drain_panel_output(&mut self) -> bool {
+        let panel_output = self.board.process_output();
+        if panel_output.persisted_state_changed {
+            self.mark_runtime_dirty();
+        }
+        panel_output.activity.terminal || panel_output.activity.browser
     }
 
     fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {
@@ -313,7 +272,7 @@ impl HorizonApp {
     }
 
     /// Push-to-talk hotkey handling plus draining speech results into the
-    /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
+    /// target panel's terminal or browser text input.
     ///
     /// The hotkey listens on the root viewport only; panels in detached
     /// windows still dictate via their mic button.
@@ -321,13 +280,13 @@ impl HorizonApp {
         let now = Instant::now();
         self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
-        // The hotkey targets the focused panel, but only terminal-backed
-        // panels can receive typed text.
-        let focused_terminal = self.board.focused.filter(|id| {
+        // The root-viewport hotkey targets the focused terminal or browser.
+        let focused_text_panel = self.board.focused.filter(|id| {
             self.board.panel(*id).is_some_and(|panel| {
                 // The root-viewport hotkey must not dictate into a panel
                 // living in a detached window (documented main-window scope).
-                panel.terminal().is_some() && !self.workspace_is_detached(panel.workspace_id)
+                (panel.terminal().is_some() || panel.browser().is_some())
+                    && !self.workspace_is_detached(panel.workspace_id)
             })
         });
         // Capture-state hygiene must run even without a speech runtime
@@ -437,7 +396,7 @@ impl HorizonApp {
         self.speech_engaged_profile = handle_profile_hotkeys(
             ctx,
             speech,
-            focused_terminal,
+            focused_text_panel,
             !capturing_hotkey && !text_surface_active,
             self.speech_engaged_profile,
             &mut events,
@@ -501,8 +460,8 @@ impl HorizonApp {
         self.inject_speech_events(events);
     }
 
-    /// Deliver transcripts into their target panels (mirrors
-    /// `poll_primary_selection_paste`); errors are logged.
+    /// Deliver transcripts into their target panel's PTY or focused browser
+    /// page element; errors are logged.
     fn inject_speech_events(&mut self, events: Vec<super::speech::SpeechEvent>) {
         for event in events {
             match event {
@@ -511,12 +470,19 @@ impl HorizonApp {
                         tracing::warn!("speech target panel closed before transcription finished");
                         continue;
                     };
-                    let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                        continue;
-                    };
-                    // Trailing space so consecutive dictations don't fuse words.
-                    let bytes = input::paste_bytes(&format!("{text} "), mode, true);
-                    panel.write_input(&bytes);
+                    if let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) {
+                        // Trailing space so consecutive dictations don't fuse words.
+                        let text = format!("{text} ");
+                        let bytes = input::paste_bytes(&text, mode, true);
+                        panel.write_input(&bytes);
+                    } else if let Some(browser) = panel.browser()
+                        && !browser.try_send(browser_speech_command(&text))
+                    {
+                        tracing::warn!(
+                            panel_id = target.0,
+                            "browser stopped before speech text could be inserted"
+                        );
+                    }
                 }
                 super::speech::SpeechEvent::Notice(message) => {
                     tracing::info!(%message, "speech notice");
@@ -759,8 +725,9 @@ impl HorizonApp {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
             self.terminal_body_screen_rects.remove(&panel_id);
-            self.terminal_grid_cache.remove(&panel_id);
-            self.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+            self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.browser_ui_state.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -770,8 +737,9 @@ impl HorizonApp {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
             } else {
-                self.terminal_grid_cache.remove(&panel_id);
-                self.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+                self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.browser_ui_state.remove(&panel_id);
             }
         }
     }
@@ -842,7 +810,11 @@ impl HorizonApp {
         }
 
         let workspace_bounds = self.board.workspace_bounds_map();
-        if !root_interaction_suppressed {
+        if root_interaction_suppressed {
+            // The viewport stabilizer owns this frame's input. Do not leave
+            // a prior frame's filtered events available to panel widgets.
+            self.terminal_keyboard_events.clear();
+        } else {
             self.handle_canvas_pan(ui);
         }
         self.render_toolbar(ui);
@@ -874,7 +846,7 @@ impl HorizonApp {
     pub(super) fn finalize_frame(
         &mut self,
         ctx: &Context,
-        had_terminal_output: bool,
+        had_panel_output: bool,
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
@@ -900,25 +872,20 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
-        let has_live_terminals = !self.board.panels.is_empty()
-            // A closed panel's Chrome/profile cleanup keeps retiring in the
-            // background: keep frames (and process_output) flowing so the
-            // retired signals are polled to completion instead of waiting
-            // for the next unrelated event or app exit.
-            || self.board.has_pending_browser_cleanup();
+        let has_live_panel_work = !self.board.panels.is_empty() || self.board.has_pending_browser_cleanup();
         let animating = self.pan_target.is_some();
         if animating {
             ctx.request_repaint();
-        } else if has_live_terminals {
+        } else if has_live_panel_work {
             // Keep streaming terminals responsive, but progressively back off
             // once the board has been quiet for a while to reduce idle CPU.
             let now = Instant::now();
-            let poll = if had_terminal_output {
-                self.last_terminal_output_at = Some(now);
+            let poll = if had_panel_output {
+                self.last_panel_output_at = Some(now);
                 Duration::from_millis(16)
             } else {
                 let idle_for = self
-                    .last_terminal_output_at
+                    .last_panel_output_at
                     .map_or(Duration::MAX, |last_output| now.saturating_duration_since(last_output));
 
                 if idle_for < Duration::from_secs(1) {
@@ -1325,7 +1292,7 @@ mod tests {
     }
 
     #[test]
-    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_terminal() {
+    fn hold_hotkey_claims_only_an_idle_session_with_a_focused_text_panel() {
         let focused = PanelId(7);
         let starts = HoldHotkeyTransition {
             start_target: Some(focused),
@@ -1350,6 +1317,17 @@ mod tests {
             hold_hotkey_transition(1, true, false, None, SpeechActivity::Idle, None),
             ignored
         );
+    }
+
+    #[test]
+    fn browser_speech_uses_cdp_text_insertion_with_a_separator() {
+        let super::BrowserCommand::Input(input) = super::browser_speech_command("spoken words") else {
+            panic!("speech must produce browser input");
+        };
+        let (method, params) = input.cdp();
+
+        assert_eq!(method, "Input.insertText");
+        assert_eq!(params["text"], "spoken words ");
     }
 
     #[test]
