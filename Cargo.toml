@@ -29,7 +29,6 @@ tungstenite = "0.30.0"
 # JPEG decoder for CDP screencast frames (change-driven video stream).
 zune-jpeg = "0.5.15"
 base64 = "0.23.1"
-atomicwrites = "0.4.4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -44,13 +43,19 @@ wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulka
 egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 tempfile = "3.27.0"
+# `std::fs::rename` cannot atomically replace an existing file on Windows.
+# Browser manifests need replace-existing semantics without exposing a gap to
+# lock-free readers.
+atomicwrites = "0.4.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.53", package = "surge-core" }
+# Mainline PR #300 advanced the resolved dependency to beta.54. Keep the
+# manifest pin aligned so unrelated lock regeneration cannot roll it back.
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.54", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
