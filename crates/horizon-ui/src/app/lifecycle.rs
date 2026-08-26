@@ -334,7 +334,7 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
-        let has_live_panels = !self.board.panels.is_empty();
+        let has_live_panels = !self.board.panels.is_empty() || self.board.has_pending_browser_cleanup();
         let animating = self.pan_target.is_some();
         if animating {
             ctx.request_repaint();
