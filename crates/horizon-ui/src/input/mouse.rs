@@ -140,6 +140,15 @@ fn mouse_report(button: u8, pressed: bool, modifiers: Modifiers, mode: TermMode,
     }
 
     let button = if pressed { code } else { 3 + code };
+    let max_point = if mode.contains(TermMode::UTF8_MOUSE) { 2015 } else { 223 };
+    let point = if pressed {
+        point
+    } else {
+        GridPoint {
+            line: point.line.min(max_point - 1),
+            column: point.column.min(max_point - 1),
+        }
+    };
     normal_mouse_report(point, button, mode.contains(TermMode::UTF8_MOUSE))
 }
 

@@ -233,7 +233,10 @@ If you do not want to start by dragging panels around the canvas, use Horizon li
 | **Space + Left-click drag** | Pan the canvas |
 | **Minimap click-and-drag** | Jump to that area of the canvas |
 | **Ctrl+Scroll** | Zoom around the cursor |
-| **Ctrl+Click** | Open URL or file path under cursor |
+| **Click** in a mouse-reporting TUI | Deliver the click to the app (Grok, vim, less, …) |
+| **Shift+Click/drag** | Select terminal text while the app has mouse reporting |
+| **Click** an OSC 8 hyperlink | Open the link in the default handler |
+| **Ctrl+Click** | Open URL, file path, or hyperlink under cursor |
 | **Ctrl+double-click** canvas | Create a new workspace |
 | **Ctrl+double-click** inside a workspace | Add a new terminal |
 

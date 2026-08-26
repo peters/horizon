@@ -14,8 +14,14 @@ pub(super) fn pointer_button_checks_clickable_target(
     (modifiers.ctrl || modifiers.command) && button == egui::PointerButton::Primary && pressed
 }
 
-pub(super) fn local_primary_selection_allowed(modifiers: egui::Modifiers) -> bool {
-    !modifiers.alt && !modifiers.ctrl && !modifiers.command
+/// Unmodified primary clicks on OSC 8 cells open the URI instead of selecting
+/// or forwarding the click to the PTY. Shift keeps the selection bypass.
+pub(super) fn pointer_button_opens_osc8_hyperlink(button: egui::PointerButton, modifiers: egui::Modifiers) -> bool {
+    button == egui::PointerButton::Primary
+        && !modifiers.shift
+        && !modifiers.alt
+        && !modifiers.ctrl
+        && !modifiers.command
 }
 
 pub(super) fn pointer_button_uses_local_selection(
@@ -24,7 +30,9 @@ pub(super) fn pointer_button_uses_local_selection(
     modifiers: egui::Modifiers,
 ) -> bool {
     button == egui::PointerButton::Primary
-        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
+        && !modifiers.ctrl
+        && !modifiers.command
+        && !pty_mouse_reporting_enabled(terminal_mode, modifiers)
 }
 
 pub(super) fn pointer_button_starts_local_selection(
@@ -41,8 +49,7 @@ pub(super) fn pointer_drag_updates_local_selection(
     buttons: input::PointerButtons,
     modifiers: egui::Modifiers,
 ) -> bool {
-    buttons.primary
-        && (!pty_mouse_reporting_enabled(terminal_mode, modifiers) || local_primary_selection_allowed(modifiers))
+    buttons.primary && !pty_mouse_reporting_enabled(terminal_mode, modifiers)
 }
 
 pub(super) fn pointer_button_routes_to_pty_mouse(

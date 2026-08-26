@@ -1,7 +1,7 @@
 use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
 use egui::{Key, PointerButton, Pos2, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, PanelId};
 
 mod frame_events;
 mod keyboard;
@@ -17,11 +17,11 @@ pub(crate) use self::keyboard::SSH_RECONNECT_SHORTCUT;
 pub(super) use self::keyboard::handle_terminal_keyboard_input;
 pub(super) use self::routing::pty_mouse_reporting_enabled;
 use self::routing::{
-    pointer_button_event_needs_handling, pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection,
-    pointer_motion_routes_to_pty_mouse,
+    pointer_button_event_needs_handling, pointer_button_opens_osc8_hyperlink, pointer_button_routes_to_pty_mouse,
+    pointer_button_starts_local_selection, pointer_motion_routes_to_pty_mouse,
 };
 pub(crate) use self::selection_drag::TerminalSelectionDragState;
-use self::selection_drag::{AutoScrollCadence, SelectionFrameOutcome};
+use self::selection_drag::{AutoScrollCadence, CapturedPrimaryGesture, SelectionFrameOutcome};
 use self::viewport_scroll::{
     SELECTION_AUTO_SCROLL_INTERVAL, handle_pointer_selection_drag, start_local_selection_at,
     update_pointer_selection_endpoint,
@@ -75,14 +75,22 @@ pub(super) fn handle_terminal_pointer_input(
         interaction.body.request_focus();
     }
 
+    selection_drag.expire_completed_primary_gesture(ui.ctx().cumulative_frame_nr());
     let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
 
-    if !should_handle_terminal_pointer(ui, interaction, from_global, selection_drag.active_for(panel_id)) {
+    let pointer_gesture_active =
+        selection_drag.active_for(panel_id) || selection_drag.has_primary_gesture_for(panel_id);
+    if !should_handle_terminal_pointer(ui, interaction, from_global, pointer_gesture_active) {
         return;
     }
 
     // Only clone events for the panel that actually needs pointer processing.
     let events: Vec<egui::Event> = ui.input(|input| input.events.clone());
+    selection_drag.cancel_interrupted_primary_gesture(
+        ui.input(|input| input.pointer.primary_down()),
+        has_primary_release(&events),
+        events.iter().any(|event| matches!(event, egui::Event::PointerMoved(_))),
+    );
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;
     };
@@ -128,17 +136,13 @@ pub(super) fn handle_terminal_pointer_input(
         selection_drag,
         selection_drag_threshold,
     );
-    let release_replay_index = if selection_outcome.release_completes_drag {
-        frame_events.primary_release_index
-    } else {
-        None
-    };
     let local_scrollback_changed = handle_pointer_events(
         &events,
         panel,
         &pointer_context,
+        selection_drag,
         selection_active_at_frame_start,
-        release_replay_index,
+        &selection_outcome,
     );
     update_active_selection_after_scrollback(local_scrollback_changed, panel, &pointer_context, selection_drag);
     maybe_copy_selection_to_primary(
@@ -150,13 +154,18 @@ pub(super) fn handle_terminal_pointer_input(
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
 
-    // Show pointing hand when Ctrl/Cmd hovering over clickable content.
-    if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
-        && let Some(point) = pointer_context.hovered_point
+    // OSC 8 hyperlinks are plain-clickable; URLs and paths still need Ctrl/Cmd.
+    if let Some(point) = pointer_context.hovered_point
         && let Some(terminal) = panel.terminal()
-        && terminal.clickable_at_point(point.line, point.column).is_some()
     {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        let modifiers = ui.input(|input| input.modifiers);
+        let has_hyperlink = terminal.has_hyperlink_at_point(point.line, point.column);
+        if (pointer_button_opens_osc8_hyperlink(PointerButton::Primary, modifiers) && has_hyperlink)
+            || ((modifiers.ctrl || modifiers.command)
+                && (has_hyperlink || terminal.clickable_at_point(point.line, point.column).is_some()))
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
     }
 }
 
@@ -189,7 +198,7 @@ fn should_handle_terminal_pointer(
     ui: &egui::Ui,
     interaction: &TerminalInteraction,
     from_global: Option<TSTransform>,
-    selection_drag_active: bool,
+    pointer_gesture_active: bool,
 ) -> bool {
     // Check cheap interaction-state conditions before cloning the event list.
     // For most panels the pointer is elsewhere, so we exit early and avoid the
@@ -203,7 +212,7 @@ fn should_handle_terminal_pointer(
         || interaction.body.triple_clicked()
         || interaction.body.clicked_by(PointerButton::Middle)
         || interaction.scrollbar.clicked()
-        || selection_drag_active
+        || pointer_gesture_active
         || ui.input(|input| {
             pointer_event_targets_rect(&input.events, from_global, interaction.layout.body)
                 || pointer_event_targets_rect(&input.events, from_global, interaction.layout.scrollbar)
@@ -214,25 +223,24 @@ fn handle_pointer_events(
     events: &[egui::Event],
     panel: &mut Panel,
     pointer: &PointerContext<'_>,
+    selection_drag: &mut TerminalSelectionDragState,
     selection_active_at_frame_start: bool,
-    release_replay_index: Option<usize>,
+    selection_outcome: &SelectionFrameOutcome,
 ) -> bool {
     let mut local_scrollback_changed = false;
     let mut local_selection_events = LocalSelectionEventTracker::new(selection_active_at_frame_start);
     let mut event_pointer_buttons = pointer_buttons_at_frame_start(events, pointer.pointer_buttons);
     let mut event_modifiers = pointer.current_modifiers;
+    let body = pointer.interaction.layout.body;
+    let frame = pointer.ui_ctx.cumulative_frame_nr();
     for (index, event) in events.iter().enumerate() {
         if let Some(modifiers) = modifiers_for_event(event) {
             event_modifiers = modifiers;
         }
         let pointer_buttons_before_event = event_pointer_buttons;
         update_pointer_buttons_for_event(&mut event_pointer_buttons, event);
-        let local_selection_claimed = local_selection_events.claims(
-            event,
-            pointer.from_global,
-            pointer.interaction.layout.body,
-            pointer.terminal_mode,
-        );
+        let local_selection_claimed =
+            local_selection_events.claims(event, pointer.from_global, body, pointer.terminal_mode);
         match event {
             egui::Event::PointerButton {
                 pos,
@@ -240,20 +248,29 @@ fn handle_pointer_events(
                 pressed,
                 modifiers,
             } => {
+                let pos = transform_pos(pointer.from_global, *pos);
+                let primary_released = *button == PointerButton::Primary && !*pressed;
+                if primary_released
+                    && selection_drag
+                        .primary_gesture_for_event(panel.id, frame, index)
+                        .is_some()
+                {
+                    finish_captured_primary_gesture(panel, pointer, selection_drag, pos, index);
+                    continue;
+                }
                 if local_selection_claimed {
-                    // Replay selection endpoints for presses and drag-completing
-                    // releases that follow a same-frame scrollback change, so
-                    // they anchor in the viewport the user actually saw.
-                    let pos = transform_pos(pointer.from_global, *pos);
-                    if *pressed {
-                        if local_scrollback_changed {
-                            start_local_selection_at(panel, pointer, pos);
-                        }
-                    } else if local_scrollback_changed && release_replay_index == Some(index) {
+                    if selection_outcome.osc8_replay_index == Some(index)
+                        && replay_osc8_press(panel, pointer, selection_drag, pos, *modifiers, index)
+                    {
+                        continue;
+                    }
+                    if *pressed && local_scrollback_changed {
+                        start_local_selection_at(panel, pointer, pos);
+                    } else if local_scrollback_changed && selection_outcome.release_replay_index == Some(index) {
                         update_pointer_selection_endpoint(
                             panel,
                             pos,
-                            pointer.interaction.layout.body,
+                            body,
                             pointer.metrics,
                             pointer.visible_rows,
                             pointer.visible_cols,
@@ -262,26 +279,28 @@ fn handle_pointer_events(
                     }
                     continue;
                 }
-                if !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers) {
+                if primary_released {
                     continue;
                 }
-                let pos = transform_pos(pointer.from_global, *pos);
-                if !pointer.interaction.layout.body.contains(pos) {
+                if !body.contains(pos)
+                    || (*pressed && !body_layer_is_topmost_at(pointer, pos))
+                    || !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers)
+                {
                     continue;
                 }
-                if *pressed {
-                    pointer.interaction.body.request_focus();
+                if let Some(route) = handle_pointer_button(panel, pointer, pos, *button, *pressed, *modifiers) {
+                    selection_drag.capture_primary_gesture(panel.id, route, frame, index);
                 }
-                handle_pointer_button(panel, pointer, pos, *button, *pressed, *modifiers);
             }
-            egui::Event::PointerMoved(pos) => {
+            egui::Event::PointerMoved(pos) if !local_selection_claimed => {
                 handle_pointer_motion(
                     panel,
                     pointer,
+                    selection_drag,
                     *pos,
                     pointer_buttons_before_event,
                     event_modifiers,
-                    local_selection_claimed,
+                    index,
                 );
             }
             egui::Event::MouseWheel {
@@ -300,16 +319,7 @@ fn handle_pointer_events(
                         point,
                     )
                 {
-                    match action {
-                        input::WheelAction::Pty(bytes) if !bytes.is_empty() => panel.write_input(&bytes),
-                        input::WheelAction::Pty(_) => {}
-                        input::WheelAction::Scrollback(lines) => {
-                            let scrollback_before = panel.terminal().map_or(0, horizon_core::Terminal::scrollback);
-                            panel.scroll_scrollback_by(lines);
-                            local_scrollback_changed |=
-                                panel.terminal().map_or(0, horizon_core::Terminal::scrollback) != scrollback_before;
-                        }
-                    }
+                    local_scrollback_changed |= apply_wheel_action(panel, action);
                 }
             }
             _ => {}
@@ -318,20 +328,73 @@ fn handle_pointer_events(
     local_scrollback_changed
 }
 
+fn apply_wheel_action(panel: &mut Panel, action: input::WheelAction) -> bool {
+    match action {
+        input::WheelAction::Pty(bytes) => {
+            if !bytes.is_empty() {
+                panel.write_input(&bytes);
+            }
+            false
+        }
+        input::WheelAction::Scrollback(lines) => {
+            let before = panel.terminal().map_or(0, horizon_core::Terminal::scrollback);
+            panel.scroll_scrollback_by(lines);
+            panel.terminal().map_or(0, horizon_core::Terminal::scrollback) != before
+        }
+    }
+}
+
+fn finish_captured_primary_gesture(
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    selection_drag: &mut TerminalSelectionDragState,
+    pos: Pos2,
+    event_index: usize,
+) {
+    let Some(CapturedPrimaryGesture::Pty {
+        terminal_mode,
+        modifiers,
+    }) = selection_drag.finish_primary_gesture(panel.id, pointer.ui_ctx.cumulative_frame_nr(), event_index)
+    else {
+        return;
+    };
+    let body = pointer.interaction.layout.body;
+    if let Some(point) = grid_point_from_position(
+        body,
+        body.clamp(pos),
+        pointer.metrics,
+        pointer.visible_rows,
+        pointer.visible_cols,
+    ) && let Some(bytes) = input::mouse_button_report(PointerButton::Primary, false, modifiers, terminal_mode, point)
+        && !bytes.is_empty()
+    {
+        panel.write_input(&bytes);
+    }
+}
+
 fn handle_pointer_motion(
     panel: &mut Panel,
     pointer: &PointerContext<'_>,
+    selection_drag: &TerminalSelectionDragState,
     pos: Pos2,
     pointer_buttons: input::PointerButtons,
     modifiers: egui::Modifiers,
-    local_selection_claimed: bool,
+    event_index: usize,
 ) {
-    if local_selection_claimed {
+    let frame = pointer.ui_ctx.cumulative_frame_nr();
+    if suppress_unowned_primary_motion(selection_drag, panel.id, pointer_buttons, frame, event_index) {
         return;
     }
+    let (terminal_mode, modifiers) = match selection_drag.primary_gesture_for_event(panel.id, frame, event_index) {
+        Some(CapturedPrimaryGesture::Pty {
+            terminal_mode,
+            modifiers,
+        }) if pointer_buttons.primary => (terminal_mode, modifiers),
+        _ => (pointer.terminal_mode, modifiers),
+    };
     let pos = transform_pos(pointer.from_global, pos);
     if pointer.interaction.layout.body.contains(pos)
-        && pointer_motion_routes_to_pty_mouse(pointer.terminal_mode, pointer_buttons, modifiers)
+        && pointer_motion_routes_to_pty_mouse(terminal_mode, pointer_buttons, modifiers)
         && let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,
             pos,
@@ -339,11 +402,30 @@ fn handle_pointer_motion(
             pointer.visible_rows,
             pointer.visible_cols,
         )
-        && let Some(bytes) = input::mouse_motion_report(pointer_buttons, modifiers, pointer.terminal_mode, point)
+        && let Some(bytes) = input::mouse_motion_report(pointer_buttons, modifiers, terminal_mode, point)
         && !bytes.is_empty()
     {
         panel.write_input(&bytes);
     }
+}
+
+fn suppress_unowned_primary_motion(
+    selection_drag: &TerminalSelectionDragState,
+    panel_id: PanelId,
+    pointer_buttons: input::PointerButtons,
+    frame: u64,
+    event_index: usize,
+) -> bool {
+    pointer_buttons.primary
+        && !matches!(
+            selection_drag.primary_gesture_for_event(panel_id, frame, event_index),
+            Some(CapturedPrimaryGesture::Pty { .. })
+        )
+}
+
+fn body_layer_is_topmost_at(pointer: &PointerContext<'_>, pos: Pos2) -> bool {
+    let global_pos = pointer.from_global.map_or(pos, |transform| transform.inverse() * pos);
+    pointer.ui_ctx.layer_id_at(global_pos) == Some(pointer.interaction.body.layer_id)
 }
 
 fn pointer_buttons_at_frame_start(
@@ -357,6 +439,19 @@ fn pointer_buttons_at_frame_start(
         }
     }
     buttons
+}
+
+fn has_primary_release(events: &[egui::Event]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::PointerButton {
+                button: PointerButton::Primary,
+                pressed: false,
+                ..
+            }
+        )
+    })
 }
 
 fn update_pointer_buttons_for_event(buttons: &mut input::PointerButtons, event: &egui::Event) {
@@ -395,7 +490,9 @@ fn handle_terminal_body_pointer_actions(
         .active_pointer_pos
         .or_else(|| response_pointer_pos(&pointer.interaction.body));
 
-    if frame_events.body_middle_press_pos.is_some()
+    if frame_events
+        .body_middle_press_pos
+        .is_some_and(|pos| body_layer_is_topmost_at(pointer, pos))
         && !pty_mouse_reporting_enabled(pointer.terminal_mode, pointer.current_modifiers)
         && should_request_primary_paste(PointerButton::Middle, true, pointer.current_modifiers)
     {
@@ -405,11 +502,11 @@ fn handle_terminal_body_pointer_actions(
         return outcome;
     }
 
-    if let Some(pos) = frame_events.body_primary_press_pos {
+    if let Some(pos) = frame_events.body_primary_press_pos
+        && body_layer_is_topmost_at(pointer, pos)
+    {
+        outcome.osc8_replay_index = frame_events.osc8_replay_index;
         pointer.interaction.body.request_focus();
-        // Collection verified this exact event's modifiers and terminal mode
-        // route it to local selection. The frame's final modifiers may belong
-        // to a later outside press.
         start_local_selection_at(panel, pointer, pos);
         selection_drag.start(panel.id, pos);
     }
@@ -419,6 +516,10 @@ fn handle_terminal_body_pointer_actions(
     // in-body press correctly restarts the drag.
     outcome.release_completes_drag =
         selection_drag.active_for(panel.id) && frame_events.primary_release_index.is_some();
+    outcome.release_replay_index = outcome
+        .release_completes_drag
+        .then_some(frame_events.primary_release_index)
+        .flatten();
 
     if selection_drag.active_for(panel.id)
         && !outcome.release_completes_drag
@@ -508,8 +609,12 @@ fn handle_pointer_button(
     button: egui::PointerButton,
     pressed: bool,
     modifiers: egui::Modifiers,
-) {
-    // Ctrl+click / Cmd+click opens URLs and file paths regardless of mouse mode.
+) -> Option<CapturedPrimaryGesture> {
+    if pressed {
+        pointer.interaction.body.request_focus();
+    }
+    // Ctrl+click / Cmd+click opens URLs, file paths, and OSC 8 hyperlinks
+    // regardless of mouse mode.
     if (modifiers.ctrl || modifiers.command)
         && button == egui::PointerButton::Primary
         && pressed
@@ -523,8 +628,16 @@ fn handle_pointer_button(
         && let Some(terminal) = panel.terminal()
         && let Some(target) = terminal.clickable_at_point(point.line, point.column)
     {
-        horizon_core::open_url(&target);
-        return;
+        open_terminal_target(&target);
+        return Some(CapturedPrimaryGesture::Horizon);
+    }
+
+    if pressed
+        && pointer_button_opens_osc8_hyperlink(button, modifiers)
+        && let Some(uri) = osc8_hyperlink_at(panel, pointer, pos)
+    {
+        open_terminal_target(&uri);
+        return Some(CapturedPrimaryGesture::Horizon);
     }
 
     if pointer_button_starts_local_selection(pointer.terminal_mode, button, pressed, modifiers) {
@@ -541,7 +654,61 @@ fn handle_pointer_button(
         && !bytes.is_empty()
     {
         panel.write_input(&bytes);
+        if button == PointerButton::Primary && pressed {
+            return Some(CapturedPrimaryGesture::Pty {
+                terminal_mode: pointer.terminal_mode,
+                modifiers,
+            });
+        }
     }
+    None
+}
+
+fn open_terminal_target(target: &str) {
+    if let Err(error) = horizon_core::open_url(target) {
+        tracing::warn!(%error, %target, "failed to open terminal target");
+    }
+}
+
+fn replay_osc8_press(
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    selection_drag: &mut TerminalSelectionDragState,
+    pos: Pos2,
+    modifiers: egui::Modifiers,
+    event_index: usize,
+) -> bool {
+    if !body_layer_is_topmost_at(pointer, pos)
+        || !pointer_button_opens_osc8_hyperlink(PointerButton::Primary, modifiers)
+    {
+        return false;
+    }
+    let Some(uri) = osc8_hyperlink_at(panel, pointer, pos) else {
+        return false;
+    };
+    open_terminal_target(&uri);
+    let _ = selection_drag.finish(panel.id);
+    if let Some(terminal) = panel.terminal() {
+        terminal.clear_selection();
+    }
+    selection_drag.capture_primary_gesture(
+        panel.id,
+        CapturedPrimaryGesture::Horizon,
+        pointer.ui_ctx.cumulative_frame_nr(),
+        event_index,
+    );
+    true
+}
+
+fn osc8_hyperlink_at(panel: &Panel, pointer: &PointerContext<'_>, pos: Pos2) -> Option<String> {
+    let point = grid_point_from_position(
+        pointer.interaction.layout.body,
+        pos,
+        pointer.metrics,
+        pointer.visible_rows,
+        pointer.visible_cols,
+    )?;
+    panel.terminal()?.hyperlink_at_point(point.line, point.column)
 }
 
 fn maybe_copy_selection_to_primary(
