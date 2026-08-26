@@ -41,6 +41,12 @@ browser session.
   geometry and Horizon paints a non-injected indicator over the omitted gutter;
   Firefox remains authoritative for the drag. Scroll-state-only changes wake
   the UI even when screenshot pixels hash identically.
+- Finding fixed and rerun: when geckodriver exited before a Firefox descendant,
+  retaining only the driver leader could leave that descendant alive. Cleanup
+  now observes an exited process-group leader and reaps every remaining owned
+  member before Retry or shutdown completes. Killing only the disposable
+  geckodriver produced a cleared frame and Retry state, left no Firefox child,
+  and Retry created one fresh driver/browser tree that normal close also reaped.
 - Common disclosure minimization: pass on the deterministic local page for
   Chromium and Firefox. The earliest author script, current document, and a
   dynamically created iframe each observed `navigator.webdriver == false`.
@@ -73,6 +79,19 @@ browser session.
   retained its native Firefox 154 user agent and a plausible screen larger
   than its content viewport. The fixture recorded these values instead of
   adding broad fingerprint spoofing.
+- Browser-default disclosure rerun: both engines reported `BrowserDefault`.
+  The earliest author script, current document, and a dynamically created
+  same-origin iframe each observed `navigator.webdriver == true`, confirming
+  that Horizon had not installed its minimization preload. Chromium retained
+  its native `HeadlessChrome` user agent in this mode and Firefox retained its
+  native Firefox user agent.
+- Firefox double-click limitation: Horizon correctly emitted consecutive
+  trusted WebDriver presses with click counts one and two, but stock Firefox
+  154/geckodriver 0.35 did not emit a DOM `dblclick` across separate W3C Actions
+  commands. WebDriver BiDi Actions has no click-count parameter. Buffering every
+  first click would add double-click-interval latency, while synthesizing a DOM
+  event would make it untrusted, so neither workaround was accepted. Single
+  click, drag, simultaneous-button, wheel, and keyboard assertions passed.
 - Exact final-build teardown: normal window close removed the task-owned
   Horizon, Chromium, geckodriver, and Firefox processes, CDP/WebDriver/BiDi
   listeners, and live manifest. The private audit journal remained at mode
@@ -92,6 +111,48 @@ browser session.
   the live manifest and runtime YAML recorded Chromium plus Firefox, normal
   close removed both task-owned manifests and process trees, and relaunch of
   that same isolated session visibly restored both engines with Firefox BiDi.
+- Full persistence rerun: Chromium navigated to the second deterministic page,
+  switched to Firefox while preserving the committed URL, title, profile
+  identity, geometry, and focus, then saved and restored as Firefox BiDi. It
+  subsequently switched back, saved, and restored as Chromium CDP. Every old
+  exact process tree was gone before profile reuse and every normal close exited
+  cleanly. Permanently closing a separate Firefox panel removed its driver,
+  browser, live manifest, and task-owned persistent profile. An unreachable
+  Firefox navigation retained the last valid frame and displayed an actionable
+  error without replacing the saved committed URL.
+- MCP-only steering rerun: both engines completed initialization and all ten
+  public MCP tools, including semantic navigation, snapshot/query/ref actions,
+  Unicode fill, scroll, evaluation, history/reload, stale-ref errors, redacted
+  audit correlation, user preemption, and handoff/handback. MCP stdout remained
+  protocol-only and exposed no raw browser endpoint or runtime path. No browser
+  control CLI is part of the contract.
+- Bundled discovery rerun: an isolated default agent panel received only the
+  transient `horizon-browser` stdio registration plus a stable actor identity;
+  no registration was written to its persistent configuration. The installed
+  discovery skill and Claude descriptor pointed to the exact Horizon executable
+  with only `--browser-mcp`, and a regression test proves custom agent commands
+  are unchanged. The isolated nested agent reached its fresh-login screen, so
+  an authenticated in-agent call was not attempted with operator credentials;
+  discovery wiring and the same MCP snapshot flow were verified independently.
+- Measured frame latency passed the documented gates. Firefox input samples
+  had median 80 ms, p95 123 ms, and maximum 178 ms; navigation samples had
+  median 78 ms, p95 129 ms, and maximum 215 ms. Chromium input samples had
+  median 32 ms, p95 48 ms, and maximum 55 ms; navigation samples had median
+  48 ms, p95 54 ms, and maximum 68 ms. Firefox animation produced 48 frames in
+  three seconds, stayed below its 30 fps cap, and decayed after returning to a
+  static page; Chromium's CDP push path produced 181 frames in three seconds.
+- Firefox scale samples remained bounded and approximately linear: one panel
+  used 13 child processes, 346 threads, and 1,539,052 KiB summed RSS; three used
+  37 processes, 916 threads, and 3,632,280 KiB; five used 61 processes, 1,477
+  threads, and 6,089,768 KiB. Summed RSS double-counts shared pages and the
+  five-panel CPU sample included an active animation, so these measurements are
+  comparison evidence rather than a general resource claim. Normal WM close
+  left no process survivors in all three cases.
+- Harness note: directly destroying an X11 drawable is not a normal application
+  close and caused winit `BadWindow` errors under load. Those observations were
+  discarded. Exact-window `WM_DELETE_WINDOW` through the task-owned window
+  manager exited with status zero and fully reaped the one-, three-, and
+  five-panel trees.
 - The complete repository pre-push matrix passed on the final source candidate:
   formatting, maintainability, both workspace test lanes, blocking Clippy,
   strict no-unwrap/no-expect Clippy, and pedantic Clippy. `horizon-browser`
