@@ -5,6 +5,7 @@
 //! state machine's reactive half, while the parent module keeps the loop,
 //! command drain, and manifest/signal plumbing.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -424,12 +425,35 @@ impl DriverState {
 /// fragment from `frameNavigated` even though `location.href` already has it,
 /// and can append a trailing slash to an otherwise identical URL.
 fn href_matches_url(href: &str, url: &str) -> bool {
-    let href = href
-        .split_once('#')
-        .map_or(href, |(base, _)| base)
-        .trim_end_matches('/');
-    let url = url.split_once('#').map_or(url, |(base, _)| base).trim_end_matches('/');
+    let href = comparable_document_url(href);
+    let url = comparable_document_url(url);
+    let href = href.trim_end_matches('/');
+    let url = url.trim_end_matches('/');
     href == url
+}
+
+/// Chrome omits URL credentials from `location.href`, while target and
+/// navigation events may retain them. Credentials do not identify a
+/// different document, so remove only the authority's user-info before
+/// comparing page metadata. An `@` in a path or query remains significant.
+fn comparable_document_url(url: &str) -> Cow<'_, str> {
+    let url = url.split_once('#').map_or(url, |(base, _)| base);
+    let Some(scheme_end) = url.find("://") else {
+        return Cow::Borrowed(url);
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = url[authority_start..]
+        .find(['/', '?'])
+        .map_or(url.len(), |offset| authority_start + offset);
+    let Some(user_info_end) = url[authority_start..authority_end].rfind('@') else {
+        return Cow::Borrowed(url);
+    };
+
+    let host_start = authority_start + user_info_end + 1;
+    let mut normalized = String::with_capacity(url.len() - (host_start - authority_start));
+    normalized.push_str(&url[..authority_start]);
+    normalized.push_str(&url[host_start..]);
+    Cow::Owned(normalized)
 }
 
 fn title_for_bound_target<'a>(params: &'a serde_json::Value, target_id: Option<&str>) -> Option<&'a str> {
@@ -595,9 +619,21 @@ mod tests {
             "https://example.test/path/",
             "https://example.test/path"
         ));
+        assert!(href_matches_url(
+            "http://127.0.0.1/page?mode=1#section",
+            "http://user:secret@127.0.0.1/page?mode=1#submitted",
+        ));
+        assert!(href_matches_url(
+            "https://example.test/path@marker?mode=1",
+            "https://example.test/path@marker?mode=1#section",
+        ));
         assert!(!href_matches_url(
             "https://example.test/path?mode=2",
             "https://example.test/path?mode=1",
+        ));
+        assert!(!href_matches_url(
+            "http://127.0.0.2/page?mode=1",
+            "http://user:secret@127.0.0.1/page?mode=1",
         ));
         assert!(!href_matches_url(
             "https://example.test/other",
