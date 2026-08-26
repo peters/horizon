@@ -99,7 +99,9 @@ impl WebDriverService {
                 let _ = process.kill();
                 return Err(format!("{label} startup cancelled"));
             }
-            if http.get("/status").is_ok() {
+            if http.get("/status").is_ok_and(|status| {
+                status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
+            }) {
                 break;
             }
             if let Some(status) = process.child_status() {
