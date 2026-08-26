@@ -335,7 +335,7 @@ impl Panel {
                     browser: browser_output.had_output,
                 },
                 cwd_changed: false,
-                persisted_state_changed: browser_output.url_changed,
+                persisted_state_changed: browser_output.url_changed || browser_output.config_changed,
             };
         }
 

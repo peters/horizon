@@ -104,6 +104,9 @@ pub struct BrowserPanelState {
     /// as the display and relaunch target until a fresh session accepts it,
     /// so the input is never silently discarded.
     pending_user_navigation: Option<String>,
+    /// A backend selection changed since the last output drain and must be
+    /// folded into the persisted runtime state exactly once.
+    persisted_config_changed: bool,
     config: BrowserConfig,
 }
 
@@ -115,6 +118,7 @@ struct PendingRelaunch {
 pub struct BrowserDrainOutput {
     pub had_output: bool,
     pub url_changed: bool,
+    pub config_changed: bool,
 }
 
 impl BrowserPanelState {
@@ -150,6 +154,7 @@ impl BrowserPanelState {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config,
         };
         state.launch_session(initial_url);
@@ -231,6 +236,7 @@ impl BrowserPanelState {
         }
         let target = self.relaunch_target();
         self.config.backend = backend;
+        self.persisted_config_changed = true;
         self.frame_slot.clear();
         self.frame_slot.clear_backend_capabilities();
         self.launch_session(target);
@@ -455,13 +461,15 @@ impl BrowserPanelState {
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
         let relaunched = self.continue_pending_relaunch();
+        let config_changed = std::mem::take(&mut self.persisted_config_changed);
         let events = self
             .session
             .as_ref()
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         let mut output = BrowserDrainOutput {
-            had_output: relaunched,
+            had_output: relaunched || config_changed,
+            config_changed,
             ..BrowserDrainOutput::default()
         };
         for event in events {
@@ -670,6 +678,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
@@ -707,6 +716,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
@@ -714,6 +724,45 @@ mod tests {
         assert_eq!(completion_tx.send(()), Ok(()));
         assert!(state.retry_ready());
         assert!(state.teardown_signal.is_none());
+    }
+
+    #[test]
+    fn backend_switch_marks_persisted_state_dirty_once() {
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let mut state = BrowserPanelState {
+            status: BrowserStatus::Ready,
+            url: Some("https://example.com/".to_string()),
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            committed_url: session::CommittedUrl::default(),
+            teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
+            pending_relaunch: None,
+            panel_local_id: "backend-persistence-test".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            navigation_error: None,
+            pending_user_navigation: None,
+            persisted_config_changed: false,
+            config: BrowserConfig::default(),
+        };
+
+        state.switch_backend(BackendKind::FirefoxBidi);
+        assert_eq!(state.backend(), BackendKind::FirefoxBidi);
+
+        let first = state.drain_events();
+        assert!(first.config_changed);
+        assert!(first.had_output);
+        assert!(!first.url_changed);
+
+        let second = state.drain_events();
+        assert!(!second.config_changed);
+        assert_eq!(completion_tx.send(()), Ok(()));
     }
 
     #[test]
@@ -739,6 +788,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
         let completion = std::thread::spawn(move || {
@@ -776,6 +826,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig {
                 command: Some("/definitely/missing/chrome".to_string()),
                 ..BrowserConfig::default()
@@ -847,6 +898,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
@@ -880,6 +932,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: Some("stale error".to_string()),
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
@@ -912,6 +965,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
@@ -947,6 +1001,7 @@ mod tests {
             pending_clipboard_text: None,
             navigation_error: None,
             pending_user_navigation: None,
+            persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
 
