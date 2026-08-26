@@ -106,9 +106,9 @@ impl HorizonApp {
         &mut self,
         capturing_hotkey: bool,
         text_surface_active: bool,
-        root_focused: bool,
+        horizon_focused: bool,
     ) {
-        let suspend = capturing_hotkey || (text_surface_active && root_focused);
+        let suspend = capturing_hotkey || (text_surface_active && horizon_focused);
         if suspend {
             if let Some(hotkeys) = self.speech_global_hotkeys.as_ref() {
                 while let Some(event) = hotkeys.try_recv() {
@@ -129,6 +129,7 @@ impl HorizonApp {
             if self.speech_global_hotkeys.is_some() {
                 self.speech_global_hotkeys = None;
                 self.speech_global_hotkeys_suspended = true;
+                self.speech_global_events_pending.clear();
             }
             return;
         }

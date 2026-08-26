@@ -363,7 +363,7 @@ impl HorizonApp {
         let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         let horizon_focused = root_focused_now || self.any_detached_viewport_focused(ctx);
         let (text_surface_active, search_capturing) = self.speech_text_surface_active();
-        self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, root_focused_now);
+        self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, horizon_focused);
         self.install_speech_global_wake(ctx);
         let sink = dictation_sink(
             self.focused_horizon_terminal(ctx, root_focused_now),
@@ -428,7 +428,7 @@ impl HorizonApp {
             .map_or(Vec::new(), |hotkeys| hotkeys.profiles().to_vec());
         let mut engaged = self.speech_engaged_profile;
         if self.speech_global_hotkeys.is_some() {
-            let presses_allowed = !(capturing_hotkey || text_surface_active && root_focused_now);
+            let presses_allowed = !(capturing_hotkey || text_surface_active && horizon_focused);
             engaged = apply_global_hotkeys(
                 speech,
                 self.speech_global_hotkeys.as_ref(),
