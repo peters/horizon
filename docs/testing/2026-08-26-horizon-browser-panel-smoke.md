@@ -5,6 +5,46 @@ engine and Horizon panel integration. Record the checked-out commit before each
 lane. Never reuse, signal, close, or inspect a pre-existing Horizon or normal
 browser session.
 
+## Linux execution record (2026-08-26)
+
+- Host: Ubuntu 24.04.4 LTS, Linux 7.0.0-30-generic x86_64, isolated Xvfb.
+- Browsers: Chromium 151.0.7922.108 snap; Firefox 154.0; geckodriver 0.35.0.
+- Chromium CDP: pass for visible push frames, committed URL/title, Fit/resize,
+  Unicode agent input, claim/lease, user preemption, handoff/handback, redacted
+  mode-`0600` audit, and exact process/manifest cleanup.
+- Firefox WebDriver BiDi: pass for visible adaptive screenshots, committed
+  URL/title, Fit/resize, Unicode agent input, claim/lease, user preemption,
+  handoff/handback, redacted mode-`0600` audit, and exact
+  Horizon-to-geckodriver-to-Firefox cleanup.
+- Finding fixed and rerun: Chromium retained a target URL-like title after a
+  credential-bearing navigation because Chrome omits URL user-info from
+  `location.href`. Metadata matching now ignores only authority user-info;
+  query, host, path, and path/query `@` characters remain significant.
+- The complete repository validation matrix, package dry-run, documentation,
+  and cross-target checks are blocking before the branch is pushed for macOS.
+- Runtime screenshots and journals are temporary task artifacts outside the
+  repository; the durable evidence is this record plus the exact pushed SHA.
+
+## Pre-PR macOS branch handoff
+
+No PR exists yet. After the Linux gate is green, the implementing agent pushes
+`feature/horizon-browser`. The macOS tester must:
+
+1. Fetch `origin/feature/horizon-browser` into an isolated clean worktree and
+   record `git rev-parse HEAD` before building.
+2. Verify the fetched SHA is still the branch head immediately before smoke;
+   never test a stale local branch or a different checkout.
+3. Run the macOS Chromium and Firefox lanes, then the full Safari lane below,
+   including classic-only fallback, optional BiDi negotiation, one-session
+   arbitration, adaptive screenshot latency, normal-window isolation, and
+   exact-child cleanup.
+4. Fix only in-scope findings on a normally named local branch. Before pushing
+   a fix to `feature/horizon-browser`, fetch again and require a regular
+   fast-forward push; never force-push over a newer head.
+5. Report every step as pass/fail, list any fix commits, and end the completed
+   report with exactly `SMOKE-TEST: DONE`. A behavior-changing macOS fix
+   invalidates affected Linux evidence and must be handed back for rerun.
+
 ## Scope and pass rule
 
 - Linux: Chromium CDP and Firefox WebDriver BiDi, including visible pixels,

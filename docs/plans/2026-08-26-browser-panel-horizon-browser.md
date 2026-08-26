@@ -1,6 +1,6 @@
 # Browser panel: first-party `horizon-browser` landing plan
 
-- Status: implemented in a local candidate; Linux Chromium/Firefox smoke passed; exact-head final validation and macOS Safari smoke pending
+- Status: implemented; Linux Chromium/Firefox exact-code smoke passed; macOS Chromium/Firefox/Safari smoke pending
 - Date: 2026-08-26
 - Target base: `origin/main` at `4c6a69d`
 - New workspace crate: `crates/horizon-browser`
@@ -49,7 +49,8 @@ release-supported until the exact candidate is exercised on macOS after the
 Linux/final-validation gate.
 
 The integrated diff is intentionally over the repository's normal PR scope
-limit. Do not open or push it as one PR without the user's explicit scope
+limit. The user authorized pushing the implementation branch for cross-machine
+smoke, but not opening a PR. Do not open it as one PR without explicit scope
 approval; the landing-train section remains the recommended review split.
 
 ## Performance answer
@@ -573,7 +574,13 @@ Any UI-related PR creates an extensive temporary plan under `docs/testing/`. Tes
 - No surviving child, listener, driver thread, manifest, or disposable profile.
 - Screenshots after launch and interaction; motion trace/video for motion-sensitive behavior.
 
-Cross-machine validation uses PR smoke request/report comments and exact-head evidence. Linux completes Chromium and Firefox smoke first. The exact same candidate head then moves to macOS for Chromium, Firefox, and Safari smoke; Safari cannot be advertised from Linux-only evidence. Windows must pass for Chromium and Firefox before those backends are advertised there.
+Cross-machine validation normally uses PR smoke request/report comments and
+exact-head evidence. For this authorized pre-PR handoff, Linux completes
+Chromium and Firefox smoke first and pushes `feature/horizon-browser`. The
+macOS tester checks out the exact remote branch head and reports its SHA before
+running Chromium, Firefox, and Safari. Safari cannot be advertised from
+Linux-only evidence. Windows must pass for Chromium and Firefox before those
+backends are advertised there.
 
 ## Existing PR disposition
 
