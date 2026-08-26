@@ -475,9 +475,14 @@ fn vertical_scrollbar_press(
     x: f64,
     y: f64,
 ) -> Option<ScrollbarPress> {
+    let overlay = layout.client_width >= viewport_width;
+    let scrollbar_left = if overlay {
+        (viewport_width - 8.0).max(0.0)
+    } else {
+        layout.client_width
+    };
     if layout.content_height <= layout.client_height
-        || layout.client_width >= viewport_width
-        || x < layout.client_width
+        || x < scrollbar_left
         || x > viewport_width
         || y < 0.0
         || y > layout.client_height
@@ -501,6 +506,9 @@ fn vertical_scrollbar_press(
             max_scroll,
             scroll_per_pointer_pixel: max_scroll / thumb_travel.max(1.0),
         }));
+    }
+    if overlay {
+        return None;
     }
 
     let direction = if y < thumb_top { -1.0 } else { 1.0 };
@@ -635,6 +643,26 @@ mod tests {
 
         let target = drag.target_scroll_y(361.0);
         assert!((target - 1_426.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn overlay_scrollbar_only_claims_its_thumb() {
+        let metrics = serde_json::json!({
+            "cssLayoutViewport": {
+                "pageY": 640,
+                "clientWidth": 684,
+                "clientHeight": 508
+            },
+            "cssContentSize": { "width": 684, "height": 2618 }
+        });
+        let layout = scrollbar_layout(&metrics);
+
+        assert!(matches!(
+            vertical_scrollbar_press(layout, 684.0, 676.0, 128.0),
+            Some(ScrollbarPress::Drag(_))
+        ));
+        assert!(vertical_scrollbar_press(layout, 684.0, 676.0, 300.0).is_none());
+        assert!(vertical_scrollbar_press(layout, 684.0, 675.0, 128.0).is_none());
     }
 
     #[test]
