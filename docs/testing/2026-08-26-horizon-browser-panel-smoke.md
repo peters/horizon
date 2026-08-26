@@ -5,7 +5,7 @@ engine and Horizon panel integration. Record the checked-out commit before each
 lane. Never reuse, signal, close, or inspect a pre-existing Horizon or normal
 browser session.
 
-## Linux execution record (2026-08-26)
+## Linux execution record (2026-08-26 to 2026-08-27)
 
 - Host: Ubuntu 24.04.4 LTS, Linux 7.0.0-30-generic x86_64, isolated Xvfb.
 - Browsers: Chromium 151.0.7922.108 snap; Firefox 154.0; geckodriver 0.35.0.
@@ -47,6 +47,10 @@ browser session.
   member before Retry or shutdown completes. Killing only the disposable
   geckodriver produced a cleared frame and Retry state, left no Firefox child,
   and Retry created one fresh driver/browser tree that normal close also reaped.
+- Independent review finding fixed: post-reap descendant cleanup is Unix-only.
+  A retained Windows child handle is exact while live, but after exit its
+  numeric PID can be reused; the candidate therefore never passes an exited PID
+  to `taskkill`. The Unix cleanup regression and Windows MSVC cross-check passed.
 - Common disclosure minimization: pass on the deterministic local page for
   Chromium and Firefox. The earliest author script, current document, and a
   dynamically created iframe each observed `navigator.webdriver == false`.
@@ -156,13 +160,13 @@ browser session.
 - The complete repository pre-push matrix passed on the final source candidate:
   formatting, maintainability, both workspace test lanes, blocking Clippy,
   strict no-unwrap/no-expect Clippy, and pedantic Clippy. `horizon-browser`
-  rustdoc, macOS/Windows crate cross-target checks, and a dirty-tree package
-  dry-run also passed; the archive contained 36 files and compressed to
-  93.2 KiB. Workspace rustdoc is not a release gate and remains blocked by a
-  pre-existing broken intra-doc link in `horizon-cursor`. The clean-tree package
-  dry-run is repeated after commit and remains blocking before push. The macOS
-  tester must use the final remote SHA, not an earlier push made before the
-  persistence, viewport/input, or disclosure-startup findings.
+  rustdoc, macOS plus Windows GNU/MSVC crate cross-target checks, and a clean
+  package dry-run also passed; the archive contained 39 files and verified from
+  its staged contents. No crate was published. Workspace rustdoc is not a
+  release gate and remains blocked by a pre-existing broken intra-doc link in
+  `horizon-cursor`. The macOS tester must use the final remote SHA, not an
+  earlier push made before the persistence, viewport/input, or disclosure-startup
+  findings.
 - Runtime screenshots and journals are temporary task artifacts outside the
   repository; the durable evidence is this record plus the exact pushed SHA.
 
