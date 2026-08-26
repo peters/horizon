@@ -94,8 +94,9 @@ impl HorizonApp {
             return;
         };
 
-        horizon_core::open_url(&update.installer_url);
-        update.error_message = None;
+        update.error_message = horizon_core::open_url(&update.installer_url)
+            .err()
+            .map(|error| format!("failed to open installer download: {error}"));
     }
 }
 

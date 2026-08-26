@@ -3,8 +3,11 @@ use super::routing::{
     pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection, pointer_drag_updates_local_selection,
     pointer_motion_routes_to_pty_mouse,
 };
+use super::selection_drag::{CapturedPrimaryGesture, TerminalSelectionDragState};
+use super::suppress_unowned_primary_motion;
 use alacritty_terminal::term::TermMode;
 use egui::{Modifiers, PointerButton};
+use horizon_core::PanelId;
 
 use crate::input::PointerButtons;
 
@@ -139,4 +142,97 @@ fn unmodified_primary_click_opens_osc8_hyperlink() {
         PointerButton::Secondary,
         Modifiers::NONE
     ));
+}
+
+#[test]
+fn primary_pty_gesture_keeps_press_routing_until_its_release() {
+    let panel_id = PanelId(42);
+    let other_panel_id = PanelId(7);
+    let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+    let mut state = TerminalSelectionDragState::default();
+    let primary_down = PointerButtons {
+        primary: true,
+        ..PointerButtons::default()
+    };
+
+    assert!(suppress_unowned_primary_motion(&state, panel_id, primary_down, 8, 0));
+
+    state.capture_primary_gesture(
+        panel_id,
+        CapturedPrimaryGesture::Pty {
+            terminal_mode: mode,
+            modifiers: Modifiers::ALT,
+        },
+        8,
+        1,
+    );
+    assert!(!suppress_unowned_primary_motion(&state, panel_id, primary_down, 8, 2));
+    assert!(suppress_unowned_primary_motion(
+        &state,
+        other_panel_id,
+        primary_down,
+        8,
+        2
+    ));
+
+    assert!(state.finish_primary_gesture(other_panel_id, 8, 2).is_none());
+    assert!(matches!(
+        state.finish_primary_gesture(panel_id, 8, 2),
+        Some(CapturedPrimaryGesture::Pty {
+            terminal_mode,
+            modifiers: Modifiers::ALT,
+        }) if terminal_mode == mode
+    ));
+    assert!(state.has_primary_gesture());
+    assert!(state.finish_primary_gesture(panel_id, 8, 3).is_none());
+    state.expire_completed_primary_gesture(8);
+    assert!(state.has_primary_gesture());
+    state.expire_completed_primary_gesture(9);
+    assert!(!state.has_primary_gesture());
+}
+
+#[test]
+fn newer_primary_capture_wins_same_frame() {
+    let panel_id = PanelId(42);
+    let other_panel_id = PanelId(7);
+    let mut state = TerminalSelectionDragState::default();
+    state.capture_primary_gesture(panel_id, CapturedPrimaryGesture::Horizon, 10, 4);
+    state.capture_primary_gesture(other_panel_id, CapturedPrimaryGesture::Horizon, 10, 1);
+
+    assert!(state.primary_gesture_for_event(panel_id, 10, 5).is_some());
+    assert!(state.finish_primary_gesture(panel_id, 10, 3).is_none());
+    assert!(state.finish_primary_gesture(panel_id, 10, 5).is_some());
+}
+
+#[test]
+fn earlier_owner_can_finish_after_a_later_capture_is_registered() {
+    let earlier_panel_id = PanelId(42);
+    let later_panel_id = PanelId(7);
+    let mut state = TerminalSelectionDragState::default();
+    state.capture_primary_gesture(earlier_panel_id, CapturedPrimaryGesture::Horizon, 9, 1);
+    state.capture_primary_gesture(later_panel_id, CapturedPrimaryGesture::Horizon, 10, 2);
+
+    assert!(state.finish_primary_gesture(earlier_panel_id, 10, 1).is_some());
+    assert!(state.primary_gesture_for_event(later_panel_id, 10, 3).is_some());
+}
+
+#[test]
+fn interrupted_primary_gesture_clears_after_the_physical_release() {
+    let panel_id = PanelId(42);
+    let mut state = TerminalSelectionDragState::default();
+    state.capture_primary_gesture(panel_id, CapturedPrimaryGesture::Horizon, 8, 1);
+
+    state.cancel_interrupted_primary_gesture(true, false, true);
+    assert!(state.has_primary_gesture());
+    state.cancel_interrupted_primary_gesture(false, false, false);
+    assert!(state.has_primary_gesture());
+    state.cancel_interrupted_primary_gesture(false, true, true);
+    assert!(state.has_primary_gesture());
+    state.cancel_interrupted_primary_gesture(false, false, true);
+    assert!(!state.has_primary_gesture());
+
+    state.capture_primary_gesture(panel_id, CapturedPrimaryGesture::Horizon, 8, 1);
+    assert!(state.finish_primary_gesture(panel_id, 8, 2).is_some());
+    state.cancel_interrupted_primary_gesture(false, false, true);
+    assert!(state.has_primary_gesture());
 }

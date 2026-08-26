@@ -2,11 +2,13 @@ use alacritty_terminal::term::TermMode;
 use egui::emath::TSTransform;
 use egui::{PointerButton, Pos2, Rect};
 
-use super::routing::{pointer_button_checks_clickable_target, pointer_button_starts_local_selection};
+use super::routing::{
+    pointer_button_checks_clickable_target, pointer_button_opens_osc8_hyperlink, pointer_button_starts_local_selection,
+};
 
 pub(super) struct PointerFrameEvents {
     pub(super) body_primary_press_pos: Option<Pos2>,
-    pub(super) body_primary_press_modifiers: egui::Modifiers,
+    pub(super) osc8_replay_index: Option<usize>,
     pub(super) primary_release_pos: Option<Pos2>,
     pub(super) primary_release_index: Option<usize>,
     pub(super) body_middle_press_pos: Option<Pos2>,
@@ -38,12 +40,13 @@ impl PointerFrameEvents {
                     } => Some((index, transform_pos(from_global, *pos))),
                     _ => None,
                 });
+        let osc8_replay_index = body_primary_press.and_then(|(index, _, modifiers)| {
+            pointer_button_opens_osc8_hyperlink(PointerButton::Primary, modifiers).then_some(index)
+        });
 
         Self {
             body_primary_press_pos: body_primary_press.map(|(_, pos, _)| pos),
-            body_primary_press_modifiers: body_primary_press
-                .map(|(_, _, modifiers)| modifiers)
-                .unwrap_or_default(),
+            osc8_replay_index,
             primary_release_pos: primary_release.map(|(_, pos)| pos),
             primary_release_index: primary_release.map(|(index, _)| index),
             body_middle_press_pos: pointer_button_event_pos(
@@ -174,13 +177,22 @@ pub(super) fn pointer_button_event_any_pos(
 mod tests {
     use super::{LocalSelectionEventTracker, PointerFrameEvents, pointer_button_event_pos, pointer_event_targets_rect};
     use alacritty_terminal::term::TermMode;
-    use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+    use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, Rect, Vec2};
 
     fn button_event(pos: Pos2, pressed: bool) -> Event {
         Event::PointerButton {
             pos,
             button: PointerButton::Primary,
             pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn wheel_event() -> Event {
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::Y,
+            phase: egui::TouchPhase::Move,
             modifiers: Modifiers::NONE,
         }
     }
@@ -207,6 +219,20 @@ mod tests {
         let events = vec![Event::PointerMoved(Pos2::new(12.0, 6.0))];
 
         assert!(pointer_event_targets_rect(&events, None, rect));
+    }
+
+    #[test]
+    fn osc8_lookup_replays_at_the_press_position() {
+        let inside = Pos2::new(4.0, 4.0);
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
+
+        let wheel_then_press =
+            PointerFrameEvents::collect(&[wheel_event(), button_event(inside, true)], None, rect, TermMode::NONE);
+        let press_then_wheel =
+            PointerFrameEvents::collect(&[button_event(inside, true), wheel_event()], None, rect, TermMode::NONE);
+
+        assert_eq!(wheel_then_press.osc8_replay_index, Some(1));
+        assert_eq!(press_then_wheel.osc8_replay_index, Some(0));
     }
 
     #[test]
@@ -287,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn local_selection_press_keeps_event_modifiers() {
+    fn shift_press_remains_local_selection_in_mouse_mode() {
         let inside = Pos2::new(4.0, 4.0);
         let events = vec![Event::PointerButton {
             pos: inside,
@@ -303,7 +329,6 @@ mod tests {
         );
 
         assert_eq!(frame_events.body_primary_press_pos, Some(inside));
-        assert!(frame_events.body_primary_press_modifiers.shift);
     }
 
     #[test]

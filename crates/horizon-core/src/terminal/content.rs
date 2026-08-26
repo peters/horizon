@@ -1,4 +1,4 @@
-use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
 use super::{
     Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, TerminalEventProxy,
@@ -222,9 +222,20 @@ impl Terminal {
         let term = self.term.lock();
         hyperlink_uri_at_viewport_point(&term, usize::from(self.cols), row, col)
     }
+
+    /// Return whether the given viewport-relative cell has an OSC 8 hyperlink.
+    #[must_use]
+    pub fn has_hyperlink_at_point(&self, row: usize, col: usize) -> bool {
+        let term = self.term.lock();
+        hyperlink_at_viewport_point(&term, usize::from(self.cols), row, col).is_some()
+    }
 }
 
 fn hyperlink_uri_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<String> {
+    hyperlink_at_viewport_point(term, cols, row, col).map(|hyperlink| hyperlink.uri().to_owned())
+}
+
+fn hyperlink_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<Hyperlink> {
     if col >= cols {
         return None;
     }
@@ -234,18 +245,18 @@ fn hyperlink_uri_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, c
     }
     let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
     let cell = &grid[point.line][Column(col)];
-    if let Some(uri) = nonempty_hyperlink_uri(cell) {
-        return Some(uri);
+    if let Some(hyperlink) = nonempty_hyperlink(cell) {
+        return Some(hyperlink);
     }
     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
-        return nonempty_hyperlink_uri(&grid[point.line][Column(col - 1)]);
+        return nonempty_hyperlink(&grid[point.line][Column(col - 1)]);
     }
     None
 }
 
-fn nonempty_hyperlink_uri(cell: &Cell) -> Option<String> {
-    let uri = cell.hyperlink()?.uri().to_string();
-    (!uri.is_empty()).then_some(uri)
+fn nonempty_hyperlink(cell: &Cell) -> Option<Hyperlink> {
+    let hyperlink = cell.hyperlink()?;
+    (!hyperlink.uri().is_empty()).then_some(hyperlink)
 }
 
 fn wrapped_line_chars_at_viewport_point<T>(

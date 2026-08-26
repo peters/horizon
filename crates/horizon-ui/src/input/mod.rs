@@ -98,6 +98,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_mouse_release_clamps_to_the_protocol_edge() {
+        for (mode, edge) in [
+            (TermMode::MOUSE_REPORT_CLICK, 222),
+            (TermMode::MOUSE_REPORT_CLICK | TermMode::UTF8_MOUSE, 2014),
+        ] {
+            let far = GridPoint {
+                line: 10_000,
+                column: 10_000,
+            };
+            let edge = GridPoint {
+                line: edge,
+                column: edge,
+            };
+
+            assert_eq!(
+                mouse_button_report(PointerButton::Primary, false, Modifiers::NONE, mode, far),
+                mouse_button_report(PointerButton::Primary, false, Modifiers::NONE, mode, edge),
+            );
+            assert_eq!(
+                mouse_button_report(PointerButton::Primary, true, Modifiers::NONE, mode, far),
+                Some(Vec::new()),
+            );
+        }
+    }
+
+    #[test]
     fn wheel_uses_mouse_reporting_when_enabled() {
         let action = wheel_action(
             Vec2::new(0.0, 12.0),

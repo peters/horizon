@@ -453,7 +453,9 @@ mod tests {
             terminal.hyperlink_at_point(0, 9),
             Some("https://x.ai/terms".to_string())
         );
+        assert!(terminal.has_hyperlink_at_point(0, 9));
         assert_eq!(terminal.hyperlink_at_point(0, 0), None);
+        assert!(!terminal.has_hyperlink_at_point(0, 0));
         assert_eq!(terminal.clickable_at_point(0, 0), None);
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
