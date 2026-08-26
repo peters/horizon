@@ -92,7 +92,7 @@ impl BrowserSession {
             BrowserAuditActor::User
         };
         let action = BrowserAuditAction::from_command(&command);
-        let accepted = self.command_tx.send(command);
+        let accepted = self.command_tx.send(command) || is_stop;
         if (!accepted || is_stop)
             && let Some(coordination) = &self.coordination
         {
