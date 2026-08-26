@@ -85,10 +85,22 @@ impl DriverState {
             }
             return;
         }
+        self.update_url_from_page(event_tx, href);
         let Some(title) = parsed.pointer("/t").and_then(|v| v.as_str()) else {
             return;
         };
         self.update_title(event_tx, title);
+    }
+
+    fn update_url_from_page(&mut self, event_tx: &BrowserEventSender, href: &str) {
+        let href = normalized_committed_url(href);
+        if href == self.url {
+            return;
+        }
+        self.url = href.to_string();
+        self.manifest_dirty = true;
+        self.write_manifest(false);
+        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
     }
 
     fn update_title(&mut self, event_tx: &BrowserEventSender, title: &str) {
@@ -261,6 +273,7 @@ impl DriverState {
                     && let Some((title, href)) = title_from_binding(event.params)
                     && href_matches_url(&href, &self.url)
                 {
+                    self.update_url_from_page(event_tx, &href);
                     self.update_title(event_tx, &title);
                 }
             }
@@ -407,11 +420,15 @@ impl DriverState {
     }
 }
 
-/// Tolerant URL comparison for the title-fetch href check: Chrome may
-/// append a trailing slash relative to the requested URL.
+/// Tolerant document comparison for page metadata. Chrome can omit the
+/// fragment from `frameNavigated` even though `location.href` already has it,
+/// and can append a trailing slash to an otherwise identical URL.
 fn href_matches_url(href: &str, url: &str) -> bool {
-    let href = href.trim_end_matches('/');
-    let url = url.trim_end_matches('/');
+    let href = href
+        .split_once('#')
+        .map_or(href, |(base, _)| base)
+        .trim_end_matches('/');
+    let url = url.split_once('#').map_or(url, |(base, _)| base).trim_end_matches('/');
     href == url
 }
 
@@ -462,8 +479,8 @@ mod tests {
     use crate::{BrowserConfig, session::BrowserSessionConfig};
 
     use super::{
-        DriverState, attached_bound_page_target, default_context_id_for_frame, title_for_bound_target,
-        title_from_binding,
+        DriverState, attached_bound_page_target, default_context_id_for_frame, href_matches_url,
+        title_for_bound_target, title_from_binding,
     };
 
     fn driver_state() -> DriverState {
@@ -566,5 +583,25 @@ mod tests {
         );
         assert_eq!(title_from_binding(&other_binding), None);
         assert_eq!(title_from_binding(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn title_href_matching_accepts_only_the_same_document() {
+        assert!(href_matches_url(
+            "https://example.test/path?mode=1#section",
+            "https://example.test/path?mode=1",
+        ));
+        assert!(href_matches_url(
+            "https://example.test/path/",
+            "https://example.test/path"
+        ));
+        assert!(!href_matches_url(
+            "https://example.test/path?mode=2",
+            "https://example.test/path?mode=1",
+        ));
+        assert!(!href_matches_url(
+            "https://example.test/other",
+            "https://example.test/path",
+        ));
     }
 }

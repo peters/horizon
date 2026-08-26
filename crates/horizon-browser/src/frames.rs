@@ -80,6 +80,8 @@ impl FrameData {
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
+    /// Reused base64 decode target for both screencast and screenshot frames.
+    encoded_buffer: Vec<u8>,
     /// Reused decode target so steady-state frames do not allocate.
     decode_buffer: Vec<u8>,
     /// Recently replaced frames whose pixels are still borrowed by the UI.
@@ -148,12 +150,19 @@ impl FrameSlot {
     /// Decode a base64-encoded JPEG and publish it as the newest frame.
     #[must_use]
     pub fn store_base64_jpeg(&self, data: &str) -> Option<u64> {
-        if let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) {
-            self.store_jpeg(&jpeg)
-        } else {
+        let mut jpeg = self.take_encoded_buffer();
+        jpeg.clear();
+        if base64::engine::general_purpose::STANDARD
+            .decode_vec(data, &mut jpeg)
+            .is_err()
+        {
+            self.return_encoded_buffer(jpeg);
             self.record_decode_failure();
-            None
+            return None;
         }
+        let result = self.store_jpeg(&jpeg);
+        self.return_encoded_buffer(jpeg);
+        result
     }
 
     /// Decode a PNG screenshot and publish it as the newest RGB frame.
@@ -216,11 +225,30 @@ impl FrameSlot {
     /// Decode a base64 `WebDriver` PNG screenshot.
     #[must_use]
     pub fn store_base64_png(&self, data: &str) -> Option<u64> {
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) {
-            self.store_png(&bytes)
-        } else {
+        let mut png = self.take_encoded_buffer();
+        png.clear();
+        if base64::engine::general_purpose::STANDARD
+            .decode_vec(data, &mut png)
+            .is_err()
+        {
+            self.return_encoded_buffer(png);
             self.record_decode_failure();
-            None
+            return None;
+        }
+        let result = self.store_png(&png);
+        self.return_encoded_buffer(png);
+        result
+    }
+
+    fn take_encoded_buffer(&self) -> Vec<u8> {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut inner.encoded_buffer)
+    }
+
+    fn return_encoded_buffer(&self, buffer: Vec<u8>) {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if buffer.capacity() > inner.encoded_buffer.capacity() {
+            inner.encoded_buffer = buffer;
         }
     }
 

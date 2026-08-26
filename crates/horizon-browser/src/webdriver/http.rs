@@ -147,7 +147,10 @@ fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, HttpError> {
         if size == 0 {
             return Ok(decoded);
         }
-        if body.len() < size + 2 || &body[size..size + 2] != b"\r\n" {
+        let framed_size = size
+            .checked_add(2)
+            .ok_or_else(|| HttpError::InvalidResponse("chunk size overflow".to_string()))?;
+        if body.len() < framed_size || &body[size..framed_size] != b"\r\n" {
             return Err(HttpError::InvalidResponse("truncated chunk".to_string()));
         }
         decoded.extend_from_slice(&body[..size]);
@@ -156,7 +159,7 @@ fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, HttpError> {
                 "decoded response exceeded 64 MiB".to_string(),
             ));
         }
-        body = &body[size + 2..];
+        body = &body[framed_size..];
     }
 }
 
@@ -173,6 +176,7 @@ mod tests {
     #[test]
     fn decodes_chunked_json() {
         assert_eq!(decode_chunked(b"4\r\ntest\r\n0\r\n\r\n").expect("chunks"), b"test");
+        assert!(decode_chunked(b"ffffffffffffffff\r\n").is_err());
     }
 
     #[test]

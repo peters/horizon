@@ -30,6 +30,7 @@ use tungstenite::protocol::WebSocket;
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(16);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_DEVTOOLS_JSON_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Error, Debug)]
 pub enum CdpError {
@@ -266,7 +267,7 @@ impl CdpLink {
     /// Fails on socket write errors.
     pub fn send_request(&mut self, method: &str, params: &Value, session_id: Option<&str>) -> Result<u64> {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
         let mut message = json!({ "id": id, "method": method, "params": params });
         if let Some(session) = session_id
             && let Some(object) = message.as_object_mut()
@@ -482,6 +483,7 @@ pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
             "devtools http: missing Content-Length",
         ));
     };
+    validate_devtools_body_length(length)?;
     let mut body = vec![0u8; length];
     let mut got = 0usize;
     while got < length {
@@ -495,6 +497,17 @@ pub fn fetch_json(host_port: &str, path: &str) -> std::io::Result<Value> {
         got += n;
     }
     serde_json::from_slice(&body).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn validate_devtools_body_length(length: usize) -> std::io::Result<()> {
+    if length <= MAX_DEVTOOLS_JSON_BYTES {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "devtools http: body too large",
+        ))
+    }
 }
 
 /// Parse the `DevTools listening on ws://...` line from browser stderr.
@@ -622,6 +635,12 @@ mod tests {
     fn fetch_json_rejects_non_loopback_endpoints() {
         let err = fetch_json("192.168.0.1:9222", "/json/version").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn fetch_json_bounds_reported_body_length() {
+        assert!(validate_devtools_body_length(MAX_DEVTOOLS_JSON_BYTES).is_ok());
+        assert!(validate_devtools_body_length(MAX_DEVTOOLS_JSON_BYTES + 1).is_err());
     }
 
     #[test]
