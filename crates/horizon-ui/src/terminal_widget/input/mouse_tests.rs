@@ -1,6 +1,7 @@
 use super::routing::{
-    pointer_button_checks_clickable_target, pointer_button_event_needs_handling, pointer_button_routes_to_pty_mouse,
-    pointer_button_starts_local_selection, pointer_drag_updates_local_selection, pointer_motion_routes_to_pty_mouse,
+    pointer_button_checks_clickable_target, pointer_button_event_needs_handling, pointer_button_opens_osc8_hyperlink,
+    pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection, pointer_drag_updates_local_selection,
+    pointer_motion_routes_to_pty_mouse,
 };
 use alacritty_terminal::term::TermMode;
 use egui::{Modifiers, PointerButton};
@@ -8,7 +9,7 @@ use egui::{Modifiers, PointerButton};
 use crate::input::PointerButtons;
 
 #[test]
-fn plain_primary_drag_selects_locally_in_mouse_mode() {
+fn plain_primary_click_reports_to_pty_in_mouse_mode() {
     let buttons = PointerButtons {
         primary: true,
         middle: false,
@@ -16,19 +17,19 @@ fn plain_primary_drag_selects_locally_in_mouse_mode() {
     };
     let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG;
 
-    assert!(pointer_button_starts_local_selection(
+    assert!(!pointer_button_starts_local_selection(
         mode,
         PointerButton::Primary,
         true,
         Modifiers::NONE
     ));
-    assert!(pointer_drag_updates_local_selection(mode, buttons, Modifiers::NONE));
-    assert!(!pointer_button_routes_to_pty_mouse(
+    assert!(!pointer_drag_updates_local_selection(mode, buttons, Modifiers::NONE));
+    assert!(pointer_button_routes_to_pty_mouse(
         mode,
         PointerButton::Primary,
         Modifiers::NONE
     ));
-    assert!(!pointer_motion_routes_to_pty_mouse(mode, buttons, Modifiers::NONE));
+    assert!(pointer_motion_routes_to_pty_mouse(mode, buttons, Modifiers::NONE));
 }
 
 #[test]
@@ -116,6 +117,26 @@ fn non_selection_mouse_reporting_remains_available() {
     assert!(pointer_motion_routes_to_pty_mouse(
         mode,
         PointerButtons::default(),
+        Modifiers::NONE
+    ));
+}
+
+#[test]
+fn unmodified_primary_click_opens_osc8_hyperlink() {
+    assert!(pointer_button_opens_osc8_hyperlink(
+        PointerButton::Primary,
+        Modifiers::NONE
+    ));
+    assert!(!pointer_button_opens_osc8_hyperlink(
+        PointerButton::Primary,
+        Modifiers::SHIFT
+    ));
+    assert!(!pointer_button_opens_osc8_hyperlink(
+        PointerButton::Primary,
+        Modifiers::CTRL
+    ));
+    assert!(!pointer_button_opens_osc8_hyperlink(
+        PointerButton::Secondary,
         Modifiers::NONE
     ));
 }

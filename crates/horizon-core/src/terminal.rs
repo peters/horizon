@@ -441,6 +441,24 @@ mod tests {
     }
 
     #[test]
+    fn clickable_at_point_returns_osc8_uri_for_labeled_text() {
+        let mut terminal = spawn_test_terminal();
+        replay_terminal_bytes(&terminal.term, b"Read \x1b]8;;https://x.ai/terms\x07Terms\x1b]8;;\x07");
+
+        assert_eq!(
+            terminal.clickable_at_point(0, 5),
+            Some("https://x.ai/terms".to_string())
+        );
+        assert_eq!(
+            terminal.hyperlink_at_point(0, 9),
+            Some("https://x.ai/terms".to_string())
+        );
+        assert_eq!(terminal.hyperlink_at_point(0, 0), None);
+        assert_eq!(terminal.clickable_at_point(0, 0), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
     fn url_detected_at_clicked_column() {
         let line: Vec<char> = "Created: https://github.com/foo/bar/issues/123".chars().collect();
         assert_eq!(

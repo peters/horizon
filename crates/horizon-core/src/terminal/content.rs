@@ -202,16 +202,50 @@ impl Terminal {
         self.term.lock().reset_damage();
     }
 
-    /// Return a clickable target (URL or file path) at the given
-    /// viewport-relative row and column, if any is detected.
+    /// Return a clickable target at the given viewport-relative row and
+    /// column. OSC 8 hyperlinks take priority over in-band URL or path text.
     #[must_use]
     pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
         let cols = usize::from(self.cols);
+        if let Some(uri) = hyperlink_uri_at_viewport_point(&term, cols, row, col) {
+            return Some(uri);
+        }
         let (line_chars, logical_col) = wrapped_line_chars_at_viewport_point(&term, cols, row, col)?;
 
         find_url_at_column(&line_chars, logical_col).or_else(|| find_file_path_at_column(&line_chars, logical_col))
     }
+
+    /// Return the OSC 8 hyperlink URI at the given viewport-relative cell.
+    #[must_use]
+    pub fn hyperlink_at_point(&self, row: usize, col: usize) -> Option<String> {
+        let term = self.term.lock();
+        hyperlink_uri_at_viewport_point(&term, usize::from(self.cols), row, col)
+    }
+}
+
+fn hyperlink_uri_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<String> {
+    if col >= cols {
+        return None;
+    }
+    let grid = term.grid();
+    if row >= grid.screen_lines() {
+        return None;
+    }
+    let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
+    let cell = &grid[point.line][Column(col)];
+    if let Some(uri) = nonempty_hyperlink_uri(cell) {
+        return Some(uri);
+    }
+    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
+        return nonempty_hyperlink_uri(&grid[point.line][Column(col - 1)]);
+    }
+    None
+}
+
+fn nonempty_hyperlink_uri(cell: &Cell) -> Option<String> {
+    let uri = cell.hyperlink()?.uri().to_string();
+    (!uri.is_empty()).then_some(uri)
 }
 
 fn wrapped_line_chars_at_viewport_point<T>(
@@ -329,7 +363,9 @@ mod tests {
     use alacritty_terminal::term::{self, Term};
     use alacritty_terminal::vte::ansi;
 
-    use super::{append_cell_text, bottom_row_texts, wrapped_line_chars_at_viewport_point};
+    use super::{
+        append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, wrapped_line_chars_at_viewport_point,
+    };
     use crate::terminal::{TerminalDimensions, TerminalEventProxy, find_url_at_column};
 
     fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
@@ -462,5 +498,45 @@ mod tests {
             wrapped_line_chars_at_viewport_point(&term, 12, 2, 4).expect("wrapped line should be present");
 
         assert_eq!(find_url_at_column(&line_chars, logical_col), Some(url.to_string()));
+    }
+
+    #[test]
+    fn osc8_hyperlink_is_detected_at_labeled_cells() {
+        let mut term = test_term(4, 40);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(
+            &mut term,
+            b"Read \x1b]8;;https://x.ai/terms\x07Terms\x1b]8;;\x07 and more",
+        );
+
+        assert_eq!(
+            hyperlink_uri_at_viewport_point(&term, 40, 0, 5),
+            Some("https://x.ai/terms".to_string())
+        );
+        assert_eq!(
+            hyperlink_uri_at_viewport_point(&term, 40, 0, 9),
+            Some("https://x.ai/terms".to_string())
+        );
+        assert_eq!(hyperlink_uri_at_viewport_point(&term, 40, 0, 0), None);
+        assert_eq!(hyperlink_uri_at_viewport_point(&term, 40, 0, 11), None);
+    }
+
+    #[test]
+    fn osc8_hyperlink_takes_priority_over_visible_url_text() {
+        let mut term = test_term(4, 40);
+        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+        parser.advance(
+            &mut term,
+            b"\x1b]8;;https://x.ai/terms\x07https://example.com\x1b]8;;\x07",
+        );
+
+        assert_eq!(
+            hyperlink_uri_at_viewport_point(&term, 40, 0, 0),
+            Some("https://x.ai/terms".to_string())
+        );
+        assert_eq!(
+            hyperlink_uri_at_viewport_point(&term, 40, 0, 8),
+            Some("https://x.ai/terms".to_string())
+        );
     }
 }

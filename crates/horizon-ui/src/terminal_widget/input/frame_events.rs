@@ -6,6 +6,7 @@ use super::routing::{pointer_button_checks_clickable_target, pointer_button_star
 
 pub(super) struct PointerFrameEvents {
     pub(super) body_primary_press_pos: Option<Pos2>,
+    pub(super) body_primary_press_modifiers: egui::Modifiers,
     pub(super) primary_release_pos: Option<Pos2>,
     pub(super) primary_release_index: Option<usize>,
     pub(super) body_middle_press_pos: Option<Pos2>,
@@ -19,9 +20,10 @@ impl PointerFrameEvents {
         terminal_mode: TermMode,
     ) -> Self {
         let body_primary_press = events.iter().enumerate().rev().find_map(|(index, event)| {
-            body_local_selection_press_pos(event, from_global, body_rect, terminal_mode).map(|pos| (index, pos))
+            body_local_selection_press(event, from_global, body_rect, terminal_mode)
+                .map(|(pos, modifiers)| (index, pos, modifiers))
         });
-        let release_search_start = body_primary_press.map_or(0, |(index, _)| index.saturating_add(1));
+        let release_search_start = body_primary_press.map_or(0, |(index, _, _)| index.saturating_add(1));
         let primary_release =
             events
                 .iter()
@@ -38,7 +40,10 @@ impl PointerFrameEvents {
                 });
 
         Self {
-            body_primary_press_pos: body_primary_press.map(|(_, pos)| pos),
+            body_primary_press_pos: body_primary_press.map(|(_, pos, _)| pos),
+            body_primary_press_modifiers: body_primary_press
+                .map(|(_, _, modifiers)| modifiers)
+                .unwrap_or_default(),
             primary_release_pos: primary_release.map(|(_, pos)| pos),
             primary_release_index: primary_release.map(|(index, _)| index),
             body_middle_press_pos: pointer_button_event_pos(
@@ -73,7 +78,7 @@ impl LocalSelectionEventTracker {
                 button: PointerButton::Primary,
                 pressed: true,
                 ..
-            } if body_local_selection_press_pos(event, from_global, body_rect, terminal_mode).is_some() => {
+            } if body_local_selection_press(event, from_global, body_rect, terminal_mode).is_some() => {
                 self.primary_owned = true;
                 true
             }
@@ -91,12 +96,12 @@ impl LocalSelectionEventTracker {
     }
 }
 
-fn body_local_selection_press_pos(
+fn body_local_selection_press(
     event: &egui::Event,
     from_global: Option<TSTransform>,
     body_rect: Rect,
     terminal_mode: TermMode,
-) -> Option<Pos2> {
+) -> Option<(Pos2, egui::Modifiers)> {
     let egui::Event::PointerButton {
         pos,
         button: PointerButton::Primary,
@@ -110,7 +115,7 @@ fn body_local_selection_press_pos(
     (body_rect.contains(pos)
         && !pointer_button_checks_clickable_target(PointerButton::Primary, true, *modifiers)
         && pointer_button_starts_local_selection(terminal_mode, PointerButton::Primary, true, *modifiers))
-    .then_some(pos)
+    .then_some((pos, *modifiers))
 }
 
 pub(super) fn transform_pos(from_global: Option<TSTransform>, pos: Pos2) -> Pos2 {
@@ -279,6 +284,40 @@ mod tests {
             .collect();
 
         assert_eq!(claims, [true, true, false]);
+    }
+
+    #[test]
+    fn local_selection_press_keeps_event_modifiers() {
+        let inside = Pos2::new(4.0, 4.0);
+        let events = vec![Event::PointerButton {
+            pos: inside,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::SHIFT,
+        }];
+        let frame_events = PointerFrameEvents::collect(
+            &events,
+            None,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0)),
+            TermMode::MOUSE_MODE,
+        );
+
+        assert_eq!(frame_events.body_primary_press_pos, Some(inside));
+        assert!(frame_events.body_primary_press_modifiers.shift);
+    }
+
+    #[test]
+    fn unmodified_press_in_mouse_mode_is_not_local_selection() {
+        let inside = Pos2::new(4.0, 4.0);
+        let events = vec![button_event(inside, true)];
+        let frame_events = PointerFrameEvents::collect(
+            &events,
+            None,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0)),
+            TermMode::MOUSE_MODE,
+        );
+
+        assert_eq!(frame_events.body_primary_press_pos, None);
     }
 
     #[test]

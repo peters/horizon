@@ -17,8 +17,8 @@ pub(crate) use self::keyboard::SSH_RECONNECT_SHORTCUT;
 pub(super) use self::keyboard::handle_terminal_keyboard_input;
 pub(super) use self::routing::pty_mouse_reporting_enabled;
 use self::routing::{
-    pointer_button_event_needs_handling, pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection,
-    pointer_motion_routes_to_pty_mouse,
+    pointer_button_event_needs_handling, pointer_button_opens_osc8_hyperlink, pointer_button_routes_to_pty_mouse,
+    pointer_button_starts_local_selection, pointer_motion_routes_to_pty_mouse,
 };
 pub(crate) use self::selection_drag::TerminalSelectionDragState;
 use self::selection_drag::{AutoScrollCadence, SelectionFrameOutcome};
@@ -150,13 +150,16 @@ pub(super) fn handle_terminal_pointer_input(
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
 
-    // Show pointing hand when Ctrl/Cmd hovering over clickable content.
-    if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
-        && let Some(point) = pointer_context.hovered_point
+    // OSC 8 hyperlinks are plain-clickable; URLs and paths still need Ctrl/Cmd.
+    if let Some(point) = pointer_context.hovered_point
         && let Some(terminal) = panel.terminal()
-        && terminal.clickable_at_point(point.line, point.column).is_some()
     {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        let ctrl_or_cmd = ui.input(|input| input.modifiers.ctrl || input.modifiers.command);
+        if terminal.hyperlink_at_point(point.line, point.column).is_some()
+            || (ctrl_or_cmd && terminal.clickable_at_point(point.line, point.column).is_some())
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
     }
 }
 
@@ -409,9 +412,16 @@ fn handle_terminal_body_pointer_actions(
         pointer.interaction.body.request_focus();
         // Collection verified this exact event's modifiers and terminal mode
         // route it to local selection. The frame's final modifiers may belong
-        // to a later outside press.
-        start_local_selection_at(panel, pointer, pos);
-        selection_drag.start(panel.id, pos);
+        // to a later outside press. OSC 8 cells still open on that press so
+        // labeled links such as "Terms" work without Ctrl.
+        if pointer_button_opens_osc8_hyperlink(PointerButton::Primary, frame_events.body_primary_press_modifiers)
+            && let Some(uri) = osc8_hyperlink_at(panel, pointer, pos)
+        {
+            horizon_core::open_url(&uri);
+        } else {
+            start_local_selection_at(panel, pointer, pos);
+            selection_drag.start(panel.id, pos);
+        }
     }
 
     // Collection only retains a release that follows the last local press.
@@ -509,7 +519,8 @@ fn handle_pointer_button(
     pressed: bool,
     modifiers: egui::Modifiers,
 ) {
-    // Ctrl+click / Cmd+click opens URLs and file paths regardless of mouse mode.
+    // Ctrl+click / Cmd+click opens URLs, file paths, and OSC 8 hyperlinks
+    // regardless of mouse mode.
     if (modifiers.ctrl || modifiers.command)
         && button == egui::PointerButton::Primary
         && pressed
@@ -524,6 +535,14 @@ fn handle_pointer_button(
         && let Some(target) = terminal.clickable_at_point(point.line, point.column)
     {
         horizon_core::open_url(&target);
+        return;
+    }
+
+    if pressed
+        && pointer_button_opens_osc8_hyperlink(button, modifiers)
+        && let Some(uri) = osc8_hyperlink_at(panel, pointer, pos)
+    {
+        horizon_core::open_url(&uri);
         return;
     }
 
@@ -542,6 +561,17 @@ fn handle_pointer_button(
     {
         panel.write_input(&bytes);
     }
+}
+
+fn osc8_hyperlink_at(panel: &Panel, pointer: &PointerContext<'_>, pos: Pos2) -> Option<String> {
+    let point = grid_point_from_position(
+        pointer.interaction.layout.body,
+        pos,
+        pointer.metrics,
+        pointer.visible_rows,
+        pointer.visible_cols,
+    )?;
+    panel.terminal()?.hyperlink_at_point(point.line, point.column)
 }
 
 fn maybe_copy_selection_to_primary(
