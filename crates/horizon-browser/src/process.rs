@@ -314,16 +314,19 @@ fn poll_and_cleanup_exited_tree(child: &mut Child) -> std::io::Result<Option<std
     Ok(status)
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 fn cleanup_reaped_process_tree(child: &mut Child) -> std::io::Result<()> {
     // This runs immediately after reaping the exact retained child handle.
-    // On Unix the process group remains addressable while an owned descendant
-    // is alive; on Windows taskkill gets one final chance to find its tree.
+    // The Unix process group remains addressable while an owned descendant is
+    // alive, even after its leader has exited.
     terminate_process_tree(child)
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn cleanup_reaped_process_tree(_child: &mut Child) -> std::io::Result<()> {
+    // Windows `taskkill` accepts only a numeric PID. Once the retained child
+    // has exited, that PID may be reused, so post-reap cleanup must never
+    // target it. Live-child teardown still uses the exact retained handle.
     Ok(())
 }
 
