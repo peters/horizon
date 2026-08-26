@@ -181,13 +181,10 @@ impl ChromeProcess {
         if self.exit_status.is_some() {
             return self.exit_status;
         }
-        let status = self
-            .child
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait()
-            .ok()
-            .flatten();
+        let status = {
+            let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            poll_and_cleanup_exited_tree(&mut child).ok().flatten()
+        };
         self.exit_status = status;
         status
     }
@@ -289,7 +286,7 @@ fn validate_extra_args(extra_args: &[String], automation_disclosure: AutomationD
 /// Kill and reap a child using only non-blocking status polls. A process that
 /// cannot be killed must not strand browser teardown indefinitely.
 fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
-    if let Some(status) = child.try_wait()? {
+    if let Some(status) = poll_and_cleanup_exited_tree(child)? {
         return Ok(Some(status));
     }
     terminate_process_tree(child)?;
@@ -303,6 +300,31 @@ fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Reap an exited process leader and immediately terminate any descendants
+/// still living in its owned process tree. `WebDriver` services can exit before
+/// the browser they launched, leaving a locked profile behind unless the
+/// process group is cleaned at the point the exit is observed.
+fn poll_and_cleanup_exited_tree(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let status = child.try_wait()?;
+    if status.is_some() {
+        cleanup_reaped_process_tree(child)?;
+    }
+    Ok(status)
+}
+
+#[cfg(any(unix, windows))]
+fn cleanup_reaped_process_tree(child: &mut Child) -> std::io::Result<()> {
+    // This runs immediately after reaping the exact retained child handle.
+    // On Unix the process group remains addressable while an owned descendant
+    // is alive; on Windows taskkill gets one final chance to find its tree.
+    terminate_process_tree(child)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn cleanup_reaped_process_tree(_child: &mut Child) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(unix)]

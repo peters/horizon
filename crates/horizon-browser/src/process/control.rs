@@ -5,7 +5,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
-use super::kill_and_reap;
+use super::{kill_and_reap, poll_and_cleanup_exited_tree};
 
 /// Exact loopback automation-service process (`geckodriver` or
 /// `safaridriver`). The service owns the browser session it creates; normal
@@ -88,7 +88,7 @@ impl ChromeProcessControl {
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
                 Err(TryLockError::WouldBlock) => return false,
             };
-            match child_guard.try_wait() {
+            match poll_and_cleanup_exited_tree(&mut child_guard) {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(error) => {
@@ -212,13 +212,10 @@ impl ServiceProcess {
         if self.exit_status.is_some() {
             return self.exit_status;
         }
-        let status = self
-            .child
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait()
-            .ok()
-            .flatten();
+        let status = {
+            let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            poll_and_cleanup_exited_tree(&mut child).ok().flatten()
+        };
         self.exit_status = status;
         status
     }
@@ -226,6 +223,7 @@ impl ServiceProcess {
     #[must_use]
     pub(crate) fn kill(&mut self) -> bool {
         if self.child_status().is_some() {
+            self.control.clear(&self.child);
             return true;
         }
         let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -295,5 +293,59 @@ fn lock_until<T>(mutex: &Mutex<T>, deadline: Instant) -> Option<MutexGuard<'_, T
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn exited_service_leader_does_not_leave_its_browser_process_group_alive() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
+        let pid_file = root.path().join("descendant.pid");
+        let args = vec![
+            "-c".to_string(),
+            "trap '' HUP; sleep 30 & echo $! > \"$1\"".to_string(),
+            "horizon-service-process-test".to_string(),
+            pid_file.display().to_string(),
+        ];
+        let mut process = ServiceProcess::spawn(
+            Path::new("/bin/sh"),
+            &args,
+            ChromeProcessControl::default(),
+            "test-driver",
+        )
+        .unwrap_or_else(|error| panic!("spawn service test process: {error}"));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_file.is_file() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let descendant_pid = std::fs::read_to_string(&pid_file)
+            .unwrap_or_else(|error| panic!("read descendant pid: {error}"))
+            .trim()
+            .to_string();
+        assert!(process_exists(&descendant_pid));
+
+        while process.child_status().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(process.child_status().is_some());
+        while process_exists(&descendant_pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process_exists(&descendant_pid));
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: &str) -> bool {
+        Command::new("/bin/kill")
+            .args(["-0", "--", pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
