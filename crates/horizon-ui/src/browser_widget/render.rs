@@ -80,7 +80,11 @@ pub fn show_body(
     let pointer_target = body_response.contains_pointer()
         || body_response.is_pointer_button_down_on()
         || body_response.drag_started()
-        || body_response.dragged();
+        || body_response.dragged()
+        // A press-drag-release can land fully inside one rendered frame with
+        // the final pointer outside the body; the stopped-drag flag keeps
+        // ownership for the release frame so the in-rect press is replayed.
+        || body_response.drag_stopped();
     let width = data.width as usize;
     let height = data.height as usize;
     let frame_size = [

@@ -96,17 +96,15 @@ pub(super) fn events(
                 );
             }
             Event::PointerMoved(pos) => {
-                let p = transform(*pos);
-                let tracking =
-                    should_track_pointer(frame.pointer_target, frame.rect.contains(p), has_pointer_capture(state));
-                // Movement dedup: only forward real movement. `None` (the
-                // first move, or the first after PointerGone) must be
-                // forwarded, or hover would be dead until a click.
-                if tracking && state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
-                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
-                    state.last_mouse = Some(p);
-                    pending_move = Some((x, y, event_buttons, event_modifiers));
-                }
+                handle_pointer_moved(
+                    browser,
+                    state,
+                    frame,
+                    transform(*pos),
+                    &mut event_buttons,
+                    event_modifiers,
+                    &mut pending_move,
+                );
             }
             // The pointer left the window mid-drag: end the drag where we
             // last saw it instead of stranding Chrome's button state down.
@@ -171,6 +169,44 @@ struct ButtonReplayEvent {
     button: PointerButton,
     pressed: bool,
     modifiers: BrowserModifiers,
+}
+
+/// Track one pointer move for this panel, or — when the pointer leaves the
+/// body without a capture — send a single clamped-edge move so the page's
+/// mouseout/leave fires, then stop tracking.
+fn handle_pointer_moved(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    frame: PointerFrame,
+    p: egui::Pos2,
+    event_buttons: &mut u32,
+    event_modifiers: BrowserModifiers,
+    pending_move: &mut Option<(f64, f64, u32, BrowserModifiers)>,
+) {
+    let tracking = should_track_pointer(frame.pointer_target, frame.rect.contains(p), has_pointer_capture(state));
+    if tracking {
+        // Movement dedup: only forward real movement. `None` (the first move,
+        // or the first after PointerGone) must be forwarded, or hover would
+        // be dead until a click.
+        if state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
+            let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
+            state.last_mouse = Some(p);
+            *pending_move = Some((x, y, *event_buttons, event_modifiers));
+        }
+    } else if state.last_mouse.is_some() {
+        let edge = egui::Pos2::new(
+            p.x.clamp(frame.rect.min.x, frame.rect.max.x),
+            p.y.clamp(frame.rect.min.y, frame.rect.max.y),
+        );
+        let (x, y) = to_page_coords(frame.rect, frame.frame_size, edge);
+        browser.send(BrowserCommand::Input(BrowserInput::MouseMove {
+            x,
+            y,
+            buttons: *event_buttons,
+            modifiers: event_modifiers,
+        }));
+        state.last_mouse = None;
+    }
 }
 
 fn replay_button_event(
