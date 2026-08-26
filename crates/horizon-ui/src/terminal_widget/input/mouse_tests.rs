@@ -91,6 +91,14 @@ fn ctrl_or_cmd_primary_click_still_checks_clickable_targets() {
         true,
         Modifiers::CTRL
     ));
+    for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+        assert!(!pointer_button_starts_local_selection(
+            TermMode::NONE,
+            PointerButton::Primary,
+            true,
+            modifiers,
+        ));
+    }
 }
 
 #[test]

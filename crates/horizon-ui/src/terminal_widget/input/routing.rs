@@ -29,7 +29,10 @@ pub(super) fn pointer_button_uses_local_selection(
     button: egui::PointerButton,
     modifiers: egui::Modifiers,
 ) -> bool {
-    button == egui::PointerButton::Primary && !pty_mouse_reporting_enabled(terminal_mode, modifiers)
+    button == egui::PointerButton::Primary
+        && !modifiers.ctrl
+        && !modifiers.command
+        && !pty_mouse_reporting_enabled(terminal_mode, modifiers)
 }
 
 pub(super) fn pointer_button_starts_local_selection(
