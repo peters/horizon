@@ -351,9 +351,9 @@ fn strip_line_col_suffix_chars(chars: &[char]) -> &[char] {
 
 /// Open a URL or file path with the platform's default handler.
 pub fn open_url(url: &str) {
-    let command = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let result = std::process::Command::new(command)
-        .arg(url)
+    let (program, args) = url_opener_invocation(url);
+    let result = std::process::Command::new(program)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -363,11 +363,36 @@ pub fn open_url(url: &str) {
     }
 }
 
+fn url_opener_invocation(url: &str) -> (&'static str, Vec<&str>) {
+    if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else if cfg!(target_os = "windows") {
+        ("cmd", vec!["/C", "start", "", url])
+    } else {
+        ("xdg-open", vec![url])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::parse_lsof_cwd;
+    use super::{parse_lsof_cwd, url_opener_invocation};
+
+    #[test]
+    fn url_opener_uses_the_platform_default_handler() {
+        let (program, args) = url_opener_invocation("https://example.com");
+        if cfg!(target_os = "macos") {
+            assert_eq!(program, "open");
+            assert_eq!(args, ["https://example.com"]);
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(program, "cmd");
+            assert_eq!(args, ["/C", "start", "", "https://example.com"]);
+        } else {
+            assert_eq!(program, "xdg-open");
+            assert_eq!(args, ["https://example.com"]);
+        }
+    }
 
     #[test]
     fn parse_lsof_cwd_extracts_working_directory() {
