@@ -1,5 +1,4 @@
 use std::fmt::Write as _;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
@@ -95,10 +94,8 @@ impl HorizonApp {
             return;
         };
 
-        match open_external_url(&update.installer_url) {
-            Ok(()) => update.error_message = None,
-            Err(error) => update.error_message = Some(error),
-        }
+        horizon_core::open_url(&update.installer_url);
+        update.error_message = None;
     }
 }
 
@@ -239,37 +236,6 @@ fn current_release_rid() -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn open_external_url(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("failed to open installer download: {error}"))
 }
 
 #[cfg(test)]
