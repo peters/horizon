@@ -2,6 +2,7 @@
 //! activity stamping, and stop/handoff requests.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::cdp::CdpLink;
@@ -22,6 +23,9 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) -> bool {
+        if self.stop_requested.load(Ordering::Acquire) {
+            return true;
+        }
         let batch = command_rx.drain(256);
         for command in batch.commands {
             self.audit_user_command(&command);

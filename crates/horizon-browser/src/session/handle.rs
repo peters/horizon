@@ -271,14 +271,17 @@ mod tests {
     }
 
     #[test]
-    fn stop_is_audited_even_when_the_atomic_flag_ends_the_driver_loop() {
+    fn stop_is_dispatched_through_the_atomic_path_when_the_queue_is_full() {
         let coordination = Arc::new(RecordingCoordination::default());
-        let (session, receiver) = session_for_audit(Arc::clone(&coordination));
+        let (session, _receiver) = session_for_audit(Arc::clone(&coordination));
+
+        for index in 0..crate::session::command_queue::COMMAND_CAPACITY {
+            assert!(session.send(BrowserCommand::Navigate(format!("https://example.test/{index}"))));
+        }
 
         assert!(session.send(BrowserCommand::Stop));
-
-        let batch = receiver.drain(1);
-        assert_eq!(batch.commands.len(), 1);
+        assert!(session.stop_requested.load(Ordering::Acquire));
+        assert_eq!(session.frame_slot.metrics().commands_rejected, 1);
         let entries = coordination
             .entries
             .lock()

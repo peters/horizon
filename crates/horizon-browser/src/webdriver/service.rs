@@ -99,9 +99,7 @@ impl WebDriverService {
                 let _ = process.kill();
                 return Err(format!("{label} startup cancelled"));
             }
-            if http.get("/status").is_ok_and(|status| {
-                status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
-            }) {
+            if http.get("/status").is_ok_and(|status| status_is_ready(&status)) {
                 break;
             }
             if let Some(status) = process.child_status() {
@@ -123,6 +121,10 @@ impl WebDriverService {
             _safari_lease: safari_lease,
         })
     }
+}
+
+fn status_is_ready(status: &serde_json::Value) -> bool {
+    status.pointer("/value/ready").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 fn service_args(backend: BackendKind, port: u16, bidi_port: Option<u16>, mut extra: Vec<String>) -> Vec<String> {
@@ -176,7 +178,7 @@ pub(super) fn prepare_profile(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafariLease, service_args};
+    use super::{SafariLease, service_args, status_is_ready};
     use crate::BackendKind;
 
     #[test]
@@ -197,5 +199,12 @@ mod tests {
         assert!(SafariLease::acquire().is_err());
         drop(first);
         assert!(SafariLease::acquire().is_ok());
+    }
+
+    #[test]
+    fn driver_status_requires_explicit_readiness() {
+        assert!(status_is_ready(&serde_json::json!({ "value": { "ready": true } })));
+        assert!(!status_is_ready(&serde_json::json!({ "value": { "ready": false } })));
+        assert!(!status_is_ready(&serde_json::json!({ "value": {} })));
     }
 }

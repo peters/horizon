@@ -5,7 +5,7 @@ use crate::frames::FrameSlot;
 
 use super::BrowserCommand;
 
-const COMMAND_CAPACITY: usize = 512;
+pub(super) const COMMAND_CAPACITY: usize = 512;
 
 struct QueueState {
     commands: VecDeque<BrowserCommand>,
