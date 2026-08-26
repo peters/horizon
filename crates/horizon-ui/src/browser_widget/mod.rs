@@ -5,23 +5,38 @@
 //! (screencasts are change-driven, so idle pages cost nothing), and mouse
 //! moves are deduplicated to actual movement.
 
+const VIEWPORT_RETRY_INTERVAL_SECONDS: f64 = 0.25;
+const MAX_VIEWPORT_CONVERGENCE_RETRIES: u8 = 8;
+
 mod chrome;
 mod ime;
 mod input;
 mod render;
 
 use egui::{Event, Pos2, TextureHandle, Ui};
-use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
+use horizon_core::browser::{BackendKind, BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
 use horizon_core::{AppShortcuts, Panel};
 
 /// Per-panel UI state that must survive across frames.
 #[derive(Default)]
 pub struct BrowserUiState {
+    /// Backend whose session owns every cache below. A backend switch creates
+    /// a new browser at its default viewport, so stale geometry must never
+    /// suppress the replacement session's first `SetViewport` command.
+    active_backend: Option<BackendKind>,
     texture: Option<TextureHandle>,
     seq: u64,
-    /// Last viewport size sent to Chrome (responsive layout + input
-    /// geometry follow the panel; the driver dedupes no-ops).
+    /// Last viewport size sent to the active backend (responsive layout and
+    /// input geometry follow the panel).
     last_viewport: (u32, u32),
+    /// Earliest time a still-mismatched frame may trigger another viewport
+    /// command. Protocol success is not visual convergence: browsers can
+    /// acknowledge a resize while an older-sized frame remains active.
+    viewport_retry_at: f64,
+    /// Number of duplicate commands sent for the current target after its
+    /// initial resize. This bounds recovery for backends whose window and
+    /// content viewport dimensions cannot be made identical.
+    viewport_retry_count: u8,
     /// Last mouse position forwarded to the page (movement dedup).
     last_mouse: Option<Pos2>,
     /// Modifier state at the end of the preceding frame. Pointer moves do
@@ -54,6 +69,21 @@ pub struct BrowserUiState {
     /// Escape exits panel fullscreen after the app has already cleared the
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,
+}
+
+impl BrowserUiState {
+    /// Reset render and input caches when a different backend takes ownership
+    /// of this panel. Returns whether a reset occurred.
+    fn synchronize_backend(&mut self, backend: BackendKind) -> bool {
+        if self.active_backend == Some(backend) {
+            return false;
+        }
+        *self = Self {
+            active_backend: Some(backend),
+            ..Self::default()
+        };
+        true
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +135,9 @@ impl<'a> BrowserView<'a> {
         }
         let state = &mut *self.ui_state;
         let panel_id = self.panel.id;
+        if let Some(browser) = self.panel.browser() {
+            state.synchronize_backend(browser.backend());
+        }
         if let Some(browser) = self.panel.browser_mut()
             && let Some(text) = browser.take_clipboard_text()
         {
@@ -121,6 +154,10 @@ impl<'a> BrowserView<'a> {
             let Some(browser) = self.panel.browser_mut() else {
                 return false;
             };
+            // `chrome::show` can switch the backend in this same frame. Drop
+            // the old session's viewport/texture/input caches before reading
+            // a replacement frame or deciding whether to send its viewport.
+            state.synchronize_backend(browser.backend());
             render::show_body(ui, panel_id, browser, state, interactive)
         };
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
@@ -157,22 +194,7 @@ impl<'a> BrowserView<'a> {
                 // button or key into the replacement session.
                 *state = BrowserUiState::default();
             }
-            // Follow panel resizes/fullscreen with the emulated viewport
-            // so responsive layout and CDP input geometry match what is on
-            // screen (the driver no-ops an unchanged size).
-            if let Some(viewport) = body.viewport_size
-                && viewport.0 > 32
-                && viewport.1 > 32
-                && viewport != state.last_viewport
-            {
-                input::cancel_pointer_capture(browser, state, body.image_rect, body.frame_size);
-                if browser.try_send(BrowserCommand::SetViewport {
-                    width: viewport.0,
-                    height: viewport.1,
-                }) {
-                    state.last_viewport = viewport;
-                }
-            }
+            synchronize_viewport(ui, browser, state, &body);
             input::handle(
                 ui,
                 browser,
@@ -212,6 +234,60 @@ impl<'a> BrowserView<'a> {
     }
 }
 
+fn synchronize_viewport(
+    ui: &Ui,
+    browser: &horizon_core::browser::BrowserPanelState,
+    state: &mut BrowserUiState,
+    body: &render::BodyOutput,
+) {
+    // Follow panel resizes/fullscreen with the emulated viewport so responsive
+    // layout and backend input geometry match what is on screen. Retry at a
+    // bounded rate until a matching frame is actually published; a protocol
+    // acknowledgement alone is not proof that input coordinates converged.
+    let Some(viewport) = body.viewport_size else {
+        return;
+    };
+    let now = ui.input(|input| input.time);
+    let frame_matches = frame_matches_viewport(body.frame_size, Some(viewport), state.last_viewport);
+    if frame_matches {
+        state.viewport_retry_count = 0;
+    }
+    if viewport == state.last_viewport
+        && !frame_matches
+        && state.viewport_retry_count < MAX_VIEWPORT_CONVERGENCE_RETRIES
+        && now < state.viewport_retry_at
+    {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(state.viewport_retry_at - now));
+    }
+    if viewport.0 <= 32
+        || viewport.1 <= 32
+        || !viewport_command_due(
+            body.frame_size,
+            viewport,
+            state.last_viewport,
+            now,
+            state.viewport_retry_at,
+            state.viewport_retry_count,
+        )
+    {
+        return;
+    }
+    input::cancel_pointer_capture(browser, state, body.image_rect, body.frame_size);
+    if browser.try_send(BrowserCommand::SetViewport {
+        width: viewport.0,
+        height: viewport.1,
+    }) {
+        if viewport == state.last_viewport {
+            state.viewport_retry_count = state.viewport_retry_count.saturating_add(1);
+        } else {
+            state.viewport_retry_count = 0;
+        }
+        state.last_viewport = viewport;
+        state.viewport_retry_at = now + VIEWPORT_RETRY_INTERVAL_SECONDS;
+    }
+}
+
 const fn page_focus_event_filter() -> egui::EventFilter {
     egui::EventFilter {
         tab: true,
@@ -245,9 +321,56 @@ fn frame_matches_viewport(
         && (frame_size[1] - f32::from(height)).abs() <= f32::EPSILON
 }
 
+fn viewport_command_due(
+    frame_size: Option<[f32; 2]>,
+    desired_viewport: (u32, u32),
+    sent_viewport: (u32, u32),
+    now: f64,
+    retry_at: f64,
+    retry_count: u8,
+) -> bool {
+    desired_viewport != sent_viewport
+        || (retry_count < MAX_VIEWPORT_CONVERGENCE_RETRIES
+            && !frame_matches_viewport(frame_size, Some(desired_viewport), sent_viewport)
+            && now >= retry_at)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{frame_matches_viewport, page_focus_event_filter, page_keyboard_can_route};
+    use egui::pos2;
+    use horizon_core::browser::BackendKind;
+
+    use super::{
+        BrowserUiState, MAX_VIEWPORT_CONVERGENCE_RETRIES, frame_matches_viewport, page_focus_event_filter,
+        page_keyboard_can_route, viewport_command_due,
+    };
+
+    #[test]
+    fn backend_switch_resets_session_owned_viewport_and_input_caches() {
+        let mut state = BrowserUiState::default();
+        assert!(state.synchronize_backend(BackendKind::ChromiumCdp));
+        state.seq = 42;
+        state.last_viewport = (800, 600);
+        state.viewport_retry_at = 12.5;
+        state.viewport_retry_count = 3;
+        state.last_mouse = Some(pos2(12.0, 34.0));
+        state.url_buffer = String::from("https://example.test/");
+        state.url_submit_enter_pending = true;
+
+        assert!(!state.synchronize_backend(BackendKind::ChromiumCdp));
+        assert_eq!(state.seq, 42);
+        assert_eq!(state.last_viewport, (800, 600));
+
+        assert!(state.synchronize_backend(BackendKind::FirefoxBidi));
+        assert_eq!(state.active_backend, Some(BackendKind::FirefoxBidi));
+        assert_eq!(state.seq, 0);
+        assert_eq!(state.last_viewport, (0, 0));
+        assert!((state.viewport_retry_at - 0.0).abs() < f64::EPSILON);
+        assert_eq!(state.viewport_retry_count, 0);
+        assert!(state.last_mouse.is_none());
+        assert!(state.url_buffer.is_empty());
+        assert!(!state.url_submit_enter_pending);
+    }
 
     #[test]
     fn page_focus_keeps_navigation_keys_out_of_egui() {
@@ -276,6 +399,50 @@ mod tests {
             (800, 600)
         ));
         assert!(!frame_matches_viewport(None, Some((800, 600)), (800, 600)));
+    }
+
+    #[test]
+    fn mismatched_viewport_retries_only_after_the_bounded_interval() {
+        assert!(viewport_command_due(
+            Some([800.0, 600.0]),
+            (900, 600),
+            (800, 600),
+            1.0,
+            2.0,
+            0
+        ));
+        assert!(!viewport_command_due(
+            Some([804.0, 600.0]),
+            (800, 600),
+            (800, 600),
+            1.0,
+            2.0,
+            0
+        ));
+        assert!(viewport_command_due(
+            Some([804.0, 600.0]),
+            (800, 600),
+            (800, 600),
+            2.0,
+            2.0,
+            0
+        ));
+        assert!(!viewport_command_due(
+            Some([800.0, 600.0]),
+            (800, 600),
+            (800, 600),
+            3.0,
+            2.0,
+            0
+        ));
+        assert!(!viewport_command_due(
+            Some([804.0, 600.0]),
+            (800, 600),
+            (800, 600),
+            3.0,
+            2.0,
+            MAX_VIEWPORT_CONVERGENCE_RETRIES
+        ));
     }
 
     #[test]

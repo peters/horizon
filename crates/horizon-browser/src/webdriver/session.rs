@@ -6,13 +6,14 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
+use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
 use crate::process::{ChromeProcessControl, resolve_binary};
 use crate::session::{
     BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CommandReceiver, publish_frame,
 };
 use crate::websocket::{JsonWsError, JsonWsLink};
-use crate::{BackendKind, BrowserConfig};
+use crate::{AutomationDisclosurePolicy, BackendKind, BrowserConfig, PageScrollState};
 
 use super::actions::ActionState;
 use super::http::HttpError;
@@ -25,6 +26,8 @@ const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
 const STATIC_CONFIRMATIONS: u8 = 3;
 const MAX_EVENT_BURST: usize = 32;
+const SCROLL_STATE_INTERVAL: Duration = Duration::from_millis(100);
+const PAGE_SCROLL_STATE_SCRIPT: &str = "const root = document.scrollingElement || document.documentElement; return { scroll_x: window.scrollX, scroll_y: window.scrollY, viewport_width: window.innerWidth, viewport_height: window.innerHeight, client_width: document.documentElement.clientWidth, client_height: document.documentElement.clientHeight, content_width: root.scrollWidth, content_height: root.scrollHeight };";
 
 struct Completion {
     tx: Option<mpsc::Sender<()>>,
@@ -125,6 +128,7 @@ struct Driver {
     context_id: Option<String>,
     actions: ActionState,
     frames: AdaptiveFrames,
+    scroll_state_refresh_at: Instant,
     url: String,
     title: String,
     generation: u64,
@@ -267,6 +271,17 @@ impl Driver {
             let _ = service.http.delete(&path);
             return Err("Firefox BiDi returned no top-level browsing context".to_string());
         }
+        if config.browser.backend == BackendKind::FirefoxBidi
+            && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+            && let Some(link) = bidi.as_mut()
+            && let Err(error) = install_common_signal_preload(link)
+        {
+            let path = format!("/session/{session_id}");
+            let _ = service.http.delete(&path);
+            return Err(format!(
+                "Firefox could not install pre-document automation disclosure minimization: {error}"
+            ));
+        }
         if let Some(link) = bidi.as_mut()
             && let Err(error) = subscribe(link)
         {
@@ -288,6 +303,7 @@ impl Driver {
             context_id,
             actions: ActionState::default(),
             frames: AdaptiveFrames::new(),
+            scroll_state_refresh_at: Instant::now(),
             url: String::new(),
             title: String::new(),
             generation: 0,
@@ -323,6 +339,11 @@ impl Driver {
             backend: self.config.browser.backend,
             capabilities: self.config.browser.backend.capabilities(),
             bidi: self.bidi.is_some(),
+            automation_disclosure: self
+                .config
+                .browser
+                .automation_disclosure
+                .ready_status(self.config.browser.backend),
         }
     }
 
@@ -446,6 +467,7 @@ impl Driver {
             tracing::warn!("WebDriver input failed: {error}");
         }
         if activity {
+            self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
     }
@@ -495,23 +517,51 @@ impl Driver {
             self.frames.invalidate();
             return;
         }
-        if !self.frames.completed(&encoded) {
-            frame_slot.record_unchanged_frame();
-            return;
-        }
-        let seq = if jpeg {
-            frame_slot.store_base64_jpeg(&encoded)
-        } else {
-            frame_slot.store_base64_png(&encoded)
-        };
-        if let Some(seq) = seq {
-            if let Some(elapsed) = self.frames.published() {
-                frame_slot.record_interaction_to_frame(elapsed);
+        let frame_changed = self.frames.completed(&encoded);
+        if frame_changed {
+            let seq = if jpeg {
+                frame_slot.store_base64_jpeg(&encoded)
+            } else {
+                frame_slot.store_base64_png(&encoded)
+            };
+            if let Some(seq) = seq {
+                if let Some(elapsed) = self.frames.published() {
+                    frame_slot.record_interaction_to_frame(elapsed);
+                }
+                publish_frame(event_tx, frame_slot, seq);
+            } else {
+                tracing::warn!("browser screenshot decode failed; retaining previous frame");
             }
-            publish_frame(event_tx, frame_slot, seq);
         } else {
-            tracing::warn!("browser screenshot decode failed; retaining previous frame");
+            frame_slot.record_unchanged_frame();
         }
+        if self.refresh_page_scroll_state(frame_slot) {
+            // A page can scroll over visually identical pixels. Wake the host
+            // even when the screenshot hash did not change so a scrollbar
+            // overlay still follows the browser's authoritative position.
+            event_tx.wake_ui();
+        }
+    }
+
+    fn refresh_page_scroll_state(&mut self, frame_slot: &FrameSlot) -> bool {
+        let now = Instant::now();
+        if now < self.scroll_state_refresh_at {
+            return false;
+        }
+        self.scroll_state_refresh_at = now + SCROLL_STATE_INTERVAL;
+        let Ok(response) = self.classic_post(
+            "execute/sync",
+            &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
+        ) else {
+            return false;
+        };
+        let Some(value) = webdriver_value(&response).cloned() else {
+            return false;
+        };
+        let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
+            return false;
+        };
+        frame_slot.publish_page_scroll_state(state)
     }
 
     fn call_bidi(&mut self, method: &str, params: &Value, event_tx: &BrowserEventSender) -> Result<Value, String> {
@@ -576,12 +626,14 @@ impl Driver {
 
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.scroll_state_refresh_at = Instant::now();
         self.frames.invalidate();
     }
 
     fn begin_navigation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_pending_at = None;
+        self.scroll_state_refresh_at = Instant::now();
         self.frames.suspend_for_navigation();
     }
 
@@ -675,6 +727,16 @@ fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, reques
             ];
             args.extend(config.extra_args.iter().cloned());
             options.insert("args".to_string(), json!(args));
+            // Headless Firefox otherwise inherits GTK overlay scrollbars,
+            // which fade completely out of screenshots and leave a streamed
+            // browser panel with no visible drag target.
+            options.insert(
+                "prefs".to_string(),
+                json!({
+                    "widget.gtk.overlay-scrollbars.enabled": false,
+                    "ui.useOverlayScrollbars": 0,
+                }),
+            );
             if let Some(command) = &config.firefox_command {
                 let binary = resolve_binary(command).map_err(|error| error.to_string())?;
                 options.insert("binary".to_string(), json!(binary));
@@ -756,6 +818,17 @@ fn subscribe(link: &mut JsonWsLink) -> Result<(), String> {
                 "browsingContext.load"
             ]
         }),
+    )
+    .result
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn install_common_signal_preload(link: &mut JsonWsLink) -> Result<(), String> {
+    link.call(
+        COMMAND_TIMEOUT,
+        "script.addPreloadScript",
+        &json!({ "functionDeclaration": COMMON_SIGNAL_PRELOAD_FUNCTION }),
     )
     .result
     .map(|_| ())
@@ -889,6 +962,23 @@ mod tests {
         assert!(validate_firefox_args(&["--remote-debugging-port=1".to_string()]).is_err());
         assert!(validate_firefox_args(&["-profile".to_string()]).is_err());
         assert!(validate_firefox_args(&["--private-window".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn firefox_screenshot_session_keeps_scrollbars_visible() {
+        let Some(profile_root) = tempfile::tempdir().ok() else {
+            panic!("temporary profile root should be available");
+        };
+        let config = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            profile_root: Some(profile_root.path().to_path_buf()),
+            ..BrowserConfig::default()
+        };
+        let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+        let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
+
+        assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
+        assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
     }
 
     #[test]

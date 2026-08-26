@@ -23,6 +23,48 @@ pub struct FrameData {
     pub seq: u64,
 }
 
+/// Root-page scroll geometry sampled alongside `WebDriver` screenshots.
+///
+/// Some `WebDriver` backends omit native scrollbars from screenshot pixels even
+/// though the browser still reserves and accepts input in the scrollbar
+/// gutter. Embedders can use this state to paint a faithful indicator over the
+/// rendered frame without injecting or modifying page content.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PageScrollState {
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    pub client_width: f32,
+    pub client_height: f32,
+    pub content_width: f32,
+    pub content_height: f32,
+}
+
+impl PageScrollState {
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        [
+            self.scroll_x,
+            self.scroll_y,
+            self.viewport_width,
+            self.viewport_height,
+            self.client_width,
+            self.client_height,
+            self.content_width,
+            self.content_height,
+        ]
+        .into_iter()
+        .all(f32::is_finite)
+            && self.viewport_width > 0.0
+            && self.viewport_height > 0.0
+            && self.client_width > 0.0
+            && self.client_height > 0.0
+            && self.content_width >= self.client_width
+            && self.content_height >= self.client_height
+    }
+}
+
 /// Lock-free counters for one panel's frame and command pipeline.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FrameMetrics {
@@ -80,6 +122,7 @@ impl FrameData {
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
+    page_scroll_state: Option<PageScrollState>,
     /// Reused base64 decode target for both screencast and screenshot frames.
     encoded_buffer: Vec<u8>,
     /// Reused decode target so steady-state frames do not allocate.
@@ -284,6 +327,7 @@ impl FrameSlot {
         if let Some(data) = inner.data.take() {
             retain_frame_buffer(&mut inner, data);
         }
+        inner.page_scroll_state = None;
     }
 
     /// Clone the newest frame handle, if any. Pixel conversion and texture
@@ -295,6 +339,26 @@ impl FrameSlot {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .data
             .clone()
+    }
+
+    /// Most recently sampled root-page scroll geometry, when the active
+    /// backend provides screenshot frames without native scrollbar pixels.
+    #[must_use]
+    pub fn page_scroll_state(&self) -> Option<PageScrollState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .page_scroll_state
+    }
+
+    pub(crate) fn publish_page_scroll_state(&self, state: PageScrollState) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next = state.is_valid().then_some(state);
+        if inner.page_scroll_state == next {
+            return false;
+        }
+        inner.page_scroll_state = next;
+        true
     }
 
     /// Claim the single outstanding UI wake-up for this slot. Further
@@ -564,6 +628,33 @@ mod tests {
         assert!(slot.claim_notification());
         assert_eq!(slot.metrics().wakeups_claimed, 2);
         assert_eq!(slot.metrics().wakeups_coalesced, 1);
+    }
+
+    #[test]
+    fn page_scroll_state_is_validated_and_cleared_with_its_session_frame() {
+        let slot = FrameSlot::new();
+        let state = PageScrollState {
+            scroll_x: 0.0,
+            scroll_y: 120.0,
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            client_width: 788.0,
+            client_height: 600.0,
+            content_width: 788.0,
+            content_height: 2400.0,
+        };
+
+        assert!(slot.publish_page_scroll_state(state));
+        assert_eq!(slot.page_scroll_state(), Some(state));
+        assert!(!slot.publish_page_scroll_state(state));
+        assert!(slot.publish_page_scroll_state(PageScrollState {
+            viewport_width: f32::NAN,
+            ..state
+        }));
+        assert!(slot.page_scroll_state().is_none());
+        assert!(slot.publish_page_scroll_state(state));
+        slot.clear();
+        assert!(slot.page_scroll_state().is_none());
     }
 
     #[test]

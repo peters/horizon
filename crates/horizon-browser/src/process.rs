@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
+use crate::AutomationDisclosurePolicy;
 use crate::cdp::parse_devtools_ws_url;
 
 pub(crate) use control::{ChromeProcessControl, ServiceProcess};
@@ -25,7 +26,7 @@ pub enum ChromeError {
     NoDevtools(String),
     #[error("timed out waiting for the DevTools endpoint (stderr: {0})")]
     DevtoolsTimeout(String),
-    #[error("browser.extra_args cannot override Horizon-managed Chrome switch `{0}`")]
+    #[error("browser.extra_args cannot override engine-managed Chrome switch `{0}`")]
     ProtectedExtraArg(String),
 }
 
@@ -55,8 +56,9 @@ pub struct ChromeLaunch {
     pub width: u32,
     pub height: u32,
     /// Extra CLI arguments appended verbatim (config `browser.extra_args`).
-    /// Horizon-managed profile and `DevTools` switches are rejected.
+    /// Engine-managed profile, `DevTools`, and disclosure switches are rejected.
     pub extra_args: Vec<String>,
+    pub automation_disclosure: AutomationDisclosurePolicy,
 }
 
 /// A running headless `Chrome` process plus its captured `DevTools` endpoint.
@@ -77,28 +79,9 @@ impl ChromeProcess {
     /// # Errors
     /// Fails when the binary is missing or the process cannot start.
     pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
-        validate_extra_args(&launch.extra_args)?;
         let command = resolve_binary(&launch.command)?;
         prepare_profile_dir(&launch.profile_dir)?;
-
-        let mut args: Vec<String> = vec![
-            "--headless=new".to_string(),
-            // Port 0: the OS picks a free port; we learn it from stderr.
-            "--remote-debugging-port=0".to_string(),
-            "--remote-debugging-address=127.0.0.1".to_string(),
-            format!("--user-data-dir={}", launch.profile_dir.display()),
-            "--no-first-run".to_string(),
-            "--no-default-browser-check".to_string(),
-            "--disable-gpu".to_string(),
-            format!("--window-size={},{}", launch.width, launch.height),
-            "--disable-features=TranslateUI".to_string(),
-        ];
-        // A disposable per-panel profile must never block startup on a
-        // macOS keychain creation prompt.
-        #[cfg(target_os = "macos")]
-        args.push("--use-mock-keychain".to_string());
-        args.extend(launch.extra_args.iter().cloned());
-        args.push("about:blank".to_string());
+        let args = launch_args(launch)?;
 
         let mut command = Command::new(command);
         command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -253,7 +236,32 @@ fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn validate_extra_args(extra_args: &[String]) -> Result<()> {
+fn launch_args(launch: &ChromeLaunch) -> Result<Vec<String>> {
+    validate_extra_args(&launch.extra_args, launch.automation_disclosure)?;
+    let mut args = vec![
+        "--headless=new".to_string(),
+        // Port 0: the OS picks a free port; we learn it from stderr.
+        "--remote-debugging-port=0".to_string(),
+        "--remote-debugging-address=127.0.0.1".to_string(),
+        format!("--user-data-dir={}", launch.profile_dir.display()),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        format!("--window-size={},{}", launch.width, launch.height),
+        "--disable-features=TranslateUI".to_string(),
+    ];
+    if launch.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals {
+        args.push("--disable-blink-features=AutomationControlled".to_string());
+    }
+    // A disposable per-panel profile must never block startup on a macOS
+    // keychain creation prompt.
+    #[cfg(target_os = "macos")]
+    args.push("--use-mock-keychain".to_string());
+    args.extend(launch.extra_args.iter().cloned());
+    args.push("about:blank".to_string());
+    Ok(args)
+}
+
+fn validate_extra_args(extra_args: &[String], automation_disclosure: AutomationDisclosurePolicy) -> Result<()> {
     for argument in extra_args {
         let Some(switch) = argument
             .strip_prefix("--")
@@ -263,7 +271,15 @@ fn validate_extra_args(extra_args: &[String]) -> Result<()> {
             continue;
         };
         let name = switch.split(['=', ':']).next().unwrap_or(switch).to_ascii_lowercase();
-        if name.starts_with("remote-debugging-") || matches!(name.as_str(), "remote-allow-origins" | "user-data-dir") {
+        let overrides_disclosure = automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+            && matches!(
+                name.as_str(),
+                "enable-automation" | "disable-blink-features" | "enable-blink-features"
+            );
+        if name.starts_with("remote-debugging-")
+            || matches!(name.as_str(), "remote-allow-origins" | "user-data-dir")
+            || overrides_disclosure
+        {
             return Err(ChromeError::ProtectedExtraArg(argument.clone()));
         }
     }
@@ -724,9 +740,12 @@ mod tests {
             vec!["--REMOTE-DEBUGGING-ADDRESS=0.0.0.0".to_string()],
             vec!["--Remote-Allow-Origins=https://example.com".to_string()],
             vec!["/USER-DATA-DIR:C:\\shared".to_string()],
+            vec!["--enable-automation".to_string()],
+            vec!["--disable-blink-features=Foo".to_string()],
+            vec!["--enable-blink-features=AutomationControlled".to_string()],
         ] {
             assert!(matches!(
-                validate_extra_args(&arguments),
+                validate_extra_args(&arguments, AutomationDisclosurePolicy::MinimizeCommonSignals),
                 Err(ChromeError::ProtectedExtraArg(_))
             ));
         }
@@ -735,11 +754,58 @@ mod tests {
     #[test]
     fn accepts_unmanaged_extra_args() {
         assert!(
-            validate_extra_args(&[
-                "--force-device-scale-factor=2".to_string(),
-                "--disable-extensions".to_string(),
-            ])
+            validate_extra_args(
+                &[
+                    "--force-device-scale-factor=2".to_string(),
+                    "--disable-extensions".to_string(),
+                    "--disable-gpu".to_string(),
+                ],
+                AutomationDisclosurePolicy::MinimizeCommonSignals,
+            )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn default_launch_uses_gpu_negotiation_and_minimizes_common_disclosure() {
+        let launch = ChromeLaunch {
+            command: "chrome".to_string(),
+            profile_dir: PathBuf::from("profile"),
+            width: 1280,
+            height: 800,
+            extra_args: Vec::new(),
+            automation_disclosure: AutomationDisclosurePolicy::MinimizeCommonSignals,
+        };
+        let args = launch_args(&launch).unwrap_or_default();
+
+        assert!(!args.iter().any(|argument| argument == "--disable-gpu"));
+        assert!(
+            args.iter()
+                .any(|argument| argument == "--disable-blink-features=AutomationControlled")
+        );
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
+
+    #[test]
+    fn browser_default_disclosure_allows_caller_owned_blink_switches() {
+        let launch = ChromeLaunch {
+            command: "chrome".to_string(),
+            profile_dir: PathBuf::from("profile"),
+            width: 1280,
+            height: 800,
+            extra_args: vec!["--enable-blink-features=ExperimentalFoo".to_string()],
+            automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+        };
+        let args = launch_args(&launch).unwrap_or_default();
+
+        assert!(
+            args.iter()
+                .all(|argument| argument != "--disable-blink-features=AutomationControlled")
+        );
+        assert!(
+            args.iter()
+                .any(|argument| argument == "--enable-blink-features=ExperimentalFoo")
+        );
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
     }
 }

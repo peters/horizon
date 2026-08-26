@@ -73,6 +73,10 @@ impl BrowserEventSender {
         self.wake.wake();
         Ok(())
     }
+
+    pub(crate) fn wake_ui(&self) {
+        self.wake.wake();
+    }
 }
 
 impl BrowserSession {

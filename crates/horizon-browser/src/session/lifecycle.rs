@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use crate::AutomationDisclosurePolicy;
 use crate::cdp::CdpLink;
+use crate::disclosure::{cdp_preload_source, chromium_user_agent_needs_override, chromium_user_agent_override};
 use crate::frames::FrameSlot;
 
 use super::{
@@ -34,19 +36,32 @@ impl DriverState {
     ) -> bool {
         if self.session_id.as_deref() != Some(session) {
             self.reset_clipboard_tracking();
+            self.invalidate_scrollbar_layout();
         }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
         // Browser-level auto-attach does not recurse into site-isolated child
         // targets. Enable it on the bound page session as well so OOPIF
         // execution contexts remain available to frame-aware input bridges.
-        let setup_commands = [
+        let initial_setup_commands = [
             (
                 "Target.setAutoAttach",
                 serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
             ),
             ("Page.enable", serde_json::json!({})),
             ("Runtime.enable", serde_json::json!({})),
+        ];
+        for (method, params) in initial_setup_commands {
+            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
+                return false;
+            }
+        }
+        if self.config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+            && !self.install_common_signal_minimization(link, event_tx, frame_slot, session)
+        {
+            return false;
+        }
+        let remaining_setup_commands = [
             ("Runtime.addBinding", serde_json::json!({ "name": TITLE_BINDING_NAME })),
             (
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -61,16 +76,22 @@ impl DriverState {
                 serde_json::json!({
                     "width": self.viewport_w,
                     "height": self.viewport_h,
+                    "screenWidth": self.viewport_w,
+                    "screenHeight": self.viewport_h,
                     "deviceScaleFactor": 1,
                     "mobile": false,
                 }),
             ),
         ];
-        for (method, params) in setup_commands {
+        for (method, params) in remaining_setup_commands {
             if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
                 return false;
             }
         }
+        // Never expose the internal metadata-bootstrap page in a screencast.
+        // The disclosure shim and UA override are already active before this
+        // first caller-supplied navigation can execute page author script.
+        self.navigate_initial_url(link, event_tx, frame_slot);
         // A page that loaded before we attached (restart case) already has
         // its title; a fresh about:blank fetch returns empty and is skipped.
         self.fetch_title(link, event_tx, frame_slot);
@@ -86,21 +107,96 @@ impl DriverState {
             backend: crate::BackendKind::ChromiumCdp,
             capabilities: crate::BackendKind::ChromiumCdp.capabilities(),
             bidi: false,
+            automation_disclosure: self
+                .config
+                .browser
+                .automation_disclosure
+                .ready_status(crate::BackendKind::ChromiumCdp),
         };
         frame_slot.publish_backend_capabilities(capabilities);
         let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
         let _ = event_tx.send(BrowserEvent::Ready);
-        // One-shot: navigate to the panel's initial URL after first attach.
-        if !self.initial_navigated {
-            self.initial_navigated = true;
-            let initial_url = self.config.initial_url.clone();
-            if let Some(initial) = initial_url
-                && initial != "about:blank"
-            {
-                self.navigate_to(link, event_tx, frame_slot, &initial);
+        !self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn navigate_initial_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
+        if self.initial_navigated {
+            return;
+        }
+        self.initial_navigated = true;
+        let initial_url = self.config.initial_url.clone();
+        if let Some(initial) = initial_url
+            && initial != "about:blank"
+        {
+            self.navigate_to(link, event_tx, frame_slot, &initial);
+        }
+    }
+
+    fn install_common_signal_minimization(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+    ) -> bool {
+        let Some(version) = self.setup_command_result(
+            link,
+            event_tx,
+            frame_slot,
+            "Browser.getVersion",
+            &serde_json::json!({}),
+            None,
+        ) else {
+            return false;
+        };
+        let needs_user_agent_override = match chromium_user_agent_needs_override(&version) {
+            Ok(value) => value,
+            Err(error) => return self.setup_failure(event_tx, frame_slot, "Browser.getVersion", error),
+        };
+        let user_agent_metadata = if needs_user_agent_override {
+            let Some(metadata) = self.native_user_agent_metadata.as_ref() else {
+                return self.setup_failure(
+                    event_tx,
+                    frame_slot,
+                    "Browser.getVersion",
+                    "native Chromium userAgentData metadata was not captured during startup",
+                );
+            };
+            metadata
+        } else {
+            &serde_json::Value::Null
+        };
+        let user_agent_override = match chromium_user_agent_override(&version, user_agent_metadata) {
+            Ok(value) => value,
+            Err(error) => return self.setup_failure(event_tx, frame_slot, "Runtime.evaluate", error),
+        };
+        if let Some(params) = user_agent_override
+            && !self.setup_command(
+                link,
+                event_tx,
+                frame_slot,
+                "Emulation.setUserAgentOverride",
+                &params,
+                Some(session),
+            )
+        {
+            return false;
+        }
+        for (method, params) in [
+            (
+                "Page.addScriptToEvaluateOnNewDocument",
+                serde_json::json!({ "source": cdp_preload_source() }),
+            ),
+            (
+                "Runtime.evaluate",
+                serde_json::json!({ "expression": cdp_preload_source() }),
+            ),
+        ] {
+            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
+                return false;
             }
         }
-        !self.stop_requested.load(Ordering::Acquire)
+        true
     }
 
     fn setup_command(
@@ -112,21 +208,46 @@ impl DriverState {
         params: &serde_json::Value,
         session: Option<&str>,
     ) -> bool {
+        self.setup_command_result(link, event_tx, frame_slot, method, params, session)
+            .is_some()
+    }
+
+    fn setup_command_result(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        method: &str,
+        params: &serde_json::Value,
+        session: Option<&str>,
+    ) -> Option<serde_json::Value> {
         match self.call_and_ack(link, event_tx, frame_slot, method, params, session) {
-            Ok(_) => !self.stop_requested.load(Ordering::Acquire),
-            Err(_) if self.stop_requested.load(Ordering::Acquire) => false,
+            Ok(result) => (!self.stop_requested.load(Ordering::Acquire)).then_some(result),
+            Err(_) if self.stop_requested.load(Ordering::Acquire) => None,
             Err(error) => {
-                self.session_id = None;
-                self.screencast_on = false;
-                self.reset_clipboard_tracking();
-                self.pending_reattach = self.target_id.is_some();
-                frame_slot.clear();
-                let message = format!("browser setup failed at {method}: {error}; retry to restart");
-                tracing::warn!(target: "browser", "{message}");
-                let _ = event_tx.send(BrowserEvent::Warning(message));
-                false
+                self.setup_failure(event_tx, frame_slot, method, &error.to_string());
+                None
             }
         }
+    }
+
+    fn setup_failure(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        frame_slot: &FrameSlot,
+        method: &str,
+        error: &str,
+    ) -> bool {
+        self.session_id = None;
+        self.screencast_on = false;
+        self.invalidate_scrollbar_layout();
+        self.reset_clipboard_tracking();
+        self.pending_reattach = self.target_id.is_some();
+        frame_slot.clear();
+        let message = format!("browser setup failed at {method}: {error}; retry to restart");
+        tracing::warn!(target: "browser", "{message}");
+        let _ = event_tx.send(BrowserEvent::Warning(message));
+        false
     }
 
     fn start_screencast(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
@@ -213,9 +334,10 @@ impl DriverState {
                 self.pending_restart_at = None;
             }
             self.pending_reattach = false;
-            if let Some(ref target) = self.target_id {
+            if let Some(target) = self.target_id.clone() {
                 self.reattach_in_flight = true;
                 self.session_id = None;
+                self.invalidate_scrollbar_layout();
                 match link.send_request(
                     "Target.attachToTarget",
                     &serde_json::json!({ "targetId": target, "flatten": true }),

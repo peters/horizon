@@ -172,6 +172,7 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 /// screencast frame, which otherwise leaves the previous frame stretched.
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
+const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const TITLE_BINDING_NAME: &str = "__horizonBrowserTitleChanged";
 const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
     if (window !== top || window.__horizonBrowserTitleObserver) return;
@@ -334,6 +335,10 @@ fn run_loop(
         state.tick_viewport_resize(link, event_tx, frame_slot);
         state.tick_viewport_capture(link, frame_slot);
 
+        // 3d. Keep the native-scrollbar hit-test geometry warm without ever
+        //     blocking the input path on a CDP roundtrip.
+        state.tick_scrollbar_layout(link);
+
         // 4. Backoff-retried screencast restart / re-attach.
         state.pending_restart_tick(link, event_tx, frame_slot);
 
@@ -351,12 +356,66 @@ fn run_loop(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct VerticalScrollbarLayout {
+    client_width: f64,
+    client_height: f64,
+    scroll_y: f64,
+    content_height: f64,
+}
+
+impl VerticalScrollbarLayout {
+    fn from_metrics(metrics: &serde_json::Value) -> Option<Self> {
+        let layout = metrics.get("cssLayoutViewport")?;
+        let content = metrics.get("cssContentSize")?;
+        let candidate = Self {
+            client_width: layout.get("clientWidth")?.as_f64()?,
+            client_height: layout.get("clientHeight")?.as_f64()?,
+            scroll_y: layout.get("pageY")?.as_f64()?,
+            content_height: content.get("height")?.as_f64()?,
+        };
+        candidate.is_valid().then_some(candidate)
+    }
+
+    fn is_valid(self) -> bool {
+        self.client_width.is_finite()
+            && self.client_width >= 0.0
+            && self.client_height.is_finite()
+            && self.client_height > 0.0
+            && self.scroll_y.is_finite()
+            && self.scroll_y >= 0.0
+            && self.content_height.is_finite()
+            && self.content_height >= self.client_height
+    }
+}
+
+#[derive(Debug)]
+struct ScrollbarLayoutCache {
+    layout: Option<VerticalScrollbarLayout>,
+    request_id: Option<u64>,
+    refresh_at: Option<Instant>,
+}
+
+impl ScrollbarLayoutCache {
+    fn new() -> Self {
+        Self {
+            layout: None,
+            request_id: None,
+            refresh_at: Some(Instant::now()),
+        }
+    }
+}
+
 /// Driver-side state machine for one page session.
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)] // intentional: per-concern state flags
 struct DriverState {
     config: BrowserSessionConfig,
     browser_ws: String,
+    /// Browser-owned Client Hints captured from a temporary hidden target
+    /// before the caller page is attached. Reused across target reattaches so
+    /// the main page never needs a diagnostic bootstrap navigation.
+    native_user_agent_metadata: Option<serde_json::Value>,
     session_id: Option<String>,
     target_id: Option<String>,
     main_frame_id: Option<String>,
@@ -366,6 +425,15 @@ struct DriverState {
     viewport_retry_at: Option<Instant>,
     pending_viewport_capture_at: Option<Instant>,
     viewport_capture_request_id: Option<u64>,
+    /// Headless Chromium paints its native scrollbar into screencast frames,
+    /// but `Input.dispatchMouseEvent` cannot operate that browser-owned UI.
+    /// A press inside the measured gutter therefore becomes an engine-owned
+    /// scroll interaction until the matching release.
+    vertical_scrollbar_drag: Option<VerticalScrollbarDrag>,
+    scrollbar_layout: ScrollbarLayoutCache,
+    /// First visually meaningful command waiting for a published frame.
+    /// Additional commands coalesce into the same sample until pixels arrive.
+    interaction_started_at: Option<Instant>,
     clipboard: ClipboardState,
     url: String,
     title: String,
@@ -401,10 +469,16 @@ struct DriverState {
 }
 
 impl DriverState {
-    fn new(config: &BrowserSessionConfig, browser_ws: &str, stop_requested: Arc<AtomicBool>) -> Self {
+    fn new(
+        config: &BrowserSessionConfig,
+        browser_ws: &str,
+        native_user_agent_metadata: Option<serde_json::Value>,
+        stop_requested: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             config: config.clone(),
             browser_ws: browser_ws.to_string(),
+            native_user_agent_metadata,
             session_id: None,
             target_id: None,
             main_frame_id: None,
@@ -414,6 +488,9 @@ impl DriverState {
             viewport_retry_at: None,
             pending_viewport_capture_at: None,
             viewport_capture_request_id: None,
+            vertical_scrollbar_drag: None,
+            scrollbar_layout: ScrollbarLayoutCache::new(),
+            interaction_started_at: None,
             clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
@@ -561,6 +638,20 @@ impl DriverState {
                 )));
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VerticalScrollbarDrag {
+    pointer_y: f64,
+    scroll_y: f64,
+    max_scroll: f64,
+    scroll_per_pointer_pixel: f64,
+}
+
+impl VerticalScrollbarDrag {
+    fn target_scroll_y(self, pointer_y: f64) -> f64 {
+        (self.scroll_y + ((pointer_y - self.pointer_y) * self.scroll_per_pointer_pixel)).clamp(0.0, self.max_scroll)
     }
 }
 

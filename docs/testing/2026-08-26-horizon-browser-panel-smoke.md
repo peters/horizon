@@ -11,11 +11,77 @@ browser session.
 - Browsers: Chromium 151.0.7922.108 snap; Firefox 154.0; geckodriver 0.35.0.
 - Chromium CDP: pass for visible push frames, committed URL/title, Fit/resize,
   Unicode agent input, claim/lease, user preemption, handoff/handback, redacted
-  mode-`0600` audit, and exact process/manifest cleanup.
+  mode-`0600` audit, and exact process/manifest cleanup. A drag on the visible
+  native vertical scrollbar moved the deterministic page from `scrollY=0` to
+  `scrollY=1255`; a following wheel event moved it to `scrollY=1287` on the
+  final rebuilt Linux candidate.
 - Firefox WebDriver BiDi: pass for visible adaptive screenshots, committed
   URL/title, Fit/resize, Unicode agent input, claim/lease, user preemption,
   handoff/handback, redacted mode-`0600` audit, and exact
-  Horizon-to-geckodriver-to-Firefox cleanup.
+  Horizon-to-geckodriver-to-Firefox cleanup. After a live Chromium-to-Firefox
+  switch, the first page click worked without resizing the panel. Firefox wheel
+  input worked, its screenshot-frame scrollbar overlay was visible, and dragging
+  that indicator through Firefox's real WebDriver gutter moved the page from
+  `scrollY=32` to `scrollY=1317` after a wheel step on the final rebuilt Linux
+  candidate. A normal exact-window close removed the Horizon, geckodriver, and
+  Firefox process tree and the live manifest.
+- Finding fixed and rerun: the browser could acknowledge a viewport command
+  while continuing to publish an older-sized frame. Pointer input correctly
+  waited for authoritative geometry, but no later resize was sent, so Firefox
+  appeared inert until the user resized the panel. Backend switches now clear
+  all session-owned geometry/input caches and the UI resends viewport commands
+  at a bounded interval until the frame converges, with a finite retry budget.
+- Finding fixed and rerun: headless Chromium paints a native scrollbar but CDP
+  pointer dispatch does not operate browser-owned scrollbar chrome. Presses in
+  the measured gutter now use engine-owned thumb/track scrolling while ordinary
+  right-edge content clicks remain normal CDP input.
+- Finding fixed and rerun: Firefox accepts real WebDriver pointer input in its
+  reserved scrollbar gutter, but WebDriver screenshots omit the native
+  scrollbar pixels. `horizon-browser` now publishes validated root scroll
+  geometry and Horizon paints a non-injected indicator over the omitted gutter;
+  Firefox remains authoritative for the drag. Scroll-state-only changes wake
+  the UI even when screenshot pixels hash identically.
+- Common disclosure minimization: pass on the deterministic local page for
+  Chromium and Firefox. The earliest author script, current document, and a
+  dynamically created iframe each observed `navigator.webdriver == false`.
+  Chromium's user agent contained `Chrome`, not `HeadlessChrome`, while its
+  browser-owned Client Hint brands and full version remained populated;
+  Firefox retained its native user agent. Visible Horizon-originated clicks
+  remained trusted DOM events. This proves the narrow active-session contract,
+  not that either browser is undetectable.
+- Decisive Chromium disclosure/startup rerun: when the browser-owned user agent
+  contained `HeadlessChrome`, the engine created a temporary hidden
+  `chrome://version/` target, read Chromium's native high-entropy Client Hint
+  values there, and closed it before attaching the caller page. A live
+  `Target.getTargets` query after startup contained no bootstrap target, and
+  `Page.getNavigationHistory` contained exactly `about:blank` followed by the
+  deterministic fixture. The resulting identity retained Chromium's native
+  architecture, bitness, brands, platform, and full version
+  (`151.0.7922.108`) while removing only the headless user-agent token.
+- Exact final-build interaction rerun: Chromium converged to a
+  `1144×698` viewport and matching emulated screen without a manual panel
+  resize, wheel-scrolled from `scrollY=0` to `scrollY=960`, and reported
+  `clicks=1 trusted=true`. The unchanged scrollbar code had already moved from
+  `scrollY=0` to `scrollY=931` through the visible native scrollbar on the
+  preceding rebuilt candidate. A live Chromium-to-Firefox switch then produced
+  a usable first converged Firefox frame without resizing the panel. Firefox
+  wheel-scrolled from `0` to `960`,
+  reported `clicks=1 trusted=true`, returned to `0` with Home, and its visible
+  WebDriver scrollbar interaction moved through `652` to `1887`.
+- Chromium retained its native Client Hint brands and full version
+  (`151.0.7922.108`) after removing only the `HeadlessChrome` token. Firefox
+  retained its native Firefox 154 user agent and a plausible screen larger
+  than its content viewport. The fixture recorded these values instead of
+  adding broad fingerprint spoofing.
+- Exact final-build teardown: normal window close removed the task-owned
+  Horizon, Chromium, geckodriver, and Firefox processes, CDP/WebDriver/BiDi
+  listeners, and live manifest. The private audit journal remained at mode
+  `0600` with the wheel, click, Home, and scrollbar drag represented as
+  ordered redacted user actions.
+- Chromium no longer receives a default `--disable-gpu` launch argument. The
+  isolated Xvfb environment still selected SwiftShader and disabled renderer
+  GPU compositing, so this lane does not claim hardware acceleration or explain
+  the observed Firefox-versus-Chromium difference by protocol alone.
 - Finding fixed and rerun: Chromium retained a target URL-like title after a
   credential-bearing navigation because Chrome omits URL user-info from
   `location.href`. Metadata matching now ignores only authority user-info;
@@ -26,10 +92,16 @@ browser session.
   the live manifest and runtime YAML recorded Chromium plus Firefox, normal
   close removed both task-owned manifests and process trees, and relaunch of
   that same isolated session visibly restored both engines with Firefox BiDi.
-- The complete repository validation matrix, package dry-run, documentation,
-  and cross-target checks are blocking before the final branch head is pushed
-  for macOS. The macOS tester must use the final remote SHA, not an earlier
-  push made before the persistence finding.
+- The complete repository pre-push matrix passed on the final source candidate:
+  formatting, maintainability, both workspace test lanes, blocking Clippy,
+  strict no-unwrap/no-expect Clippy, and pedantic Clippy. `horizon-browser`
+  rustdoc, macOS/Windows crate cross-target checks, and a dirty-tree package
+  dry-run also passed; the archive contained 36 files and compressed to
+  93.2 KiB. Workspace rustdoc is not a release gate and remains blocked by a
+  pre-existing broken intra-doc link in `horizon-cursor`. The clean-tree package
+  dry-run is repeated after commit and remains blocking before push. The macOS
+  tester must use the final remote SHA, not an earlier push made before the
+  persistence, viewport/input, or disclosure-startup findings.
 - Runtime screenshots and journals are temporary task artifacts outside the
   repository; the durable evidence is this record plus the exact pushed SHA.
 
@@ -113,21 +185,61 @@ For every backend:
 
 ## Navigation, input, and focus
 
-1. Focus a text input inside the page, type ASCII and punctuation, then commit
+1. Before manually resizing the panel, click a deterministic page button and
+   wheel-scroll in Firefox. Then switch an unchanged-geometry panel from
+   Chromium to Firefox and repeat the click. Both actions must work on the first
+   converged Firefox frame; resizing is not an acceptable workaround.
+2. Focus a text input inside the page, type ASCII and punctuation, then commit
    a multi-character Unicode/IME string. Verify text appears once and key-up
    does not leak into the URL bar or Horizon shortcuts.
-2. Exercise Tab, Shift+Tab, Enter, Escape, arrows, Home/End, Backspace/Delete,
+3. Exercise Tab, Shift+Tab, Enter, Escape, arrows, Home/End, Backspace/Delete,
    and one function key handled by the page. Confirm backend capability claims:
    Firefox and Safari must not claim physical-key or clipboard behavior they do
    not preserve.
-3. Click, double-click, drag out of the viewport, release outside, wheel both
+4. Click, double-click, drag out of the viewport, release outside, wheel both
    axes, and use simultaneous button masks where supported. Verify no stuck
    press after focus loss.
-4. Focus the URL bar, submit the second deterministic page, and verify committed
+5. On a tall page, verify a vertical scrollbar indicator is visible, drag its
+   thumb from top toward the middle, click its track, and wheel once. Confirm
+   page scroll position and thumb position change after each operation. Also
+   click page content within 32 pixels of the right edge to prove the Chromium
+   gutter fast path does not steal content input.
+6. Focus the URL bar, submit the second deterministic page, and verify committed
    URL/title/frame. Exercise back, forward, and reload.
-5. Submit an invalid/unreachable URL and verify an actionable navigation error
+7. Submit an invalid/unreachable URL and verify an actionable navigation error
    without losing the last valid frame or queued retry target.
-6. Capture and inspect a post-input/navigation screenshot.
+8. Capture and inspect a post-input/navigation screenshot.
+
+## Automation disclosure and fingerprint consistency
+
+Use a deterministic loopback page whose inline script runs before any deferred
+or external script. Do not use a public search engine, anti-bot service, or
+CAPTCHA as the pass/fail oracle.
+
+1. With `automation_disclosure: minimize_common_signals`, record the active
+   capability status. Chromium and Firefox must report
+   `CommonSignalsMinimized`; Safari must report `UnsupportedByBackend` rather
+   than silently claiming parity.
+2. In Chromium, verify the earliest inline script, the current document, and a
+   dynamically created same-origin iframe each observe
+   `navigator.webdriver == false`. Verify the user agent has no
+   `HeadlessChrome` token and Client Hint brands/version data are nonempty and
+   coherent with the browser version.
+3. Repeat the early/current/iframe checks in Firefox after a fresh session.
+   This must work on the first navigation because BiDi preload installation is
+   ordered before it.
+4. Record, without broadly spoofing, languages, plugins, viewport, screen,
+   device scale, and WebGL renderer. Treat contradictions as findings; do not
+   turn the test into an expanding fingerprint-evasion list.
+5. Confirm a visible click routed through Horizon produces a trusted DOM input
+   event on both Linux backends and still changes the page. This validates real
+   protocol input, not human origin.
+6. Repeat with `automation_disclosure: browser_default` in a focused engine
+   test and verify the active status is `BrowserDefault` and engine-managed
+   minimization is not installed.
+7. Treat any rejected required preload or user-agent command as a startup
+   failure. A session must never claim `CommonSignalsMinimized` after a silent
+   downgrade.
 
 ## Agent steering, user handoff, and audit
 
@@ -165,7 +277,9 @@ live manifest directly.
    request and completion counts must stop increasing. Chromium must do no
    decode/upload work without a CDP repaint.
 2. Input latency: collect at least 20 deterministic one-key-to-visible-frame
-   samples. Firefox's gate is median <=100 ms and p95 <=180 ms.
+   samples per backend from the shared `FrameMetrics` command-to-published-frame
+   counter. Firefox's gate is median <=100 ms and p95 <=180 ms; use the same
+   viewport/page/display when comparing it with Chromium or Safari.
 3. Navigation latency: collect at least 20 alternating local navigation-to-frame
    samples against pages with visibly distinct pixels, with the same thresholds.
 4. Animation: run CSS and canvas animation for at least three seconds. Adaptive
@@ -175,9 +289,18 @@ live manifest directly.
 5. Rapid input/scroll and repeated resize: verify at most one adaptive capture
    is in flight, newest demand wins, command coalescing grows instead of an
    unbounded queue, and no old-size or old-navigation frame is published.
-6. Compare one, three, and five panels for bounded memory/thread/process growth.
+6. Hold one panel at a size where the backend initially reports a different
+   frame height. Verify viewport commands retry no faster than every 250 ms,
+   pointer input remains gated while geometry differs, the frame converges
+   without manual resize, and retries cease after convergence. If an exact
+   viewport is impossible, verify the finite retry budget prevents a permanent
+   repaint/resize loop.
+7. Compare one, three, and five panels for bounded memory/thread/process growth.
    Record child RSS/CPU and frame metrics; do not generalize beyond the measured
    browser/version/viewport.
+8. For Chromium, inspect renderer/GPU diagnostics as well as the root launch
+   arguments. Absence of `--disable-gpu` does not prove hardware acceleration,
+   especially under Xvfb, remote desktops, or virtual machines.
 
 ## Layout and persistence
 
@@ -223,13 +346,20 @@ Run only after Linux Chromium and Firefox have passed on the candidate head.
    actually negotiated. If the installed Safari rejects that capability,
    verify one clean retry without it and report classic-only mode.
 3. Run all baseline, input, navigation, viewport, performance, persistence, and
-   teardown steps in Safari's isolated automation window.
-4. Start a second Safari panel. It must show a safe busy error while the first
+   teardown steps in Safari's isolated automation window. Explicitly repeat the
+   no-manual-resize click, wheel, visible-scrollbar, thumb-drag, track-click, and
+   viewport-convergence regressions in Chromium, Firefox, and Safari before
+   treating the macOS lane as complete.
+4. Repeat the disclosure-consistency lane in macOS Chromium and Firefox. For
+   Safari, verify the active status is `UnsupportedByBackend` under the default
+   minimization policy and `BrowserDefault` when explicitly selected; do not
+   claim Safari provides an equivalent preload contract.
+5. Start a second Safari panel. It must show a safe busy error while the first
    session remains intact. Close the first, wait for exact cleanup, then Retry
    the second successfully.
-5. Manually break the task-owned automation glass pane, verify permanent session
+6. Manually break the task-owned automation glass pane, verify permanent session
    disconnect plus bounded cleanup, then Retry only after cleanup.
-6. Before and after the lane, verify no normal Safari window, normal profile,
+7. Before and after the lane, verify no normal Safari window, normal profile,
    history, AutoFill data, cookies, settings, or default browser choice changed.
 
 ## Evidence and handoff

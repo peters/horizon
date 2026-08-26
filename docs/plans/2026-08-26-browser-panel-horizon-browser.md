@@ -1,6 +1,6 @@
 # Browser panel: first-party `horizon-browser` landing plan
 
-- Status: implemented; Linux Chromium/Firefox exact-code smoke passed; macOS Chromium/Firefox/Safari smoke pending
+- Status: implemented and locally validated; Linux Chromium/Firefox exact-code smoke passed; macOS Chromium/Firefox/Safari smoke pending
 - Date: 2026-08-26
 - Target base: `origin/main` at `4c6a69d`
 - New workspace crate: `crates/horizon-browser`
@@ -36,6 +36,9 @@ slice rather than integrating the old stack:
 - backend-neutral agent actions on every backend, fresh-owner leases, user
   steering priority, explicit user handoff, and private append-only redacted
   audit journals;
+- an explicit automation-disclosure policy: Chromium and Firefox establish a
+  narrow pre-document common-signal minimization contract, while Safari and
+  browser-owned behavior are reported honestly through active capabilities;
 - a UI-independent `horizon-browser` package boundary with crates.io metadata,
   a crate README, and no dependency on Horizon, egui, winit, Tokio, or an async
   runtime. Packaging metadata is preparation only; the crate is not published.
@@ -45,10 +48,25 @@ pixels, input, navigation, title/URL state, resize/Fit, agent steering,
 handoff, redacted audit records, exact child/manifest cleanup, and a normal
 close/relaunch that restored one Chromium panel and one Firefox BiDi panel.
 The relaunch pass caught and fixed a missing runtime-dirty signal after backend
-selection (`472451c`). Firefox met the measured input/navigation latency gates
-and adaptive capture decayed to zero on a static page. Safari remains
-capability-implemented but not release-supported until the exact candidate is
-exercised on macOS after the Linux/final-validation gate.
+selection (`472451c`). A later interaction pass caught stale viewport geometry:
+Firefox clicks were gated until a manual resize. Backend switches now clear
+session-owned UI caches and bounded viewport retries continue until a matching
+frame arrives. The same pass added working Chromium native-scrollbar drag
+translation and a visible, non-injected Firefox scrollbar indicator backed by
+authoritative page metrics; Firefox still receives the actual drag through
+WebDriver. Firefox met the measured input/navigation latency gates and adaptive
+capture decayed to zero on a static page. Safari remains capability-implemented
+but not release-supported until the exact candidate is exercised on macOS after
+the Linux/final-validation gate.
+
+The final Chromium startup rerun also proved that native Client Hint metadata
+is collected through a short-lived hidden internal target. That target is
+closed before Horizon attaches the caller page, is absent from the live target
+list afterward, and never enters caller navigation history. On the
+deterministic fixture, Chromium and Firefox both exposed the narrow configured
+`navigator.webdriver == false` contract in the earliest author script, current
+document, and a newly created same-origin iframe; this remains common-signal
+minimization, not proof that automation or AI control is undetectable.
 
 The integrated diff is intentionally over the repository's normal PR scope
 limit. The user authorized pushing the implementation branch for cross-machine
@@ -61,12 +79,17 @@ Owning the implementation is a sound performance and control decision, but “we
 
 - Horizon's existing Chromium candidate and ferridriver's Chromium backend both use CDP `Page.startScreencast`. Streaming is not a unique Chromium advantage.
 - The current Horizon candidate has useful hot-path properties worth preserving: immediate frame acknowledgement, latest-only publication, a coalesced UI wake-up, allocation-aware JPEG decode, and texture upload only when the frame sequence changes.
+- Chromium is no longer forced into software rendering by Horizon. The engine
+  lets the browser negotiate its renderer by default while preserving an
+  explicit `--disable-gpu` escape hatch. An isolated Xvfb smoke can still
+  select SwiftShader, so renderer-process/GPU diagnostics on a real desktop are
+  required before attributing a speed difference to hardware acceleration.
 - ferridriver 0.5.0's Firefox path uses fixed-rate screenshot capture. A first-party implementation lets Horizon avoid that exact policy.
 - Standard BiDi does not currently provide live image frames to the client. Its `browsingContext.startScreencast` command records media to a file and returns the path. Firefox's current implementation uses `MediaRecorder` and a 10-second data timeslice, so it is not suitable as Horizon's interactive frame source.
 - A Firefox backend can use `browsingContext.captureScreenshot` adaptively, but that is still snapshot rendering. It must not be described as streaming.
 - Safari's documented automation surface is WebDriver. Stable Safari uses isolated automation windows, allows one session at a time, and exposes screenshot capture rather than CDP-style push frames. Upstream WebKit contains partial BiDi support, but the installed Safari must prove `webSocketUrl` negotiation at runtime.
 
-The existing Chromium measurements are promising but are not a ferridriver comparison: approximately 0.15 ms driver time at 403×252 and 2.0 ms at 1840×1000, with zero decode/upload work for an unchanged idle page. Preserve that baseline and require a workload-matched benchmark before making a broader performance claim.
+The existing Chromium measurements are promising but are not a ferridriver comparison: approximately 0.15 ms driver time at 403×252 and 2.0 ms at 1840×1000, with zero decode/upload work for an unchanged idle page. `FrameMetrics` now records comparable command-to-published-frame latency for both CDP push frames and adaptive WebDriver screenshots. Preserve the baseline and require a workload-matched, same-display benchmark before claiming that CDP, Firefox, or this crate is faster overall.
 
 ## Architecture decision record
 
@@ -104,6 +127,9 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Let agents steer every backend through one validated action contract while
   user activity and explicit handoffs always take priority.
 - Preserve a privacy-aware audit trail of user, agent, and system actions.
+- Minimize the common explicit automation disclosures that Chromium and
+  Firefox can remove coherently before page scripts, and report the active
+  result instead of inferring it from the selected browser.
 - Keep a future crates.io release straightforward without publishing the crate
   as part of this work.
 
@@ -121,6 +147,10 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Carrying unrelated terminal, speech, or dependency cleanup in browser engine PRs.
 - Publishing `horizon-browser`, creating a registry token, or cutting a crate
   release in this implementation task.
+- An undetectable, anonymous, or anti-bot browser. Page behavior, graphics,
+  timing, network, browser defects, and future signals remain observable.
+- Site-specific evasion, CAPTCHA bypass, broad fingerprint spoofing, or using
+  a public website such as a search engine as the correctness oracle.
 
 ## Workspace and dependency boundary
 
@@ -258,7 +288,19 @@ pub struct BackendCapabilities {
     pub clipboard: bool,
     pub downloads: bool,
     pub persistent_profile: bool,
+    pub automation_disclosure_minimization: bool,
     pub max_sessions: Option<u32>,
+}
+
+pub enum AutomationDisclosurePolicy {
+    BrowserDefault,
+    MinimizeCommonSignals,
+}
+
+pub enum AutomationDisclosureStatus {
+    BrowserDefault,
+    CommonSignalsMinimized,
+    UnsupportedByBackend,
 }
 
 pub struct BrowserSession {
@@ -275,6 +317,9 @@ fixed:
 - Transient ports, PIDs, WebSocket URLs, protocol sessions, and driver handles are never persistable state.
 - Commands are bounded or coalesced by kind. Resize and pointer motion must not build an unbounded queue.
 - Events do not carry large pixel buffers through mpsc. The UI receives a lightweight sequence notification and reads the newest frame slot.
+- A static capability says whether a backend can establish the minimization
+  contract; `ActiveBackendCapabilities` reports what the current session
+  actually established. No status is an undetectability claim.
 
 ### Host coordination and audit
 
@@ -305,6 +350,19 @@ compliance-grade storage.
 - Preserve flattened target-session routing: browser-level commands, page-session events, and `Page.screencastFrameAck` have different session placement requirements.
 - Drain every event received during a synchronous command roundtrip. Losing a screencast frame without acknowledging it can stall the stream; losing navigation/title events can persist false state.
 - Keep one exact Chromium child handle per initial panel implementation. A shared browser/multi-tab architecture is a measured follow-up, not a landing shortcut.
+- Do not force `--disable-gpu`; use Chromium's normal renderer negotiation and
+  retain explicit extra arguments as an operator-controlled fallback.
+- Under `MinimizeCommonSignals`, reject launch arguments that override the
+  engine-managed disclosure switches, avoid the Blink automation flag, install
+  the common-signal script with `Page.addScriptToEvaluateOnNewDocument` before
+  navigation, and apply it to the initial document.
+- If headless Chromium reports a `HeadlessChrome` user-agent token, remove only
+  that token with `Emulation.setUserAgentOverride` and supply required
+  browser-owned user-agent metadata so Client Hint brands, platform,
+  architecture, and versions remain coherent. Read those values from a
+  network-free temporary target, close it, and attach the caller's untouched
+  `about:blank` target before any caller URL can execute. Fail startup rather
+  than claim minimization after a rejected required command.
 
 ### Frame hot path
 
@@ -322,9 +380,15 @@ Retain the current candidate's fail-open behavior: a bad frame keeps the previou
 
 - Preserve physical and logical key identity, DOM key/code, virtual-key values, repeat, modifier masks, edit commands, and key-up symmetry.
 - Preserve pointer button masks during move/release, released-outside handling, wheel magnitude/direction, focus loss, and IME commit/dismissal.
+- Translate Chromium presses in the measured native scrollbar gutter because
+  CDP page-input dispatch cannot operate headless browser chrome; preserve
+  ordinary content clicks at the right edge and audit the original physical
+  pointer actions.
 - Keep clipboard behavior behind an explicit host boundary.
 - Track authoritative top-frame committed URL/title events separately from requested URL text.
-- Coalesce viewport updates and capture one authoritative frame after resize if the screencast transition does not paint promptly.
+- Coalesce viewport updates, clear session-owned geometry on backend changes,
+  and retry at a bounded cadence and count until an authoritative matching frame
+  arrives after resize if the screencast transition does not paint promptly.
 
 ## Firefox WebDriver BiDi backend
 
@@ -338,7 +402,13 @@ Retain the current candidate's fail-open behavior: a bad frame keeps the previou
 - Focused text input through WebDriver/BiDi actions. Firefox does not advertise
   clipboard or physical-key capabilities that the adapter cannot preserve.
 - Adaptive classic WebDriver PNG screenshot capture and exact error mapping.
+- Validated root-page scroll geometry for an embedder-owned visual scrollbar
+  indicator when WebDriver screenshots omit native scrollbar pixels. Page
+  content is not injected or modified, and WebDriver remains the input owner.
 - Deterministic Firefox child/profile ownership and bounded shutdown.
+- Under `MinimizeCommonSignals`, install the same narrow callable function with
+  BiDi `script.addPreloadScript` before subscriptions and initial navigation.
+  Treat rejection as a startup error instead of silently reporting success.
 
 ### Rendering reality
 
@@ -399,6 +469,9 @@ The runtime contract is therefore:
 - Do not use the private Safari Web Inspector protocol as a hidden rendering path.
 - Treat a manually broken Safari glass pane as a permanent session disconnect and surface Retry only after cleanup.
 - Use the same newest-demand adaptive screenshot scheduler and generation guards as Firefox, with Safari-specific measurements.
+- Report `AutomationDisclosureStatus::UnsupportedByBackend` when minimization
+  is requested. Safari's public WebDriver surface used here cannot establish
+  the same pre-document contract; do not imply otherwise.
 
 ### Safari visible-panel gate
 
@@ -598,7 +671,9 @@ No PR mutation is part of this plan update.
 ## Source references
 
 - [CDP `Page.startScreencast`](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-startScreencast)
+- [CDP `Emulation.setUserAgentOverride`](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setUserAgentOverride)
 - [WebDriver BiDi `browsingContext.startScreencast`](https://w3c.github.io/webdriver-bidi/#command-browsingContext-startScreencast)
+- [WebDriver BiDi `script.addPreloadScript`](https://w3c.github.io/webdriver-bidi/#command-script-addPreloadScript)
 - [Firefox `startScreencast` implementation at `600bd212`](https://searchfox.org/firefox-main/rev/600bd2128b2ba435b9698ec8b61394aa27c7c93f/remote/webdriver-bidi/modules/root/browsingContext.sys.mjs#1905)
 - [Apple Safari WebDriver documentation](https://developer.apple.com/documentation/safari-developer-tools/webdriver)
 - [WebKit BiDi capability negotiation at `54b9fc03`](https://github.com/WebKit/WebKit/blob/54b9fc03d8cb650626fcab77a275117cf99cc11f/Source/WebDriver/WebDriverService.cpp#L1198)
@@ -621,10 +696,16 @@ No PR mutation is part of this plan update.
 - Accepted from Linux evidence: Firefox adaptive screenshots meet the current
   visible-panel latency and idle-decay gate; cross-platform claims still need
   exact-machine evidence.
+- Accepted from Linux evidence: backend switching and resize converge input
+  geometry without a manual-resize workaround; Chromium and Firefox expose a
+  visible, draggable vertical scrollbar through backend-specific handling.
 - Accepted: expose auditable backend-neutral agent controls and explicit user
   handoff through an optional host coordination boundary.
 - Accepted: prepare `horizon-browser` for a future crates.io release with a
   minimal UI-independent dependency boundary, without publishing it now.
+- Accepted: default to narrow, pre-document common-signal minimization on
+  Chromium and Firefox; expose browser-default opt-out and active status; do
+  not promise undetectability or add site-specific fingerprint spoofing.
 - Deferred pending exact-head macOS evidence: whether the installed Safari exposes BiDi and whether adaptive screenshots meet the Safari visible-panel gate.
 - Deferred: true low-latency Firefox client streaming if standard BiDi does not expose live frames.
 

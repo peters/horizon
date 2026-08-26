@@ -3,10 +3,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
-use crate::BrowserConfig;
 use crate::cdp::CdpLink;
+use crate::disclosure::{
+    CHROMIUM_DISCLOSURE_BOOTSTRAP_URL, CHROMIUM_USER_AGENT_METADATA_EXPRESSION, chromium_user_agent_needs_override,
+};
 use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
+use crate::{AutomationDisclosurePolicy, BrowserConfig};
 
 use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
@@ -48,6 +51,7 @@ struct DriverConnection {
     ws_url: String,
     target_id: String,
     session_id: String,
+    native_user_agent_metadata: Option<serde_json::Value>,
 }
 
 fn initialize_driver(
@@ -105,10 +109,11 @@ fn initialize_driver(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    initialize_target(event_tx, stop_requested, chrome, link, ws_url)
+    initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
 }
 
 fn initialize_target(
+    config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
     mut chrome: ChromeProcess,
@@ -124,17 +129,8 @@ fn initialize_target(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let _ = call_during_startup(
-        &mut link,
-        stop_requested,
-        "Target.setAutoAttach",
-        &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
-    );
-    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
-        return None;
-    }
-    // setAutoAttach only covers *future* targets: attach explicitly to the
-    // page that Chrome opened at startup (creating one if it has none).
+    // Resolve the caller page before creating the hidden metadata target so
+    // target ordering can never bind the panel to the temporary page.
     let existing_target = first_page_target(&mut link, stop_requested);
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
@@ -151,6 +147,32 @@ fn initialize_target(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
+    let native_user_agent_metadata =
+        match prepare_disclosure_metadata(&mut link, stop_requested, config.browser.automation_disclosure) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let _ = event_tx.send(BrowserEvent::Warning(format!(
+                    "browser disclosure bootstrap failed: {error}"
+                )));
+                let _ = chrome.kill();
+                let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+                return None;
+            }
+        };
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    let _ = call_during_startup(
+        &mut link,
+        stop_requested,
+        "Target.setAutoAttach",
+        &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
+    );
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    // setAutoAttach only covers *future* targets: attach explicitly to the
+    // page that Chrome opened at startup (creating one if it has none).
     let Some(session_id) = link
         .call_and_drain_until(
             CALL_TIMEOUT,
@@ -177,7 +199,99 @@ fn initialize_target(
         ws_url,
         target_id,
         session_id,
+        native_user_agent_metadata,
     })
+}
+
+fn prepare_disclosure_metadata(
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+    policy: AutomationDisclosurePolicy,
+) -> Result<Option<serde_json::Value>, String> {
+    if policy == AutomationDisclosurePolicy::BrowserDefault {
+        return Ok(None);
+    }
+    let version = call_during_startup(link, stop_requested, "Browser.getVersion", &serde_json::json!({}))
+        .map_err(|error| format!("Browser.getVersion: {error}"))?;
+    if !chromium_user_agent_needs_override(&version).map_err(str::to_string)? {
+        return Ok(None);
+    }
+    let created = call_during_startup(
+        link,
+        stop_requested,
+        "Target.createTarget",
+        &serde_json::json!({
+            "url": CHROMIUM_DISCLOSURE_BOOTSTRAP_URL,
+            "background": true,
+        }),
+    )
+    .map_err(|error| format!("Target.createTarget: {error}"))?;
+    let target_id = created
+        .get("targetId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Target.createTarget omitted targetId".to_string())?
+        .to_string();
+
+    let metadata = read_disclosure_metadata_from_target(link, stop_requested, &target_id);
+    let close_result = call_during_startup(
+        link,
+        stop_requested,
+        "Target.closeTarget",
+        &serde_json::json!({ "targetId": target_id }),
+    )
+    .map_err(|error| format!("Target.closeTarget: {error}"))
+    .and_then(|result| {
+        result
+            .get("success")
+            .and_then(serde_json::Value::as_bool)
+            .is_some_and(|success| success)
+            .then_some(())
+            .ok_or_else(|| "Target.closeTarget did not close the disclosure target".to_string())
+    });
+    match (metadata, close_result) {
+        (Ok(metadata), Ok(())) => Ok(Some(metadata)),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+fn read_disclosure_metadata_from_target(
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+    target_id: &str,
+) -> Result<serde_json::Value, String> {
+    let attached = call_during_startup(
+        link,
+        stop_requested,
+        "Target.attachToTarget",
+        &serde_json::json!({ "targetId": target_id, "flatten": true }),
+    )
+    .map_err(|error| format!("Target.attachToTarget: {error}"))?;
+    let session_id = attached
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Target.attachToTarget omitted sessionId".to_string())?;
+    for (method, params) in [
+        ("Runtime.enable", serde_json::json!({})),
+        (
+            "Runtime.evaluate",
+            serde_json::json!({
+                "expression": CHROMIUM_USER_AGENT_METADATA_EXPRESSION,
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        ),
+    ] {
+        let result = link
+            .call_and_drain_until(CALL_TIMEOUT, method, &params, Some(session_id), || {
+                stop_requested.load(Ordering::Acquire)
+            })
+            .result
+            .map_err(|error| format!("{method}: {error}"))?;
+        if method == "Runtime.evaluate" {
+            return Ok(result);
+        }
+    }
+    Err("Runtime.evaluate did not return native user-agent metadata".to_string())
 }
 
 fn call_during_startup(
@@ -210,7 +324,12 @@ pub(super) fn run_driver(
         return;
     };
 
-    let mut state = DriverState::new(config, &connection.ws_url, Arc::clone(stop_requested));
+    let mut state = DriverState::new(
+        config,
+        &connection.ws_url,
+        connection.native_user_agent_metadata.take(),
+        Arc::clone(stop_requested),
+    );
     state.initialize_manifest();
     if !state.attach_setup(
         &mut connection.link,
@@ -282,6 +401,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
         width: config.width,
         height: config.height,
         extra_args: config.browser.extra_args.clone(),
+        automation_disclosure: config.browser.automation_disclosure,
     })
 }
 

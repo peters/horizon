@@ -151,6 +151,12 @@ impl DriverState {
         if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
             return;
         }
+        if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
+            if let Some(error) = error {
+                tracing::debug!(target: "browser", "scrollbar layout request rejected: {error}");
+            }
+            return;
+        }
         if self.viewport_capture_request_id == Some(id) {
             self.viewport_capture_request_id = None;
             if let Some(error) = error {
@@ -166,6 +172,7 @@ impl DriverState {
             };
             frame_slot.record_capture_completion();
             if let Some(seq) = frame_slot.store_base64_jpeg(data) {
+                self.record_interaction_frame(frame_slot);
                 publish_frame(event_tx, frame_slot, seq);
             }
             return;
@@ -232,6 +239,7 @@ impl DriverState {
                     self.screencast_on = false;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
+                    self.invalidate_scrollbar_layout();
                     self.reset_clipboard_tracking();
                     // Drop the tracked context: the next title fetch must
                     // use a fresh default context, not a dead contextId.
@@ -297,7 +305,7 @@ impl DriverState {
                 }
                 self.note_clipboard_execution_context(&event);
             }
-            "Page.screencastFrame" => Self::handle_screencast_frame(link, event_tx, frame_slot, event),
+            "Page.screencastFrame" => self.handle_screencast_frame(link, event_tx, frame_slot, event),
             _ => {}
         }
     }
@@ -315,6 +323,7 @@ impl DriverState {
         self.screencast_on = false;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
+        self.invalidate_scrollbar_layout();
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
         self.manifest_dirty = true;
@@ -333,6 +342,7 @@ impl DriverState {
         if frame.get("parentId").is_some() {
             return;
         }
+        self.invalidate_scrollbar_layout();
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
             && normalized_committed_url(target_url) != self.url
@@ -369,6 +379,7 @@ impl DriverState {
         let Some(target_url) = event.params.get("url").and_then(|url| url.as_str()) else {
             return;
         };
+        self.invalidate_scrollbar_layout();
         let url = normalized_committed_url(target_url);
         if url == self.url {
             return;
@@ -385,11 +396,18 @@ impl DriverState {
     /// screencast until each frame is acknowledged, so a malformed frame
     /// must never stall an otherwise healthy stream.
     fn handle_screencast_frame(
+        &mut self,
         link: &mut CdpLink,
         event_tx: &BrowserEventSender,
         frame_slot: &FrameSlot,
         event: CdpEvent<'_>,
     ) {
+        self.note_screencast_scroll_offset(
+            event
+                .params
+                .pointer("/metadata/scrollOffsetY")
+                .and_then(serde_json::Value::as_f64),
+        );
         // Ack so the stream continues: params.sessionId echoes the frame's
         // session identifier, the top-level sessionId scopes the call
         // (flattened sessions).
@@ -414,9 +432,16 @@ impl DriverState {
             return;
         };
         if let Some(seq) = frame_slot.store_base64_jpeg(data) {
+            self.record_interaction_frame(frame_slot);
             publish_frame(event_tx, frame_slot, seq);
         } else {
             tracing::warn!(target: "browser", "dropping undecodable screencast frame");
+        }
+    }
+
+    fn record_interaction_frame(&mut self, frame_slot: &FrameSlot) {
+        if let Some(started_at) = self.interaction_started_at.take() {
+            frame_slot.record_interaction_to_frame(started_at.elapsed());
         }
     }
 }
@@ -519,6 +544,7 @@ mod tests {
                 coordination: None,
             },
             "ws://127.0.0.1/devtools/browser/test",
+            None,
             Arc::new(AtomicBool::new(false)),
         )
     }

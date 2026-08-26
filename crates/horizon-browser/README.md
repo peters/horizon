@@ -20,7 +20,34 @@ workspace.
 
 Capability reporting is exact for the active session. Consumers should check
 `ActiveBackendCapabilities` instead of assuming that a browser name implies
-BiDi, physical keys, clipboard, downloads, or multiple concurrent sessions.
+BiDi, physical keys, clipboard, downloads, disclosure minimization, or
+multiple concurrent sessions.
+
+## Automation disclosure policy
+
+`BrowserConfig::default()` uses
+`AutomationDisclosurePolicy::MinimizeCommonSignals`. Chromium avoids
+automation-only launch switches, suppresses Blink's standard automation flag,
+installs a pre-document `navigator.webdriver` compatibility shim, and removes
+only the `HeadlessChrome` user-agent token while preserving Chromium-owned
+Client Hint brands, platform, architecture, and versions. The engine reads
+those native values on a network-free temporary target and closes that target
+before attaching the caller's `about:blank` page, so it cannot enter caller
+history or frames. Firefox installs the same narrow value shim with WebDriver BiDi
+`script.addPreloadScript` before the initial navigation; startup fails instead
+of silently downgrading when that required BiDi command is rejected.
+
+Safari's public automation surface cannot currently establish the same
+pre-document contract, so an active Safari session reports
+`AutomationDisclosureStatus::UnsupportedByBackend`. Callers that need the
+browser's unmodified behavior can select
+`AutomationDisclosurePolicy::BrowserDefault` on any backend.
+
+This policy minimizes a small set of common script-visible disclosures; it is
+not an undetectability or anti-bot guarantee. Pages can still infer automation
+from timing, behavior, graphics, browser bugs, environment, network, or future
+signals. The crate intentionally does not spoof broad fingerprint surfaces or
+claim that a particular site cannot identify automation.
 
 ## Embedding boundary
 
@@ -55,6 +82,8 @@ let _accepted = session.send(BrowserCommand::Reload);
 
 The embedder owns rendering and persistence. It may upload `FrameData::rgb` to
 a GPU texture, write it to an image, or expose it through another UI toolkit.
+`FrameMetrics` includes comparable interaction-to-published-frame samples for
+both CDP push frames and adaptive WebDriver screenshots.
 
 ## Agent control, steering, and audit
 

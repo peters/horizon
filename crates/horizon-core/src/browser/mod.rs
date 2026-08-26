@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use horizon_browser::{
-    ActiveBackendCapabilities, BackendAvailability, BackendCapabilities, BackendKind, BrowserButton, BrowserCommand,
-    BrowserConfig, BrowserEditCommand, BrowserEvent, BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers,
-    BrowserSession, BrowserShutdownSignal, DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot,
+    ActiveBackendCapabilities, AutomationDisclosurePolicy, AutomationDisclosureStatus, BackendAvailability,
+    BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEditCommand, BrowserEvent,
+    BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession, BrowserShutdownSignal,
+    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 

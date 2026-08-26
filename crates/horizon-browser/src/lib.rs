@@ -9,6 +9,7 @@ mod audit;
 pub mod cdp;
 mod control;
 mod coordination;
+mod disclosure;
 mod error;
 pub mod frames;
 pub mod input;
@@ -24,8 +25,9 @@ use std::path::PathBuf;
 pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
 pub use control::{AgentAction, BrowserControlAction};
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
+pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
-pub use frames::{FrameData, FrameMetrics, FrameSlot};
+pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
@@ -41,6 +43,8 @@ pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
 #[serde(default)]
 pub struct BrowserConfig {
     pub backend: BackendKind,
+    /// Treatment of common script-visible browser-automation signals.
+    pub automation_disclosure: AutomationDisclosurePolicy,
     /// Explicit Chromium executable (absolute path or PATH name).
     pub command: Option<String>,
     /// Explicit Firefox executable. Geckodriver still owns the process.
@@ -62,6 +66,7 @@ impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
             backend: BackendKind::ChromiumCdp,
+            automation_disclosure: AutomationDisclosurePolicy::default(),
             command: None,
             firefox_command: None,
             geckodriver_command: None,
@@ -122,6 +127,9 @@ pub struct BackendCapabilities {
     pub clipboard: bool,
     pub downloads: bool,
     pub persistent_profile: bool,
+    /// Whether the backend can install common-signal minimization before
+    /// author scripts run.
+    pub automation_disclosure_minimization: bool,
     pub max_sessions: Option<u32>,
 }
 
@@ -131,6 +139,7 @@ pub struct ActiveBackendCapabilities {
     pub backend: BackendKind,
     pub capabilities: BackendCapabilities,
     pub bidi: bool,
+    pub automation_disclosure: AutomationDisclosureStatus,
 }
 
 /// Compile-time host support for a backend. Executable discovery remains a
@@ -153,6 +162,7 @@ impl BackendKind {
                 clipboard: true,
                 downloads: false,
                 persistent_profile: true,
+                automation_disclosure_minimization: true,
                 max_sessions: None,
             },
             Self::FirefoxBidi => BackendCapabilities {
@@ -163,6 +173,7 @@ impl BackendKind {
                 clipboard: false,
                 downloads: false,
                 persistent_profile: true,
+                automation_disclosure_minimization: true,
                 max_sessions: None,
             },
             Self::SafariWebDriver => BackendCapabilities {
@@ -173,6 +184,7 @@ impl BackendKind {
                 clipboard: false,
                 downloads: false,
                 persistent_profile: false,
+                automation_disclosure_minimization: false,
                 max_sessions: Some(1),
             },
         }
@@ -225,14 +237,42 @@ mod tests {
             BackendKind::ChromiumCdp.capabilities().frame_delivery,
             FrameDelivery::PushJpeg
         );
+        assert!(
+            BackendKind::ChromiumCdp
+                .capabilities()
+                .automation_disclosure_minimization
+        );
         assert_eq!(
             BackendKind::FirefoxBidi.capabilities().frame_delivery,
             FrameDelivery::AdaptiveScreenshot
+        );
+        assert!(
+            BackendKind::FirefoxBidi
+                .capabilities()
+                .automation_disclosure_minimization
         );
         let safari = BackendKind::SafariWebDriver.capabilities();
         assert_eq!(safari.frame_delivery, FrameDelivery::AdaptiveScreenshot);
         assert_eq!(safari.max_sessions, Some(1));
         assert!(!safari.persistent_profile);
+        assert!(!safari.automation_disclosure_minimization);
+    }
+
+    #[test]
+    fn legacy_config_defaults_to_common_signal_minimization() {
+        let config = serde_json::from_str::<BrowserConfig>(r#"{"backend":"firefox"}"#).unwrap_or_default();
+
+        assert_eq!(config.backend, BackendKind::FirefoxBidi);
+        assert_eq!(
+            config.automation_disclosure,
+            AutomationDisclosurePolicy::MinimizeCommonSignals
+        );
+        assert_eq!(
+            serde_json::to_value(&config)
+                .ok()
+                .and_then(|value| value.get("automation_disclosure").cloned()),
+            Some(serde_json::json!("minimize_common_signals"))
+        );
     }
 
     #[test]

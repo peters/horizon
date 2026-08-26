@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect, Sense, StrokeKind, Ui, pos2, vec2};
-use horizon_core::browser::{BrowserPanelState, BrowserStatus};
+use horizon_core::browser::{BrowserPanelState, BrowserStatus, PageScrollState};
 
 use crate::browser_widget::BrowserUiState;
 
@@ -121,6 +121,21 @@ pub fn show_body(
     // Letterbox (upscale allowed; linear filtering smooths it).
     let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
+    paint_browser_frame(ui, rect, texture);
+    paint_webdriver_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
+
+    BodyOutput {
+        image_rect: Some(rect),
+        frame_size: Some(frame_size),
+        viewport_size: Some(viewport_size),
+        pointer_target,
+        retry_clicked: false,
+        body_clicked,
+        keyboard_focus_id,
+    }
+}
+
+fn paint_browser_frame(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {
     ui.painter().add(egui::epaint::Shape::Rect(egui::epaint::RectShape {
         rect,
         corner_radius: CornerRadius::ZERO,
@@ -135,16 +150,47 @@ pub fn show_body(
         })),
         angle: 0.0,
     }));
+}
 
-    BodyOutput {
-        image_rect: Some(rect),
-        frame_size: Some(frame_size),
-        viewport_size: Some(viewport_size),
-        pointer_target,
-        retry_clicked: false,
-        body_clicked,
-        keyboard_focus_id,
+fn paint_webdriver_scrollbar(ui: &Ui, image_rect: Rect, state: Option<PageScrollState>) {
+    let Some((track, thumb)) = state.and_then(|state| vertical_scrollbar_geometry(image_rect, state)) else {
+        return;
+    };
+    ui.painter().rect_filled(
+        track,
+        CornerRadius::ZERO,
+        crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 220),
+    );
+    ui.painter()
+        .rect_filled(thumb.shrink(2.0), CornerRadius::same(4), crate::theme::ACCENT());
+}
+
+fn vertical_scrollbar_geometry(image_rect: Rect, state: PageScrollState) -> Option<(Rect, Rect)> {
+    if !state.is_valid() || state.content_height <= state.client_height + f32::EPSILON {
+        return None;
     }
+    let scale = image_rect.width() / state.viewport_width;
+    let native_gutter = (state.viewport_width - state.client_width).max(0.0) * scale;
+    let track_width = native_gutter.clamp(8.0, 14.0).min(image_rect.width());
+    let track = Rect::from_min_max(
+        pos2(image_rect.right() - track_width, image_rect.top()),
+        image_rect.right_bottom(),
+    );
+    let visible_fraction = (state.client_height / state.content_height).clamp(0.0, 1.0);
+    let natural_thumb_height = track.height() * visible_fraction;
+    let thumb_height = if track.height() >= 24.0 {
+        natural_thumb_height.clamp(24.0, track.height())
+    } else {
+        track.height()
+    };
+    let max_scroll = state.content_height - state.client_height;
+    let progress = (state.scroll_y / max_scroll).clamp(0.0, 1.0);
+    let thumb_top = track.top() + ((track.height() - thumb_height) * progress);
+    let thumb = Rect::from_min_max(
+        pos2(track.left(), thumb_top),
+        pos2(track.right(), thumb_top + thumb_height),
+    );
+    Some((track, thumb))
 }
 
 fn placeholder(
@@ -185,4 +231,41 @@ fn placeholder(
         }
     });
     retry_clicked
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Rect, pos2};
+    use horizon_core::browser::PageScrollState;
+
+    use super::vertical_scrollbar_geometry;
+
+    fn scroll_state(scroll_y: f32) -> PageScrollState {
+        PageScrollState {
+            scroll_x: 0.0,
+            scroll_y,
+            viewport_width: 1164.0,
+            viewport_height: 608.0,
+            client_width: 1152.0,
+            client_height: 608.0,
+            content_width: 1152.0,
+            content_height: 3000.0,
+        }
+    }
+
+    #[test]
+    fn webdriver_scrollbar_overlay_tracks_native_gutter_and_scroll_position() {
+        let image = Rect::from_min_max(pos2(0.0, 0.0), pos2(1164.0, 608.0));
+        let Some((track, top_thumb)) = vertical_scrollbar_geometry(image, scroll_state(0.0)) else {
+            panic!("scrollable page should have overlay geometry");
+        };
+        let Some((_, middle_thumb)) = vertical_scrollbar_geometry(image, scroll_state(1_196.0)) else {
+            panic!("scrolled page should have overlay geometry");
+        };
+
+        assert!((track.width() - 12.0).abs() < f32::EPSILON);
+        assert!((top_thumb.top() - image.top()).abs() < f32::EPSILON);
+        assert!(middle_thumb.top() > top_thumb.top());
+        assert!((top_thumb.height() - 123.2).abs() < 0.1);
+    }
 }
