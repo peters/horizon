@@ -74,12 +74,13 @@ impl GlobalHotkeys {
     /// Grab `bindings` (profile index, spec).
     ///
     /// # Errors
-    /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty or this
-    /// session has no X11 display, or [`HotkeyError::Failed`] when none of the
-    /// bindings could be grabbed. Bindings that fail individually are omitted
-    /// from [`Self::profiles`] so local handling can keep them.
+    /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty, this
+    /// session is Wayland (`WAYLAND_DISPLAY` is set), or there is no X11
+    /// display. [`HotkeyError::Failed`] is returned when none of the bindings
+    /// could be grabbed. Bindings that fail individually are omitted from
+    /// [`Self::profiles`] so local handling can keep them.
     pub fn listen(bindings: &[(usize, Hotkey)]) -> Result<Self, HotkeyError> {
-        if bindings.is_empty() {
+        if bindings.is_empty() || !session_supports_global_hotkeys(std::env::var_os("WAYLAND_DISPLAY").as_deref()) {
             return Err(HotkeyError::Unsupported);
         }
         platform::listen(bindings)
@@ -110,6 +111,10 @@ impl GlobalHotkeys {
     pub fn profiles(&self) -> &[usize] {
         &self.profiles
     }
+}
+
+fn session_supports_global_hotkeys(wayland_display: Option<&std::ffi::OsStr>) -> bool {
+    wayland_display.is_none()
 }
 
 impl Drop for GlobalHotkeys {
@@ -274,6 +279,14 @@ mod platform {
         u16::from(ModMask::LOCK) | u16::from(ModMask::M2)
     }
 
+    fn grab_modifier_mask() -> u16 {
+        u16::from(ModMask::SHIFT)
+            | u16::from(ModMask::CONTROL)
+            | u16::from(ModMask::M1)
+            | u16::from(ModMask::M4)
+            | lock_modifier_mask()
+    }
+
     fn normalized_mods(state: u16) -> u16 {
         state & !lock_modifier_mask()
     }
@@ -283,7 +296,7 @@ mod platform {
     }
 
     fn event_key(keycode: u8, state: x11rb::protocol::xproto::KeyButMask) -> (u8, u16) {
-        (keycode, normalized_mods(u16::from(state)))
+        (keycode, normalized_mods(u16::from(state) & grab_modifier_mask()))
     }
 
     fn grab_all_lock_variants<C: x11rb::connection::Connection>(
@@ -367,7 +380,7 @@ mod platform {
             Hotkey, HotkeyKey, activate_press, activate_release, grab_key, keysym, modifiers, normalized_mods,
         };
         use std::collections::HashMap;
-        use x11rb::protocol::xproto::ModMask;
+        use x11rb::protocol::xproto::{KeyButMask, ModMask};
 
         #[test]
         fn function_and_latin_keys_map_to_x11_keysyms() {
@@ -416,6 +429,30 @@ mod platform {
         }
 
         #[test]
+        fn pointer_button_bits_do_not_block_a_ctrl_binding() {
+            let mut grabbed = HashMap::new();
+            grabbed.insert(
+                grab_key(
+                    45,
+                    modifiers(Hotkey {
+                        ctrl: true,
+                        shift: false,
+                        alt: false,
+                        super_: false,
+                        key: HotkeyKey::Letter('k'),
+                    }),
+                ),
+                3,
+            );
+            let mut held = HashMap::new();
+            let state = u16::from(ModMask::CONTROL) | u16::from(KeyButMask::BUTTON1);
+            assert_eq!(
+                activate_press(&grabbed, &mut held, 45, KeyButMask::from(state)),
+                Some(3)
+            );
+        }
+
+        #[test]
         fn modifier_masks_keep_ctrl_and_alt_bindings_distinct() {
             let letter_k = Hotkey {
                 ctrl: false,
@@ -440,6 +477,14 @@ mod tests {
     #[test]
     fn empty_binding_list_does_not_claim_a_listener() {
         assert!(matches!(GlobalHotkeys::listen(&[]), Err(HotkeyError::Unsupported)));
+    }
+
+    #[test]
+    fn wayland_display_disables_global_hotkeys() {
+        assert!(!super::session_supports_global_hotkeys(Some(std::ffi::OsStr::new(
+            "wayland-0"
+        ))));
+        assert!(super::session_supports_global_hotkeys(None));
     }
 }
 

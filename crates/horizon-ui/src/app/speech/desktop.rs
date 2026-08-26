@@ -2,7 +2,7 @@
 
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use horizon_core::{PanelId, ShortcutBinding, ShortcutKey};
+use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
 use horizon_cursor::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, send_paste_chord};
 
 use super::super::HorizonApp;
@@ -50,8 +50,12 @@ fn retain_clipboard_owner(clipboard: arboard::Clipboard) {
 }
 
 /// Keep the X11 grab while a hold is in flight so a surface opening cannot
-/// drop a release that `XGrabKey` already consumed.
-fn keep_global_listener_while_suspending(engaged: Option<usize>, pending: &[HotkeyEvent]) -> bool {
+/// drop a release that `XGrabKey` already consumed. Toggle mode does not
+/// need that release, so the grab is dropped and local shortcuts can run.
+fn keep_global_listener_while_suspending(hold_mode: bool, engaged: Option<usize>, pending: &[HotkeyEvent]) -> bool {
+    if !hold_mode {
+        return false;
+    }
     if engaged.is_some() {
         return true;
     }
@@ -111,7 +115,15 @@ impl HorizonApp {
                     self.speech_global_events_pending.push(event);
                 }
             }
-            if keep_global_listener_while_suspending(self.speech_engaged_profile, &self.speech_global_events_pending) {
+            let hold_mode = self
+                .speech
+                .as_ref()
+                .is_some_and(|speech| speech.hotkey_mode() == SpeechHotkeyMode::Hold);
+            if keep_global_listener_while_suspending(
+                hold_mode,
+                self.speech_engaged_profile,
+                &self.speech_global_events_pending,
+            ) {
                 return;
             }
             if self.speech_global_hotkeys.is_some() {
@@ -244,14 +256,25 @@ mod tests {
     #[test]
     fn hold_in_flight_keeps_the_global_listener_while_suspending() {
         use horizon_cursor::HotkeyEvent::{Pressed, Released};
-        assert!(super::keep_global_listener_while_suspending(Some(0), &[]));
-        assert!(!super::keep_global_listener_while_suspending(None, &[]));
-        assert!(super::keep_global_listener_while_suspending(None, &[Pressed(1)]));
+        assert!(super::keep_global_listener_while_suspending(true, Some(0), &[]));
+        assert!(!super::keep_global_listener_while_suspending(true, None, &[]));
+        assert!(super::keep_global_listener_while_suspending(true, None, &[Pressed(1)]));
         assert!(!super::keep_global_listener_while_suspending(
+            true,
             None,
             &[Pressed(1), Released(1)]
         ));
-        assert!(!super::keep_global_listener_while_suspending(None, &[Released(1)]));
+        assert!(!super::keep_global_listener_while_suspending(
+            true,
+            None,
+            &[Released(1)]
+        ));
+        assert!(!super::keep_global_listener_while_suspending(false, Some(0), &[]));
+        assert!(!super::keep_global_listener_while_suspending(
+            false,
+            None,
+            &[Pressed(1)]
+        ));
     }
 
     #[test]

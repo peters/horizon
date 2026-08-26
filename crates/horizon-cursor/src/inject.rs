@@ -27,7 +27,10 @@ impl std::error::Error for InjectError {}
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) use platform::keysym_to_keycode_with_shift;
 
-/// Send Ctrl+V (Cmd+V on macOS) to the focused client without changing focus.
+/// Send Ctrl+V to the focused client without changing focus.
+///
+/// Currently implemented on X11 via `XTest`. macOS and native Wayland sessions
+/// return [`InjectError::Unsupported`].
 ///
 /// # Errors
 ///
