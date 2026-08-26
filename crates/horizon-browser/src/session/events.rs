@@ -349,6 +349,7 @@ impl DriverState {
             return;
         }
         self.invalidate_scrollbar_layout();
+        self.semantic.invalidate();
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(unreachable_url) = frame
             .get("unreachableUrl")

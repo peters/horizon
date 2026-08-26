@@ -16,6 +16,7 @@ pub mod input;
 mod paths;
 pub mod process;
 mod profile;
+mod semantic;
 pub mod session;
 mod webdriver;
 mod websocket;
@@ -23,12 +24,16 @@ mod websocket;
 use std::path::PathBuf;
 
 pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
-pub use control::{AgentAction, BrowserControlAction};
+pub use control::{AgentAction, BrowserControlAction, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES};
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub use semantic::{
+    AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
+    BrowserSnapshot, BrowserTarget,
+};
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
     CommittedUrl, start_session,

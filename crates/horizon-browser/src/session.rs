@@ -31,6 +31,7 @@ mod events;
 mod handle;
 mod lifecycle;
 mod manifest_io;
+mod semantic;
 mod shutdown;
 mod startup;
 
@@ -49,6 +50,7 @@ use std::time::{Duration, Instant};
 use crate::cdp::{CdpError, CdpLink};
 use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
+use crate::semantic::SemanticState;
 use crate::{ActiveBackendCapabilities, BackendKind};
 use crate::{BrowserConfig, BrowserInput};
 
@@ -468,6 +470,7 @@ struct DriverState {
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
     handoff_seen: Option<String>,
+    semantic: SemanticState,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -517,6 +520,7 @@ impl DriverState {
             last_user_active_stamp: None,
             owner_seen: None,
             handoff_seen: None,
+            semantic: SemanticState::default(),
             stop_requested,
         }
     }

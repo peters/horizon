@@ -29,8 +29,12 @@ pub enum BrowserAuditStatus {
     Queued,
     /// Submitted to the backend adapter. This is not page-level success proof.
     Dispatched,
+    /// The backend handler completed the requested control operation.
+    Completed,
     /// Refused before backend dispatch.
     Rejected,
+    /// The backend accepted the request but could not complete it.
+    Failed,
 }
 
 /// Redacted action shape. Text content and URL query/fragment values are
@@ -88,6 +92,28 @@ pub enum BrowserAuditAction {
     InsertText {
         characters: usize,
     },
+    Snapshot {
+        max_nodes: u32,
+    },
+    Query {
+        selector_characters: usize,
+        max_results: u32,
+    },
+    Click {
+        target: String,
+    },
+    Fill {
+        target: String,
+        characters: usize,
+    },
+    Scroll {
+        target: Option<String>,
+        delta_x: f64,
+        delta_y: f64,
+    },
+    Evaluate {
+        expression_characters: usize,
+    },
     HandoffRequested,
     HandoffDone,
     Stop,
@@ -104,6 +130,30 @@ impl BrowserAuditAction {
             BrowserControlAction::Back => Self::Back,
             BrowserControlAction::Forward => Self::Forward,
             BrowserControlAction::Input { input } => Self::from_input(input),
+            BrowserControlAction::Snapshot { max_nodes } => Self::Snapshot { max_nodes: *max_nodes },
+            BrowserControlAction::Query { selector, max_results } => Self::Query {
+                selector_characters: selector.chars().count(),
+                max_results: *max_results,
+            },
+            BrowserControlAction::Click { target } => Self::Click {
+                target: audit_target(target),
+            },
+            BrowserControlAction::Fill { target, value } => Self::Fill {
+                target: audit_target(target),
+                characters: value.chars().count(),
+            },
+            BrowserControlAction::Scroll {
+                target,
+                delta_x,
+                delta_y,
+            } => Self::Scroll {
+                target: target.as_ref().map(audit_target),
+                delta_x: *delta_x,
+                delta_y: *delta_y,
+            },
+            BrowserControlAction::Evaluate { expression } => Self::Evaluate {
+                expression_characters: expression.chars().count(),
+            },
         }
     }
 
@@ -254,6 +304,13 @@ fn audit_key(key: BrowserKey) -> String {
     }
 }
 
+fn audit_target(target: &crate::BrowserTarget) -> String {
+    match target {
+        crate::BrowserTarget::Ref { reference } => reference.clone(),
+        crate::BrowserTarget::Selector { selector } => format!("selector:{}", selector.chars().count()),
+    }
+}
+
 fn redact_url(url: &str) -> String {
     let trimmed = url.trim();
     let scheme_end = trimmed.find(':');
@@ -331,5 +388,28 @@ mod tests {
 
         assert!(json.contains("printable"));
         assert!(!json.contains("\"s\""));
+    }
+
+    #[test]
+    fn semantic_audits_redact_selectors_scripts_and_fill_values() {
+        let query = BrowserAuditAction::from_control(&BrowserControlAction::Query {
+            selector: "input[value='secret']".to_string(),
+            max_results: 2,
+        });
+        let fill = BrowserAuditAction::from_control(&BrowserControlAction::Fill {
+            target: crate::BrowserTarget::Selector {
+                selector: "#password".to_string(),
+            },
+            value: "correct horse battery staple".to_string(),
+        });
+        let evaluate = BrowserAuditAction::from_control(&BrowserControlAction::Evaluate {
+            expression: "document.cookie".to_string(),
+        });
+        let json = serde_json::to_string(&[query, fill, evaluate]).unwrap_or_default();
+
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("password"));
+        assert!(!json.contains("correct horse"));
+        assert!(!json.contains("document.cookie"));
     }
 }

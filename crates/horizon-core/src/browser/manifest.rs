@@ -38,9 +38,11 @@ use crate::horizon_home::{HorizonHome, safe_local_id};
 
 mod agent;
 mod audit;
+mod result;
 
 pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
+pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
@@ -428,7 +430,9 @@ pub struct ManifestCoordination {
 
 impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn prepare(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        remove_with_timeout(panel_local_id, timeout)
+        let manifest_removed = remove_with_timeout(panel_local_id, timeout);
+        let results_removed = result::remove_stale(panel_local_id).is_ok();
+        manifest_removed && results_removed
     }
 
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
@@ -516,6 +520,14 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
 
     fn record_action(&self, panel_local_id: &str, entry: &horizon_browser::BrowserAuditEntry) -> std::io::Result<()> {
         self.audit.append(entry, panel_local_id)
+    }
+
+    fn complete_action(
+        &self,
+        panel_local_id: &str,
+        result: &horizon_browser::AgentActionResult,
+    ) -> std::io::Result<()> {
+        result::write(panel_local_id, result)
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {

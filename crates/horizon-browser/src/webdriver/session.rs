@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
 use crate::process::{ChromeProcessControl, resolve_binary};
+use crate::semantic::SemanticState;
 use crate::session::{
     BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CommandReceiver, publish_frame,
 };
@@ -20,6 +21,7 @@ use super::http::HttpError;
 use super::service::{WebDriverService, prepare_profile};
 
 mod coordination;
+mod semantic;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -141,6 +143,7 @@ struct Driver {
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
     handoff_seen: Option<String>,
+    semantic: SemanticState,
 }
 
 struct NewSession {
@@ -198,12 +201,17 @@ pub(crate) fn run_webdriver(
             break;
         }
         for request in driver.tick_coordination(event_tx) {
-            if request.action.validate().is_err() {
+            if let Err(message) = request.action.validate() {
                 driver.audit_agent_action(&request, crate::BrowserAuditStatus::Rejected);
+                driver.complete_agent_action(
+                    &request,
+                    Err(crate::BrowserControlFailure::new("invalid_input", message)),
+                );
                 continue;
             }
             driver.audit_agent_action(&request, crate::BrowserAuditStatus::Dispatched);
-            let _ = driver.handle_command(request.action.into_command(), event_tx, false);
+            let result = driver.execute_agent_action(&request, event_tx);
+            driver.complete_agent_action(&request, result);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
@@ -318,6 +326,7 @@ impl Driver {
             last_user_active_stamp: None,
             owner_seen: None,
             handoff_seen: None,
+            semantic: SemanticState::default(),
         })
     }
 
@@ -331,7 +340,9 @@ impl Driver {
             BrowserCommand::Back => self.traverse(-1, event_tx),
             BrowserCommand::Forward => self.traverse(1, event_tx),
             BrowserCommand::SetViewport { width, height } => self.set_viewport(width, height, event_tx),
-            BrowserCommand::Input(input) => self.perform_input(input, event_tx),
+            BrowserCommand::Input(input) => {
+                let _ = self.perform_input(input, event_tx);
+            }
             BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
             BrowserCommand::Stop => return true,
         }
@@ -464,7 +475,7 @@ impl Driver {
         }
     }
 
-    fn perform_input(&mut self, input: crate::BrowserInput, event_tx: &BrowserEventSender) {
+    fn perform_input(&mut self, input: crate::BrowserInput, event_tx: &BrowserEventSender) -> Result<(), String> {
         let activity = input.is_activity();
         let mut payload = self.actions.payload(input);
         let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
@@ -473,13 +484,14 @@ impl Driver {
         } else {
             self.classic_post("actions", &payload).map(|_| ())
         };
-        if let Err(error) = result {
+        if let Err(error) = &result {
             tracing::warn!("WebDriver input failed: {error}");
         }
         if activity && !self.retain_frame_during_navigation {
             self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
+        result
     }
 
     fn capture_frame(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
@@ -649,6 +661,7 @@ impl Driver {
     }
 
     fn begin_navigation(&mut self) {
+        self.semantic.invalidate();
         self.generation = self.generation.wrapping_add(1);
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;

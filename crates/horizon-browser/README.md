@@ -95,6 +95,22 @@ both CDP push frames and adaptive WebDriver screenshots.
 - pause agent actions while a user is actively steering;
 - persist privacy-aware `BrowserAuditEntry` records.
 
+The same contract also supports semantic request/results without exposing raw
+CDP, BiDi, or WebDriver session identifiers. `Snapshot` and `Query` return
+bounded visible DOM summaries with short-lived `g…s…e…` references. `Click`,
+`Fill`, and `Scroll` accept either one of those references or an explicit CSS
+selector; `Evaluate` returns a size-bounded JSON value. A new snapshot replaces
+the previous reference set, and navigation invalidates it, so callers must
+ground an action in fresh page state instead of reusing stale handles.
+
+Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
+terminal `Completed` audit record means the engine finished handling the
+request; navigation and other asynchronous page behavior still need an
+explicit later snapshot, query, or wait in the host-facing adapter. Selectors,
+scripts, filled text, and returned page data are excluded from audit records.
+Only redacted shape, bounded character counts, actor, action identity, and
+status are retained.
+
 Audit records include ordered action identity, actor, dispatch state, and
 pointer/navigation/input shape. Printable text is represented only by length,
 and URL user-info, query values, fragments, `data:`, and script payloads are

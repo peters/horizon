@@ -58,6 +58,15 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     fn record_action(&self, _panel_local_id: &str, _entry: &crate::BrowserAuditEntry) -> std::io::Result<()> {
         Ok(())
     }
+    /// Publish the terminal result for an externally queued action. The
+    /// default keeps result transport optional for embedders that only accept
+    /// fire-and-forget controls.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the host cannot publish the result.
+    fn complete_action(&self, _panel_local_id: &str, _result: &crate::AgentActionResult) -> std::io::Result<()> {
+        Ok(())
+    }
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool;
 }
 

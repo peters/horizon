@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
-use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserInput};
+use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
 
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
@@ -46,19 +46,22 @@ impl DriverState {
         actions: Vec<AgentAction>,
     ) -> bool {
         for request in actions {
-            if request.action.validate().is_err() {
+            if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
+                self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
-            if self.dispatch_command(link, event_tx, frame_slot, request.action.into_command(), false) {
+            let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
+            self.complete_agent_action(&request, result);
+            if stop {
                 return true;
             }
         }
         false
     }
 
-    fn dispatch_command(
+    pub(super) fn dispatch_command(
         &mut self,
         link: &mut CdpLink,
         event_tx: &BrowserEventSender,

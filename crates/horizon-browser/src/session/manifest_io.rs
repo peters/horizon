@@ -4,8 +4,8 @@
 use std::time::Instant;
 
 use crate::{
-    AgentAction, BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, BrowserCommand,
-    CoordinationState, HandoffRequest, new_action_id,
+    AgentAction, AgentActionResult, BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus,
+    BrowserCommand, BrowserControlFailure, BrowserControlValue, CoordinationState, HandoffRequest, new_action_id,
 };
 
 use super::{
@@ -95,6 +95,30 @@ impl DriverState {
         );
         if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
             tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
+        }
+    }
+
+    pub(super) fn complete_agent_action(
+        &self,
+        request: &AgentAction,
+        outcome: Result<BrowserControlValue, BrowserControlFailure>,
+    ) {
+        let (status, result) = match outcome {
+            Ok(value) => (
+                BrowserAuditStatus::Completed,
+                AgentActionResult::completed(request.action_id.clone(), value),
+            ),
+            Err(error) => (
+                BrowserAuditStatus::Failed,
+                AgentActionResult::failed(request.action_id.clone(), error),
+            ),
+        };
+        self.audit_agent_action(request, status);
+        let Some(coordination) = self.config.coordination.as_ref() else {
+            return;
+        };
+        if let Err(error) = coordination.complete_action(&self.config.panel_local_id, &result) {
+            tracing::warn!(target: "browser", "failed to publish browser action result: {error}");
         }
     }
 
