@@ -1003,6 +1003,21 @@ mod tests {
     }
 
     #[test]
+    fn custom_codex_launch_does_not_inject_the_horizon_mcp_registration() {
+        let (_, args) = resolve_launch_command(
+            Some("/opt/custom-codex".to_string()),
+            vec!["--custom-flag".to_string()],
+            None,
+            PanelKind::Codex,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        let command = args.join(" ");
+        assert!(command.contains("/opt/custom-codex --custom-flag"));
+        assert!(!command.contains("mcp_servers.horizon-browser"));
+        assert!(!command.contains("--browser-mcp"));
+    }
+
+    #[test]
     fn shell_launch_args_adds_login_flag_when_requested() {
         assert_eq!(shell_launch_args(Vec::new(), true), vec!["-l".to_string()]);
     }
