@@ -594,7 +594,7 @@ impl Panel {
             );
         }
 
-        let env = agent_env(self.kind);
+        let env = agent_env(self.kind, &self.local_id);
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,

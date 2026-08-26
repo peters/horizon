@@ -368,23 +368,27 @@ Chromium is the only push-frame backend. Firefox and Safari deliberately use new
 
 ### Agent steering and audit
 
-Agents can discover and steer live panels through
-`horizon_core::browser::manifest`, using `claim`, `heartbeat`,
-`enqueue_action`, and `request_handoff`. The validated action model is shared
-by Chromium, Firefox, and Safari; agents do not need backend-specific protocol
-commands for navigation or input. A fresh user page action or browser-control
-action pauses the agent queue for five seconds. An explicit handoff keeps it
-paused until the user selects **Done — hand back to agent**.
+MCP is the only agent-facing browser contract. Horizon-launched Codex and
+Claude agents receive the bundled `horizon-browser` MCP server and discovery
+skill automatically. Agents use `browser_list`, semantic snapshots and
+queries, ref-based actions, waits, handoff, and audit tools; they never receive
+raw CDP, BiDi, WebDriver, manifest, or result-file endpoints. The validated
+action model is shared by Chromium, Firefox, and Safari. A fresh user page
+action or browser-control action pauses the agent queue for five seconds. An
+explicit handoff keeps it paused until the user selects **Done — hand back to
+agent**.
 
-Live discovery and action queues are private locked files beneath
+The MCP adapter claims and refreshes ownership automatically. Live discovery,
+action queues, and one-shot results are private implementation files beneath
 `~/.horizon/runtime/browsers/`. Ordered action records remain in private JSONL
 journals beneath `~/.horizon/audit/browsers/` after the panel closes. Audit
 entries identify the user, agent, or system and correlate queue/dispatch state
 with an action id. They exclude printable text content, redact URL credentials,
 query values, fragments, and script/data payloads, and store pasted or typed
 text only as a character count. `dispatched` means the backend adapter received
-the command; use the resulting URL, title, frame, or error event as execution
-evidence. Raw CDP/BiDi/WebDriver clients bypass this canonical audit contract.
+the command; use a later MCP snapshot, query, wait, or action result as
+execution evidence. Raw CDP/BiDi/WebDriver clients and direct manifest access
+are outside the supported agent contract.
 Queued agent actions are claimed at most once; after a crash, a queued record
 without a matching dispatched record requires an explicit retry decision. The
 local journal is application-append-only, not tamper-evident compliance

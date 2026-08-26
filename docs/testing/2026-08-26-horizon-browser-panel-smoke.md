@@ -243,33 +243,74 @@ CAPTCHA as the pass/fail oracle.
 
 ## Agent steering, user handoff, and audit
 
-Run this lane through the public Horizon manifest helpers, never by editing a
-live manifest directly.
+Run this lane through the `horizon-browser` MCP server over stdio. MCP is the
+only agent-facing browser contract: do not use a browser-control CLI, import
+Horizon's manifest helpers, edit a live manifest, or connect to a raw CDP,
+BiDi, or WebDriver endpoint. The manifest, result files, and engine endpoints
+are private host plumbing and may be inspected only after the lane as
+implementation-level security and cleanup evidence.
 
-1. Discover the live panel, claim it with a unique agent name, and refresh the
-   lease. Verify another name cannot take a fresh lease and the owner chip
-   identifies the current agent.
-2. Queue backend-neutral navigate, back/forward/reload, pointer, and text-input
-   actions. Correlate each returned action id with a `queued` and `dispatched`
-   audit record and verify the visible page result on Chromium and Firefox.
-   Repeat on Safari during the macOS lane.
-3. Interact with the page as the user, then immediately try to queue an agent
-   action. It must return `WouldBlock`. Repeat with URL submission and browser
-   navigation controls, not only page clicks or keys.
-4. Request a handoff with a visible reason. Verify the panel shows the paused
-   banner and rejects queued agent work until the user activates **Done — hand
-   back to agent**. Verify the exact request is acknowledged and a replacement
-   request cannot be cleared accidentally.
-5. Read the private JSONL journal through the public audit reader. Verify
-   actor, action id, ordering, and status; mode `0600` on Unix; URL user-info,
-   query values, fragments, and script/data payloads redacted; and typed or
-   pasted text represented only by character count.
-6. Verify queue bounds, stale-owner rejection, lease expiry, malformed-action
+1. Start the exact candidate as the MCP stdio command and complete
+   `initialize`, `notifications/initialized`, and `tools/list` with protocol
+   versions `2025-06-18` and `2026-07-28`. Verify the ten public tools have
+   structured schemas and neither schemas nor results expose raw endpoints or
+   runtime paths.
+2. Call `browser_list`, select the live panel by its safe id, and confirm
+   `browser_panel` reports the same backend, protocol, URL, title, ownership,
+   handoff state, and semantic capabilities. Verify MCP automatically claims
+   the panel under the calling Horizon agent's stable identity and keeps the
+   lease alive during a long bounded action.
+3. Through MCP only, navigate to the deterministic page, wait for its marker,
+   take a bounded semantic snapshot, query a CSS selector, click its returned
+   ref, fill Unicode text through a fresh ref, scroll, evaluate deterministic
+   page state, and exercise reload/back/forward. Verify each tool result and
+   the visible page result on Chromium and Firefox. Repeat the same semantic
+   sequence in Safari during the macOS lane.
+4. Mutate or navigate the document, then try an old ref. It must fail as stale;
+   take a new snapshot or query and verify the replacement ref succeeds.
+5. Correlate each MCP-returned action id with `queued`, `dispatched`, and
+   terminal `completed` or `failed` entries returned by `browser_audit`.
+   Verify a failed selector action is reported as an MCP tool error and has a
+   corresponding terminal audit entry.
+6. Interact with the page as the user, then immediately call an MCP action. It
+   must return `WouldBlock`. Repeat with URL submission and browser navigation
+   controls, not only page clicks or keys.
+7. Call `browser_handoff` with a visible reason. Verify the panel shows the
+   paused banner and rejects MCP actions until the user activates **Done — hand
+   back to agent**. Poll `browser_list` until `handoff_pending` is false, take a
+   fresh snapshot, and resume. Verify the exact request is acknowledged and a
+   replacement request cannot be cleared accidentally.
+8. Read the journal through `browser_audit`. Verify actor, action id, ordering,
+   and status; mode `0600` on Unix; URL user-info, query values, fragments,
+   selectors, and script/data payloads redacted; and filled text represented
+   only by character count. Confirm the MCP response itself contains no raw
+   runtime path.
+9. Verify queue bounds, stale-owner rejection, lease expiry, malformed-action
    rejection, and crash/relaunch behavior. A `dispatched` record proves the
    command reached the backend adapter; page-level success still requires the
    corresponding URL/title/frame or error evidence.
-7. Close normally and verify the live manifest disappears while its append-only
-   audit journal remains available to the user.
+10. Close normally and verify the live panel disappears from `browser_list`
+   while its append-only audit journal remains available to the user through a
+   later live instance of that saved panel.
+
+## Bundled agent discovery
+
+Run after the MCP semantic lane on Linux and repeat on macOS.
+
+1. Launch the exact Horizon candidate with the isolated home and verify it
+   installs the bundled `horizon-browser` discovery skill for Codex and Claude
+   Code without changing the operator's persistent MCP configuration.
+2. Verify the generated Claude plugin descriptor points to the exact Horizon
+   executable with only the private `--browser-mcp` transport bootstrap.
+3. Create a default Codex agent panel. Inspect its exact task-owned process
+   arguments and environment: the launch must add a transient
+   `mcp_servers.horizon-browser` stdio registration and a stable
+   `HORIZON_BROWSER_ACTOR`, without writing that registration to the user's
+   config file. A custom agent command must remain unchanged.
+4. From the launched agent, confirm the bundled skill discovers
+   `browser_list`, then invokes `browser_snapshot` against the sibling panel.
+   The agent must not need to know a manifest path, raw endpoint, or secondary
+   CLI command.
 
 ## Frame delivery and performance
 

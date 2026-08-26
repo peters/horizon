@@ -17,6 +17,13 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-browser/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-browser/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-notify/SKILL.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -25,7 +32,7 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
     },
 ];
 
-const TEXT_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+const NOTIFY_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
     content: include_str!(concat!(
         env!("OUT_DIR"),
@@ -33,10 +40,19 @@ const TEXT_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
+const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-browser/SKILL.md"
+    )),
+}];
+
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let mcp_command = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("horizon"));
 
-    match install_agent_plugins_impl(horizon_home, user_home.as_deref()) {
+    match install_agent_plugins_impl(horizon_home, user_home.as_deref(), &mcp_command) {
         Ok(updated_files) if updated_files > 0 => {
             tracing::info!(updated_files, "synced embedded Horizon agent plugins");
         }
@@ -45,22 +61,52 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
     }
 }
 
-fn install_agent_plugins_impl(horizon_home: &HorizonHome, user_home: Option<&Path>) -> std::io::Result<usize> {
+fn install_agent_plugins_impl(
+    horizon_home: &HorizonHome,
+    user_home: Option<&Path>,
+    mcp_command: &Path,
+) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
 
     updated_files += sync_plugin_files(&horizon_home.claude_plugin_dir(), CLAUDE_PLUGIN_FILES)?;
-    updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), TEXT_SKILL_FILES)?;
+    updated_files += usize::from(sync_file_if_changed(
+        &horizon_home.claude_plugin_dir().join(".mcp.json"),
+        &claude_mcp_config(mcp_command)?,
+    )?);
+    updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), NOTIFY_SKILL_FILES)?;
+    updated_files += sync_plugin_files(&horizon_home.codex_browser_skill_dir(), BROWSER_SKILL_FILES)?;
 
     if let Some(home) = user_home {
-        let codex_home_skill_dir = home.join(".codex").join("skills").join("horizon-notify");
-        updated_files += sync_plugin_files(&codex_home_skill_dir, TEXT_SKILL_FILES)?;
-        let codex_export_dir = home.join(".agents").join("skills").join("horizon-notify");
-        updated_files += sync_plugin_files(&codex_export_dir, TEXT_SKILL_FILES)?;
-        let kilo_export_dir = home.join(".kilocode").join("skills").join("horizon-notify");
-        updated_files += sync_plugin_files(&kilo_export_dir, TEXT_SKILL_FILES)?;
+        for (skill_name, files) in [
+            ("horizon-notify", NOTIFY_SKILL_FILES),
+            ("horizon-browser", BROWSER_SKILL_FILES),
+        ] {
+            let codex_home_skill_dir = home.join(".codex").join("skills").join(skill_name);
+            updated_files += sync_plugin_files(&codex_home_skill_dir, files)?;
+            let codex_export_dir = home.join(".agents").join("skills").join(skill_name);
+            updated_files += sync_plugin_files(&codex_export_dir, files)?;
+            let kilo_export_dir = home.join(".kilocode").join("skills").join(skill_name);
+            updated_files += sync_plugin_files(&kilo_export_dir, files)?;
+        }
     }
 
     Ok(updated_files)
+}
+
+fn claude_mcp_config(command: &Path) -> std::io::Result<String> {
+    let command = command.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Horizon executable path is not valid UTF-8",
+        )
+    })?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "horizon-browser": {
+            "command": command,
+            "args": ["--browser-mcp"]
+        }
+    }))
+    .map_err(std::io::Error::other)
 }
 
 fn sync_plugin_files(base: &Path, files: &[EmbeddedFile]) -> std::io::Result<usize> {
@@ -93,9 +139,14 @@ fn sync_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use horizon_core::HorizonHome;
 
-    use super::{EmbeddedFile, TEXT_SKILL_FILES, install_agent_plugins_impl, sync_file_if_changed, sync_plugin_files};
+    use super::{
+        BROWSER_SKILL_FILES, EmbeddedFile, NOTIFY_SKILL_FILES, install_agent_plugins_impl, sync_file_if_changed,
+        sync_plugin_files,
+    };
 
     #[test]
     fn sync_file_if_changed_writes_missing_file() {
@@ -146,28 +197,38 @@ mod tests {
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let user_home = temp.path().join("user-home");
 
-        let updated = install_agent_plugins_impl(&horizon_home, Some(&user_home)).expect("install plugins");
+        let updated = install_agent_plugins_impl(&horizon_home, Some(&user_home), Path::new("/opt/horizon"))
+            .expect("install plugins");
 
         assert!(updated > 0);
         assert_eq!(
             std::fs::read_to_string(user_home.join(".codex/skills/horizon-notify/SKILL.md"))
                 .expect("codex skill should be exported"),
-            TEXT_SKILL_FILES[0].content,
+            NOTIFY_SKILL_FILES[0].content,
         );
         assert_eq!(
             std::fs::read_to_string(user_home.join(".agents/skills/horizon-notify/SKILL.md"))
                 .expect("legacy codex skill export should still exist"),
-            TEXT_SKILL_FILES[0].content,
+            NOTIFY_SKILL_FILES[0].content,
         );
         assert_eq!(
             std::fs::read_to_string(user_home.join(".kilocode/skills/horizon-notify/SKILL.md"))
                 .expect("kilo skill should be exported"),
-            TEXT_SKILL_FILES[0].content,
+            NOTIFY_SKILL_FILES[0].content,
         );
         assert_eq!(
             std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))
                 .expect("horizon codex integration should be synced"),
-            TEXT_SKILL_FILES[0].content,
+            NOTIFY_SKILL_FILES[0].content,
         );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".codex/skills/horizon-browser/SKILL.md"))
+                .expect("browser skill should be exported"),
+            BROWSER_SKILL_FILES[0].content,
+        );
+        let mcp_config = std::fs::read_to_string(horizon_home.claude_plugin_dir().join(".mcp.json"))
+            .expect("Claude MCP config should be installed");
+        assert!(mcp_config.contains("/opt/horizon"));
+        assert!(mcp_config.contains("--browser-mcp"));
     }
 }

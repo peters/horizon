@@ -2,8 +2,9 @@
 //!
 //! Protocol, process, frame, input, and session ownership live in the
 //! UI-independent `horizon-browser` crate. This module adapts that engine to
-//! Horizon persistence, panels, and agent-facing manifests.
+//! Horizon persistence, panels, and private MCP host coordination.
 
+#[doc(hidden)]
 pub mod manifest;
 
 pub use horizon_browser::{cdp, frames, input, process, session};
@@ -599,7 +600,8 @@ impl Drop for BrowserPanelState {
     }
 }
 
-/// Resolve the manifest directory for browser panels (UI + external agents).
+/// Resolve the private host-coordination directory for browser panels.
+#[doc(hidden)]
 #[must_use]
 pub fn manifest_dir() -> PathBuf {
     manifest::default_manifest_dir()

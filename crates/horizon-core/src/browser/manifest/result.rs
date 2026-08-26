@@ -29,8 +29,13 @@ pub(super) fn write(panel_local_id: &str, result: &AgentActionResult) -> std::io
 }
 
 pub(super) fn remove_stale(panel_local_id: &str) -> std::io::Result<()> {
-    let panel_dir = HorizonHome::resolve()
-        .browser_results_dir()
+    remove_stale_at(HorizonHome::resolve().root(), panel_local_id)
+}
+
+fn remove_stale_at(root: &Path, panel_local_id: &str) -> std::io::Result<()> {
+    let panel_dir = root
+        .join("runtime")
+        .join("browser-results")
         .join(safe_local_id(panel_local_id));
     match std::fs::remove_dir_all(panel_dir) {
         Ok(()) => Ok(()),
@@ -64,7 +69,11 @@ pub fn take_action_result(panel_local_id: &str, action_id: &str) -> std::io::Res
 }
 
 fn take_at(path: &Path, action_id: &str) -> std::io::Result<Option<AgentActionResult>> {
-    let _lock = ManifestLock::acquire(path)?;
+    let _lock = match ManifestLock::acquire(path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let encoded = match std::fs::read(path) {
         Ok(encoded) => encoded,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -92,11 +101,17 @@ mod tests {
 
     #[test]
     fn results_are_private_one_shot_files_with_confined_paths() {
-        let root = std::env::temp_dir().join(format!("horizon-browser-results-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "horizon-browser-results-{}-{}",
+            std::process::id(),
+            new_action_id()
+        ));
         let action_id = new_action_id();
         let path = action_result_path_for_root(&root, "../panel", &action_id);
         let result = AgentActionResult::completed(action_id.clone(), BrowserControlValue::Accepted);
 
+        assert_eq!(take_at(&path, &action_id).unwrap(), None);
+        assert!(!root.exists());
         write_at(&path, &result).unwrap();
         assert!(path.starts_with(&root));
         assert_eq!(take_at(&path, &action_id).unwrap(), Some(result));
@@ -116,6 +131,15 @@ mod tests {
                 0o600
             );
         }
+        let retained_id = new_action_id();
+        let retained_path = action_result_path_for_root(&root, "../panel", &retained_id);
+        write_at(
+            &retained_path,
+            &AgentActionResult::completed(retained_id, BrowserControlValue::Accepted),
+        )
+        .unwrap();
+        remove_stale_at(&root, "../panel").unwrap();
+        assert!(!retained_path.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -3,16 +3,18 @@
 //! Each browser panel writes a small JSON file under
 //! `~/.horizon/runtime/browsers/<encoded-panel-local-id>.json` while it is
 //! alive.
-//! It is the shared channel between three parties:
+//! It is the private shared channel between three parties:
 //!
 //! - the **panel driver** (writes backend endpoint/context, `url`,
 //!   `title`, `user_active`, and the handoff `done` flag),
-//! - **external agents** (read discovery fields, heartbeat `owner`, write
-//!   a `handoff` request, and enqueue validated backend-neutral actions),
+//! - the **Horizon MCP adapter** (reads discovery fields, heartbeats `owner`,
+//!   writes a `handoff` request, and enqueues validated backend-neutral
+//!   actions),
 //! - the **UI** (reads ownership for the chrome chip).
 //!
-//! File-based on purpose: no new IPC mechanism, works across process
-//! boundaries, and every field is observable with plain shell tooling.
+//! File-based on purpose: it works across process boundaries without putting
+//! a transport dependency in `horizon-browser`. It is not a supported agent
+//! API; MCP is the sole agent-facing browser contract.
 //! Every update to an existing manifest must use [`update`] (or implement its
 //! adjacent `<panel>.json.lock` protocol around both the read and the write).
 //! The lock file is a stable coordination inode guarded by the operating
@@ -87,7 +89,7 @@ pub struct BrowserManifest {
     #[serde(default)]
     pub backend: horizon_browser::BackendKind,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
-    /// Safari. Canonical agents should use the validated action queue.
+    /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
     /// The page target or top-level browsing context the panel is driving.
     pub target_id: String,
@@ -531,7 +533,9 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        remove_with_timeout(panel_local_id, timeout)
+        let manifest_removed = remove_with_timeout(panel_local_id, timeout);
+        let results_removed = result::remove_stale(panel_local_id).is_ok();
+        manifest_removed && results_removed
     }
 }
 

@@ -38,6 +38,11 @@ use tracing_subscriber::fmt::format::FmtSpan;
 fn main() -> eframe::Result {
     init_tracing();
 
+    if browser_mcp_mode_requested() {
+        run_browser_mcp_server();
+        return Ok(());
+    }
+
     let horizon_home = HorizonHome::resolve();
     plugin_install::install_agent_plugins(&horizon_home);
 
@@ -107,6 +112,25 @@ fn main() -> eframe::Result {
         }),
         observed_keyboard_inputs,
     )
+}
+
+fn browser_mcp_mode_requested() -> bool {
+    let mut args = std::env::args_os().skip(1);
+    args.next().is_some_and(|argument| argument == "--browser-mcp") && args.next().is_none()
+}
+
+fn run_browser_mcp_server() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build();
+    let result = match runtime {
+        Ok(runtime) => runtime
+            .block_on(horizon_browser_mcp::serve_stdio())
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(format!("could not start browser MCP runtime: {error}")),
+    };
+    if let Err(error) = result {
+        tracing::error!(%error, "Horizon browser MCP server stopped with an error");
+        std::process::exit(1);
+    }
 }
 
 /// Select a wgpu adapter that can actually present to the given surface.

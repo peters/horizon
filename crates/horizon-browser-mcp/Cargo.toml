@@ -1,0 +1,32 @@
+[package]
+name = "horizon-browser-mcp"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MCP server for audited control of live Horizon browser panels"
+repository.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "horizon-browser-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+horizon-browser.workspace = true
+horizon-core.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt-multi-thread", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

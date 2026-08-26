@@ -77,6 +77,7 @@ pub enum AgentResumeMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentIntegrationKind {
     None,
+    CodexMcp,
     ClaudePluginDir,
 }
 
@@ -122,7 +123,7 @@ const CODEX: AgentDefinition = AgentDefinition {
     default_command: "codex",
     resume_mode: AgentResumeMode::ExactSubcommand { subcommand: "resume" },
     session_validation: AgentSessionValidationMode::ParentThreadRoots,
-    integration: AgentIntegrationKind::None,
+    integration: AgentIntegrationKind::CodexMcp,
     kitty_keyboard: false,
 };
 

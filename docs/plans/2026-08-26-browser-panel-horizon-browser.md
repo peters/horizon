@@ -3,7 +3,7 @@
 - Status: implemented and locally validated; Linux Chromium/Firefox exact-code smoke passed; macOS Chromium/Firefox/Safari smoke pending
 - Date: 2026-08-26
 - Target base: `origin/main` at `4c6a69d`
-- New workspace crate: `crates/horizon-browser`
+- New workspace crates: `crates/horizon-browser`, `crates/horizon-browser-mcp`
 - Protocols: Chromium CDP, Firefox WebDriver BiDi, and Safari WebDriver with optional BiDi
 - Full browser predecessor: closed PR #298
 - Current implementation references: stacked PRs #302–#307
@@ -36,6 +36,9 @@ slice rather than integrating the old stack:
 - backend-neutral agent actions on every backend, fresh-owner leases, user
   steering priority, explicit user handoff, and private append-only redacted
   audit journals;
+- one stdio MCP agent contract for discovery, navigation, semantic snapshots
+  and queries, ref-based actions, waits, handoff, and audit; there is no
+  browser-control CLI and raw protocol/runtime endpoints stay private;
 - an explicit automation-disclosure policy: Chromium and Firefox establish a
   narrow pre-document common-signal minimization contract, while Safari and
   browser-owned behavior are reported honestly through active capabilities;
@@ -126,6 +129,8 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Make performance counters part of the engine contract rather than an afterthought.
 - Let agents steer every backend through one validated action contract while
   user activity and explicit handoffs always take priority.
+- Expose that action model to agents only through MCP; keep filesystem
+  coordination and backend protocols as private adapter details.
 - Preserve a privacy-aware audit trail of user, agent, and system actions.
 - Minimize the common explicit automation disclosures that Chromium and
   Firefox can remove coherently before page scripts, and report the active
@@ -147,6 +152,7 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Carrying unrelated terminal, speech, or dependency cleanup in browser engine PRs.
 - Publishing `horizon-browser`, creating a registry token, or cutting a crate
   release in this implementation task.
+- A second browser-control CLI or a documented direct-manifest agent API.
 - An undetectable, anonymous, or anti-bot browser. Page behavior, graphics,
   timing, network, browser defects, and future signals remain observable.
 - Site-specific evasion, CAPTCHA bypass, broad fingerprint spoofing, or using
@@ -156,10 +162,11 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 
 ```text
 horizon-ui
-    |
-    v
-horizon-core
-    |
+    |                horizon-browser-mcp
+    v                       |
+horizon-core <--------------+
+    |                        |
+    +------------------------+
     v
 horizon-browser
 ```
@@ -191,6 +198,14 @@ horizon-browser
 - Stable mapping between engine events and panel state.
 - Retry policy visible to Horizon users.
 
+### `horizon-browser-mcp` owns
+
+- The sole agent-facing `browser_*` tool contract over stdio MCP.
+- Safe panel summaries, automatic ownership heartbeats, bounded result waits,
+  semantic wait composition, handoff requests, and redacted audit reads.
+- Structured MCP schemas that never expose raw browser endpoints or Horizon
+  runtime paths.
+
 ### `horizon-ui` owns
 
 - egui texture creation/update and browser chrome.
@@ -201,12 +216,15 @@ horizon-browser
 
 ### Workspace manifest
 
-The new crate must use workspace version, edition, Rust version, license, lints, and repository metadata. Add both the workspace member and an exact path/version workspace dependency:
+The new crates must use workspace version, edition, Rust version, license,
+lints, and repository metadata. Add each workspace member and exact
+path/version workspace dependency:
 
 ```toml
 [workspace]
 members = [
     "crates/horizon-browser",
+    "crates/horizon-browser-mcp",
     "crates/horizon-core",
     "crates/horizon-cursor",
     "crates/horizon-ui",
@@ -214,6 +232,7 @@ members = [
 
 [workspace.dependencies]
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
+horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 ```
 
 Keep the version synchronized with `[workspace.package].version`. Do not add protocol feature flags initially: CDP and BiDi share the same small wire dependencies, and compiling both avoids an unnecessary CI matrix. Reconsider only if backend-specific dependencies become material.
@@ -341,6 +360,22 @@ leaves a queued-only record and requires a new caller decision rather than an
 unsafe automatic retry. The local JSONL journal is private and
 application-append-only, but intentionally not presented as tamper-evident or
 compliance-grade storage.
+
+### Sole agent contract: MCP
+
+`horizon-browser-mcp` is a stdio-only adapter over Horizon's private host
+coordination. Its public surface is the `browser_*` MCP tool set: list or read
+a panel, navigate, snapshot, query, act, evaluate, wait, request user handoff,
+and read the redacted audit. It automatically claims and heartbeats a panel for
+the stable identity injected into a Horizon agent panel. No MCP result or tool
+schema exposes raw browser endpoints, manifest paths, or result paths.
+
+The standalone binary and Horizon's private `--browser-mcp` bootstrap mode run
+the same server. The latter lets bundled agent integrations start MCP from the
+exact Horizon executable without shipping a second release artifact. This
+bootstrap switch is transport plumbing, not a browser-control CLI. Codex gets
+an in-memory launch override; Claude gets a generated entry in Horizon's
+existing plugin. Neither path edits the user's persistent MCP configuration.
 
 ## Chromium CDP backend
 
@@ -701,6 +736,8 @@ No PR mutation is part of this plan update.
   visible, draggable vertical scrollbar through backend-specific handling.
 - Accepted: expose auditable backend-neutral agent controls and explicit user
   handoff through an optional host coordination boundary.
+- Accepted: MCP is the sole agent-facing control contract; do not add a CLI or
+  document direct runtime-file/raw-protocol access for agents.
 - Accepted: prepare `horizon-browser` for a future crates.io release with a
   minimal UI-independent dependency boundary, without publishing it now.
 - Accepted: default to narrow, pre-document common-signal minimization on

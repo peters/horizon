@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -307,6 +308,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     } else {
         None
     };
+    let env = agent_env(kind, &local_id);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
@@ -338,7 +340,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         scrollback_limit: scrollback_limit_for_kind(kind),
         window_id: id.0,
         replay_bytes,
-        env: agent_env(kind),
+        env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
@@ -706,9 +708,11 @@ fn resolve_agent_launch_command(
     let Some(definition) = agent_definition(kind) else {
         unreachable!("agent launch requested for non-agent panel: {kind:?}");
     };
+    let uses_default_command = command.is_none();
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
-        AgentIntegrationKind::None => Vec::new(),
+        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
+        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
     match definition.resume_mode {
@@ -900,12 +904,39 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
-pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
+pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, String> {
     let mut env = HashMap::new();
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
+        env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
     }
     env
+}
+
+fn browser_actor(local_id: &str) -> String {
+    if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
+        return format!("horizon:{local_id}");
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    local_id.hash(&mut hasher);
+    format!("horizon:{:016x}", hasher.finish())
+}
+
+fn horizon_codex_mcp_args() -> Vec<String> {
+    let Some(command) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .and_then(|path| serde_json::to_string(&path).ok())
+    else {
+        tracing::warn!("could not resolve Horizon executable for browser MCP integration");
+        return Vec::new();
+    };
+    vec![
+        "-c".to_string(),
+        format!("mcp_servers.horizon-browser.command={command}"),
+        "-c".to_string(),
+        "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
+    ]
 }
 
 fn horizon_claude_plugin_args() -> Vec<String> {
@@ -942,6 +973,34 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_environment_exposes_a_stable_browser_actor() {
+        let env = agent_env(PanelKind::Codex, "panel-42");
+        assert_eq!(env.get("HORIZON").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get("HORIZON_BROWSER_ACTOR").map(String::as_str),
+            Some("horizon:panel-42")
+        );
+        assert!(agent_env(PanelKind::Shell, "panel-42").is_empty());
+        assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
+    }
+
+    #[test]
+    fn default_codex_launch_registers_only_the_mcp_browser_contract() {
+        let (_, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Codex,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        let command = args.join(" ");
+        assert!(command.contains("mcp_servers.horizon-browser.command="));
+        assert!(command.contains("mcp_servers.horizon-browser.args="));
+        assert!(command.contains("--browser-mcp"));
+        assert!(!command.contains("browser-cli"));
+    }
 
     #[test]
     fn shell_launch_args_adds_login_flag_when_requested() {

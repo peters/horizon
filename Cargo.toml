@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/horizon-browser", "crates/horizon-core", "crates/horizon-cursor", "crates/horizon-ui"]
+members = [
+    "crates/horizon-browser",
+    "crates/horizon-browser-mcp",
+    "crates/horizon-core",
+    "crates/horizon-cursor",
+    "crates/horizon-ui",
+]
 
 [workspace.package]
 version = "0.2.7"
@@ -20,6 +26,7 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
+horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
 thiserror = "2.0.20"
@@ -36,6 +43,8 @@ profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
+rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }
+schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.36.1"
