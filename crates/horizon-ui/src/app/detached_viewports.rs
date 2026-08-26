@@ -414,15 +414,21 @@ impl HorizonApp {
         } else {
             Vec::new()
         };
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         self.panels_to_close.clear();
-        for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
+        for panel_id in panel_ids {
             if self.render_panel(
                 ctx,
                 canvas_rect,
                 panel_id,
-                fallback_index,
                 &workspace_collision_ids,
                 &browser_events,
+                crate::app::panels::PanelRenderScope {
+                    detached: true,
+                    frame_has_pointer_button,
+                },
             ) {
                 self.panels_to_close.push(panel_id);
             }

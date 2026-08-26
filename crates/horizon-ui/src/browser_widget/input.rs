@@ -19,6 +19,13 @@ pub(crate) struct InputFlags<'a> {
     pub(crate) keyboard_target: KeyboardTarget,
     pub(crate) pointer_viewport: PointerViewportState,
     pub(crate) shortcuts: &'a AppShortcuts,
+    /// App shortcuts this viewport actually dispatches; the browser only
+    /// suppresses presses it would otherwise swallow without an effect.
+    pub(crate) shortcut_bindings: &'a [horizon_core::ShortcutBinding],
+    /// Frame-level hint: any pointer-button event in this viewport's event
+    /// slice, used to skip the per-panel pointer scan for panels that
+    /// cannot consume it.
+    pub(crate) frame_has_pointer_button: bool,
     pub(crate) exit_fullscreen_shortcut_owner: ShortcutOwner,
 }
 
@@ -66,7 +73,18 @@ pub fn handle(
     if matches!(flags.pointer_viewport, PointerViewportState::Ready)
         && let (Some(rect), Some(frame_size)) = (body, frame_size)
     {
-        pointer::events(ui, flags.events, browser, state, rect, frame_size, pointer_target);
+        pointer::events(
+            ui,
+            flags.events,
+            browser,
+            state,
+            pointer::PointerFrame {
+                rect,
+                frame_size,
+                pointer_target,
+                frame_has_pointer_button: flags.frame_has_pointer_button,
+            },
+        );
     } else {
         state.pointer_modifiers = keyboard::key_modifiers(ui);
     }
@@ -76,6 +94,7 @@ pub fn handle(
             browser,
             state,
             flags.shortcuts,
+            flags.shortcut_bindings,
             matches!(flags.exit_fullscreen_shortcut_owner, ShortcutOwner::App),
         );
     } else if page_keyboard_active {
@@ -86,6 +105,7 @@ pub fn handle(
             browser,
             state,
             flags.shortcuts,
+            flags.shortcut_bindings,
             exit_fullscreen_shortcut_active,
         );
     }

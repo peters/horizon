@@ -14,6 +14,7 @@ pub(super) fn events(
     browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
     shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
     exit_fullscreen_shortcut_active: bool,
 ) {
     let KeyboardFrameEvents {
@@ -22,7 +23,13 @@ pub(super) fn events(
         mut shortcut_chars,
         shortcut_presses,
         ime_composing,
-    } = collect_keyboard_frame_events(events, shortcuts, exit_fullscreen_shortcut_active, state.ime_composing);
+    } = collect_keyboard_frame_events(
+        events,
+        shortcuts,
+        shortcut_bindings,
+        exit_fullscreen_shortcut_active,
+        state.ime_composing,
+    );
     state.ime_composing = ime_composing;
     for (event_index, event) in events.iter().enumerate() {
         match event {
@@ -83,6 +90,7 @@ pub(super) fn browser_shortcut_events(
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
     shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
     exit_fullscreen_shortcut_active: bool,
 ) {
     for event in events {
@@ -108,7 +116,12 @@ pub(super) fn browser_shortcut_events(
                     repeat: *repeat,
                     modifiers: *modifiers,
                     key_text: None,
-                    app_shortcut: app_shortcut_press(event, shortcuts, exit_fullscreen_shortcut_active),
+                    app_shortcut: app_shortcut_press(
+                        event,
+                        shortcuts,
+                        shortcut_bindings,
+                        exit_fullscreen_shortcut_active,
+                    ),
                 },
             );
         }
@@ -182,12 +195,13 @@ struct KeyboardFrameEvents {
 fn collect_keyboard_frame_events(
     events: &[Event],
     shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
     exit_fullscreen_shortcut_active: bool,
     ime_composing: bool,
 ) -> KeyboardFrameEvents {
     let shortcut_presses: Vec<bool> = events
         .iter()
-        .map(|event| app_shortcut_press(event, shortcuts, exit_fullscreen_shortcut_active))
+        .map(|event| app_shortcut_press(event, shortcuts, shortcut_bindings, exit_fullscreen_shortcut_active))
         .collect();
     let mut ime_composing = ime_composing;
     let ime_composing_at_event: Vec<bool> = events
@@ -409,12 +423,21 @@ fn committed_text_after_key(events: &[Event], key_index: usize) -> Option<char> 
     None
 }
 
-fn app_shortcut_press(event: &Event, shortcuts: &AppShortcuts, exit_fullscreen_shortcut_active: bool) -> bool {
-    crate::app::global_shortcut_bindings(shortcuts)
-        .into_iter()
-        .filter(|binding| *binding != shortcuts.save_editor)
-        .filter(|binding| exit_fullscreen_shortcut_active || *binding != shortcuts.exit_fullscreen_panel)
-        .any(|binding| crate::app::shortcuts::shortcut_event_matches(event, binding))
+/// Whether this press matches an app shortcut the *current viewport*
+/// actually dispatches. Browser input suppresses exactly that set so the
+/// keys are not swallowed without effect (detached viewports only handle a
+/// subset of the root window's global bindings).
+fn app_shortcut_press(
+    event: &Event,
+    shortcuts: &AppShortcuts,
+    bindings: &[horizon_core::ShortcutBinding],
+    exit_fullscreen_shortcut_active: bool,
+) -> bool {
+    bindings
+        .iter()
+        .filter(|binding| **binding != shortcuts.save_editor)
+        .filter(|binding| exit_fullscreen_shortcut_active || **binding != shortcuts.exit_fullscreen_panel)
+        .any(|binding| crate::app::shortcuts::shortcut_event_matches(event, *binding))
 }
 
 pub(super) fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
@@ -593,13 +616,19 @@ mod tests {
                 active_range_chars: None,
             })],
             &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
             false,
             false,
         );
         assert!(first_frame.ime_composing);
 
-        let composing_frame =
-            collect_keyboard_frame_events(&[press(Key::A, false)], &shortcuts, false, first_frame.ime_composing);
+        let composing_frame = collect_keyboard_frame_events(
+            &[press(Key::A, false)],
+            &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
+            false,
+            first_frame.ime_composing,
+        );
         assert_eq!(composing_frame.key_texts, [None]);
         assert!(composing_frame.ime_composing);
 
@@ -609,6 +638,7 @@ mod tests {
                 press(Key::B, false),
             ],
             &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
             false,
             composing_frame.ime_composing,
         );
@@ -624,6 +654,7 @@ mod tests {
                 press(Key::C, false),
             ],
             &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
             false,
             true,
         );
@@ -634,6 +665,7 @@ mod tests {
     #[test]
     fn app_shortcuts_are_filtered_only_when_the_app_owns_them() {
         let shortcuts = AppShortcuts::default();
+        let global = crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts);
         let escape = press(Key::Escape, false);
         let fullscreen = press(Key::F11, false);
         let save_editor = modified_press(
@@ -646,10 +678,10 @@ mod tests {
             },
         );
 
-        assert!(app_shortcut_press(&fullscreen, &shortcuts, false));
-        assert!(!app_shortcut_press(&escape, &shortcuts, false));
-        assert!(app_shortcut_press(&escape, &shortcuts, true));
-        assert!(!app_shortcut_press(&save_editor, &shortcuts, false));
+        assert!(app_shortcut_press(&fullscreen, &shortcuts, &global, false));
+        assert!(!app_shortcut_press(&escape, &shortcuts, &global, false));
+        assert!(app_shortcut_press(&escape, &shortcuts, &global, true));
+        assert!(!app_shortcut_press(&save_editor, &shortcuts, &global, false));
     }
 
     #[test]
@@ -661,6 +693,7 @@ mod tests {
             ),
             ..AppShortcuts::default()
         };
+        let global = crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts);
         let f5 = press(Key::F5, false);
 
         assert!(should_route_key_while_url_focused(
@@ -668,7 +701,7 @@ mod tests {
             Key::F5,
             Modifiers::NONE
         ));
-        assert!(app_shortcut_press(&f5, &shortcuts, false));
+        assert!(app_shortcut_press(&f5, &shortcuts, &global, false));
     }
 
     #[test]

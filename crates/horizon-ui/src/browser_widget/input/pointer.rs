@@ -11,14 +11,23 @@ const BUTTON_LEFT: u32 = 1;
 const BUTTON_RIGHT: u32 = 2;
 const BUTTON_MIDDLE: u32 = 4;
 
+/// The frame-level pointer context for one panel: the geometry this panel
+/// owns, whether the frame-end pointer is over it, and the frame-wide
+/// press hint used by the one-scan fast path.
+#[derive(Clone, Copy)]
+pub(super) struct PointerFrame {
+    pub(super) rect: egui::Rect,
+    pub(super) frame_size: [f32; 2],
+    pub(super) pointer_target: bool,
+    pub(super) frame_has_pointer_button: bool,
+}
+
 pub(super) fn events(
     ui: &Ui,
     events: &[Event],
     browser: &mut BrowserPanelState,
     state: &mut BrowserUiState,
-    rect: egui::Rect,
-    frame_size: [f32; 2],
-    pointer_target: bool,
+    frame: PointerFrame,
 ) {
     let ctx = ui.ctx();
     // Pointer positions arrive in global (window) space; the body rect is
@@ -29,11 +38,21 @@ pub(super) fn events(
     let transform = |pos: egui::Pos2| from_global.map_or(pos, |t| t * pos);
     let frame_pos = ctx.input(|i| i.pointer.interact_pos());
     let frame_final_modifiers = key_modifiers(ui);
+    // One-scan fast path: a panel that is not under the pointer, owns no
+    // capture, and cannot own a press in this frame consumes nothing from
+    // the event slice, so skip it (with N browser panels the event slice
+    // would otherwise be scanned N times per pointer-heavy frame).
+    if !frame.pointer_target && !has_pointer_capture(state) && !frame.frame_has_pointer_button {
+        state.pointer_modifiers = frame_final_modifiers;
+        return;
+    }
     let event_time = ctx.input(|input| input.time);
     let click_thresholds = click_thresholds(ctx);
     // Frame-end pointer position: only used for wheel events, which carry
     // no per-event position.
-    let wheel_pos = frame_pos.map(transform).filter(|p| pointer_target && rect.contains(*p));
+    let wheel_pos = frame_pos
+        .map(transform)
+        .filter(|p| frame.pointer_target && frame.rect.contains(*p));
 
     // Replay this frame's pointer events with their own positions. A fast
     // gesture (press, moves, release) can be batched into a single
@@ -58,38 +77,33 @@ pub(super) fn events(
                 pos, button, pressed, ..
             } => {
                 flush_pending_move(browser, &mut pending_move);
-                let Some(browser_button) = egui_button(*button) else {
-                    continue;
-                };
-                let p = transform(*pos);
-                replay_pointer_button(
+                replay_button_event(
                     browser,
                     state,
                     &mut event_buttons,
-                    PointerButtonReplay {
-                        global_position: *pos,
-                        local_position: p,
-                        button: browser_button,
-                        pressed: *pressed,
-                        pointer_target,
+                    ButtonReplayContext {
+                        frame,
                         event_time,
-                        max_click_dist: click_thresholds.distance,
-                        max_click_duration: click_thresholds.duration,
-                        max_double_click_delay: click_thresholds.double_click_delay,
-                        modifiers: event_modifiers,
-                        rect,
-                        frame_size,
+                        click_thresholds,
                     },
+                    ButtonReplayEvent {
+                        global_position: *pos,
+                        button: *button,
+                        pressed: *pressed,
+                        modifiers: event_modifiers,
+                    },
+                    &transform,
                 );
             }
             Event::PointerMoved(pos) => {
                 let p = transform(*pos);
-                let tracking = should_track_pointer(pointer_target, rect.contains(p), has_pointer_capture(state));
+                let tracking =
+                    should_track_pointer(frame.pointer_target, frame.rect.contains(p), has_pointer_capture(state));
                 // Movement dedup: only forward real movement. `None` (the
                 // first move, or the first after PointerGone) must be
                 // forwarded, or hover would be dead until a click.
                 if tracking && state.last_mouse.is_none_or(|last| (last - p).length() >= 0.5) {
-                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
                     state.last_mouse = Some(p);
                     pending_move = Some((x, y, event_buttons, event_modifiers));
                 }
@@ -98,12 +112,12 @@ pub(super) fn events(
             // last saw it instead of stranding Chrome's button state down.
             Event::PointerGone => {
                 flush_pending_move(browser, &mut pending_move);
-                let p = state.last_mouse.unwrap_or_else(|| rect.center());
+                let p = state.last_mouse.unwrap_or_else(|| frame.rect.center());
                 for captured in &mut state.captured_clicks {
                     let Some(click) = captured.take() else {
                         continue;
                     };
-                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
                     event_buttons &= !button_mask(click.button);
                     browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
                         x,
@@ -124,7 +138,7 @@ pub(super) fn events(
                         egui::MouseWheelUnit::Line => 16.0,
                         egui::MouseWheelUnit::Page => 500.0,
                     };
-                    let (x, y) = to_page_coords(rect, frame_size, p);
+                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
                     let (delta_x, delta_y) = cdp_wheel_delta(*delta, scale);
                     browser.send(BrowserCommand::Input(BrowserInput::Wheel {
                         x,
@@ -140,6 +154,56 @@ pub(super) fn events(
     }
     flush_pending_move(browser, &mut pending_move);
     state.pointer_modifiers = frame_final_modifiers;
+}
+
+/// Replay one pointer-button press/release into the page, translating its
+/// global position into this panel's page coordinates.
+#[derive(Clone, Copy)]
+struct ButtonReplayContext {
+    frame: PointerFrame,
+    event_time: f64,
+    click_thresholds: ClickThresholds,
+}
+
+#[derive(Clone, Copy)]
+struct ButtonReplayEvent {
+    global_position: egui::Pos2,
+    button: PointerButton,
+    pressed: bool,
+    modifiers: BrowserModifiers,
+}
+
+fn replay_button_event(
+    browser: &mut BrowserPanelState,
+    state: &mut BrowserUiState,
+    event_buttons: &mut u32,
+    context: ButtonReplayContext,
+    event: ButtonReplayEvent,
+    transform: &dyn Fn(egui::Pos2) -> egui::Pos2,
+) {
+    let Some(browser_button) = egui_button(event.button) else {
+        return;
+    };
+    let p = transform(event.global_position);
+    replay_pointer_button(
+        browser,
+        state,
+        event_buttons,
+        PointerButtonReplay {
+            global_position: event.global_position,
+            local_position: p,
+            button: browser_button,
+            pressed: event.pressed,
+            pointer_target: context.frame.pointer_target,
+            event_time: context.event_time,
+            max_click_dist: context.click_thresholds.distance,
+            max_click_duration: context.click_thresholds.duration,
+            max_double_click_delay: context.click_thresholds.double_click_delay,
+            modifiers: event.modifiers,
+            rect: context.frame.rect,
+            frame_size: context.frame.frame_size,
+        },
+    );
 }
 
 #[derive(Clone, Copy)]

@@ -74,6 +74,8 @@ pub struct BrowserView<'a> {
     ui_state: &'a mut BrowserUiState,
     shortcuts: &'a AppShortcuts,
     fullscreen_active: bool,
+    shortcut_bindings: &'a [horizon_core::ShortcutBinding],
+    frame_has_pointer_button: bool,
 }
 
 impl<'a> BrowserView<'a> {
@@ -83,12 +85,16 @@ impl<'a> BrowserView<'a> {
         ui_state: &'a mut BrowserUiState,
         shortcuts: &'a AppShortcuts,
         fullscreen_active: bool,
+        shortcut_bindings: &'a [horizon_core::ShortcutBinding],
+        frame_has_pointer_button: bool,
     ) -> BrowserView<'a> {
         Self {
             panel,
             ui_state,
             shortcuts,
             fullscreen_active,
+            shortcut_bindings,
+            frame_has_pointer_button,
         }
     }
 
@@ -188,6 +194,8 @@ impl<'a> BrowserView<'a> {
                         input::PointerViewportState::AwaitingFrame
                     },
                     shortcuts: self.shortcuts,
+                    shortcut_bindings: self.shortcut_bindings,
+                    frame_has_pointer_button: self.frame_has_pointer_button,
                     exit_fullscreen_shortcut_owner: if self.fullscreen_active || state.fullscreen_active_last_frame {
                         input::ShortcutOwner::App
                     } else {

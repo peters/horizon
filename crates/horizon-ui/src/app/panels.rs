@@ -16,7 +16,7 @@ use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
-use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
+use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
 use super::speech::MicState;
 use super::util::{clamp_panel_size, primary_shortcut_label};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
@@ -176,6 +176,13 @@ fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state:
     response
 }
 
+pub(super) struct PanelRenderScope {
+    /// Detached viewports dispatch only the fit/minimap toolbar shortcuts.
+    pub(super) detached: bool,
+    /// The viewport's event slice carries a pointer-button press this frame.
+    pub(super) frame_has_pointer_button: bool,
+}
+
 struct PanelBodyContext<'a> {
     keyboard_events: &'a [TerminalInputEvent],
     browser_events: &'a [egui::Event],
@@ -188,6 +195,8 @@ struct PanelBodyContext<'a> {
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
     browser_shortcuts: Option<&'a AppShortcuts>,
+    browser_shortcut_bindings: &'a [ShortcutBinding],
+    browser_frame_has_pointer_button: bool,
     browser_fullscreen_active: bool,
 }
 
@@ -211,8 +220,15 @@ fn show_panel_body_contents(
                 ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));
                 return false;
             };
-            crate::browser_widget::BrowserView::new(panel, state, shortcuts, body_context.browser_fullscreen_active)
-                .show(ui, body_context.browser_events, is_focused, interactive)
+            crate::browser_widget::BrowserView::new(
+                panel,
+                state,
+                shortcuts,
+                body_context.browser_fullscreen_active,
+                body_context.browser_shortcut_bindings,
+                body_context.browser_frame_has_pointer_button,
+            )
+            .show(ui, body_context.browser_events, is_focused, interactive)
         }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
@@ -310,6 +326,10 @@ impl HorizonApp {
                 .map(|input| input.event.clone())
                 .collect()
         });
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
+        let all_shortcut_bindings = global_shortcut_bindings(&self.shortcuts);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
@@ -359,6 +379,8 @@ impl HorizonApp {
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_shortcut_bindings: &all_shortcut_bindings,
+                                    browser_frame_has_pointer_button: frame_has_pointer_button,
                                     browser_fullscreen_active: true,
                                 },
                             );
@@ -419,17 +441,23 @@ impl HorizonApp {
         } else {
             Vec::new()
         };
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         let mut panels_to_close = Vec::new();
 
         for i in 0..self.panel_render_order.len() {
-            let (panel_id, fallback_index) = self.panel_render_order[i];
+            let (panel_id, _fallback_index) = self.panel_render_order[i];
             if self.render_panel(
                 ctx,
                 canvas_rect,
                 panel_id,
-                fallback_index,
                 &workspace_collision_ids,
                 &browser_events,
+                PanelRenderScope {
+                    detached: false,
+                    frame_has_pointer_button,
+                },
             ) {
                 panels_to_close.push(panel_id);
             }
@@ -444,14 +472,14 @@ impl HorizonApp {
         ctx: &Context,
         canvas_rect: Rect,
         panel_id: PanelId,
-        _fallback_index: usize,
         workspace_collision_ids: &[WorkspaceId],
         browser_events: &[egui::Event],
+        scope: PanelRenderScope,
     ) -> bool {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, browser_events);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, browser_events, scope);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
@@ -504,11 +532,22 @@ impl HorizonApp {
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
         browser_events: &[egui::Event],
+        scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
+        // Browser input suppresses app shortcuts that this viewport actually
+        // handles: the root window routes the full global set, detached
+        // windows only the two toolbar shortcuts.
+        let all_shortcut_bindings = global_shortcut_bindings(&self.shortcuts);
+        let detached_shortcut_bindings = [self.shortcuts.fit_active_workspace, self.shortcuts.toggle_minimap];
+        let browser_shortcut_bindings = if scope.detached {
+            &detached_shortcut_bindings[..]
+        } else {
+            &all_shortcut_bindings[..]
+        };
 
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
@@ -714,6 +753,8 @@ impl HorizonApp {
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_shortcut_bindings,
+                                    browser_frame_has_pointer_button: scope.frame_has_pointer_button,
                                     browser_fullscreen_active: false,
                                 },
                             );
