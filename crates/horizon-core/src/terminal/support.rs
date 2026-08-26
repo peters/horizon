@@ -367,7 +367,9 @@ fn url_opener_invocation(url: &str) -> (&'static str, Vec<&str>) {
     if cfg!(target_os = "macos") {
         ("open", vec![url])
     } else if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", "start", "", url])
+        // explorer.exe invokes the default handler without cmd.exe, so URI
+        // metacharacters cannot start extra commands.
+        ("explorer", vec![url])
     } else {
         ("xdg-open", vec![url])
     }
@@ -386,8 +388,8 @@ mod tests {
             assert_eq!(program, "open");
             assert_eq!(args, ["https://example.com"]);
         } else if cfg!(target_os = "windows") {
-            assert_eq!(program, "cmd");
-            assert_eq!(args, ["/C", "start", "", "https://example.com"]);
+            assert_eq!(program, "explorer");
+            assert_eq!(args, ["https://example.com"]);
         } else {
             assert_eq!(program, "xdg-open");
             assert_eq!(args, ["https://example.com"]);
