@@ -9,7 +9,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use horizon_core::{PanelId, SpeechBackend, SpeechProfile, SpeechTask};
+use horizon_core::{SpeechBackend, SpeechProfile, SpeechTask};
+
+use super::SpeechSink;
 use transcribe_cpp::{Backend, CancelToken, Model, ModelOptions, RunOptions, Session, Task};
 
 /// `Model::load_with` cannot be interrupted, so loads are serialized across
@@ -108,7 +110,7 @@ fn register_retiring_worker(life: &Weak<WorkerLife>) {
 
 pub struct Job {
     pub pcm: Vec<f32>,
-    pub target: PanelId,
+    pub target: SpeechSink,
     pub generation: u64,
 }
 
@@ -127,12 +129,12 @@ pub enum WorkerEvent {
     /// dictation attempt.
     PreloadFailed { message: String },
     Done {
-        target: PanelId,
+        target: SpeechSink,
         generation: u64,
         text: String,
     },
     Failed {
-        target: PanelId,
+        target: SpeechSink,
         generation: u64,
         message: String,
     },

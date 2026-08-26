@@ -11,6 +11,25 @@
 
 use horizon_core::PanelId;
 
+/// Where a finished transcript should be inserted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpeechSink {
+    /// Typed into this terminal panel's PTY.
+    Panel(PanelId),
+    /// Pasted into the currently focused OS window.
+    Desktop,
+}
+
+impl SpeechSink {
+    #[must_use]
+    pub const fn panel(self) -> Option<PanelId> {
+        match self {
+            Self::Panel(id) => Some(id),
+            Self::Desktop => None,
+        }
+    }
+}
+
 /// Visual state of a panel's mic control.
 #[cfg_attr(not(feature = "speech"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,9 +44,9 @@ pub enum MicState {
 #[cfg_attr(not(feature = "speech"), allow(dead_code))]
 #[derive(Debug)]
 pub enum SpeechEvent {
-    /// Transcribed text ready to inject into `target`'s PTY input.
+    /// Transcribed text ready to inject into `target`.
     Text {
-        target: PanelId,
+        target: SpeechSink,
         text: String,
     },
     /// A dictation attempt ended without text (too short, nothing heard,
@@ -37,6 +56,7 @@ pub enum SpeechEvent {
     Error(String),
 }
 
+mod desktop;
 mod input;
 #[cfg(all(test, feature = "speech"))]
 pub(crate) use input::SPEECH_POLL_INTERVAL;

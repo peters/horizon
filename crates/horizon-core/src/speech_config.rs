@@ -45,6 +45,10 @@ pub struct SpeechConfig {
     /// F1 = Norwegian via NB-Whisper, F2 = English via whisper-large-v3).
     /// When empty, the flat fields above act as a single unnamed profile.
     pub profiles: Vec<SpeechProfile>,
+    /// When true, push-to-talk with no focused Horizon window pastes into
+    /// the currently focused OS window. Background dictation currently
+    /// requires an X11 global grab. Mic-button dictation is unchanged.
+    pub desktop_injection: bool,
 }
 
 impl Default for SpeechConfig {
@@ -61,6 +65,7 @@ impl Default for SpeechConfig {
             hotkey_mode: SpeechHotkeyMode::Hold,
             preload: false,
             profiles: Vec::new(),
+            desktop_injection: false,
         }
     }
 }
@@ -333,6 +338,7 @@ mod tests {
         assert_eq!(speech.backend, super::SpeechBackend::Auto);
         assert_eq!(speech.hotkey, "F9");
         assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Hold);
+        assert!(!speech.desktop_injection);
     }
     #[test]
     fn speech_config_parses_from_yaml_and_roundtrips() {
@@ -355,6 +361,7 @@ features:
         assert_eq!(speech.task, super::SpeechTask::Translate);
         assert_eq!(speech.backend, super::SpeechBackend::Cuda);
         assert_eq!(speech.hotkey_mode, super::SpeechHotkeyMode::Toggle);
+        assert!(!speech.desktop_injection);
 
         let round_tripped = Config::from_yaml(&config.to_yaml().expect("serialize")).expect("re-parse");
         assert_eq!(round_tripped.features.speech, *speech);
@@ -363,6 +370,14 @@ features:
     fn config_without_speech_block_still_parses() {
         let config = Config::from_yaml("features:\n  attention_feed: false\n").expect("parse");
         assert!(!config.features.speech.enabled);
+        assert!(!config.features.speech.desktop_injection);
+    }
+
+    #[test]
+    fn desktop_injection_parses_when_set() {
+        let yaml = "features:\n  speech:\n    enabled: true\n    model: /m.gguf\n    desktop_injection: true\n";
+        let config = Config::from_yaml(yaml).expect("parse");
+        assert!(config.features.speech.desktop_injection);
     }
     #[test]
     fn validate_rejects_malformed_speech_hotkey_only_when_enabled() {

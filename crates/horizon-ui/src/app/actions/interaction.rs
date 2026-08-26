@@ -381,7 +381,7 @@ impl HorizonApp {
 
     fn filter_detached_speech_events(&mut self, ctx: &Context, events: &[Event]) -> Option<Vec<Event>> {
         let escape_cancelled = self.speech.as_ref().is_some_and(|speech| {
-            speech.recording_target().is_some()
+            speech.recording_sink().is_some()
                 && events.iter().any(|event| {
                     matches!(
                         event,

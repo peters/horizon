@@ -92,6 +92,20 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         return changed;
     }
 
+    ui.add_space(6.0);
+    changed |= ui
+        .checkbox(
+            &mut config.features.speech.desktop_injection,
+            egui::RichText::new("Paste into other apps")
+                .color(theme::FG())
+                .size(12.0),
+        )
+        .changed();
+    super::dim_label(
+        ui,
+        "When no Horizon window is focused, push-to-talk pastes into the focused OS window. Background dictation currently requires X11; it will not start on a pure Wayland session.",
+    );
+
     // The microphone applies to every profile, so it renders in both the
     // profiles and the flat single-model layout. Backend and hotkey mode
     // are global too, but the flat grid below already hosts them — render
