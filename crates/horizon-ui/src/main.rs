@@ -326,7 +326,12 @@ fn init_tracing() {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"));
 
-    let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter);
+    // Stdout is an MCP protocol channel in `--browser-mcp` mode. Keep every
+    // tracing event on stderr so a coordination warning can never corrupt a
+    // JSON-RPC response.
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr);
 
     if std::env::var_os("HORIZON_TRACE_SPANS").is_some() {
         subscriber
