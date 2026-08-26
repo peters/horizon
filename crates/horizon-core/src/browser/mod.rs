@@ -440,6 +440,11 @@ impl BrowserPanelState {
             match event {
                 BrowserEvent::Ready => {
                     self.status = BrowserStatus::Ready;
+                    // A startup without a fresh navigation (no initial URL
+                    // or about:blank) never gets Loading(false); clear the
+                    // initial loading flag here. A real initial navigation
+                    // queues Loading(true) immediately after Ready.
+                    self.loading = false;
                     output.had_output = true;
                 }
                 BrowserEvent::Title(title) => {

@@ -502,6 +502,11 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const RESTART_BACKOFF: Duration = Duration::from_millis(250);
 const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
+/// Max CDP messages handled per pump pass. One message per pass capped the
+/// link at ~200 msg/s (pass + 5 ms sleep), which backs up the socket under
+/// animated pages plus pointer input and delays the screencast acks new
+/// frames wait on.
+const MAX_CDP_BURST: u32 = 16;
 const MANIFEST_MIN_INTERVAL: Duration = Duration::from_millis(200);
 const SIGNAL_MIN_INTERVAL: Duration = Duration::from_millis(250);
 /// Pointer-move storms rewrite the manifest on every event otherwise; the
@@ -619,20 +624,33 @@ fn run_loop(
             break;
         }
 
-        // 2. CDP messages: responses and events.
-        match link.read_one() {
-            Ok(Some(message)) => state.handle_message(link, event_tx, frame_slot, message),
-            Ok(None) => {}
-            Err(error) => {
-                // The connection is gone. Reconnecting a single panel's
-                // session is not worth the state surgery; surface the
-                // failure and stop — the panel offers Retry.
-                tracing::warn!(target: "browser", "cdp connection lost: {error}");
-                let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
-                let _ = chrome.kill();
-                let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-                break;
+        // 2. CDP messages: responses and events. Drain a bounded burst of
+        //    ready messages so sustained traffic keeps pace with what one
+        //    pass can emit (input, viewport, clipboard, screencast acks).
+        let mut connection_lost = None;
+        let mut burst = 0;
+        while burst < MAX_CDP_BURST {
+            match link.read_one() {
+                Ok(Some(message)) => {
+                    state.handle_message(link, event_tx, frame_slot, message);
+                    burst += 1;
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    connection_lost = Some(error);
+                    break;
+                }
             }
+        }
+        if let Some(error) = connection_lost {
+            // The connection is gone. Reconnecting a single panel's
+            // session is not worth the state surgery; surface the
+            // failure and stop — the panel offers Retry.
+            tracing::warn!(target: "browser", "cdp connection lost: {error}");
+            let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
+            let _ = chrome.kill();
+            let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+            break;
         }
 
         // 3. Flush a pending throttled manifest write (the loop always
