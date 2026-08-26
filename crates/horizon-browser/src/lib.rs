@@ -5,7 +5,9 @@
 //! The crate is UI-independent and keeps protocol, browser-process, input,
 //! and frame ownership outside Horizon's board and persistence model.
 
+mod audit;
 pub mod cdp;
+mod control;
 mod coordination;
 mod error;
 pub mod frames;
@@ -19,6 +21,8 @@ mod websocket;
 
 use std::path::PathBuf;
 
+pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
+pub use control::{AgentAction, BrowserControlAction};
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot};

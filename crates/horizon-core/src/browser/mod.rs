@@ -275,7 +275,7 @@ impl BrowserPanelState {
             // numbers stay monotonic, so a retried session's first frame is
             // never mistaken for an unchanged one by the UI's seq check.
             frame_slot: Arc::clone(&self.frame_slot),
-            coordination: Some(Arc::new(manifest::ManifestCoordination)),
+            coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
         };
         match session::start_session(session_config) {
             Ok(handle) => {

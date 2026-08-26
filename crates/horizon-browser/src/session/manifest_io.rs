@@ -3,7 +3,10 @@
 
 use std::time::Instant;
 
-use crate::{CoordinationState, HandoffRequest};
+use crate::{
+    AgentAction, BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, BrowserCommand,
+    CoordinationState, HandoffRequest, new_action_id,
+};
 
 use super::{
     BrowserEvent, BrowserEventSender, DriverState, MANIFEST_MIN_INTERVAL, SIGNAL_MIN_INTERVAL, USER_ACTIVE_TTL,
@@ -43,24 +46,72 @@ impl DriverState {
     }
 
     /// Poll product-owned coordination for owner and handoff changes.
-    pub(super) fn tick_signals(&mut self, event_tx: &BrowserEventSender) {
+    pub(super) fn tick_signals(&mut self, event_tx: &BrowserEventSender) -> Vec<AgentAction> {
         if self.last_signal_check.elapsed() < SIGNAL_MIN_INTERVAL {
-            return;
+            return Vec::new();
         }
         self.last_signal_check = Instant::now();
         self.expire_user_active();
         let Some(coordination) = self.config.coordination.as_ref() else {
-            return;
+            return Vec::new();
         };
         let signals = match coordination.signals(&self.config.panel_local_id) {
             Ok(signals) => signals,
             Err(error) => {
                 tracing::debug!(target: "browser", "failed to read browser coordination: {error}");
-                return;
+                return Vec::new();
             }
         };
         publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
         publish_handoff_change(&mut self.handoff_seen, signals.handoff, event_tx);
+        signals.actions
+    }
+
+    pub(super) fn audit_user_command(&self, command: &BrowserCommand) {
+        // Stop is recorded synchronously by `BrowserSession::send` because
+        // setting its atomic flag can end the loop before the queue drains.
+        if matches!(command, BrowserCommand::Stop) {
+            return;
+        }
+        let actor = if matches!(command, BrowserCommand::SetViewport { .. }) {
+            BrowserAuditActor::System
+        } else {
+            BrowserAuditActor::User
+        };
+        self.audit_command(new_action_id(), actor, BrowserAuditStatus::Dispatched, command);
+    }
+
+    pub(super) fn audit_agent_action(&self, request: &AgentAction, status: BrowserAuditStatus) {
+        let Some(coordination) = self.config.coordination.as_ref() else {
+            return;
+        };
+        let entry = BrowserAuditEntry::new(
+            request.action_id.clone(),
+            BrowserAuditActor::Agent {
+                name: request.actor.clone(),
+            },
+            status,
+            BrowserAuditAction::from_control(&request.action),
+        );
+        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+            tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
+        }
+    }
+
+    fn audit_command(
+        &self,
+        action_id: String,
+        actor: BrowserAuditActor,
+        status: BrowserAuditStatus,
+        command: &BrowserCommand,
+    ) {
+        let Some(coordination) = self.config.coordination.as_ref() else {
+            return;
+        };
+        let entry = BrowserAuditEntry::new(action_id, actor, status, BrowserAuditAction::from_command(command));
+        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+            tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
+        }
     }
 
     pub(super) fn write_manifest(&mut self, force: bool) {
@@ -139,6 +190,7 @@ impl DriverState {
 
     fn coordination_state(&self) -> CoordinationState {
         CoordinationState {
+            backend: self.config.browser.backend,
             browser_ws: self.browser_ws.clone(),
             target_id: self.target_id.clone().unwrap_or_default(),
             url: self.url.clone(),

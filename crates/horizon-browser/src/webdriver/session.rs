@@ -18,6 +18,8 @@ use super::actions::ActionState;
 use super::http::HttpError;
 use super::service::{WebDriverService, prepare_profile};
 
+mod coordination;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
@@ -119,6 +121,7 @@ struct Driver {
     service: WebDriverService,
     session_id: String,
     bidi: Option<JsonWsLink>,
+    automation_ws: String,
     context_id: Option<String>,
     actions: ActionState,
     frames: AdaptiveFrames,
@@ -126,6 +129,12 @@ struct Driver {
     title: String,
     generation: u64,
     refresh_pending_at: Option<Instant>,
+    coordination_dirty: bool,
+    last_coordination_write: Instant,
+    last_signal_check: Instant,
+    last_user_active_stamp: Option<Instant>,
+    owner_seen: Option<String>,
+    handoff_seen: Option<String>,
 }
 
 struct NewSession {
@@ -146,6 +155,7 @@ pub(crate) fn run_webdriver(
         tx: Some(completion_tx),
         process: process_control.clone(),
     };
+    let _coordination_lifetime = crate::coordination::CoordinationLifetime::start(config);
     let mut driver = match Driver::start(config, process_control, stop_requested) {
         Ok(driver) => driver,
         Err(error) => {
@@ -154,11 +164,8 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    let capabilities = crate::ActiveBackendCapabilities {
-        backend: driver.config.browser.backend,
-        capabilities: driver.config.browser.backend.capabilities(),
-        bidi: driver.bidi.is_some(),
-    };
+    driver.initialize_coordination();
+    let capabilities = driver.active_capabilities();
     frame_slot.publish_backend_capabilities(capabilities);
     let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
     let _ = event_tx.send(BrowserEvent::Ready);
@@ -174,7 +181,8 @@ pub(crate) fn run_webdriver(
         let mut stop = false;
         let batch = command_rx.drain(256);
         for command in batch.commands {
-            if driver.handle_command(command, event_tx) {
+            driver.audit_user_command(&command);
+            if driver.handle_command(command, event_tx, true) {
                 stop = true;
                 break;
             }
@@ -183,18 +191,27 @@ pub(crate) fn run_webdriver(
         if stop {
             break;
         }
+        for request in driver.tick_coordination(event_tx) {
+            if request.action.validate().is_err() {
+                driver.audit_agent_action(&request, crate::BrowserAuditStatus::Rejected);
+                continue;
+            }
+            driver.audit_agent_action(&request, crate::BrowserAuditStatus::Dispatched);
+            let _ = driver.handle_command(request.action.into_command(), event_tx, false);
+        }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
             if driver.config.browser.backend == BackendKind::FirefoxBidi {
                 let _ = event_tx.send(BrowserEvent::Warning(format!("Firefox BiDi disconnected: {error}")));
                 break;
             }
-            driver.bidi = None;
+            driver.disable_optional_bidi(frame_slot, event_tx);
         }
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
         driver.tick_page_state_refresh(event_tx);
+        driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
             return;
@@ -228,15 +245,23 @@ impl Driver {
         let new_session = parse_new_session_response(&response)?;
         let session_id = new_session.id;
         let ws_url = new_session.capabilities.get("webSocketUrl").and_then(Value::as_str);
-        let mut bidi = ws_url
-            .map(|url| connect_bidi_with_startup_retry(url, stop_requested))
-            .transpose()?;
+        let mut bidi = match ws_url {
+            Some(url) => match connect_bidi_with_startup_retry(url, stop_requested) {
+                Ok(link) => Some(link),
+                Err(error) if config.browser.backend == BackendKind::SafariWebDriver => {
+                    tracing::warn!("Safari BiDi endpoint was unavailable; continuing with classic WebDriver: {error}");
+                    None
+                }
+                Err(error) => return Err(error),
+            },
+            None => None,
+        };
         if config.browser.backend == BackendKind::FirefoxBidi && bidi.is_none() {
             let path = format!("/session/{session_id}");
             let _ = service.http.delete(&path);
             return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
         }
-        let context_id = bidi.as_mut().and_then(discover_context);
+        let mut context_id = bidi.as_mut().and_then(discover_context);
         if config.browser.backend == BackendKind::FirefoxBidi && context_id.is_none() {
             let path = format!("/session/{session_id}");
             let _ = service.http.delete(&path);
@@ -251,12 +276,15 @@ impl Driver {
                 return Err(format!("Firefox BiDi event subscription failed: {error}"));
             }
             bidi = None;
+            context_id = None;
         }
+        let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
         Ok(Self {
             config: config.clone(),
             service,
             session_id,
             bidi,
+            automation_ws,
             context_id,
             actions: ActionState::default(),
             frames: AdaptiveFrames::new(),
@@ -264,10 +292,19 @@ impl Driver {
             title: String::new(),
             generation: 0,
             refresh_pending_at: None,
+            coordination_dirty: true,
+            last_coordination_write: Instant::now(),
+            last_signal_check: Instant::now(),
+            last_user_active_stamp: None,
+            owner_seen: None,
+            handoff_seen: None,
         })
     }
 
-    fn handle_command(&mut self, command: BrowserCommand, event_tx: &BrowserEventSender) -> bool {
+    fn handle_command(&mut self, command: BrowserCommand, event_tx: &BrowserEventSender, user_origin: bool) -> bool {
+        if user_origin && command.is_user_activity() {
+            self.stamp_user_active();
+        }
         match command {
             BrowserCommand::Navigate(url) => self.navigate(&url, event_tx),
             BrowserCommand::Reload => self.reload(event_tx),
@@ -275,14 +312,28 @@ impl Driver {
             BrowserCommand::Forward => self.traverse(1, event_tx),
             BrowserCommand::SetViewport { width, height } => self.set_viewport(width, height, event_tx),
             BrowserCommand::Input(input) => self.perform_input(input, event_tx),
-            BrowserCommand::HandoffDone => {
-                let _ = event_tx.send(BrowserEvent::HandoffResolutionFailed(
-                    "agent handoff is available only for Chromium CDP sessions".to_string(),
-                ));
-            }
+            BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
             BrowserCommand::Stop => return true,
         }
         false
+    }
+
+    fn active_capabilities(&self) -> crate::ActiveBackendCapabilities {
+        crate::ActiveBackendCapabilities {
+            backend: self.config.browser.backend,
+            capabilities: self.config.browser.backend.capabilities(),
+            bidi: self.bidi.is_some(),
+        }
+    }
+
+    fn disable_optional_bidi(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        self.bidi = None;
+        self.automation_ws.clear();
+        self.context_id = None;
+        self.coordination_dirty = true;
+        let capabilities = self.active_capabilities();
+        frame_slot.publish_backend_capabilities(capabilities);
+        let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
     }
 
     fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) {
@@ -491,18 +542,21 @@ impl Driver {
         {
             self.context_id = Some(context.to_string());
         }
-        if let Some(url) = params.get("url").and_then(Value::as_str)
-            && url != self.url
-        {
-            self.url = url.to_string();
-            let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-        }
+        let url_changed = params
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|url| *url != self.url)
+            .map(|url| {
+                self.url = url.to_string();
+                self.coordination_dirty = true;
+                let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+            })
+            .is_some();
         if method.ends_with("navigationStarted") {
             self.advance_generation();
             let _ = event_tx.send(BrowserEvent::Loading(true));
         } else if method.ends_with("domContentLoaded") || method.ends_with("load") {
             let _ = event_tx.send(BrowserEvent::Loading(false));
-            self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
             self.frames.demand();
         } else if method.ends_with("contextDestroyed") {
             let destroyed = params.get("context").and_then(Value::as_str);
@@ -510,6 +564,13 @@ impl Driver {
                 self.context_id = None;
                 self.advance_generation();
             }
+        }
+        // A BFCache history traversal can publish a new URL and pixels
+        // without another DOMContentLoaded/load event. Refresh classic
+        // WebDriver state after either signal so the committed title cannot
+        // remain attached to the page we just left.
+        if bidi_event_needs_page_refresh(method, url_changed) {
+            self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
         }
     }
 
@@ -530,6 +591,7 @@ impl Driver {
             && url != self.url
         {
             self.url = normalize_url(url).to_string();
+            self.coordination_dirty = true;
             let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
         }
         if let Ok(response) = self.classic_get("title")
@@ -537,6 +599,7 @@ impl Driver {
             && title != self.title
         {
             self.title = title.to_string();
+            self.coordination_dirty = true;
             let _ = event_tx.send(BrowserEvent::Title(self.title.clone()));
         }
         let _ = event_tx.send(BrowserEvent::Loading(false));
@@ -740,11 +803,15 @@ fn capture_is_current(
     capture_generation == current_generation && capture_context == current_context
 }
 
+fn bidi_event_needs_page_refresh(method: &str, url_changed: bool) -> bool {
+    url_changed || method.ends_with("domContentLoaded") || method.ends_with("load")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, capture_is_current, new_session_capabilities, parse_new_session_response, safe_session_id,
-        validate_firefox_args,
+        AdaptiveFrames, bidi_event_needs_page_refresh, capture_is_current, new_session_capabilities,
+        parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -808,6 +875,13 @@ mod tests {
         frames.invalidate();
         assert!(frames.next_capture.is_some());
         assert!(frames.completed("same"));
+    }
+
+    #[test]
+    fn bidi_url_change_refreshes_title_without_a_load_event() {
+        assert!(bidi_event_needs_page_refresh("browsingContext.historyUpdated", true));
+        assert!(bidi_event_needs_page_refresh("browsingContext.load", false));
+        assert!(!bidi_event_needs_page_refresh("log.entryAdded", false));
     }
 
     #[test]

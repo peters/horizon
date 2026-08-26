@@ -5,10 +5,10 @@
 //! alive.
 //! It is the shared channel between three parties:
 //!
-//! - the **panel driver** (writes `browser_ws`, `target_id`, `url`,
+//! - the **panel driver** (writes backend endpoint/context, `url`,
 //!   `title`, `user_active`, and the handoff `done` flag),
 //! - **external agents** (read discovery fields, heartbeat `owner`, write
-//!   a `handoff` request),
+//!   a `handoff` request, and enqueue validated backend-neutral actions),
 //! - the **UI** (reads ownership for the chrome chip).
 //!
 //! File-based on purpose: no new IPC mechanism, works across process
@@ -35,6 +35,12 @@ use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
 use crate::horizon_home::{HorizonHome, safe_local_id};
+
+mod agent;
+mod audit;
+
+pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
+pub use audit::{audit_path_for_root, default_audit_path, read_audit};
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
@@ -76,18 +82,27 @@ pub struct ManifestHandoff {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct BrowserManifest {
     pub panel_local_id: String,
-    /// Browser-level `DevTools` ws endpoint (what an agent connects to).
+    #[serde(default)]
+    pub backend: horizon_browser::BackendKind,
+    /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
+    /// Safari. Canonical agents should use the validated action queue.
     pub browser_ws: String,
-    /// The page target the panel is driving.
+    /// The page target or top-level browsing context the panel is driving.
     pub target_id: String,
     pub url: String,
     pub title: String,
+    /// Private append-only JSONL action journal for this panel identity.
+    #[serde(default)]
+    pub audit_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ManifestOwner>,
     pub user_active: bool,
     pub user_active_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<ManifestHandoff>,
+    /// Bounded host queue consumed only while the user is not steering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<horizon_browser::AgentAction>,
     pub updated_at: i64,
 }
 
@@ -407,7 +422,9 @@ fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()>
 /// Horizon's filesystem-backed implementation of the engine's optional live
 /// coordination boundary.
 #[derive(Debug, Default)]
-pub struct ManifestCoordination;
+pub struct ManifestCoordination {
+    audit: audit::AuditSink,
+}
 
 impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn prepare(&self, panel_local_id: &str, timeout: Duration) -> bool {
@@ -417,10 +434,12 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         initialize(panel_local_id, |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
+            manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
             manifest.title.clone_from(&state.title);
+            manifest.audit_path = default_audit_path(panel_local_id).to_string_lossy().to_string();
             manifest.user_active = false;
             manifest.user_active_at = 0;
             manifest.updated_at = now_millis();
@@ -430,6 +449,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
 
     fn update(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         update(panel_local_id, |manifest| {
+            manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -449,35 +469,34 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn signals(&self, panel_local_id: &str) -> std::io::Result<horizon_browser::CoordinationSignals> {
-        let Some(mut manifest) = read(panel_local_id) else {
+        let Some(snapshot) = read(panel_local_id) else {
             return Ok(horizon_browser::CoordinationSignals::default());
         };
-        if let Some(handoff) = manifest
+        let now = now_millis();
+        let legacy_handoff = snapshot
             .handoff_pending()
-            .filter(|handoff| handoff.request_id.is_empty())
-        {
-            let observed_reason = handoff.reason.clone();
-            let observed_requested_at = handoff.requested_at;
-            let request_id = new_handoff_request_id();
-            manifest = update(panel_local_id, |current| {
-                if let Some(current_handoff) = current.handoff.as_mut()
-                    && !current_handoff.done
-                    && current_handoff.request_id.is_empty()
-                    && current_handoff.reason == observed_reason
-                    && current_handoff.requested_at == observed_requested_at
-                {
-                    current_handoff.request_id.clone_from(&request_id);
-                }
-            })?;
+            .is_some_and(|handoff| handoff.request_id.is_empty());
+        let actions_can_advance =
+            !snapshot.actions.is_empty() && !snapshot.user_is_active(now) && snapshot.handoff_pending().is_none();
+        if !legacy_handoff && !actions_can_advance {
+            return Ok(signals_from_manifest(&snapshot, Vec::new()));
         }
-        let owner = manifest.live_owner(now_millis()).map(|owner| owner.name.clone());
-        let handoff = manifest.handoff_pending().and_then(|handoff| {
-            (!handoff.request_id.is_empty()).then(|| horizon_browser::HandoffRequest {
-                request_id: handoff.request_id.clone(),
-                reason: handoff.reason.clone(),
-            })
-        });
-        Ok(horizon_browser::CoordinationSignals { owner, handoff })
+        let generated_request_id = new_handoff_request_id();
+        let mut actions = Vec::new();
+        let mut rejected = Vec::new();
+        let manifest = update(panel_local_id, |current| {
+            if let Some(current_handoff) = current.handoff.as_mut()
+                && !current_handoff.done
+                && current_handoff.request_id.is_empty()
+            {
+                current_handoff.request_id.clone_from(&generated_request_id);
+            }
+            (actions, rejected) = agent::take_ready_actions(current);
+        })?;
+        if let Err(error) = agent::append_rejected_actions(panel_local_id, rejected) {
+            tracing::warn!(target: "browser", "failed to append rejected-action audit: {error}");
+        }
+        Ok(signals_from_manifest(&manifest, actions))
     }
 
     fn acknowledge_handoff(&self, panel_local_id: &str, request_id: &str) -> std::io::Result<bool> {
@@ -495,8 +514,30 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         Ok(acknowledged)
     }
 
+    fn record_action(&self, panel_local_id: &str, entry: &horizon_browser::BrowserAuditEntry) -> std::io::Result<()> {
+        self.audit.append(entry, panel_local_id)
+    }
+
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
         remove_with_timeout(panel_local_id, timeout)
+    }
+}
+
+fn signals_from_manifest(
+    manifest: &BrowserManifest,
+    actions: Vec<horizon_browser::AgentAction>,
+) -> horizon_browser::CoordinationSignals {
+    let owner = manifest.live_owner(now_millis()).map(|owner| owner.name.clone());
+    let handoff = manifest.handoff_pending().and_then(|handoff| {
+        (!handoff.request_id.is_empty()).then(|| horizon_browser::HandoffRequest {
+            request_id: handoff.request_id.clone(),
+            reason: handoff.reason.clone(),
+        })
+    });
+    horizon_browser::CoordinationSignals {
+        owner,
+        handoff,
+        actions,
     }
 }
 
@@ -519,14 +560,17 @@ mod tests {
     fn sample(id: &str) -> BrowserManifest {
         BrowserManifest {
             panel_local_id: id.to_string(),
+            backend: horizon_browser::BackendKind::ChromiumCdp,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
+            audit_path: String::new(),
             owner: None,
             user_active: false,
             user_active_at: 0,
             handoff: None,
+            actions: Vec::new(),
             updated_at: 0,
         }
     }

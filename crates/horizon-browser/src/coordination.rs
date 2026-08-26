@@ -1,11 +1,13 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// Live Chromium endpoint and page metadata exported to an optional host
-/// coordination layer. Horizon uses this boundary for its agent handoff
-/// manifest; standalone users can omit coordination entirely.
+/// Live backend endpoint and page metadata exported to an optional host
+/// coordination layer. Horizon uses this boundary for agent steering and
+/// handoff; standalone users can omit coordination entirely.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CoordinationState {
+    pub backend: crate::BackendKind,
     pub browser_ws: String,
     pub target_id: String,
     pub url: String,
@@ -18,10 +20,13 @@ pub struct HandoffRequest {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CoordinationSignals {
     pub owner: Option<String>,
     pub handoff: Option<HandoffRequest>,
+    /// Validated, atomically claimed external actions. A host must not
+    /// return the same request twice unless it intentionally wants a retry.
+    pub actions: Vec<crate::AgentAction>,
 }
 
 /// Optional product-owned coordination boundary for live browser sessions.
@@ -44,5 +49,42 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     /// # Errors
     /// Returns an I/O error when the exact handoff cannot be updated.
     fn acknowledge_handoff(&self, panel_local_id: &str, request_id: &str) -> std::io::Result<bool>;
+    /// Append one privacy-aware action record to the host's audit sink.
+    /// The default keeps audit optional for standalone embedders.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the configured audit sink cannot persist
+    /// the record.
+    fn record_action(&self, _panel_local_id: &str, _entry: &crate::BrowserAuditEntry) -> std::io::Result<()> {
+        Ok(())
+    }
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool;
+}
+
+/// Own the host coordination entry for exactly one driver lifetime.
+pub(crate) struct CoordinationLifetime {
+    coordination: Option<Arc<dyn BrowserCoordination>>,
+    panel_local_id: String,
+}
+
+impl CoordinationLifetime {
+    pub(crate) fn start(config: &crate::BrowserSessionConfig) -> Self {
+        if let Some(coordination) = &config.coordination
+            && !coordination.prepare(&config.panel_local_id, Duration::from_secs(2))
+        {
+            tracing::warn!(target: "browser", "failed to remove stale browser coordination before startup");
+        }
+        Self {
+            coordination: config.coordination.clone(),
+            panel_local_id: config.panel_local_id.clone(),
+        }
+    }
+}
+
+impl Drop for CoordinationLifetime {
+    fn drop(&mut self) {
+        if let Some(coordination) = &self.coordination {
+            let _ = coordination.remove(&self.panel_local_id, Duration::from_secs(2));
+        }
+    }
 }

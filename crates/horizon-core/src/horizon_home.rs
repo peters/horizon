@@ -92,6 +92,11 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn browser_audit_dir(&self) -> PathBuf {
+        self.root.join("audit").join("browsers")
+    }
+
+    #[must_use]
     pub fn browser_profile_dir(&self, local_id: &str) -> PathBuf {
         self.root.join("browser-profiles").join(safe_local_id(local_id))
     }
@@ -143,6 +148,10 @@ mod tests {
         assert_eq!(
             home.browsers_manifest_dir(),
             PathBuf::from("/tmp/horizon-home/runtime/browsers")
+        );
+        assert_eq!(
+            home.browser_audit_dir(),
+            PathBuf::from("/tmp/horizon-home/audit/browsers")
         );
         assert_eq!(
             home.browser_profile_dir("panel-1"),

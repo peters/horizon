@@ -106,6 +106,19 @@ pub enum BrowserCommand {
     Stop,
 }
 
+impl BrowserCommand {
+    /// Whether a user-originated command means the user is actively steering
+    /// the page and should temporarily pause external agent actions.
+    #[must_use]
+    pub fn is_user_activity(&self) -> bool {
+        match self {
+            Self::Navigate(_) | Self::Reload | Self::Back | Self::Forward => true,
+            Self::Input(input) => input.is_activity(),
+            Self::SetViewport { .. } | Self::HandoffDone | Self::Stop => false,
+        }
+    }
+}
+
 /// Everything the driver needs to start.
 #[derive(Clone, Debug)]
 pub struct BrowserSessionConfig {
@@ -325,7 +338,8 @@ fn run_loop(
         state.pending_restart_tick(link, event_tx, frame_slot);
 
         // 5. Ownership / handoff signals from the manifest (agent side).
-        state.tick_signals(event_tx);
+        let actions = state.tick_signals(event_tx);
+        let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions);
 
         // 6. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
@@ -567,5 +581,22 @@ mod tests {
         assert_eq!(normalized_committed_url("about:blank"), "");
         assert_eq!(normalized_committed_url(""), "");
         assert_eq!(normalized_committed_url("https://example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn page_controls_count_as_user_steering_but_system_controls_do_not() {
+        assert!(BrowserCommand::Navigate("https://example.test".to_string()).is_user_activity());
+        assert!(BrowserCommand::Reload.is_user_activity());
+        assert!(BrowserCommand::Back.is_user_activity());
+        assert!(BrowserCommand::Forward.is_user_activity());
+        assert!(
+            !BrowserCommand::SetViewport {
+                width: 800,
+                height: 600
+            }
+            .is_user_activity()
+        );
+        assert!(!BrowserCommand::HandoffDone.is_user_activity());
+        assert!(!BrowserCommand::Stop.is_user_activity());
     }
 }

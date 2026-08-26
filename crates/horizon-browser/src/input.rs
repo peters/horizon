@@ -8,7 +8,8 @@
 mod cdp;
 
 /// CDP modifier bitmask (matches `protocol::Input.Modifier`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 #[allow(clippy::struct_excessive_bools)] // the four CDP modifier bits
 pub struct BrowserModifiers {
     pub alt: bool,
@@ -48,7 +49,8 @@ impl BrowserModifiers {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BrowserButton {
     Left,
     Middle,
@@ -70,7 +72,8 @@ impl BrowserButton {
 /// and unmodified Enter ride on a `keyDown` event carrying `text` (Chrome then
 /// synthesizes the full keydown/keypress/input DOM sequence); other
 /// non-printable keys use `rawKeyDown` with a virtual-key code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum BrowserKey {
     ArrowUp,
     ArrowDown,
@@ -111,7 +114,8 @@ pub enum BrowserKey {
 /// Clipboard pseudo-events need the explicit command because modifier bits
 /// alone do not invoke the platform editing action in every headless Chrome
 /// build (notably on macOS).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BrowserEditCommand {
     Copy,
     Cut,
@@ -202,7 +206,8 @@ fn vk_for_char(c: char) -> u32 {
 
 /// One input event to deliver to the page. Coordinates are in CSS pixels
 /// of the emulated viewport.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserInput {
     MouseMove {
         x: f64,

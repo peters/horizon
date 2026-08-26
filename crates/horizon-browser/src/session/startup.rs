@@ -2,7 +2,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use crate::BrowserConfig;
 use crate::cdp::CdpLink;
@@ -26,33 +25,6 @@ impl Drop for DriverCompletion {
         self.process_control.mark_registration_settled();
         if let Some(tx) = self.completion_tx.take() {
             let _ = tx.send(());
-        }
-    }
-}
-
-struct CoordinationLifetime {
-    coordination: Option<Arc<dyn crate::BrowserCoordination>>,
-    panel_local_id: String,
-}
-
-impl CoordinationLifetime {
-    fn start(config: &BrowserSessionConfig) -> Self {
-        if let Some(coordination) = &config.coordination
-            && !coordination.prepare(&config.panel_local_id, Duration::from_secs(2))
-        {
-            tracing::warn!(target: "browser", "failed to remove stale browser coordination before startup");
-        }
-        Self {
-            coordination: config.coordination.clone(),
-            panel_local_id: config.panel_local_id.clone(),
-        }
-    }
-}
-
-impl Drop for CoordinationLifetime {
-    fn drop(&mut self) {
-        if let Some(coordination) = &self.coordination {
-            let _ = coordination.remove(&self.panel_local_id, Duration::from_secs(2));
         }
     }
 }
@@ -233,7 +205,7 @@ pub(super) fn run_driver(
         completion_tx: Some(completion_tx),
         process_control: process_control.clone(),
     };
-    let _coordination_lifetime = CoordinationLifetime::start(config);
+    let _coordination_lifetime = crate::coordination::CoordinationLifetime::start(config);
     let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
         return;
     };

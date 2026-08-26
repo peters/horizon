@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
+use crate::{AgentAction, BrowserAuditStatus};
 
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
@@ -22,39 +23,73 @@ impl DriverState {
     ) -> bool {
         let batch = command_rx.drain(256);
         for command in batch.commands {
-            match command {
-                BrowserCommand::Stop => return true,
-                BrowserCommand::Navigate(url) => self.navigate_to(link, event_tx, frame_slot, &url),
-                BrowserCommand::Reload => {
-                    self.pending_restart_at = Some(Instant::now());
-                    let _ = self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
-                }
-                BrowserCommand::Back => self.navigate_history(link, event_tx, frame_slot, -1),
-                BrowserCommand::Forward => self.navigate_history(link, event_tx, frame_slot, 1),
-                BrowserCommand::SetViewport { width, height } => {
-                    self.set_viewport(link, event_tx, frame_slot, width, height);
-                }
-                BrowserCommand::Input(input) => {
-                    // Input cannot block on a roundtrip: a detaching session
-                    // would otherwise stall every frame for the call timeout.
-                    let is_activity = input.is_activity();
-                    if input.copies_selection() {
-                        self.request_clipboard_text(link);
-                    }
-                    let (method, params) = input.cdp();
-                    if let Some(session) = self.session_id.clone() {
-                        let _ = link.send_request(method, &params, Some(session.as_str()));
-                    }
-                    if is_activity {
-                        self.stamp_user_active();
-                    }
-                }
-                BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
+            self.audit_user_command(&command);
+            if self.dispatch_command(link, event_tx, frame_slot, command, true) {
+                return true;
             }
         }
         // The last sender dropped without sending Stop: no one is left to
         // service, so stop instead of keeping the browser and profile alive.
         batch.disconnected
+    }
+
+    pub(super) fn drain_agent_actions(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        actions: Vec<AgentAction>,
+    ) -> bool {
+        for request in actions {
+            if request.action.validate().is_err() {
+                self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
+                continue;
+            }
+            self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
+            if self.dispatch_command(link, event_tx, frame_slot, request.action.into_command(), false) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn dispatch_command(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        command: BrowserCommand,
+        user_origin: bool,
+    ) -> bool {
+        if user_origin && command.is_user_activity() {
+            self.stamp_user_active();
+        }
+        match command {
+            BrowserCommand::Stop => return true,
+            BrowserCommand::Navigate(url) => self.navigate_to(link, event_tx, frame_slot, &url),
+            BrowserCommand::Reload => {
+                self.pending_restart_at = Some(Instant::now());
+                let _ = self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
+            }
+            BrowserCommand::Back => self.navigate_history(link, event_tx, frame_slot, -1),
+            BrowserCommand::Forward => self.navigate_history(link, event_tx, frame_slot, 1),
+            BrowserCommand::SetViewport { width, height } => {
+                self.set_viewport(link, event_tx, frame_slot, width, height);
+            }
+            BrowserCommand::Input(input) => {
+                // Input cannot block on a roundtrip: a detaching session
+                // would otherwise stall every frame for the call timeout.
+                if input.copies_selection() {
+                    self.request_clipboard_text(link);
+                }
+                let (method, params) = input.cdp();
+                if let Some(session) = self.session_id.clone() {
+                    let _ = link.send_request(method, &params, Some(session.as_str()));
+                }
+            }
+            BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
+        }
+        false
     }
 
     fn set_viewport(
