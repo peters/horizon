@@ -8,6 +8,9 @@ use crate::browser_widget::BrowserUiState;
 use crate::theme;
 
 const CHROME_HEIGHT: f32 = 30.0;
+/// The URL bar keeps at least this much width even when an owner chip is
+/// present on a narrow panel.
+const URL_MIN_WIDTH: f32 = 120.0;
 
 /// Draw the top strip. Returns whether the URL bar has focus and whether
 /// any chrome widget was clicked this frame (for panel-focus requests).
@@ -21,11 +24,11 @@ pub fn show(
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
-        // Reserve the chip's natural width up front so the URL bar's
-        // expanding width cannot starve it (a trailing `right_to_left`
-        // scope gets zero remaining width and the chip renders invisibly).
+        // Reserve the chip's width up front so the URL bar's expanding
+        // width cannot starve it (a trailing `right_to_left` scope gets
+        // zero remaining width and the chip renders invisibly).
         let chip = ownership_chip_label(browser);
-        let chip_width = chip.as_ref().map_or(0.0, |(label, _)| {
+        let natural_chip_width = chip.as_ref().map_or(0.0, |(label, _)| {
             ui.painter()
                 .layout_no_wrap(label.clone(), egui::FontId::proportional(10.0), egui::Color32::WHITE)
                 .size()
@@ -36,16 +39,29 @@ pub fn show(
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
-        // Without a chip the bar keeps its old full-width behavior.
+        // The owner name is an unrestricted external string: cap the chip to
+        // what the row can spare while keeping the URL bar a usable minimum
+        // width, and let the chip truncate (full name on hover). Without a
+        // chip the bar keeps its old full-width behavior.
+        let chip_width = if chip.is_some() {
+            natural_chip_width.min((ui.available_width() - URL_MIN_WIDTH - 8.0).max(0.0))
+        } else {
+            0.0
+        };
         let url_max_width = if chip.is_some() {
-            (ui.available_width() - chip_width - 8.0).max(0.0)
+            (ui.available_width() - chip_width - 8.0).max(URL_MIN_WIDTH)
         } else {
             f32::INFINITY
         };
         let (url_focused, url_clicked) = url_bar(ui, panel_id, browser, state, interactive, url_max_width);
         clicked |= url_clicked;
-        if let Some((label, color)) = chip {
-            ui.label(RichText::new(label).size(10.0).color(color).strong());
+        if let Some((label, color)) = &chip {
+            ui.add_sized(
+                egui::vec2(chip_width, CHROME_HEIGHT),
+                egui::Label::new(RichText::new(label.clone()).size(10.0).color(*color).strong())
+                    .wrap_mode(TextWrapMode::Truncate),
+            )
+            .on_hover_text(label.clone());
         }
         (url_focused, clicked)
     });
