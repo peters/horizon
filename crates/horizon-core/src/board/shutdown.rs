@@ -273,7 +273,9 @@ mod tests {
 
     #[test]
     fn browser_wait_forces_bounded_cleanup_after_timeout() {
-        let (_completed_tx, completed_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        // The driver is already gone: force cleanup must not wait on it.
+        drop(completed_tx);
         let progress = ShutdownProgress::new(
             1,
             Arc::new(AtomicUsize::new(0)),
@@ -286,7 +288,9 @@ mod tests {
 
     #[test]
     fn background_browser_force_is_one_shot_and_completes_without_blocking_the_caller() {
-        let (_completed_tx, completed_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        // The driver is already gone: force cleanup must not wait on it.
+        drop(completed_tx);
         let progress = ShutdownProgress::new(
             1,
             Arc::new(AtomicUsize::new(0)),
