@@ -293,7 +293,10 @@ impl BrowserPanelState {
         match session::start_session(session_config) {
             Ok(handle) => {
                 self.committed_url = handle.committed_url();
-                self.pending_user_navigation = None;
+                // The pending submission is only cleared once the session
+                // commits a navigation (see sync_committed_url): a startup
+                // that dies before navigate_to must keep it so Retry
+                // re-targets the user's request, not the stale URL.
                 self.clear_agent_state_for_relaunch();
                 self.status = BrowserStatus::Starting;
                 self.loading = true;
@@ -571,6 +574,12 @@ impl BrowserPanelState {
         };
         if self.url.as_deref() == Some(url.as_str()) {
             return;
+        }
+        // The driver committed a real navigation: the pending submission it
+        // was carrying is done (exact match or the post-redirect
+        // destination). about:blank commits are not navigation results.
+        if url != "about:blank" {
+            self.pending_user_navigation = None;
         }
         self.url = Some(url);
         self.navigation_error = None;
