@@ -64,6 +64,7 @@ fn keep_global_listener_while_suspending(hold_mode: bool, engaged: Option<usize>
         match event {
             HotkeyEvent::Pressed(_) => held += 1,
             HotkeyEvent::Released(_) => held -= 1,
+            HotkeyEvent::Disconnected => {}
         }
     }
     held > 0

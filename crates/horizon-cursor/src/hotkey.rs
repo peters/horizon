@@ -41,6 +41,8 @@ pub enum HotkeyKey {
 pub enum HotkeyEvent {
     Pressed(usize),
     Released(usize),
+    /// The X11 listener thread exited (display connection lost).
+    Disconnected,
 }
 
 /// Failure to listen for global hotkeys.
@@ -102,7 +104,11 @@ impl GlobalHotkeys {
 
     #[must_use]
     pub fn try_recv(&self) -> Option<HotkeyEvent> {
-        self.events.try_recv().ok()
+        match self.events.try_recv() {
+            Ok(event) => Some(event),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(HotkeyEvent::Disconnected),
+        }
     }
 
     /// Profiles whose bindings were actually grabbed. Bindings the backend
@@ -200,7 +206,15 @@ mod platform {
                                 thread::sleep(Duration::from_millis(20));
                                 continue;
                             }
-                            Err(_) => break,
+                            Err(_) => {
+                                for profile in held.values().copied() {
+                                    if tx.send(HotkeyEvent::Released(profile)).is_err() {
+                                        return;
+                                    }
+                                }
+                                let _ = tx.send(HotkeyEvent::Disconnected);
+                                return;
+                            }
                         },
                     };
                     match event {

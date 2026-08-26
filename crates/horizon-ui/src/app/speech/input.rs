@@ -199,10 +199,19 @@ fn apply_global_hotkey_events(
     presses_allowed: bool,
     mut engaged_profile: Option<usize>,
     notices: &mut Vec<SpeechEvent>,
-) -> (Option<usize>, Vec<horizon_cursor::HotkeyEvent>) {
+) -> (Option<usize>, Vec<horizon_cursor::HotkeyEvent>, bool) {
     let mut deferred = Vec::new();
     let mut started_this_drain = false;
+    let mut disconnected = false;
     for event in events {
+        if event == horizon_cursor::HotkeyEvent::Disconnected {
+            disconnected = true;
+            if speech.recording_sink().is_some() {
+                speech.cancel();
+            }
+            engaged_profile = None;
+            continue;
+        }
         if started_this_drain {
             deferred.push(event);
             continue;
@@ -258,9 +267,10 @@ fn apply_global_hotkey_events(
                     engaged_profile = None;
                 }
             }
+            horizon_cursor::HotkeyEvent::Disconnected => {}
         }
     }
-    (engaged_profile, deferred)
+    (engaged_profile, deferred, disconnected)
 }
 
 fn apply_global_hotkeys(
@@ -271,15 +281,15 @@ fn apply_global_hotkeys(
     presses_allowed: bool,
     engaged_profile: Option<usize>,
     events: &mut Vec<SpeechEvent>,
-) -> Option<usize> {
+) -> (Option<usize>, bool) {
     let mut incoming = std::mem::take(pending);
     while let Some(event) = recv_global_hotkey(hotkeys) {
         incoming.push(event);
     }
-    let (engaged_profile, deferred) =
+    let (engaged_profile, deferred, disconnected) =
         apply_global_hotkey_events(speech, incoming, sink, presses_allowed, engaged_profile, events);
     *pending = deferred;
-    engaged_profile
+    (engaged_profile, disconnected)
 }
 
 impl HorizonApp {
@@ -429,7 +439,8 @@ impl HorizonApp {
         let mut engaged = self.speech_engaged_profile;
         if self.speech_global_hotkeys.is_some() {
             let presses_allowed = !(capturing_hotkey || text_surface_active && horizon_focused);
-            engaged = apply_global_hotkeys(
+            let disconnected;
+            (engaged, disconnected) = apply_global_hotkeys(
                 speech,
                 self.speech_global_hotkeys.as_ref(),
                 &mut self.speech_global_events_pending,
@@ -438,6 +449,14 @@ impl HorizonApp {
                 engaged,
                 &mut events,
             );
+            if disconnected {
+                tracing::warn!("desktop dictation: global hotkey listener disconnected");
+                engaged = None;
+                self.speech_global_hotkeys = None;
+                self.speech_global_hotkeys_tried = false;
+                self.speech_global_hotkeys_suspended = false;
+                self.speech_global_events_pending.clear();
+            }
             if !self.speech_global_events_pending.is_empty() {
                 ctx.request_repaint();
             }

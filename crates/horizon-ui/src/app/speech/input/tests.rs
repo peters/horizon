@@ -260,7 +260,7 @@ fn global_hold_defers_same_drain_release_until_the_next_batch() {
     let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
     let sink = Some(SpeechSink::Desktop);
     let mut notices = Vec::new();
-    let (engaged, deferred) = apply_global_hotkey_events(
+    let (engaged, deferred, disconnected) = apply_global_hotkey_events(
         &mut speech,
         [
             horizon_cursor::HotkeyEvent::Pressed(0),
@@ -272,13 +272,49 @@ fn global_hold_defers_same_drain_release_until_the_next_batch() {
         &mut notices,
     );
     assert_eq!(engaged, Some(0));
+    assert!(!disconnected);
     assert_eq!(speech.recording_sink(), Some(SpeechSink::Desktop));
     assert!(channels.capture_start_requested());
     assert_eq!(deferred, vec![horizon_cursor::HotkeyEvent::Released(0)]);
     assert!(notices.is_empty());
 
-    let (engaged, deferred) = apply_global_hotkey_events(&mut speech, deferred, sink, true, engaged, &mut notices);
+    let (engaged, deferred, disconnected) =
+        apply_global_hotkey_events(&mut speech, deferred, sink, true, engaged, &mut notices);
     assert_eq!(engaged, None);
+    assert!(!disconnected);
+    assert!(deferred.is_empty());
+    assert_eq!(speech.recording_sink(), None);
+}
+
+#[cfg(feature = "speech")]
+#[test]
+fn global_listener_disconnect_cancels_an_active_hold() {
+    let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
+    let sink = Some(SpeechSink::Desktop);
+    let mut notices = Vec::new();
+    let (engaged, _, disconnected) = apply_global_hotkey_events(
+        &mut speech,
+        [horizon_cursor::HotkeyEvent::Pressed(0)],
+        sink,
+        true,
+        None,
+        &mut notices,
+    );
+    assert_eq!(engaged, Some(0));
+    assert!(!disconnected);
+    assert_eq!(speech.recording_sink(), Some(SpeechSink::Desktop));
+    assert!(channels.capture_start_requested());
+
+    let (engaged, deferred, disconnected) = apply_global_hotkey_events(
+        &mut speech,
+        [horizon_cursor::HotkeyEvent::Disconnected],
+        sink,
+        true,
+        engaged,
+        &mut notices,
+    );
+    assert_eq!(engaged, None);
+    assert!(disconnected);
     assert!(deferred.is_empty());
     assert_eq!(speech.recording_sink(), None);
 }
