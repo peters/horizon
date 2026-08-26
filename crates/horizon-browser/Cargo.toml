@@ -1,12 +1,16 @@
 [package]
 name = "horizon-browser"
-publish = false
+publish = ["crates-io"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description.workspace = true
+description = "Runtime-independent CDP, WebDriver BiDi, and Safari automation with bounded frame delivery"
 repository.workspace = true
+readme = "README.md"
+keywords = ["browser-automation", "cdp", "webdriver", "bidi", "safari"]
+categories = ["api-bindings", "web-programming"]
+exclude = ["tests/fixtures/**"]
 
 [features]
 test-support = []

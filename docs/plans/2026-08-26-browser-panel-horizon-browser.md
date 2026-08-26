@@ -1,8 +1,8 @@
 # Browser panel: first-party `horizon-browser` landing plan
 
-- Status: accepted architecture; implementation not started
+- Status: implemented in a local candidate; Linux Chromium/Firefox smoke passed; exact-head final validation and macOS Safari smoke pending
 - Date: 2026-08-26
-- Target base inspected: `origin/main` at `59f426e`
+- Target base: `origin/main` at `4c6a69d`
 - New workspace crate: `crates/horizon-browser`
 - Protocols: Chromium CDP, Firefox WebDriver BiDi, and Safari WebDriver with optional BiDi
 - Full browser predecessor: closed PR #298
@@ -13,7 +13,7 @@
 
 Build and own the browser engine in a new `horizon-browser` crate. Do not integrate ferridriver.
 
-The crate will expose one backend-neutral session API with explicit capabilities and three backend adapters:
+The crate exposes one backend-neutral session API with explicit capabilities and three backend adapters:
 
 - `ChromiumCdp`: the first production renderer, using change-driven CDP `Page.startScreencast` frames.
 - `FirefoxBidi`: a real WebDriver BiDi transport/session/input backend, landed after the shared API and Chromium path are stable.
@@ -22,6 +22,35 @@ The crate will expose one backend-neutral session API with explicit capabilities
 CDP does not mean Firefox support. Firefox uses BiDi. The common API must preserve backend differences instead of reducing both protocols to a lowest-common-denominator interface.
 
 Chromium is the first complete visible browser panel. Firefox BiDi support includes transport, process ownership, contexts, navigation, events, input, screenshots, and capability reporting. Firefox becomes a production visible panel only when its rendering lane passes the explicit gate below. Safari is built into the same engine contract before the macOS handoff, but it remains unavailable on non-macOS hosts and requires exact-machine capability and smoke proof.
+
+## Implementation checkpoint
+
+The local `feature/horizon-browser` candidate now implements the vertical
+slice rather than integrating the old stack:
+
+- first-party Chromium CDP push frames, Firefox WebDriver BiDi control with
+  adaptive classic WebDriver screenshots, and macOS-only Safari WebDriver with
+  optional negotiated BiDi;
+- browser panels, backend selection, persistence, input, resize, retry,
+  deterministic child teardown, profiles, and capability reporting;
+- backend-neutral agent actions on every backend, fresh-owner leases, user
+  steering priority, explicit user handoff, and private append-only redacted
+  audit journals;
+- a UI-independent `horizon-browser` package boundary with crates.io metadata,
+  a crate README, and no dependency on Horizon, egui, winit, Tokio, or an async
+  runtime. Packaging metadata is preparation only; the crate is not published.
+
+Linux deterministic-page smoke has passed for Chromium and Firefox, including
+pixels, input, navigation, title/URL state, resize/Fit, agent steering,
+handoff, redacted audit records, and exact child/manifest cleanup. Firefox met
+the measured input/navigation latency gates and adaptive capture decayed to
+zero on a static page. Safari remains capability-implemented but not
+release-supported until the exact candidate is exercised on macOS after the
+Linux/final-validation gate.
+
+The integrated diff is intentionally over the repository's normal PR scope
+limit. Do not open or push it as one PR without the user's explicit scope
+approval; the landing-train section remains the recommended review split.
 
 ## Performance answer
 
@@ -40,7 +69,7 @@ The existing Chromium measurements are promising but are not a ferridriver compa
 
 ### Context
 
-The browser feature spans protocol transport, child-process ownership, frame delivery, input, persistence, UI, agent handoff, and shutdown. The current implementation proves the vertical feature but is too large to land safely as one tree: the current stack tip differs from refreshed `origin/main` by 67 files and 13,006 changed lines.
+The browser feature spans protocol transport, child-process ownership, frame delivery, input, persistence, UI, agent handoff, and shutdown. The integrated candidate proves the vertical feature but is too large to land safely as one PR: it changes more than 78 files and 15,000 lines, well above the repository's explicit review gate.
 
 The engine also has value outside Horizon's board model. Keeping it inside `horizon-core` would couple protocol code to panels, persistence, YAML configuration, and agent coordination. A third-party driver reduces initial code ownership but constrains the hot path, lifecycle semantics, raw protocol access, and backend rollout.
 
@@ -69,6 +98,11 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Integrate browser panels into Horizon through a narrow `horizon-core` bridge.
 - Split delivery into small, serial, independently testable outcomes.
 - Make performance counters part of the engine contract rather than an afterthought.
+- Let agents steer every backend through one validated action contract while
+  user activity and explicit handoffs always take priority.
+- Preserve a privacy-aware audit trail of user, agent, and system actions.
+- Keep a future crates.io release straightforward without publishing the crate
+  as part of this work.
 
 ## Non-goals for the first landing
 
@@ -82,6 +116,8 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Hardware video decode, WebRTC tab capture, or custom wgpu texture import.
 - Moving Horizon persistence, configuration, agent manifests, or egui code into `horizon-browser`.
 - Carrying unrelated terminal, speech, or dependency cleanup in browser engine PRs.
+- Publishing `horizon-browser`, creating a registry token, or cutting a crate
+  release in this implementation task.
 
 ## Workspace and dependency boundary
 
@@ -104,6 +140,9 @@ horizon-browser
 - Loopback-only WebSocket and HTTP transport, deadlines, cancellation, and bounded event draining.
 - Chromium, Firefox, and Safari-driver executable discovery, protected launch arguments, child handles, profiles or isolated sessions, endpoint discovery, termination, and reaping.
 - Backend-neutral navigation and input intent plus protocol-specific translation.
+- Backend-neutral external control actions, steering signals, and redacted
+  audit values; the embedding application owns authentication, storage, and
+  retention.
 - Encoded-frame metadata, reusable decode scratch, latest-frame publication, backpressure, and engine metrics.
 - Driver thread/session lifecycle and typed commands/events.
 - Capability reporting for frame delivery, input, viewport, clipboard, download, and protocol extensions.
@@ -113,7 +152,9 @@ horizon-browser
 - `PanelKind::Browser`, panel identity, board orchestration, and shutdown aggregation.
 - Horizon YAML configuration and migration into typed engine launch options.
 - Runtime/session persistence and restore policy.
-- Agent ownership/handoff manifests under the Horizon runtime directory.
+- Locked agent ownership/handoff/action manifests under the Horizon runtime
+  directory and private append-only audit journals under the Horizon audit
+  directory.
 - Stable mapping between engine events and panel state.
 - Retry policy visible to Horizon users.
 
@@ -144,68 +185,49 @@ horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 
 Keep the version synchronized with `[workspace.package].version`. Do not add protocol feature flags initially: CDP and BiDi share the same small wire dependencies, and compiling both avoids an unnecessary CI matrix. Reconsider only if backend-specific dependencies become material.
 
-## Proposed crate layout
+The crate manifest may be publishable and contain package metadata, but this
+task must not run `cargo publish` or create a registry release. Its direct
+runtime dependencies stay limited to protocol serialization/transport, image
+decode, typed errors, and tracing. A separate application can implement
+`BrowserCoordination` with its own socket, database, or in-memory adapter
+without importing Horizon.
+
+## Implemented crate layout
 
 ```text
 crates/horizon-browser/
   Cargo.toml
+  README.md
   src/
     lib.rs                  public API and capability types
+    control.rs              validated backend-neutral agent actions
+    audit.rs                privacy-aware action records
+    coordination.rs         optional host steering/audit boundary
     error.rs                typed engine/transport/protocol/process errors
-    command.rs              backend-neutral commands
-    event.rs                backend-neutral events
-    capabilities.rs         exact backend feature reporting
-    driver/
-      mod.rs                owned thread and bounded pump
-      shutdown.rs           stop, deadlines, completion, forced cleanup
-    transport/
-      mod.rs
-      websocket.rs          loopback connection, timeout, cancellation
-      http.rs               bounded loopback WebDriver requests
-      pending.rs            request ids, responses, orphan expiry
-    cdp/
-      mod.rs
-      message.rs            CDP envelopes and flattened session routing
-      browser.rs            target discovery and attach
-      page.rs               navigation, viewport, lifecycle, screencast
-      input.rs              CDP input mapping
-    bidi/
-      mod.rs
-      message.rs            BiDi command/response/event envelopes
-      session.rs            capabilities and subscriptions
-      browsing_context.rs   context lifecycle, navigation, viewport, capture
-      input.rs              BiDi action mapping
+    cdp.rs                  flattened CDP envelopes and request pump
+    websocket.rs            loopback-only JSON WebSocket transport
+    frames.rs               newest-frame decode, handoff, and metrics
+    input.rs                backend-neutral input model
+    input/cdp.rs            CDP input translation
+    paths.rs                executable discovery candidates
+    profile.rs              confined per-panel profiles
+    process.rs              browser launch and process ownership
+    process/control.rs      bounded exact-child teardown
+    session.rs              Chromium driver orchestration and public API
+    session/                focused command, event, lifecycle, startup,
+                            shutdown, clipboard, queue, and host leaves
     webdriver/
-      mod.rs
-      message.rs            classic WebDriver response and error envelopes
-      session.rs            new/delete session and capability negotiation
-      browsing_context.rs   URL, title, viewport, history, script, screenshot
-      input.rs              W3C actions and release semantics
-    process/
-      mod.rs
-      chromium.rs           Chromium discovery and protected launch
-      firefox.rs            Firefox discovery and protected launch
-      safari.rs             macOS safaridriver discovery and service lifecycle
-      child.rs              exact child ownership, termination, reaping
-      profile.rs            task/panel-owned profile lifecycle
-    frame/
-      mod.rs
-      encoded.rs            codec, dimensions, timestamp, sequence
-      decode.rs             reusable base64/JPEG scratch and decode buffers
-      slot.rs               newest-frame handoff and coalesced wake-up
-      metrics.rs            produced/acked/decoded/dropped/published counters
-    input/
-      mod.rs                logical input intent
-      key.rs                physical/logical key and modifiers
-      pointer.rs            buttons, coordinates, wheel
-  tests/
-    support/                mock CDP/BiDi websocket peers and local pages
-    cdp_contract.rs
-    bidi_contract.rs
-    process_lifecycle.rs
+      mod.rs                shared Firefox/Safari adapter entry
+      http.rs               bounded classic WebDriver HTTP
+      actions.rs            W3C/BiDi action translation
+      service.rs            driver services and Safari arbitration
+      session.rs            Firefox/Safari sessions and adaptive frames
+      session/coordination.rs
 ```
 
-Keep production modules comfortably below the repository's 1,000-line hard limit and split near 600 lines. Do not recreate the existing 776-line CDP file, 908-line process file, 979-line input file, 900-line browser `mod.rs`, or 938-line session file as equally large files in a new directory.
+The repository maintainability guard covers this crate as well as core/UI.
+Keep production modules below the 1,000-line hard limit and split near 600
+lines when one file starts accumulating another independent responsibility.
 
 ## Public engine contract
 
@@ -231,6 +253,7 @@ pub struct BackendCapabilities {
     pub physical_keys: bool,
     pub ime: bool,
     pub clipboard: bool,
+    pub downloads: bool,
     pub persistent_profile: bool,
     pub max_sessions: Option<u32>,
 }
@@ -240,7 +263,8 @@ pub struct BrowserSession {
 }
 ```
 
-The exact final fields should follow spike evidence, but these rules are fixed:
+The implemented fields follow the measured backend behavior; these rules are
+fixed:
 
 - Callers can query capabilities before showing UI controls or promising behavior.
 - Protocol JSON values and session identifiers do not escape the crate.
@@ -248,6 +272,27 @@ The exact final fields should follow spike evidence, but these rules are fixed:
 - Transient ports, PIDs, WebSocket URLs, protocol sessions, and driver handles are never persistable state.
 - Commands are bounded or coalesced by kind. Resize and pointer motion must not build an unbounded queue.
 - Events do not carry large pixel buffers through mpsc. The UI receives a lightweight sequence notification and reads the newest frame slot.
+
+### Host coordination and audit
+
+`BrowserCoordination` is optional so standalone embedders do not inherit a
+Horizon filesystem or IPC choice. When present, it supplies live ownership,
+handoff, validated `AgentAction` batches, user-activity state, and an audit
+sink. The engine uses the same command translation for agent and user actions
+on every backend, but stamps user activity only for user-originated page
+controls and input.
+
+Horizon's adapter serializes manifest updates with an adjacent OS lock, permits
+only the fresh owner to queue work, caps the queue, pauses it during user
+activity or handoff, and atomically claims actions once. Audit entries record
+queued, dispatched, rejected, and system actions. `dispatched` is a transport
+boundary, not a claim that the page completed the action. Text content is not
+stored; URL user-info, query values, and fragments are redacted while the path
+is retained. The queue is at-most-once: a crash between claim and dispatch
+leaves a queued-only record and requires a new caller decision rather than an
+unsafe automatic retry. The local JSONL journal is private and
+application-append-only, but intentionally not presented as tamper-evident or
+compliance-grade storage.
 
 ## Chromium CDP backend
 
@@ -280,13 +325,16 @@ Retain the current candidate's fail-open behavior: a bad frame keeps the previou
 
 ## Firefox WebDriver BiDi backend
 
-### Required protocol scope
+### Implemented session scope
 
 - Session creation/status and capability negotiation.
-- Browsing-context discovery, creation, activation, close, navigation, history traversal, reload, viewport, and lifecycle subscriptions.
+- Top-level browsing-context discovery, navigation, history traversal, reload,
+  viewport, and lifecycle subscriptions. Multi-tab context creation/activation
+  is outside Horizon's one-panel/one-page contract.
 - Input actions with correct source identity and release semantics.
-- Script/preload support needed for focused-element and clipboard integration, subject to security review.
-- Screenshot capture and exact error mapping.
+- Focused text input through WebDriver/BiDi actions. Firefox does not advertise
+  clipboard or physical-key capabilities that the adapter cannot preserve.
+- Adaptive classic WebDriver PNG screenshot capture and exact error mapping.
 - Deterministic Firefox child/profile ownership and bounded shutdown.
 
 ### Rendering reality
@@ -297,7 +345,9 @@ Therefore:
 
 - Do not use BiDi recording-file screencast for interactive rendering.
 - Do not tail the file: the latency, container boundaries, remote path, cleanup, and crash semantics are unsuitable.
-- Implement an adaptive `captureScreenshot` prototype behind `FrameDelivery::AdaptiveScreenshot`.
+- Implement adaptive classic WebDriver PNG capture behind
+  `FrameDelivery::AdaptiveScreenshot`; measured Firefox builds return it more
+  quickly than their BiDi screenshot command.
 - Capture immediately after Horizon input, viewport changes, navigation commits, and relevant lifecycle events.
 - Use a bounded active cadence only while page activity is detected; decay quickly to zero or a very low probe rate when static.
 - Count requested, completed, superseded, decoded, and published screenshots.
@@ -417,7 +467,9 @@ Before opening each PR, measure source/test file count and non-generated changed
     - Config/migration, committed URL/profile state, restore, and session-store tests.
     - Sync `~/.horizon/config.yaml` during implementation because config code changes.
 12. `feat/browser-agent-handoff`
-    - Horizon-owned manifest, ownership TTL, handoff generation, atomic permissions, and recovery tests.
+    - Horizon-owned manifest, ownership TTL, validated action queue, user
+      steering priority, handoff generation, private redacted JSONL audit,
+      atomic permissions, and recovery tests.
 13. `feat/browser-panel-render`
     - Texture/body rendering, URL/nav chrome, status/errors, accessibility, and temporary UI smoke plan.
 14. `feat/browser-panel-input`
@@ -557,8 +609,15 @@ No PR mutation is part of this plan update.
 - Accepted: support Chromium CDP, Firefox BiDi, and Safari WebDriver with optional BiDi as explicit backends.
 - Accepted: use Chromium CDP streaming for the first production visible panel.
 - Accepted: preserve the high-performance pieces from the existing implementation and prove claims with matched measurements.
-- Deferred pending evidence: whether Firefox adaptive screenshots meet the production visible-panel gate.
+- Accepted from Linux evidence: Firefox adaptive screenshots meet the current
+  visible-panel latency and idle-decay gate; cross-platform claims still need
+  exact-machine evidence.
+- Accepted: expose auditable backend-neutral agent controls and explicit user
+  handoff through an optional host coordination boundary.
+- Accepted: prepare `horizon-browser` for a future crates.io release with a
+  minimal UI-independent dependency boundary, without publishing it now.
 - Deferred pending exact-head macOS evidence: whether the installed Safari exposes BiDi and whether adaptive screenshots meet the Safari visible-panel gate.
 - Deferred: true low-latency Firefox client streaming if standard BiDi does not expose live frames.
 
-No implementation branch, dependency change, PR mutation, merge, browser download, or live Horizon process action is authorized by this document alone.
+No PR mutation, merge, crate publication, tag, GitHub Release, or support claim
+beyond recorded exact-machine evidence is authorized by this document alone.

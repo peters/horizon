@@ -5,6 +5,22 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-browser`
+
+- Owns browser processes, CDP/WebDriver/BiDi transports, backend-neutral
+  commands and input, frame delivery, capability reporting, and deterministic
+  shutdown. It must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
+  or an async runtime.
+- `control.rs` defines validated external actions and `audit.rs` defines
+  privacy-aware records. Host-specific IPC, authentication, persistence, and
+  retention stay outside the crate behind `BrowserCoordination`.
+- `session.rs` orchestrates the Chromium driver; command dispatch, event
+  transitions, host coordination, lifecycle, startup, and shutdown belong in
+  focused `session/` leaves.
+- `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
+  belongs in `webdriver/session/coordination.rs`; HTTP, action translation, and
+  service/process responsibilities stay in their existing WebDriver leaves.
+
 ### `horizon-core`
 
 - Owns board state, workspace metadata, panel lifecycle, persistence
@@ -18,13 +34,11 @@ back into large multi-purpose modules.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
-- `browser/session.rs` owns driver lifecycle and shared state; UI-command
-  dispatch belongs in `browser/session/commands.rs`, frame-aware clipboard
-  capture in `browser/session/clipboard.rs`, CDP response/event transitions in
-  `browser/session/events.rs`, and locked manifest/handoff persistence in
-  `browser/session/manifest_io.rs`. Launch-time browser-profile path resolution
-  belongs in `browser/profile.rs` so launch, persistence, and deletion share
-  one root invariant.
+- `browser/mod.rs` maps engine sessions/events into Horizon panel state and
+  retry/teardown behavior. Locked live coordination stays in
+  `browser/manifest.rs`, with agent-side lease/action helpers in
+  `browser/manifest/agent.rs` and append-only audit storage in
+  `browser/manifest/audit.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in
@@ -76,6 +90,7 @@ not an escape hatch for oversized modules.
 
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
+  - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
   - `crates/horizon-ui/src`
 - Inline `#[cfg(test)]` modules should stay at the end of the file; the line
