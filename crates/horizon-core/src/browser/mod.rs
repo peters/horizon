@@ -490,10 +490,19 @@ impl BrowserPanelState {
                 }
                 BrowserEvent::UrlChanged(url) => {
                     if self.url.as_deref() != Some(url.as_str()) {
-                        self.url = Some(url);
+                        self.url = Some(url.clone());
                         output.url_changed = true;
                     }
                     self.navigation_error = None;
+                    // The sender publishes the committed URL before emitting
+                    // this event, so by the time sync_committed_url runs the
+                    // equality return hides the change; clear the pending
+                    // submission here (that sync stays as fallback for a
+                    // dropped event receiver). Blank commits are not
+                    // navigation results.
+                    if !url.is_empty() && url != "about:blank" {
+                        self.pending_user_navigation = None;
+                    }
                     output.had_output = true;
                 }
                 BrowserEvent::NavigationFailed(message) => {

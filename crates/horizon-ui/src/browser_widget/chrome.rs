@@ -104,9 +104,12 @@ fn url_bar(
     if submitted {
         state.url_submit_enter_pending = !ui.input(|i| i.key_released(egui::Key::Enter));
         let url = state.url_buffer.trim().to_string();
-        if !url.is_empty() && browser.committed_url_for_persistence() != Some(url.as_str()) {
+        if !url.is_empty() && browser.display_url() != url {
             // A driver-less submission is retained as the relaunch target and
-            // surfaced via navigation_error instead of being dropped.
+            // surfaced via navigation_error instead of being dropped. The
+            // guard compares the displayed target (pending first), not the
+            // committed URL: resubmitting the persisted URL while a newer
+            // pending target is queued must replace it, not be skipped.
             browser.submit_navigation(&url);
         }
     }
