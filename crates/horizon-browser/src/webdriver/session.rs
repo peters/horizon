@@ -136,6 +136,7 @@ struct Driver {
     generation: u64,
     retain_frame_during_navigation: bool,
     navigation_failed: bool,
+    pending_classic_history_start: Option<PendingHistoryStart>,
     refresh_pending_at: Option<Instant>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
@@ -144,6 +145,11 @@ struct Driver {
     owner_seen: Option<String>,
     handoff_seen: Option<String>,
     semantic: SemanticState,
+}
+
+struct PendingHistoryStart {
+    url: String,
+    expires_at: Instant,
 }
 
 struct NewSession {
@@ -319,6 +325,7 @@ impl Driver {
             generation: 0,
             retain_frame_during_navigation: false,
             navigation_failed: false,
+            pending_classic_history_start: None,
             refresh_pending_at: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
@@ -422,7 +429,9 @@ impl Driver {
 
     fn traverse(&mut self, delta: i64, event_tx: &BrowserEventSender) {
         self.begin_navigation();
-        // BiDi traversal returns before completion, so use the blocking classic endpoint.
+        // Firefox's BiDi traversal can return without a completion event, so
+        // use its blocking classic endpoint and suppress the matching late
+        // navigationStarted event that would otherwise cancel this capture.
         let result = self
             .classic_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
             .map(|_| ());
@@ -430,6 +439,10 @@ impl Driver {
             self.retain_frame_during_navigation = false;
             self.navigation_failed = false;
             self.refresh_page_state(event_tx);
+            self.pending_classic_history_start = Some(PendingHistoryStart {
+                url: self.url.clone(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+            });
             self.frames.demand();
         }
         self.finish_page_command(result, "history traversal", event_tx);
@@ -477,6 +490,9 @@ impl Driver {
 
     fn perform_input(&mut self, input: crate::BrowserInput, event_tx: &BrowserEventSender) -> Result<(), String> {
         let activity = input.is_activity();
+        if activity {
+            self.pending_classic_history_start = None;
+        }
         let mut payload = self.actions.payload(input);
         let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
             payload["context"] = json!(self.context_id);
@@ -615,6 +631,13 @@ impl Driver {
             self.context_id = Some(context.to_string());
         }
         if method.ends_with("navigationStarted") {
+            if consume_pending_history_start(
+                &mut self.pending_classic_history_start,
+                params.get("url").and_then(Value::as_str),
+                Instant::now(),
+            ) {
+                return;
+            }
             self.begin_navigation();
             let _ = event_tx.send(BrowserEvent::Loading(true));
             return;
@@ -661,6 +684,7 @@ impl Driver {
     }
 
     fn begin_navigation(&mut self) {
+        self.pending_classic_history_start = None;
         self.semantic.invalidate();
         self.generation = self.generation.wrapping_add(1);
         self.retain_frame_during_navigation = true;
@@ -919,11 +943,19 @@ fn bidi_navigation_failed(method: &str) -> bool {
     method.ends_with("navigationFailed")
 }
 
+fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url: Option<&str>, now: Instant) -> bool {
+    let Some(pending) = pending.take() else {
+        return false;
+    };
+    now <= pending.expires_at && url == Some(pending.url.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, bidi_navigation_complete, bidi_navigation_failed, capture_is_current, new_session_capabilities,
-        parse_new_session_response, safe_session_id, validate_firefox_args,
+        AdaptiveFrames, PendingHistoryStart, bidi_navigation_complete, bidi_navigation_failed, capture_is_current,
+        consume_pending_history_start, new_session_capabilities, parse_new_session_response, safe_session_id,
+        validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -995,6 +1027,43 @@ mod tests {
         assert!(bidi_navigation_complete("browsingContext.domContentLoaded"));
         assert!(bidi_navigation_complete("browsingContext.fragmentNavigated"));
         assert!(!bidi_navigation_complete("browsingContext.navigationStarted"));
+    }
+
+    #[test]
+    fn matching_late_history_start_is_consumed_only_within_its_deadline() {
+        let now = std::time::Instant::now();
+        let mut pending = Some(PendingHistoryStart {
+            url: "https://example.test/previous".to_string(),
+            expires_at: now + std::time::Duration::from_secs(1),
+        });
+        assert!(consume_pending_history_start(
+            &mut pending,
+            Some("https://example.test/previous"),
+            now,
+        ));
+        assert!(pending.is_none());
+
+        let mut different_url = Some(PendingHistoryStart {
+            url: "https://example.test/previous".to_string(),
+            expires_at: now + std::time::Duration::from_secs(1),
+        });
+        assert!(!consume_pending_history_start(
+            &mut different_url,
+            Some("https://example.test/new"),
+            now,
+        ));
+        assert!(different_url.is_none());
+
+        let mut expired = Some(PendingHistoryStart {
+            url: "https://example.test/previous".to_string(),
+            expires_at: now,
+        });
+        assert!(!consume_pending_history_start(
+            &mut expired,
+            Some("https://example.test/previous"),
+            now + std::time::Duration::from_millis(1),
+        ));
+        assert!(expired.is_none());
     }
 
     #[test]
