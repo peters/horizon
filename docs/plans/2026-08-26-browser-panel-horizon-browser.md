@@ -42,11 +42,13 @@ slice rather than integrating the old stack:
 
 Linux deterministic-page smoke has passed for Chromium and Firefox, including
 pixels, input, navigation, title/URL state, resize/Fit, agent steering,
-handoff, redacted audit records, and exact child/manifest cleanup. Firefox met
-the measured input/navigation latency gates and adaptive capture decayed to
-zero on a static page. Safari remains capability-implemented but not
-release-supported until the exact candidate is exercised on macOS after the
-Linux/final-validation gate.
+handoff, redacted audit records, exact child/manifest cleanup, and a normal
+close/relaunch that restored one Chromium panel and one Firefox BiDi panel.
+The relaunch pass caught and fixed a missing runtime-dirty signal after backend
+selection (`472451c`). Firefox met the measured input/navigation latency gates
+and adaptive capture decayed to zero on a static page. Safari remains
+capability-implemented but not release-supported until the exact candidate is
+exercised on macOS after the Linux/final-validation gate.
 
 The integrated diff is intentionally over the repository's normal PR scope
 limit. The user authorized pushing the implementation branch for cross-machine

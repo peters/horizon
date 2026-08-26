@@ -20,8 +20,16 @@ browser session.
   credential-bearing navigation because Chrome omits URL user-info from
   `location.href`. Metadata matching now ignores only authority user-info;
   query, host, path, and path/query `@` characters remain significant.
+- Finding fixed and rerun: changing a live panel from Chromium to Firefox did
+  not dirty Horizon's runtime state, so the panel restored as Chromium. Backend
+  changes now produce a one-shot persistence signal. On code commit `472451c`,
+  the live manifest and runtime YAML recorded Chromium plus Firefox, normal
+  close removed both task-owned manifests and process trees, and relaunch of
+  that same isolated session visibly restored both engines with Firefox BiDi.
 - The complete repository validation matrix, package dry-run, documentation,
-  and cross-target checks are blocking before the branch is pushed for macOS.
+  and cross-target checks are blocking before the final branch head is pushed
+  for macOS. The macOS tester must use the final remote SHA, not an earlier
+  push made before the persistence finding.
 - Runtime screenshots and journals are temporary task artifacts outside the
   repository; the durable evidence is this record plus the exact pushed SHA.
 
@@ -229,9 +237,11 @@ Run only after Linux Chromium and Firefox have passed on the candidate head.
 - Linux report includes exact SHA, versions, commands, screenshots, metrics,
   steering/audit evidence, process/listener cleanup, and each step as
   pass/fail.
-- Post the macOS request on the implementation PR only after Linux passes:
-  `SMOKE-TEST REQUEST macOS — plan: docs/testing/2026-08-26-horizon-browser-panel-smoke.md — scope: Chromium, Firefox, Safari`
-- The macOS agent checks out the exact PR head, fixes only in-scope issues,
-  reruns affected lanes, and ends its report with exactly `SMOKE-TEST: DONE`.
+- Before a PR exists, hand off the exact pushed
+  `origin/feature/horizon-browser` SHA together with:
+  `SMOKE-TEST REQUEST macOS — plan: docs/testing/2026-08-26-horizon-browser-panel-smoke.md — scope: Chromium, Firefox, Safari`.
+- The macOS agent checks out that exact remote branch head, fixes only in-scope
+  issues, reruns affected lanes, and ends its report with exactly
+  `SMOKE-TEST: DONE`. Do not create a PR as part of the smoke handoff.
 - Any behavior-changing push invalidates older smoke evidence and requires the
   affected lane again.
