@@ -132,6 +132,8 @@ struct Driver {
     url: String,
     title: String,
     generation: u64,
+    retain_frame_during_navigation: bool,
+    navigation_failed: bool,
     refresh_pending_at: Option<Instant>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
@@ -307,6 +309,8 @@ impl Driver {
             url: String::new(),
             title: String::new(),
             generation: 0,
+            retain_frame_during_navigation: false,
+            navigation_failed: false,
             refresh_pending_at: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
@@ -373,12 +377,15 @@ impl Driver {
         match result {
             Ok(()) => {
                 if self.config.browser.backend != BackendKind::FirefoxBidi {
+                    self.retain_frame_during_navigation = false;
+                    self.navigation_failed = false;
                     self.refresh_page_state(event_tx);
                     self.frames.demand();
                 }
             }
             Err(error) => {
-                self.frames.demand();
+                self.navigation_failed = true;
+                self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
                     "could not navigate to {url}: {error}"
                 )));
@@ -404,27 +411,30 @@ impl Driver {
 
     fn traverse(&mut self, delta: i64, event_tx: &BrowserEventSender) {
         self.begin_navigation();
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
-            self.call_bidi(
-                "browsingContext.traverseHistory",
-                &json!({ "context": self.context_id, "delta": delta }),
-                event_tx,
-            )
-            .map(|_| ())
-        } else {
-            self.classic_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
-                .map(|_| ())
-        };
+        // BiDi traversal returns before completion, so use the blocking classic endpoint.
+        let result = self
+            .classic_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
+            .map(|_| ());
+        if result.is_ok() && self.config.browser.backend == BackendKind::FirefoxBidi {
+            self.retain_frame_during_navigation = false;
+            self.navigation_failed = false;
+            self.refresh_page_state(event_tx);
+            self.frames.demand();
+        }
         self.finish_page_command(result, "history traversal", event_tx);
     }
 
     fn finish_page_command(&mut self, result: Result<(), String>, action: &str, event_tx: &BrowserEventSender) {
         if let Err(error) = result {
-            self.frames.demand();
+            self.navigation_failed = true;
+            self.frames.interaction_started_at = None;
             let _ = event_tx.send(BrowserEvent::NavigationFailed(format!("{action} failed: {error}")));
+            let _ = event_tx.send(BrowserEvent::Loading(false));
             return;
         }
         if self.config.browser.backend != BackendKind::FirefoxBidi {
+            self.retain_frame_during_navigation = false;
+            self.navigation_failed = false;
             self.refresh_page_state(event_tx);
             self.frames.demand();
         }
@@ -449,7 +459,7 @@ impl Driver {
         };
         if let Err(error) = result {
             tracing::warn!("WebDriver viewport update failed: {error}");
-        } else {
+        } else if !self.retain_frame_during_navigation {
             self.frames.demand();
         }
     }
@@ -466,7 +476,7 @@ impl Driver {
         if let Err(error) = result {
             tracing::warn!("WebDriver input failed: {error}");
         }
-        if activity {
+        if activity && !self.retain_frame_during_navigation {
             self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
@@ -592,22 +602,35 @@ impl Driver {
         {
             self.context_id = Some(context.to_string());
         }
-        let url_changed = params
-            .get("url")
-            .and_then(Value::as_str)
-            .filter(|url| *url != self.url)
-            .map(|url| {
+        if method.ends_with("navigationStarted") {
+            self.begin_navigation();
+            let _ = event_tx.send(BrowserEvent::Loading(true));
+            return;
+        }
+        if bidi_navigation_failed(method) {
+            self.navigation_failed = true;
+            self.retain_frame_during_navigation = true;
+            self.frames.suspend_for_navigation();
+            self.frames.interaction_started_at = None;
+            let url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("the requested page");
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!("could not navigate to {url}")));
+            let _ = event_tx.send(BrowserEvent::Loading(false));
+            return;
+        }
+        let navigation_complete = bidi_navigation_complete(method);
+        if navigation_complete && !self.navigation_failed {
+            if let Some(url) = params.get("url").and_then(Value::as_str).filter(|url| *url != self.url) {
                 self.url = url.to_string();
                 self.coordination_dirty = true;
                 let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-            })
-            .is_some();
-        if method.ends_with("navigationStarted") {
-            self.advance_generation();
-            let _ = event_tx.send(BrowserEvent::Loading(true));
-        } else if method.ends_with("domContentLoaded") || method.ends_with("load") {
+            }
+            self.retain_frame_during_navigation = false;
             let _ = event_tx.send(BrowserEvent::Loading(false));
             self.frames.demand();
+            self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
         } else if method.ends_with("contextDestroyed") {
             let destroyed = params.get("context").and_then(Value::as_str);
             if destroyed == self.context_id.as_deref() {
@@ -615,23 +638,20 @@ impl Driver {
                 self.advance_generation();
             }
         }
-        // A BFCache history traversal can publish a new URL and pixels
-        // without another DOMContentLoaded/load event. Refresh classic
-        // WebDriver state after either signal so the committed title cannot
-        // remain attached to the page we just left.
-        if bidi_event_needs_page_refresh(method, url_changed) {
-            self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
-        }
     }
 
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.scroll_state_refresh_at = Instant::now();
-        self.frames.invalidate();
+        if !self.retain_frame_during_navigation {
+            self.frames.invalidate();
+        }
     }
 
     fn begin_navigation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.retain_frame_during_navigation = true;
+        self.navigation_failed = false;
         self.refresh_pending_at = None;
         self.scroll_state_refresh_at = Instant::now();
         self.frames.suspend_for_navigation();
@@ -814,6 +834,8 @@ fn subscribe(link: &mut JsonWsLink) -> Result<(), String> {
                 "browsingContext.contextCreated",
                 "browsingContext.contextDestroyed",
                 "browsingContext.navigationStarted",
+                "browsingContext.navigationFailed",
+                "browsingContext.fragmentNavigated",
                 "browsingContext.domContentLoaded",
                 "browsingContext.load"
             ]
@@ -876,14 +898,18 @@ fn capture_is_current(
     capture_generation == current_generation && capture_context == current_context
 }
 
-fn bidi_event_needs_page_refresh(method: &str, url_changed: bool) -> bool {
-    url_changed || method.ends_with("domContentLoaded") || method.ends_with("load")
+fn bidi_navigation_complete(method: &str) -> bool {
+    method.ends_with("domContentLoaded") || method.ends_with("fragmentNavigated") || method.ends_with("load")
+}
+
+fn bidi_navigation_failed(method: &str) -> bool {
+    method.ends_with("navigationFailed")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, bidi_event_needs_page_refresh, capture_is_current, new_session_capabilities,
+        AdaptiveFrames, bidi_navigation_complete, bidi_navigation_failed, capture_is_current, new_session_capabilities,
         parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
@@ -951,10 +977,11 @@ mod tests {
     }
 
     #[test]
-    fn bidi_url_change_refreshes_title_without_a_load_event() {
-        assert!(bidi_event_needs_page_refresh("browsingContext.historyUpdated", true));
-        assert!(bidi_event_needs_page_refresh("browsingContext.load", false));
-        assert!(!bidi_event_needs_page_refresh("log.entryAdded", false));
+    fn bidi_navigation_outcomes_are_classified_before_frame_capture() {
+        assert!(bidi_navigation_failed("browsingContext.navigationFailed"));
+        assert!(bidi_navigation_complete("browsingContext.domContentLoaded"));
+        assert!(bidi_navigation_complete("browsingContext.fragmentNavigated"));
+        assert!(!bidi_navigation_complete("browsingContext.navigationStarted"));
     }
 
     #[test]

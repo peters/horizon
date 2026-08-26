@@ -171,6 +171,9 @@ impl DriverState {
                 return;
             };
             frame_slot.record_capture_completion();
+            if self.retain_frame_during_navigation {
+                return;
+            }
             if let Some(seq) = frame_slot.store_base64_jpeg(data) {
                 self.record_interaction_frame(frame_slot);
                 publish_frame(event_tx, frame_slot, seq);
@@ -273,12 +276,15 @@ impl DriverState {
                 }
             }
             "Target.targetInfoChanged" => {
-                if let Some(title) = title_for_bound_target(event.params, self.target_id.as_deref()) {
+                if !self.retain_frame_during_navigation
+                    && let Some(title) = title_for_bound_target(event.params, self.target_id.as_deref())
+                {
                     self.update_title(event_tx, title);
                 }
             }
             "Runtime.bindingCalled" => {
-                if on_page_session
+                if !self.retain_frame_during_navigation
+                    && on_page_session
                     && let Some((title, href)) = title_from_binding(event.params)
                     && href_matches_url(&href, &self.url)
                 {
@@ -344,6 +350,21 @@ impl DriverState {
         }
         self.invalidate_scrollbar_layout();
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
+        if let Some(unreachable_url) = frame
+            .get("unreachableUrl")
+            .and_then(|url| url.as_str())
+            .filter(|url| !url.is_empty())
+        {
+            self.retain_frame_during_navigation = true;
+            self.interaction_started_at = None;
+            self.title_fetch_at = None;
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
+                "could not navigate to {unreachable_url}: the page was unreachable"
+            )));
+            let _ = event_tx.send(BrowserEvent::Loading(false));
+            return;
+        }
+        self.retain_frame_during_navigation = false;
         if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
             && normalized_committed_url(target_url) != self.url
         {
@@ -379,6 +400,10 @@ impl DriverState {
         let Some(target_url) = event.params.get("url").and_then(|url| url.as_str()) else {
             return;
         };
+        if self.retain_frame_during_navigation && !href_matches_url(target_url, &self.url) {
+            return;
+        }
+        self.retain_frame_during_navigation = false;
         self.invalidate_scrollbar_layout();
         let url = normalized_committed_url(target_url);
         if url == self.url {
@@ -431,6 +456,9 @@ impl DriverState {
         let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
             return;
         };
+        if self.retain_frame_during_navigation {
+            return;
+        }
         if let Some(seq) = frame_slot.store_base64_jpeg(data) {
             self.record_interaction_frame(frame_slot);
             publish_frame(event_tx, frame_slot, seq);
@@ -521,10 +549,12 @@ fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Optio
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, mpsc};
 
+    use crate::cdp::CdpEvent;
     use crate::frames::FrameSlot;
+    use crate::session::{BrowserEvent, BrowserEventSender, BrowserEventWake, CommittedUrl};
     use crate::{BrowserConfig, session::BrowserSessionConfig};
 
     use super::{
@@ -614,6 +644,75 @@ mod tests {
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);
         assert!(!state.pending_reattach);
+    }
+
+    #[test]
+    fn unreachable_top_frame_keeps_last_committed_page() {
+        let mut state = driver_state();
+        state.url = "https://example.test/good".to_string();
+        state.title = "Good page".to_string();
+        state.retain_frame_during_navigation = true;
+        let (tx, rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let params = serde_json::json!({
+            "frame": {
+                "id": "main",
+                "url": "chrome-error://chromewebdata/",
+                "unreachableUrl": "http://127.0.0.1:9/unreachable"
+            }
+        });
+
+        state.handle_frame_navigated(
+            &events,
+            CdpEvent {
+                method: "Page.frameNavigated",
+                params: &params,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert_eq!(state.url, "https://example.test/good");
+        assert_eq!(state.title, "Good page");
+        assert!(state.retain_frame_during_navigation);
+        assert!(matches!(rx.recv(), Ok(BrowserEvent::NavigationFailed(_))));
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(false)));
+
+        let unrelated = serde_json::json!({
+            "frameId": "main",
+            "url": "http://127.0.0.1:9/unreachable#fragment"
+        });
+        state.handle_same_document_navigation(
+            &events,
+            CdpEvent {
+                method: "Page.navigatedWithinDocument",
+                params: &unrelated,
+                session_id: Some("session"),
+            },
+            true,
+        );
+        assert!(state.retain_frame_during_navigation);
+        assert_eq!(state.url, "https://example.test/good");
+
+        let reachable = serde_json::json!({
+            "frameId": "main",
+            "url": "https://example.test/good#fragment"
+        });
+        state.handle_same_document_navigation(
+            &events,
+            CdpEvent {
+                method: "Page.navigatedWithinDocument",
+                params: &reachable,
+                session_id: Some("session"),
+            },
+            true,
+        );
+        assert!(!state.retain_frame_during_navigation);
+        assert_eq!(state.url, "https://example.test/good#fragment");
     }
 
     #[test]

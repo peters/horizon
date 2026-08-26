@@ -101,9 +101,8 @@ pub struct BrowserPanelState {
     pending_clipboard_text: Option<String>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
-    /// User-typed navigation submitted while no driver session exists. Kept
-    /// as the display and relaunch target until a fresh session accepts it,
-    /// so the input is never silently discarded.
+    /// User-typed navigation kept as the display and retry target until the
+    /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
     /// A backend selection changed since the last output drain and must be
     /// folded into the persisted runtime state exactly once.
@@ -343,16 +342,15 @@ impl BrowserPanelState {
         self.session.as_ref().is_some_and(|session| session.send(command))
     }
 
-    /// Submit a user-typed navigation. Returns `true` when the driver
-    /// accepted it. When no session exists (stopped, or still waiting for a
-    /// prior teardown), the URL is retained as the display and relaunch
-    /// target and the failure is surfaced via `navigation_error` instead of
-    /// being silently discarded.
+    /// Submit a user-typed navigation and retain it as the display/retry
+    /// target until a reachable page commits. Returns `true` when the driver
+    /// accepted it; a missing driver is surfaced via `navigation_error`.
     pub fn submit_navigation(&mut self, url: &str) -> bool {
+        self.pending_user_navigation = Some(url.to_string());
+        self.navigation_error = None;
         if self.try_send(BrowserCommand::Navigate(url.to_string())) {
             return true;
         }
-        self.pending_user_navigation = Some(url.to_string());
         self.navigation_error = Some("Browser is not running; press Retry to open the typed URL".to_string());
         false
     }

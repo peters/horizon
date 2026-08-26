@@ -434,6 +434,9 @@ struct DriverState {
     /// First visually meaningful command waiting for a published frame.
     /// Additional commands coalesce into the same sample until pixels arrive.
     interaction_started_at: Option<Instant>,
+    /// Keep the last good pixels while an explicit navigation has not yet
+    /// committed a reachable top-level document.
+    retain_frame_during_navigation: bool,
     clipboard: ClipboardState,
     url: String,
     title: String,
@@ -491,6 +494,7 @@ impl DriverState {
             vertical_scrollbar_drag: None,
             scrollbar_layout: ScrollbarLayoutCache::new(),
             interaction_started_at: None,
+            retain_frame_during_navigation: false,
             clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
@@ -609,6 +613,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         url: &str,
     ) {
+        self.retain_frame_during_navigation = true;
         let result = self.send_page_command(
             link,
             event_tx,
@@ -621,9 +626,11 @@ impl DriverState {
                 if let Some(error) = result.get("errorText").and_then(serde_json::Value::as_str)
                     && !error.is_empty()
                 {
+                    self.interaction_started_at = None;
                     let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
                         "could not navigate to {url}: {error}"
                     )));
+                    let _ = event_tx.send(BrowserEvent::Loading(false));
                     return;
                 }
                 // The committed URL remains authoritative and arrives via a
@@ -633,9 +640,11 @@ impl DriverState {
                 let _ = event_tx.send(BrowserEvent::Loading(true));
             }
             Err(error) => {
+                self.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
                     "could not navigate to {url}: {error}"
                 )));
+                let _ = event_tx.send(BrowserEvent::Loading(false));
             }
         }
     }
