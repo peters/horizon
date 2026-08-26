@@ -39,10 +39,16 @@ pub(super) fn events(
     let frame_pos = ctx.input(|i| i.pointer.interact_pos());
     let frame_final_modifiers = key_modifiers(ui);
     // One-scan fast path: a panel that is not under the pointer, owns no
-    // capture, and cannot own a press in this frame consumes nothing from
-    // the event slice, so skip it (with N browser panels the event slice
-    // would otherwise be scanned N times per pointer-heavy frame).
-    if !frame.pointer_target && !has_pointer_capture(state) && !frame.frame_has_pointer_button {
+    // capture, has never tracked the pointer, and cannot own a press in
+    // this frame consumes nothing from the event slice, so skip it (with
+    // N browser panels the event slice would otherwise be scanned N times
+    // per pointer-heavy frame). A previously tracked panel must still run
+    // so its leave transition (edge move) can fire.
+    if !frame.pointer_target
+        && !has_pointer_capture(state)
+        && state.last_mouse.is_none()
+        && !frame.frame_has_pointer_button
+    {
         state.pointer_modifiers = frame_final_modifiers;
         return;
     }
@@ -110,23 +116,7 @@ pub(super) fn events(
             // last saw it instead of stranding Chrome's button state down.
             Event::PointerGone => {
                 flush_pending_move(browser, &mut pending_move);
-                let p = state.last_mouse.unwrap_or_else(|| frame.rect.center());
-                for captured in &mut state.captured_clicks {
-                    let Some(click) = captured.take() else {
-                        continue;
-                    };
-                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
-                    event_buttons &= !button_mask(click.button);
-                    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
-                        x,
-                        y,
-                        button: click.button,
-                        click_count: click.count,
-                        buttons: event_buttons,
-                        modifiers: event_modifiers,
-                    }));
-                }
-                state.last_mouse = None;
+                end_captured_drags(browser, state, frame, &mut event_buttons, event_modifiers);
             }
             Event::MouseWheel { unit, delta, .. } => {
                 flush_pending_move(browser, &mut pending_move);
@@ -169,6 +159,35 @@ struct ButtonReplayEvent {
     button: PointerButton,
     pressed: bool,
     modifiers: BrowserModifiers,
+}
+
+/// Release every captured click at the last known position: the pointer
+/// left the window mid-drag, so end the drag where we last saw it instead
+/// of stranding Chrome's button state down.
+fn end_captured_drags(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    frame: PointerFrame,
+    event_buttons: &mut u32,
+    event_modifiers: BrowserModifiers,
+) {
+    let p = state.last_mouse.unwrap_or_else(|| frame.rect.center());
+    for captured in &mut state.captured_clicks {
+        let Some(click) = captured.take() else {
+            continue;
+        };
+        let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
+        *event_buttons &= !button_mask(click.button);
+        browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+            x,
+            y,
+            button: click.button,
+            click_count: click.count,
+            buttons: *event_buttons,
+            modifiers: event_modifiers,
+        }));
+    }
+    state.last_mouse = None;
 }
 
 /// Track one pointer move for this panel, or — when the pointer leaves the
