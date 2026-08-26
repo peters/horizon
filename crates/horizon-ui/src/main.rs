@@ -2,6 +2,7 @@
 
 mod app;
 mod branding;
+mod browser_widget;
 mod command_palette;
 mod command_registry;
 mod dir_picker;

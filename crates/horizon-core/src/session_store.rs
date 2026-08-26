@@ -132,8 +132,9 @@ impl SessionStore {
     /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
         let source_runtime_path = self.home.session_runtime_path(source_session_id);
-        let runtime_state = RuntimeState::load(&source_runtime_path)?
+        let mut runtime_state = RuntimeState::load(&source_runtime_path)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {source_session_id}")))?;
+        runtime_state.regenerate_browser_local_ids();
         let session = self.create_session_from_runtime(runtime_state)?;
         copy_directory_recursive(
             &self.home.session_transcripts_dir(source_session_id),
@@ -193,6 +194,18 @@ impl SessionStore {
             )));
         }
 
+        if let Some(runtime_state) = RuntimeState::load(&self.home.session_runtime_path(session_id))? {
+            for workspace in &runtime_state.workspaces {
+                for panel in &workspace.panels {
+                    if panel.kind == crate::panel::PanelKind::Browser {
+                        let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
+                        let profile_dir =
+                            crate::browser::profile_dir_for_home(&browser_config, &self.home, &panel.local_id);
+                        remove_dir_if_exists(&profile_dir)?;
+                    }
+                }
+            }
+        }
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
         let mut index = self.load_session_index()?;
         index.remove_profile_session(&self.profile_id, session_id);

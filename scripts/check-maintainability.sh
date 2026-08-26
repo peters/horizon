@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAX_LINES=1000
 ALLOW_PATTERN='#\[allow\(clippy::too_many_lines\)\]'
 SOURCE_DIRS=(
+  "$ROOT_DIR/crates/horizon-browser/src"
   "$ROOT_DIR/crates/horizon-core/src"
   "$ROOT_DIR/crates/horizon-ui/src"
 )
@@ -114,12 +115,12 @@ done < <(
 
 if command -v rg >/dev/null 2>&1; then
   if rg -n "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
-    echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from core/UI source files' >&2
+    echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from workspace source files' >&2
     rg -n "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >&2
     status=1
   fi
 elif grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
-  echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from core/UI source files' >&2
+  echo 'maintainability error: remove #[allow(clippy::too_many_lines)] from workspace source files' >&2
   grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >&2
   status=1
 fi

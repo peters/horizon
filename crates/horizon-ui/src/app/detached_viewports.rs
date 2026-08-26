@@ -6,7 +6,7 @@ use egui::{
     Align, Button, Color32, Context, CornerRadius, Layout, Panel, Pos2, Rect, Stroke, Vec2, ViewportBuilder,
     ViewportCommand, ViewportId,
 };
-use horizon_core::{CanvasViewState, WindowConfig, WorkspaceId};
+use horizon_core::{CanvasViewState, PanelKind, WindowConfig, WorkspaceId};
 
 use crate::{branding, theme};
 
@@ -204,6 +204,10 @@ impl HorizonApp {
             return;
         }
 
+        // Keyboard/text events are collected exactly once, by
+        // handle_canvas_pan_in_rect below: a second pass would consume the
+        // one-shot frame keyboard metadata twice and re-run the stateful
+        // speech filter (leaking an orphan hotkey key-up).
         self.handle_detached_shortcuts(ctx, workspace_id);
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
@@ -408,9 +412,35 @@ impl HorizonApp {
         panel_ids.sort_by_key(|panel_id| Some(*panel_id) == focused);
 
         let canvas_rect = detached_canvas_rect(ctx);
+        let has_browser = panel_ids.iter().any(|panel_id| {
+            self.board
+                .panel(*panel_id)
+                .is_some_and(|panel| panel.kind == PanelKind::Browser)
+        });
+        let browser_events = if has_browser {
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         self.panels_to_close.clear();
-        for (fallback_index, panel_id) in panel_ids.into_iter().enumerate() {
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+        for panel_id in panel_ids {
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                &workspace_collision_ids,
+                &browser_events,
+                crate::app::panels::PanelRenderScope {
+                    detached: true,
+                    frame_has_pointer_button,
+                },
+            ) {
                 self.panels_to_close.push(panel_id);
             }
         }
@@ -571,7 +601,11 @@ fn detached_viewport_builder(
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{consume_detached_position_restore, detached_viewport_builder};
+    use crate::app::test_support::test_app;
+    use crate::test_egui::DiscardTextures;
+    use egui::{Event, RawInput};
+
+    use super::{consume_detached_position_restore, detached_viewport_builder, detached_viewport_id};
     use horizon_core::WindowConfig;
 
     #[test]
@@ -600,5 +634,39 @@ mod tests {
         assert!(consume_detached_position_restore(&mut pending, &workspace_local_id));
         assert!(!consume_detached_position_restore(&mut pending, &workspace_local_id));
         assert!(!consume_detached_position_restore(&mut pending, "ws-beta"));
+    }
+
+    #[test]
+    fn detached_viewport_input_is_collected_before_panel_rendering() {
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        let viewport_id = detached_viewport_id("ws-browser");
+        let events = vec![
+            Event::PointerMoved(egui::pos2(420.0, 240.0)),
+            Event::Text("detached browser input".to_string()),
+        ];
+        let mut input = RawInput {
+            viewport_id,
+            events: events.clone(),
+            ..RawInput::default()
+        };
+        input.viewports.entry(viewport_id).or_default();
+
+        let _ = ctx
+            .run_ui(input, |ui| {
+                app.handle_canvas_pan_in_rect(
+                    ui.ctx(),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0)),
+                    None,
+                );
+            })
+            .discard_textures();
+
+        let collected = app
+            .terminal_keyboard_events
+            .iter()
+            .map(|input| input.event.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(collected, events);
     }
 }

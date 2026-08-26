@@ -1,6 +1,6 @@
 use egui::{Align, Color32, Context, Id, Layout, Order, Pos2, Rect, Sense, UiBuilder, Vec2};
 use horizon_core::{
-    AgentSessionBinding, AgentStatus, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
+    AgentSessionBinding, AgentStatus, AppShortcuts, AttentionSeverity, Panel, PanelId, PanelKind, ShortcutBinding,
     SshConnectionStatus, WorkspaceId,
 };
 
@@ -16,7 +16,7 @@ use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
-use super::shortcut_inventory::ssh_reconnect_shortcut_conflicts;
+use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
 use super::speech::MicState;
 use super::util::{clamp_panel_size, primary_shortcut_label};
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
@@ -176,8 +176,16 @@ fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state:
     response
 }
 
+pub(super) struct PanelRenderScope {
+    /// Detached viewports dispatch only the fit/minimap toolbar shortcuts.
+    pub(super) detached: bool,
+    /// The viewport's event slice carries a pointer-button press this frame.
+    pub(super) frame_has_pointer_button: bool,
+}
+
 struct PanelBodyContext<'a> {
     keyboard_events: &'a [TerminalInputEvent],
+    browser_events: &'a [egui::Event],
     editor_save_shortcut: ShortcutBinding,
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
     local_ssh_reconnect_enabled: bool,
@@ -185,6 +193,11 @@ struct PanelBodyContext<'a> {
     reconnect_requested: &'a mut bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
+    browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
+    browser_shortcuts: Option<&'a AppShortcuts>,
+    browser_shortcut_bindings: &'a [ShortcutBinding],
+    browser_frame_has_pointer_button: bool,
+    browser_fullscreen_active: bool,
 }
 
 fn show_panel_body_contents(
@@ -202,6 +215,21 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
+        PanelKind::Browser => {
+            let (Some(state), Some(shortcuts)) = (body_context.browser_ui_state, body_context.browser_shortcuts) else {
+                ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));
+                return false;
+            };
+            crate::browser_widget::BrowserView::new(
+                panel,
+                state,
+                shortcuts,
+                body_context.browser_fullscreen_active,
+                body_context.browser_shortcut_bindings,
+                body_context.browser_frame_has_pointer_button,
+            )
+            .show(ui, body_context.browser_events, is_focused, interactive)
+        }
         _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
             ui,
             is_focused,
@@ -284,7 +312,24 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
+        let raw_events = ui.ctx().input(|input| input.events.clone());
+        self.terminal_keyboard_events = self.terminal_events_for_viewport(ui.ctx(), &raw_events);
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
+        let browser_shortcuts = self
+            .board
+            .panel(panel_id)
+            .is_some_and(|panel| panel.kind == PanelKind::Browser)
+            .then(|| self.shortcuts.clone());
+        let browser_events = browser_shortcuts.as_ref().map_or_else(Vec::new, |_| {
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
+        });
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
+        let all_shortcut_bindings = global_shortcut_bindings(&self.shortcuts);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
@@ -303,7 +348,17 @@ impl HorizonApp {
                         let mut reconnect_requested = false;
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
-                                Some(self.editor_preview_cache.entry(panel_id).or_default())
+                                Some(
+                                    self.panel_render_caches
+                                        .editor_preview_cache
+                                        .entry(panel_id)
+                                        .or_default(),
+                                )
+                            } else {
+                                None
+                            };
+                            let browser_state = if panel.kind == PanelKind::Browser {
+                                Some(self.panel_render_caches.browser_ui_state.entry(panel_id).or_default())
                             } else {
                                 None
                             };
@@ -314,6 +369,7 @@ impl HorizonApp {
                                 true,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
+                                    browser_events: &browser_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
@@ -321,6 +377,11 @@ impl HorizonApp {
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
+                                    browser_ui_state: browser_state,
+                                    browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_shortcut_bindings: &all_shortcut_bindings,
+                                    browser_frame_has_pointer_button: frame_has_pointer_button,
+                                    browser_fullscreen_active: true,
                                 },
                             );
                         }
@@ -367,11 +428,37 @@ impl HorizonApp {
             .sort_by_key(|(panel_id, _)| Some(*panel_id) == focused);
 
         let canvas_rect = self.canvas_rect(ctx);
+        let has_browser = self.panel_render_order.iter().any(|(panel_id, _)| {
+            self.board
+                .panel(*panel_id)
+                .is_some_and(|panel| panel.kind == PanelKind::Browser)
+        });
+        let browser_events = if has_browser {
+            self.terminal_keyboard_events
+                .iter()
+                .map(|input| input.event.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let frame_has_pointer_button = browser_events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         let mut panels_to_close = Vec::new();
 
         for i in 0..self.panel_render_order.len() {
-            let (panel_id, fallback_index) = self.panel_render_order[i];
-            if self.render_panel(ctx, canvas_rect, panel_id, fallback_index, &workspace_collision_ids) {
+            let (panel_id, _fallback_index) = self.panel_render_order[i];
+            if self.render_panel(
+                ctx,
+                canvas_rect,
+                panel_id,
+                &workspace_collision_ids,
+                &browser_events,
+                PanelRenderScope {
+                    detached: false,
+                    frame_has_pointer_button,
+                },
+            ) {
                 panels_to_close.push(panel_id);
             }
         }
@@ -385,13 +472,14 @@ impl HorizonApp {
         ctx: &Context,
         canvas_rect: Rect,
         panel_id: PanelId,
-        _fallback_index: usize,
         workspace_collision_ids: &[WorkspaceId],
+        browser_events: &[egui::Event],
+        scope: PanelRenderScope,
     ) -> bool {
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
-        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot);
+        let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, browser_events, scope);
         self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
     }
 
@@ -443,10 +531,23 @@ impl HorizonApp {
         canvas_rect: Rect,
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
+        browser_events: &[egui::Event],
+        scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
+        let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
+        // Browser input suppresses app shortcuts that this viewport actually
+        // handles: the root window routes the full global set, detached
+        // windows only the two toolbar shortcuts.
+        let all_shortcut_bindings = global_shortcut_bindings(&self.shortcuts);
+        let detached_shortcut_bindings = [self.shortcuts.fit_active_workspace, self.shortcuts.toggle_minimap];
+        let browser_shortcut_bindings = if scope.detached {
+            &detached_shortcut_bindings[..]
+        } else {
+            &all_shortcut_bindings[..]
+        };
 
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
@@ -477,13 +578,9 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
-                // Dictation needs a PTY to type into: Editor/GitChanges/Usage
-                // panels have no terminal, so they get no mic control.
-                let mic_eligible = self.speech.is_some()
-                    && !matches!(
-                        snapshot.kind,
-                        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage
-                    );
+                // Terminal panels dictate through their PTY; browser panels
+                // dispatch text to the focused page element through CDP.
+                let mic_eligible = self.speech.is_some() && snapshot.kind.accepts_text_input();
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();
                     let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));
@@ -619,8 +716,9 @@ impl HorizonApp {
                     |ui| {
                         let mut reconnect_requested = false;
                         let board = &mut self.board;
-                        let editor_preview_cache = &mut self.editor_preview_cache;
-                        let terminal_grid_cache = &mut self.terminal_grid_cache;
+                        let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
+                        let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
+                        let browser_ui_state = &mut self.panel_render_caches.browser_ui_state;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -633,6 +731,11 @@ impl HorizonApp {
                             } else {
                                 None
                             };
+                            let browser_state = if panel.kind == PanelKind::Browser {
+                                Some(browser_ui_state.entry(panel_id).or_default())
+                            } else {
+                                None
+                            };
                             outcome.focus_requested |= show_panel_body_contents(
                                 ui,
                                 panel,
@@ -640,6 +743,7 @@ impl HorizonApp {
                                 interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
+                                    browser_events,
                                     editor_save_shortcut: self.shortcuts.save_editor,
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
@@ -647,6 +751,11 @@ impl HorizonApp {
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
+                                    browser_ui_state: browser_state,
+                                    browser_shortcuts: browser_shortcuts.as_ref(),
+                                    browser_shortcut_bindings,
+                                    browser_frame_has_pointer_button: scope.frame_has_pointer_button,
+                                    browser_fullscreen_active: false,
                                 },
                             );
                         }

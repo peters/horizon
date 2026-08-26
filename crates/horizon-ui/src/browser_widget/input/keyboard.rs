@@ -1,0 +1,821 @@
+//! Keyboard, IME, clipboard, and browser-shortcut routing.
+
+use egui::{Event, Key, Modifiers, Ui};
+use horizon_core::AppShortcuts;
+use horizon_core::browser::{
+    BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers, BrowserPanelState,
+};
+
+use crate::browser_widget::{BrowserUiState, PressedBrowserKey};
+
+pub(super) fn events(
+    ui: &Ui,
+    events: &[Event],
+    browser: &mut BrowserPanelState,
+    state: &mut BrowserUiState,
+    shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
+    exit_fullscreen_shortcut_active: bool,
+) {
+    let KeyboardFrameEvents {
+        key_texts,
+        mut key_chars,
+        mut shortcut_chars,
+        shortcut_presses,
+        ime_composing,
+    } = collect_keyboard_frame_events(
+        events,
+        shortcuts,
+        shortcut_bindings,
+        exit_fullscreen_shortcut_active,
+        state.ime_composing,
+    );
+    state.ime_composing = ime_composing;
+    for (event_index, event) in events.iter().enumerate() {
+        match event {
+            Event::Text(text) if !text.is_empty() => {
+                let shortcut_text = take_matching_single_char(text, &mut shortcut_chars);
+                let duplicate_key_text = take_matching_single_char(text, &mut key_chars);
+                if !shortcut_text && !duplicate_key_text {
+                    browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: text.clone() }));
+                }
+            }
+            // egui_winit turns Ctrl/Cmd+V into a global Paste event (the URL
+            // bar consumes its own copy while focused). Both paste and IME
+            // commits reach the page as one CDP insertText operation.
+            Event::Ime(egui::ImeEvent::Commit(text)) | Event::Paste(text) if !text.is_empty() => {
+                browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: text.clone() }));
+            }
+            Event::Copy => send_clipboard_shortcut(
+                browser,
+                state,
+                BrowserKey::Char('c'),
+                BrowserEditCommand::Copy,
+                clipboard_modifiers(ui),
+            ),
+            Event::Cut => send_clipboard_shortcut(
+                browser,
+                state,
+                BrowserKey::Char('x'),
+                BrowserEditCommand::Cut,
+                clipboard_modifiers(ui),
+            ),
+            Event::Key {
+                key,
+                physical_key,
+                pressed,
+                repeat,
+                modifiers,
+                ..
+            } => handle_key_event(
+                browser,
+                state,
+                BrowserKeyEvent {
+                    key: *key,
+                    physical_key: *physical_key,
+                    pressed: *pressed,
+                    repeat: *repeat,
+                    modifiers: *modifiers,
+                    key_text: key_texts[event_index],
+                    app_shortcut: shortcut_presses[event_index],
+                },
+            ),
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn browser_shortcut_events(
+    events: &[Event],
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
+    exit_fullscreen_shortcut_active: bool,
+) {
+    for event in events {
+        let Event::Key {
+            key,
+            physical_key,
+            pressed,
+            repeat,
+            modifiers,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        if should_route_key_while_url_focused(state, *key, *modifiers) {
+            handle_key_event(
+                browser,
+                state,
+                BrowserKeyEvent {
+                    key: *key,
+                    physical_key: *physical_key,
+                    pressed: *pressed,
+                    repeat: *repeat,
+                    modifiers: *modifiers,
+                    key_text: None,
+                    app_shortcut: app_shortcut_press(
+                        event,
+                        shortcuts,
+                        shortcut_bindings,
+                        exit_fullscreen_shortcut_active,
+                    ),
+                },
+            );
+        }
+    }
+}
+
+fn should_route_key_while_url_focused(state: &BrowserUiState, key: Key, modifiers: Modifiers) -> bool {
+    if is_reload_shortcut(key, modifiers) || (key == Key::Enter && state.url_submit_enter_pending) {
+        return true;
+    }
+    key_to_browser_key(key)
+        .is_some_and(|key| state.suppressed_shortcut_keys.contains(&key) || state.clipboard_release_keys.contains(&key))
+}
+
+pub(super) fn release_pressed_keys(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    modifiers: BrowserModifiers,
+) {
+    for (key, pressed) in state.pressed_keys.drain() {
+        browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+            physical_key: pressed.physical_key,
+            key,
+            text: pressed.text,
+            modifiers,
+        }));
+    }
+}
+
+pub(super) fn clear_focus_lost_suppressions(state: &mut BrowserUiState) {
+    // Once another widget owns keyboard focus, releases are intentionally not
+    // routed to the page. Retire matching suppression at the same boundary so
+    // a missed release cannot swallow that key when page focus returns.
+    state.suppressed_shortcut_keys.clear();
+    state.clipboard_release_keys.clear();
+}
+
+fn send_clipboard_shortcut(
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    key: BrowserKey,
+    edit_command: BrowserEditCommand,
+    modifiers: BrowserModifiers,
+) {
+    state.clipboard_release_keys.insert(key);
+    state.pressed_keys.remove(&key);
+    browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        physical_key: Some(key),
+        key,
+        text: None,
+        modifiers,
+        repeat: false,
+        edit_command: Some(edit_command),
+    }));
+    browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+        physical_key: Some(key),
+        key,
+        text: None,
+        modifiers,
+    }));
+}
+
+struct KeyboardFrameEvents {
+    key_texts: Vec<Option<char>>,
+    key_chars: Vec<char>,
+    shortcut_chars: Vec<char>,
+    shortcut_presses: Vec<bool>,
+    ime_composing: bool,
+}
+
+fn collect_keyboard_frame_events(
+    events: &[Event],
+    shortcuts: &AppShortcuts,
+    shortcut_bindings: &[horizon_core::ShortcutBinding],
+    exit_fullscreen_shortcut_active: bool,
+    ime_composing: bool,
+) -> KeyboardFrameEvents {
+    let shortcut_presses: Vec<bool> = events
+        .iter()
+        .map(|event| app_shortcut_press(event, shortcuts, shortcut_bindings, exit_fullscreen_shortcut_active))
+        .collect();
+    let mut ime_composing = ime_composing;
+    let ime_composing_at_event: Vec<bool> = events
+        .iter()
+        .map(|event| {
+            match event {
+                Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    ime_composing = !text.is_empty();
+                }
+                Event::Ime(egui::ImeEvent::Commit(_)) => ime_composing = false,
+                _ => {}
+            }
+            ime_composing
+        })
+        .collect();
+    // Pair each printable key-down with its adjacent committed text. That text
+    // is layout-authoritative (unlike a US-layout Shift prediction) and is
+    // also removed from the later Event::Text path to avoid double insertion.
+    // During an IME composition, omit the guessed fallback: the final commit
+    // is authoritative and can arrive in a later frame.
+    let key_texts: Vec<Option<char>> = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            if shortcut_presses[index] {
+                return None;
+            }
+            if let Event::Key {
+                key,
+                pressed,
+                modifiers,
+                ..
+            } = event
+                && *pressed
+                && !(modifiers.ctrl || modifiers.mac_cmd || modifiers.alt)
+                && let Some(browser_key) = key_to_browser_key(*key)
+            {
+                committed_text_after_key(events, index).or_else(|| {
+                    (!ime_composing_at_event[index])
+                        .then(|| browser_key.printable_char_with_shift(modifiers.shift))
+                        .flatten()
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let key_chars = key_texts.iter().flatten().copied().collect();
+    let shortcut_chars = shortcut_presses
+        .iter()
+        .enumerate()
+        .filter(|(_, suppressed)| **suppressed)
+        .filter_map(|(index, _)| committed_text_after_key(events, index))
+        .collect();
+    KeyboardFrameEvents {
+        key_texts,
+        key_chars,
+        shortcut_chars,
+        shortcut_presses,
+        ime_composing,
+    }
+}
+
+fn take_matching_single_char(text: &str, candidates: &mut Vec<char>) -> bool {
+    (text.chars().count() == 1)
+        .then(|| text.chars().next())
+        .flatten()
+        .and_then(|character| candidates.iter().position(|candidate| *candidate == character))
+        .is_some_and(|index| {
+            candidates.swap_remove(index);
+            true
+        })
+}
+
+#[derive(Clone, Copy)]
+struct BrowserKeyEvent {
+    key: Key,
+    physical_key: Option<Key>,
+    pressed: bool,
+    repeat: bool,
+    modifiers: Modifiers,
+    key_text: Option<char>,
+    app_shortcut: bool,
+}
+
+fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, event: BrowserKeyEvent) {
+    let BrowserKeyEvent {
+        key,
+        physical_key,
+        pressed,
+        repeat,
+        modifiers,
+        key_text,
+        app_shortcut,
+    } = event;
+    if key == Key::Enter && state.url_submit_enter_pending {
+        if !pressed {
+            state.url_submit_enter_pending = false;
+        }
+        return;
+    }
+    let reload_shortcut = is_reload_shortcut(key, modifiers);
+    let browser_key = key_to_browser_key(key);
+    if consume_clipboard_release(state, browser_key, pressed) {
+        return;
+    }
+    if app_shortcut {
+        if let Some(browser_key) = browser_key {
+            state.suppressed_shortcut_keys.insert(browser_key);
+            state.pressed_keys.remove(&browser_key);
+        }
+        return;
+    }
+    if consume_suppressed_key(state, browser_key, pressed) {
+        return;
+    }
+    if reload_shortcut {
+        if pressed {
+            if let Some(browser_key) = browser_key {
+                // Modifiers can be released before the key. Remember the
+                // consumed press so that later bare key-up cannot reach the
+                // page without a matching key-down.
+                state.suppressed_shortcut_keys.insert(browser_key);
+                state.pressed_keys.remove(&browser_key);
+            }
+            // Consume every repeat in a held shortcut, but reload only once.
+            if !repeat {
+                browser.send(BrowserCommand::Reload);
+            }
+        }
+        return;
+    }
+    if !pressed {
+        if let Some(browser_key) = browser_key {
+            let Some(pressed_key) = state.pressed_keys.remove(&browser_key) else {
+                return;
+            };
+            browser.send(BrowserCommand::Input(BrowserInput::KeyUp {
+                physical_key: pressed_key.physical_key,
+                key: browser_key,
+                text: pressed_key.text,
+                modifiers: to_browser_modifiers(modifiers),
+            }));
+        }
+        return;
+    }
+    let Some(browser_key) = browser_key else {
+        return;
+    };
+    // A repeat can arrive after focus loss synthesized the matching key-up.
+    // Do not start a new page key sequence with an orphan repeat; the next
+    // physical non-repeat press remains eligible normally.
+    if repeat && !state.pressed_keys.contains_key(&browser_key) {
+        return;
+    }
+    let modifiers = to_browser_modifiers(modifiers);
+    let physical_browser_key = physical_key.and_then(key_to_browser_key);
+    let edit_command = editing_command(key, modifiers);
+    let text = key_text
+        .map(|character| character.to_string())
+        .filter(|_| !(modifiers.ctrl || modifiers.meta || modifiers.alt));
+    state.pressed_keys.insert(
+        browser_key,
+        PressedBrowserKey {
+            physical_key: physical_browser_key,
+            text: text.clone(),
+        },
+    );
+    browser.send(BrowserCommand::Input(BrowserInput::KeyDown {
+        physical_key: physical_browser_key,
+        key: browser_key,
+        text,
+        modifiers,
+        repeat,
+        edit_command,
+    }));
+}
+
+fn is_reload_shortcut(key: Key, modifiers: Modifiers) -> bool {
+    key == Key::F5 || (key == Key::R && (modifiers.ctrl || modifiers.mac_cmd))
+}
+
+fn editing_command(key: Key, modifiers: BrowserModifiers) -> Option<BrowserEditCommand> {
+    let primary = if cfg!(target_os = "macos") {
+        modifiers.meta
+    } else {
+        modifiers.ctrl
+    };
+    (primary && !modifiers.alt && !modifiers.shift && key == Key::A).then_some(BrowserEditCommand::SelectAll)
+}
+
+fn consume_clipboard_release(state: &mut BrowserUiState, key: Option<BrowserKey>, pressed: bool) -> bool {
+    let Some(key) = key.filter(|key| state.clipboard_release_keys.contains(key)) else {
+        return false;
+    };
+    state.clipboard_release_keys.remove(&key);
+    !pressed
+}
+
+fn consume_suppressed_key(state: &mut BrowserUiState, key: Option<BrowserKey>, pressed: bool) -> bool {
+    let Some(key) = key.filter(|key| state.suppressed_shortcut_keys.contains(key)) else {
+        return false;
+    };
+    if !pressed {
+        state.suppressed_shortcut_keys.remove(&key);
+        state.pressed_keys.remove(&key);
+    }
+    true
+}
+
+fn committed_text_after_key(events: &[Event], key_index: usize) -> Option<char> {
+    for event in &events[key_index + 1..] {
+        match event {
+            Event::Text(text) if text.chars().count() == 1 => return text.chars().next(),
+            Event::Text(_) | Event::Key { .. } | Event::Ime(egui::ImeEvent::Commit(_)) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether this press matches an app shortcut the *current viewport*
+/// actually dispatches. Browser input suppresses exactly that set so the
+/// keys are not swallowed without effect (detached viewports only handle a
+/// subset of the root window's global bindings).
+fn app_shortcut_press(
+    event: &Event,
+    shortcuts: &AppShortcuts,
+    bindings: &[horizon_core::ShortcutBinding],
+    exit_fullscreen_shortcut_active: bool,
+) -> bool {
+    bindings
+        .iter()
+        .filter(|binding| **binding != shortcuts.save_editor)
+        .filter(|binding| exit_fullscreen_shortcut_active || **binding != shortcuts.exit_fullscreen_panel)
+        .any(|binding| crate::app::shortcuts::shortcut_event_matches(event, *binding))
+}
+
+pub(super) fn to_browser_modifiers(modifiers: Modifiers) -> BrowserModifiers {
+    BrowserModifiers {
+        alt: modifiers.alt,
+        ctrl: modifiers.ctrl,
+        // `command` is the platform-primary shortcut flag and is also true
+        // for physical Ctrl on Linux/Windows. CDP Meta must represent the
+        // physical macOS Command key only.
+        meta: modifiers.mac_cmd,
+        shift: modifiers.shift,
+    }
+}
+
+pub(super) fn key_modifiers(ui: &Ui) -> BrowserModifiers {
+    ui.input(|i| to_browser_modifiers(i.modifiers))
+}
+
+fn clipboard_modifiers(ui: &Ui) -> BrowserModifiers {
+    ensure_clipboard_primary(key_modifiers(ui))
+}
+
+fn ensure_clipboard_primary(mut modifiers: BrowserModifiers) -> BrowserModifiers {
+    if !modifiers.ctrl && !modifiers.meta {
+        #[cfg(target_os = "macos")]
+        {
+            modifiers.meta = true;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            modifiers.ctrl = true;
+        }
+    }
+    modifiers
+}
+
+fn key_to_browser_key(key: Key) -> Option<BrowserKey> {
+    Some(match key {
+        Key::ArrowUp => BrowserKey::ArrowUp,
+        Key::ArrowDown => BrowserKey::ArrowDown,
+        Key::ArrowLeft => BrowserKey::ArrowLeft,
+        Key::ArrowRight => BrowserKey::ArrowRight,
+        Key::Enter => BrowserKey::Enter,
+        Key::Tab => BrowserKey::Tab,
+        Key::Escape => BrowserKey::Escape,
+        Key::Space => BrowserKey::Space,
+        Key::Backspace => BrowserKey::Backspace,
+        Key::Delete => BrowserKey::Delete,
+        Key::Home => BrowserKey::Home,
+        Key::End => BrowserKey::End,
+        Key::PageUp => BrowserKey::PageUp,
+        Key::PageDown => BrowserKey::PageDown,
+        Key::Insert => BrowserKey::Insert,
+        Key::F1 => BrowserKey::F1,
+        Key::F2 => BrowserKey::F2,
+        Key::F3 => BrowserKey::F3,
+        Key::F4 => BrowserKey::F4,
+        Key::F5 => BrowserKey::F5,
+        Key::F6 => BrowserKey::F6,
+        Key::F7 => BrowserKey::F7,
+        Key::F8 => BrowserKey::F8,
+        Key::F9 => BrowserKey::F9,
+        Key::F10 => BrowserKey::F10,
+        Key::F11 => BrowserKey::F11,
+        Key::F12 => BrowserKey::F12,
+        Key::F13 => BrowserKey::F13,
+        Key::F14 => BrowserKey::F14,
+        Key::F15 => BrowserKey::F15,
+        Key::A => BrowserKey::Char('a'),
+        Key::B => BrowserKey::Char('b'),
+        Key::C => BrowserKey::Char('c'),
+        Key::D => BrowserKey::Char('d'),
+        Key::E => BrowserKey::Char('e'),
+        Key::F => BrowserKey::Char('f'),
+        Key::G => BrowserKey::Char('g'),
+        Key::H => BrowserKey::Char('h'),
+        Key::I => BrowserKey::Char('i'),
+        Key::J => BrowserKey::Char('j'),
+        Key::K => BrowserKey::Char('k'),
+        Key::L => BrowserKey::Char('l'),
+        Key::M => BrowserKey::Char('m'),
+        Key::N => BrowserKey::Char('n'),
+        Key::O => BrowserKey::Char('o'),
+        Key::P => BrowserKey::Char('p'),
+        Key::Q => BrowserKey::Char('q'),
+        Key::R => BrowserKey::Char('r'),
+        Key::S => BrowserKey::Char('s'),
+        Key::T => BrowserKey::Char('t'),
+        Key::U => BrowserKey::Char('u'),
+        Key::V => BrowserKey::Char('v'),
+        Key::W => BrowserKey::Char('w'),
+        Key::X => BrowserKey::Char('x'),
+        Key::Y => BrowserKey::Char('y'),
+        Key::Z => BrowserKey::Char('z'),
+        Key::Num0 => BrowserKey::Char('0'),
+        Key::Num1 => BrowserKey::Char('1'),
+        Key::Num2 => BrowserKey::Char('2'),
+        Key::Num3 => BrowserKey::Char('3'),
+        Key::Num4 => BrowserKey::Char('4'),
+        Key::Num5 => BrowserKey::Char('5'),
+        Key::Num6 => BrowserKey::Char('6'),
+        Key::Num7 => BrowserKey::Char('7'),
+        Key::Num8 => BrowserKey::Char('8'),
+        Key::Num9 => BrowserKey::Char('9'),
+        Key::Comma => BrowserKey::Char(','),
+        Key::Period => BrowserKey::Char('.'),
+        Key::Slash => BrowserKey::Char('/'),
+        Key::Semicolon => BrowserKey::Char(';'),
+        Key::Quote => BrowserKey::Char('\''),
+        Key::Minus => BrowserKey::Char('-'),
+        Key::Equals => BrowserKey::Char('='),
+        Key::OpenBracket => BrowserKey::Char('['),
+        Key::CloseBracket => BrowserKey::Char(']'),
+        Key::Backslash => BrowserKey::Char('\\'),
+        Key::Backtick => BrowserKey::Char('`'),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(key: Key, shift: bool) -> Event {
+        modified_press(
+            key,
+            Modifiers {
+                shift,
+                ..Modifiers::NONE
+            },
+        )
+    }
+
+    fn modified_press(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn committed_text_is_layout_authoritative() {
+        let events = [press(Key::Semicolon, true), Event::Text(";".to_owned())];
+
+        assert_eq!(committed_text_after_key(&events, 0), Some(';'));
+    }
+
+    #[test]
+    fn committed_text_does_not_cross_the_next_key_event() {
+        let events = [press(Key::A, false), press(Key::B, false), Event::Text("b".to_owned())];
+
+        assert_eq!(committed_text_after_key(&events, 0), None);
+        assert_eq!(committed_text_after_key(&events, 1), Some('b'));
+    }
+
+    #[test]
+    fn committed_text_does_not_cross_a_multi_character_text_event() {
+        let events = [
+            press(Key::A, false),
+            Event::Text("paste".to_owned()),
+            Event::Text("a".to_owned()),
+        ];
+
+        assert_eq!(committed_text_after_key(&events, 0), None);
+    }
+
+    #[test]
+    fn printable_fallback_stays_suppressed_until_ime_commit() {
+        let shortcuts = AppShortcuts::default();
+        let first_frame = collect_keyboard_frame_events(
+            &[Event::Ime(egui::ImeEvent::Preedit {
+                text: "中".to_owned(),
+                active_range_chars: None,
+            })],
+            &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
+            false,
+            false,
+        );
+        assert!(first_frame.ime_composing);
+
+        let composing_frame = collect_keyboard_frame_events(
+            &[press(Key::A, false)],
+            &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
+            false,
+            first_frame.ime_composing,
+        );
+        assert_eq!(composing_frame.key_texts, [None]);
+        assert!(composing_frame.ime_composing);
+
+        let committed_frame = collect_keyboard_frame_events(
+            &[
+                Event::Ime(egui::ImeEvent::Commit("中".to_owned())),
+                press(Key::B, false),
+            ],
+            &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
+            false,
+            composing_frame.ime_composing,
+        );
+        assert_eq!(committed_frame.key_texts, [None, Some('b')]);
+        assert!(!committed_frame.ime_composing);
+
+        let dismissed_frame = collect_keyboard_frame_events(
+            &[
+                Event::Ime(egui::ImeEvent::Preedit {
+                    text: String::new(),
+                    active_range_chars: None,
+                }),
+                press(Key::C, false),
+            ],
+            &shortcuts,
+            &crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts),
+            false,
+            true,
+        );
+        assert_eq!(dismissed_frame.key_texts, [None, Some('c')]);
+        assert!(!dismissed_frame.ime_composing);
+    }
+
+    #[test]
+    fn app_shortcuts_are_filtered_only_when_the_app_owns_them() {
+        let shortcuts = AppShortcuts::default();
+        let global = crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts);
+        let escape = press(Key::Escape, false);
+        let fullscreen = press(Key::F11, false);
+        let save_editor = modified_press(
+            Key::S,
+            Modifiers {
+                shift: true,
+                mac_cmd: true,
+                command: true,
+                ..Modifiers::NONE
+            },
+        );
+
+        assert!(app_shortcut_press(&fullscreen, &shortcuts, &global, false));
+        assert!(!app_shortcut_press(&escape, &shortcuts, &global, false));
+        assert!(app_shortcut_press(&escape, &shortcuts, &global, true));
+        assert!(!app_shortcut_press(&save_editor, &shortcuts, &global, false));
+    }
+
+    #[test]
+    fn configured_app_reload_key_stays_app_owned_while_the_url_is_focused() {
+        let shortcuts = AppShortcuts {
+            fullscreen_panel: horizon_core::ShortcutBinding::new(
+                horizon_core::ShortcutModifiers::NONE,
+                horizon_core::ShortcutKey::Function(5),
+            ),
+            ..AppShortcuts::default()
+        };
+        let global = crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts);
+        let f5 = press(Key::F5, false);
+
+        assert!(should_route_key_while_url_focused(
+            &BrowserUiState::default(),
+            Key::F5,
+            Modifiers::NONE
+        ));
+        assert!(app_shortcut_press(&f5, &shortcuts, &global, false));
+    }
+
+    #[test]
+    fn extended_function_keys_map_to_cdp_keys() {
+        assert_eq!(key_to_browser_key(Key::F13), Some(BrowserKey::F13));
+        assert_eq!(key_to_browser_key(Key::F14), Some(BrowserKey::F14));
+        assert_eq!(key_to_browser_key(Key::F15), Some(BrowserKey::F15));
+    }
+
+    #[test]
+    fn suppressed_release_is_consumed_after_modifiers_change() {
+        let mut state = BrowserUiState::default();
+        state.suppressed_shortcut_keys.insert(BrowserKey::Char('r'));
+
+        assert!(consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+        assert!(!state.suppressed_shortcut_keys.contains(&BrowserKey::Char('r')));
+        assert!(!consume_suppressed_key(&mut state, Some(BrowserKey::Char('r')), false));
+    }
+
+    #[test]
+    fn focus_loss_retires_stale_key_suppressions() {
+        let mut state = BrowserUiState::default();
+        state.suppressed_shortcut_keys.insert(BrowserKey::Char('r'));
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+
+        clear_focus_lost_suppressions(&mut state);
+
+        assert!(state.suppressed_shortcut_keys.is_empty());
+        assert!(state.clipboard_release_keys.is_empty());
+    }
+
+    #[test]
+    fn url_focus_keeps_browser_reload_shortcuts_routable() {
+        let mut state = BrowserUiState::default();
+        let command_r = Modifiers {
+            mac_cmd: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+
+        assert!(should_route_key_while_url_focused(&state, Key::F5, Modifiers::NONE));
+        assert!(should_route_key_while_url_focused(&state, Key::R, command_r));
+        assert!(!should_route_key_while_url_focused(&state, Key::A, Modifiers::NONE));
+
+        state.suppressed_shortcut_keys.insert(BrowserKey::Char('r'));
+        assert!(should_route_key_while_url_focused(&state, Key::R, Modifiers::NONE));
+    }
+
+    #[test]
+    fn clipboard_shortcuts_suppress_their_later_native_release() {
+        let mut state = BrowserUiState::default();
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+        state.clipboard_release_keys.insert(BrowserKey::Char('x'));
+
+        assert!(consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('c')),
+            false
+        ));
+        assert!(consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('x')),
+            false
+        ));
+        assert!(state.clipboard_release_keys.is_empty());
+    }
+
+    #[test]
+    fn a_new_clipboard_key_press_retires_stale_release_suppression() {
+        let mut state = BrowserUiState::default();
+        state.clipboard_release_keys.insert(BrowserKey::Char('c'));
+
+        assert!(!consume_clipboard_release(
+            &mut state,
+            Some(BrowserKey::Char('c')),
+            true
+        ));
+        assert!(state.clipboard_release_keys.is_empty());
+    }
+
+    #[test]
+    fn clipboard_pseudo_events_restore_a_released_primary_modifier() {
+        let modifiers = ensure_clipboard_primary(BrowserModifiers::default());
+
+        #[cfg(target_os = "macos")]
+        assert!(modifiers.meta);
+        #[cfg(not(target_os = "macos"))]
+        assert!(modifiers.ctrl);
+    }
+
+    #[test]
+    fn primary_a_requests_chromium_select_all() {
+        let modifiers = if cfg!(target_os = "macos") {
+            BrowserModifiers {
+                meta: true,
+                ..BrowserModifiers::none()
+            }
+        } else {
+            BrowserModifiers {
+                ctrl: true,
+                ..BrowserModifiers::none()
+            }
+        };
+
+        assert_eq!(editing_command(Key::A, modifiers), Some(BrowserEditCommand::SelectAll));
+        assert_eq!(
+            editing_command(
+                Key::A,
+                BrowserModifiers {
+                    shift: true,
+                    ..modifiers
+                }
+            ),
+            None
+        );
+    }
+}

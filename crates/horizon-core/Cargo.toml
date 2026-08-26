@@ -15,6 +15,7 @@ trace-profiling = ["profiling/profile-with-tracing"]
 workspace = true
 
 [dependencies]
+horizon-browser.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 profiling.workspace = true
@@ -27,6 +28,8 @@ uuid.workspace = true
 comrak = { version = "0.54", default-features = false }
 git2.workspace = true
 regex.workspace = true
+atomicwrites.workspace = true
 
 [dev-dependencies]
+horizon-browser = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

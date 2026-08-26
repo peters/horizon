@@ -1,5 +1,6 @@
 use horizon_core::{CanvasViewState, Config, RuntimeState, StartupDecision, WindowConfig};
 
+use super::super::session_manager::{SessionSwitchShutdownState, session_switch_shutdown_state};
 use super::super::test_support::{
     editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_config_and_startup,
 };
@@ -12,6 +13,26 @@ fn runtime_with_staggered_workspaces(prefix: &str) -> RuntimeState {
         ],
         ..RuntimeState::default()
     }
+}
+
+#[test]
+fn session_switch_timeout_detaches_terminals_but_never_bypasses_browser_cleanup() {
+    assert_eq!(
+        session_switch_shutdown_state(false, true, true),
+        SessionSwitchShutdownState::Complete
+    );
+    assert_eq!(
+        session_switch_shutdown_state(false, false, true),
+        SessionSwitchShutdownState::AbortForBrowser
+    );
+    assert_eq!(
+        session_switch_shutdown_state(false, false, false),
+        SessionSwitchShutdownState::Waiting
+    );
+    assert_eq!(
+        session_switch_shutdown_state(true, true, false),
+        SessionSwitchShutdownState::Complete
+    );
 }
 
 #[test]

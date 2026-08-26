@@ -165,9 +165,10 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
-        if self.native_window_liveness.is_root_destroyed() {
-            return;
-        }
+        // `exiting` is the one callback that remains safe and necessary after
+        // the native root handle is gone: eframe uses it to run `App::on_exit`
+        // and destroy application state. Skipping it lets browser-driver
+        // threads outlive a macOS Cmd-Q long enough to orphan Chrome.
         self.inner.exiting(event_loop);
     }
 

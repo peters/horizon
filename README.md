@@ -324,9 +324,53 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ---
 
+## Browser Panels
+
+Browser panels render a real browser inside the Horizon canvas through the first-party `horizon-browser` engine. Add one from the built-in **Browser** (`web`) preset, or declare one in a workspace and use `command` as its initial URL:
+
+```yaml
+workspaces:
+  - name: Web
+    panels:
+      - name: App
+        kind: browser
+        command: http://127.0.0.1:3000
+```
+
+The backend picker in each panel switches among the protocols supported on the current host:
+
+| Backend | Automation and pixels | Prerequisites | Important limits |
+|:--|:--|:--|:--|
+| **Chromium** | CDP with change-driven JPEG screencast frames | Chrome, Chromium, Edge, or Brave | Push frames; separate persistent profile per panel |
+| **Firefox** | WebDriver BiDi plus adaptive lossless WebDriver screenshots | Firefox and `geckodriver` | Screenshots, not a live BiDi video stream; capture decays to zero on a static page and is capped at 30 fps while active |
+| **Safari** | Classic WebDriver screenshots, with BiDi events when `webSocketUrl` is negotiated | macOS, Safari, and an explicitly enabled `safaridriver` | One automation session at a time; isolated Safari automation state; exact-head macOS validation is required before release support is claimed |
+
+Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself before a Safari smoke test. Safari remains disabled in the picker on Linux and Windows.
+
+The browser settings select the default backend and allow explicit executable paths:
+
+```yaml
+browser:
+  backend: chromium              # chromium, firefox, or safari
+  command: /path/to/chrome       # Chromium-family binary; omit to discover
+  firefox_command: /path/to/firefox
+  geckodriver_command: /path/to/geckodriver
+  safaridriver_command: /usr/bin/safaridriver
+  extra_args: []                 # managed browser switches are rejected
+  quality: 60                    # Chromium JPEG screencast quality, 1–100
+  every_nth_frame: 1             # Chromium screencast sampling
+  profile_root: ~/.horizon/browser-profiles
+```
+
+All executable fields are optional. Chromium and Firefox receive separate directories beneath `profile_root`, so cookies and page storage persist for a saved panel without sharing a browser profile lock. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not expose or reuse the user's normal history, AutoFill data, cookies, or preferences.
+
+Chromium is the only push-frame backend. Firefox and Safari deliberately use newest-frame adaptive screenshots because the standardized BiDi recording command writes a remote media file; it is not an interactive client-frame stream. Firefox still uses BiDi for contexts, navigation, lifecycle events, and input, while its measured-faster classic WebDriver PNG endpoint supplies pixels. Horizon permits one capture in flight, discards a result superseded by navigation/context/viewport generation changes, coalesces input and resize demand, and keeps the prior valid frame after a decode failure.
+
+---
+
 ## Speech Input (opt-in)
 
-Dictate straight into a terminal: every terminal-backed panel's title bar gets a mic button (Editor, Git Changes, and Usage panels have no PTY, so they get none), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
+Dictate straight into a terminal or a browser page: terminal-backed and Browser panels get a mic button in their title bar (Editor, Git Changes, and Usage panels do not), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
 
 It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
 
@@ -412,7 +456,7 @@ features:
 
 Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
 
-**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal panel title bars.
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal and Browser panel title bars.
 
 ---
 
