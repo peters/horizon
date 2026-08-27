@@ -182,17 +182,24 @@ impl Driver {
     }
 
     pub(super) fn tick_safari_input(&mut self, event_tx: &BrowserEventSender) {
-        let Some((dispatch, handle)) = self.safari.as_mut().and_then(|state| {
+        let _ = self.dispatch_safari_input(Instant::now(), event_tx);
+    }
+
+    pub(super) fn flush_safari_input(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
+        self.dispatch_safari_input(Instant::now() + INPUT_SETTLE, event_tx)
+            .unwrap_or(Ok(()))
+    }
+
+    fn dispatch_safari_input(&mut self, now: Instant, event_tx: &BrowserEventSender) -> Option<Result<(), String>> {
+        let (dispatch, handle) = self.safari.as_mut().and_then(|state| {
             state
-                .take_ready(Instant::now())
+                .take_ready(now)
                 .map(|dispatch| (dispatch, state.window_handle.clone()))
-        }) else {
-            return;
-        };
+        })?;
         let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: false });
         let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
         let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: true });
-        if let Err(error) = result {
+        if let Err(error) = &result {
             tracing::warn!("WebDriver input failed: {error}");
             self.reset_safari_input();
         }
@@ -200,6 +207,7 @@ impl Driver {
             self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
+        Some(result)
     }
 
     pub(super) fn perform_safari_click(

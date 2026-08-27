@@ -128,6 +128,10 @@ impl Driver {
             event_tx,
         )
         .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        if self.safari.is_some() {
+            self.flush_safari_input(event_tx)
+                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
