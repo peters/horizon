@@ -95,8 +95,8 @@ impl ChromeProcess {
         let mut command = Command::new(command);
         command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
         // Give Chrome an isolated process group so emergency cleanup can
-        // terminate helpers as well as the browser parent on Unix. Windows
-        // uses taskkill /T against the exact unreaped child PID below.
+        // terminate helpers as well as the browser parent on Unix. On Windows,
+        // `spawn_process` assigns the child tree to a retained Job Object.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
