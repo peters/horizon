@@ -3,8 +3,8 @@ mod shortcut_actions;
 use std::collections::BTreeSet;
 
 use egui::{
-    Align, Button, Color32, Context, CornerRadius, Layout, Panel, Pos2, Rect, Stroke, Vec2, ViewportBuilder,
-    ViewportCommand, ViewportId,
+    Align, Button, Context, CornerRadius, Layout, Panel, Pos2, Rect, Stroke, Vec2, ViewportBuilder, ViewportCommand,
+    ViewportId,
 };
 use horizon_core::{CanvasViewState, PanelKind, WindowConfig, WorkspaceId};
 
@@ -397,11 +397,12 @@ impl HorizonApp {
         let workspace_collision_ids = self.workspace_collision_scope(Some(workspace_id));
 
         self.workspace_colors.clear();
-        self.workspace_colors
-            .extend(self.board.workspaces.iter().map(|workspace| {
-                let (r, g, b) = workspace.accent();
-                (workspace.id, Color32::from_rgb(r, g, b))
-            }));
+        self.workspace_colors.extend(
+            self.board
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.id, theme::workspace_accent(workspace.color_idx))),
+        );
 
         let mut panel_ids = self
             .board

@@ -8,9 +8,24 @@ const FILE_ROW_SIZE: f32 = 11.0;
 const DIFF_FONT_SIZE: f32 = 11.0;
 const SUMMARY_SIZE: f32 = 11.0;
 const HEADER_HEIGHT: f32 = 28.0;
+const DIFF_LINE_TINT_ALPHA: u8 = 22;
 
-const DIFF_ADD_BG: Color32 = Color32::from_rgba_unmultiplied_const(166, 227, 161, 18);
-const DIFF_DEL_BG: Color32 = Color32::from_rgba_unmultiplied_const(243, 139, 168, 18);
+/// Diff line tint: derived from the active theme's green/red so both themes
+/// keep enough contrast against their panel background.
+fn diff_line_bg(kind: DiffLineKind) -> Color32 {
+    match kind {
+        DiffLineKind::Add => theme::alpha(theme::PALETTE_GREEN(), DIFF_LINE_TINT_ALPHA),
+        DiffLineKind::Delete => theme::alpha(theme::PALETTE_RED(), DIFF_LINE_TINT_ALPHA),
+        DiffLineKind::Context => Color32::TRANSPARENT,
+    }
+}
+
+fn branch_color() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => Color32::from_rgb(203, 166, 247),
+        theme::ResolvedTheme::Light => Color32::from_rgb(139, 88, 226),
+    }
+}
 
 pub struct GitChangesView<'a> {
     panel: &'a mut Panel,
@@ -75,13 +90,13 @@ fn render_header(ui: &mut egui::Ui, status: &GitStatus) {
             // Branch badge
             if let Some(branch) = &status.branch {
                 let badge = egui::Frame::new()
-                    .fill(theme::alpha(Color32::from_rgb(203, 166, 247), 20))
+                    .fill(theme::alpha(branch_color(), 20))
                     .corner_radius(CornerRadius::same(4));
                 badge.show(ui, |ui| {
                     ui.label(
                         RichText::new(branch)
                             .font(FontId::monospace(10.0))
-                            .color(Color32::from_rgb(203, 166, 247)),
+                            .color(branch_color()),
                     );
                 });
             }
@@ -402,11 +417,7 @@ fn render_diff_line(ui: &mut egui::Ui, line: &horizon_core::DiffLine) {
     ui.allocate_rect(line_rect, egui::Sense::hover());
 
     // Background
-    let bg = match line.kind {
-        DiffLineKind::Add => DIFF_ADD_BG,
-        DiffLineKind::Delete => DIFF_DEL_BG,
-        DiffLineKind::Context => Color32::TRANSPARENT,
-    };
+    let bg = diff_line_bg(line.kind);
     if bg != Color32::TRANSPARENT {
         ui.painter().rect_filled(line_rect, CornerRadius::ZERO, bg);
     }

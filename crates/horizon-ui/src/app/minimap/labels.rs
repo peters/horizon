@@ -56,10 +56,9 @@ fn collect_minimap_workspace_labels<'a>(
             workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
         let title_strip_rect = minimap_workspace_title_strip_rect(workspace_rect, model.scale_y);
 
-        let (r, g, b) = workspace.accent();
         labels.push(MinimapWorkspaceLabel {
             name: &workspace.name,
-            color: Color32::from_rgb(r, g, b),
+            color: theme::workspace_accent(workspace.color_idx),
             is_active,
             workspace_rect,
             title_strip_rect,

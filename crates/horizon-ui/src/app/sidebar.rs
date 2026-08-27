@@ -139,7 +139,6 @@ impl HorizonApp {
             .workspaces
             .iter()
             .map(|workspace| {
-                let (r, g, b) = workspace.accent();
                 let panels = workspace
                     .panels
                     .iter()
@@ -150,7 +149,7 @@ impl HorizonApp {
                 WorkspaceSidebarEntry {
                     id: workspace.id,
                     name: workspace.name.clone(),
-                    color: Color32::from_rgb(r, g, b),
+                    color: theme::workspace_accent(workspace.color_idx),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),
                     panels,

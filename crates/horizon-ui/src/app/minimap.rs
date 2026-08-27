@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use egui::{Color32, Context, CornerRadius, Id, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use egui::{Context, CornerRadius, Id, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
 use crate::theme;
@@ -148,8 +148,7 @@ fn paint_minimap_workspaces(
         if !scope_includes_workspace(app, scope, workspace.id) {
             continue;
         }
-        let (r, g, b) = workspace.accent();
-        let workspace_color = Color32::from_rgb(r, g, b);
+        let workspace_color = theme::workspace_accent(workspace.color_idx);
         let is_active =
             app.board.active_workspace == Some(workspace.id) || scope == MinimapScope::Workspace(workspace.id);
         let is_hovered = hovered_workspace == Some(workspace.id);
@@ -196,8 +195,7 @@ fn paint_minimap_panels(app: &HorizonApp, painter: &Painter, origin: Pos2, model
             .board
             .workspace(panel.workspace_id)
             .map_or(theme::ACCENT(), |workspace| {
-                let (r, g, b) = workspace.accent();
-                Color32::from_rgb(r, g, b)
+                theme::workspace_accent(workspace.color_idx)
             });
         let is_focused = app.board.focused == Some(panel.id);
 

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Button, Color32, FontId, Ui};
+use egui::{Button, FontId, Ui};
 use horizon_core::{PanelId, PanelKind, PresetConfig, WorkspaceId};
 
 use crate::command_palette::{PanelEntry, PresetEntry, WorkspaceEntry};
@@ -228,15 +228,12 @@ pub(super) fn command_palette_workspace_entries(
         .workspaces
         .iter()
         .filter(|workspace| !detached_workspace_ids.contains(&workspace.id))
-        .map(|workspace| {
-            let (r, g, b) = workspace.accent();
-            WorkspaceEntry {
-                id: workspace.id,
-                name: workspace.name.clone(),
-                color: Color32::from_rgb(r, g, b),
-                panel_count: workspace.panels.len(),
-                is_active: active_workspace == Some(workspace.id),
-            }
+        .map(|workspace| WorkspaceEntry {
+            id: workspace.id,
+            name: workspace.name.clone(),
+            color: theme::workspace_accent(workspace.color_idx),
+            panel_count: workspace.panels.len(),
+            is_active: active_workspace == Some(workspace.id),
         })
         .collect()
 }
