@@ -7,6 +7,7 @@
 
 const VIEWPORT_RETRY_INTERVAL_SECONDS: f64 = 0.25;
 const MAX_VIEWPORT_CONVERGENCE_RETRIES: u8 = 8;
+const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 0.5;
 
 mod chrome;
 mod ime;
@@ -243,15 +244,20 @@ impl<'a> BrowserView<'a> {
     }
 }
 
-fn restore_host_focus(ui: &Ui, state: &mut BrowserUiState, requested: bool) {
-    let (now, focused) = ui.input(|input| (input.time, input.viewport().focused));
-    if requested {
+fn restore_host_focus(ui: &Ui, state: &mut BrowserUiState, request: Option<bool>) {
+    let now = ui.input(|input| input.time);
+    if request == Some(true) {
+        state.host_focus_requested_at = None;
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        return;
+    }
+    if request == Some(false) {
         state.host_focus_requested_at = Some(now);
     }
     let Some(requested_at) = state.host_focus_requested_at else {
         return;
     };
-    if focused == Some(false) || now - requested_at >= 0.05 {
+    if now - requested_at >= SAFARI_HOST_FOCUS_RECOVERY_SECONDS {
         state.host_focus_requested_at = None;
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {

@@ -100,7 +100,7 @@ pub struct BrowserPanelState {
     /// Latest page selection copied by Chrome and not yet written to the host
     /// clipboard by the UI.
     pending_clipboard_text: Option<String>,
-    host_focus_request: Option<()>,
+    host_focus_request: Option<bool>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
     /// User-typed navigation kept as the display and retry target until the
@@ -367,8 +367,8 @@ impl BrowserPanelState {
     }
 
     /// Take a Safari request to restore focus to the host viewport.
-    pub fn take_host_focus_request(&mut self) -> bool {
-        self.host_focus_request.take().is_some()
+    pub fn take_host_focus_request(&mut self) -> Option<bool> {
+        self.host_focus_request.take()
     }
 
     /// Tell the driver the user handed the panel back to the agent.
@@ -545,8 +545,8 @@ impl BrowserPanelState {
                 self.pending_clipboard_text = Some(text);
                 output.had_output = true;
             }
-            BrowserEvent::HostFocusRequested => {
-                self.host_focus_request = Some(());
+            BrowserEvent::HostFocusRequested { ready } => {
+                self.host_focus_request = Some(self.host_focus_request.unwrap_or(false) || ready);
                 output.had_output = true;
             }
             BrowserEvent::OwnerChanged(owner) => {

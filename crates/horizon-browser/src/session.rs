@@ -89,9 +89,11 @@ pub enum BrowserEvent {
     /// Selected page text copied by headless Chrome, ready for the host
     /// clipboard bridge in the UI.
     ClipboardText(String),
-    /// Safari is about to focus its automation window, so the host viewport
-    /// should reclaim focus on its UI thread.
-    HostFocusRequested,
+    /// Arm Safari host-focus recovery before input, then request it
+    /// immediately once the blocking `WebDriver` call returns.
+    HostFocusRequested {
+        ready: bool,
+    },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
 }
