@@ -19,26 +19,32 @@ impl ActionState {
                 x,
                 y,
                 button,
+                click_count,
                 modifiers,
                 ..
             } => {
                 self.push_modifier_source(modifiers, &mut sources);
-                sources.push(pointer_source(vec![
-                    pointer_move(x, y),
+                sources.push(pointer_source(pointer_button_actions(
+                    x,
+                    y,
+                    click_count,
                     json!({ "type": "pointerDown", "button": button_number(button) }),
-                ]));
+                )));
             }
             BrowserInput::MouseRelease {
                 x,
                 y,
                 button,
+                click_count,
                 modifiers,
                 ..
             } => {
-                sources.push(pointer_source(vec![
-                    pointer_move(x, y),
+                sources.push(pointer_source(pointer_button_actions(
+                    x,
+                    y,
+                    click_count,
                     json!({ "type": "pointerUp", "button": button_number(button) }),
-                ]));
+                )));
                 self.push_modifier_source(modifiers, &mut sources);
             }
             BrowserInput::Wheel {
@@ -143,6 +149,15 @@ fn pointer_move(x: f64, y: f64) -> Value {
     })
 }
 
+fn pointer_button_actions(x: f64, y: f64, click_count: u32, action: Value) -> Vec<Value> {
+    let mut actions = Vec::with_capacity(2);
+    if click_count <= 1 {
+        actions.push(pointer_move(x, y));
+    }
+    actions.push(action);
+    actions
+}
+
 fn key_source(actions: Vec<Value>) -> Value {
     let actions = Value::Array(actions);
     json!({ "type": "key", "id": "horizon-keyboard", "actions": actions })
@@ -230,7 +245,7 @@ fn finite_i64_from_f64(value: f64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::ActionState;
     use crate::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
@@ -287,5 +302,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("pointerUp")
         );
+    }
+
+    #[test]
+    fn continuation_clicks_do_not_reset_webdriver_click_count_with_pointer_moves() {
+        for expected in ["pointerDown", "pointerUp"] {
+            let actions = super::pointer_button_actions(12.0, 24.0, 2, json!({ "type": expected }));
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0]["type"], expected);
+        }
     }
 }

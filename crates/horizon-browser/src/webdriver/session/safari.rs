@@ -108,7 +108,25 @@ impl InputState {
             return None;
         }
         self.ready_at = None;
-        let payloads = std::mem::take(&mut self.pending)
+        let pending = std::mem::take(&mut self.pending);
+        if let [
+            BrowserInput::MousePress { click_count: 1, .. },
+            BrowserInput::MouseRelease { click_count: 1, .. },
+            BrowserInput::MousePress {
+                x,
+                y,
+                button,
+                click_count: 2,
+                modifiers,
+                ..
+            },
+            BrowserInput::MouseRelease { click_count: 2, .. },
+        ] = pending.as_slice()
+        {
+            let payload = self.actions.click_payload(*x, *y, *button, 2, *modifiers);
+            return Some(InputDispatch::Foreground(vec![payload]));
+        }
+        let payloads = pending
             .into_iter()
             .filter_map(|input| match input {
                 BrowserInput::KeyDown { text: Some(text), .. } => {
@@ -329,6 +347,37 @@ mod tests {
             panic!("semantic click should require foreground dispatch");
         };
 
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
+    }
+
+    #[test]
+    fn physical_double_click_is_one_foreground_action_chain() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let modifiers = BrowserModifiers::none();
+        macro_rules! input {
+            ($kind:ident, $click_count:literal, $buttons:literal) => {
+                BrowserInput::$kind {
+                    x: 10.0,
+                    y: 20.0,
+                    button: BrowserButton::Left,
+                    click_count: $click_count,
+                    buttons: $buttons,
+                    modifiers,
+                }
+            };
+        }
+        state.pending = vec![
+            input!(MousePress, 1, 1),
+            input!(MouseRelease, 1, 0),
+            input!(MousePress, 2, 1),
+            input!(MouseRelease, 2, 0),
+        ];
+        state.ready_at = Some(std::time::Instant::now());
+        let Some(InputDispatch::Foreground(payloads)) = state.take_ready(std::time::Instant::now()) else {
+            panic!("double-click should dispatch foreground input");
+        };
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
     }
