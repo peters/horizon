@@ -544,6 +544,7 @@ mod tests {
                 height: 800,
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: None,
+                capture_directory: None,
             },
             "ws://127.0.0.1/devtools/browser/test",
             None,

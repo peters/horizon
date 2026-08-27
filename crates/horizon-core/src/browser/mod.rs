@@ -285,6 +285,9 @@ impl BrowserPanelState {
             // never mistaken for an unchanged one by the UI's seq check.
             frame_slot: Arc::clone(&self.frame_slot),
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
+            capture_directory: Some(
+                crate::horizon_home::HorizonHome::resolve().browser_capture_dir(&self.panel_local_id),
+            ),
         };
         match session::start_session(session_config) {
             Ok(handle) => {

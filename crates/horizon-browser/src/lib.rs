@@ -13,6 +13,7 @@ mod disclosure;
 mod error;
 pub mod frames;
 pub mod input;
+mod network;
 mod paths;
 pub mod process;
 mod profile;
@@ -32,6 +33,12 @@ pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub use network::{
+    BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection, BrowserNetworkConnectionState,
+    BrowserNetworkDirection, BrowserNetworkEventKind, BrowserNetworkFrameOptions, BrowserNetworkOperation,
+    BrowserNetworkPayloadEncoding, BrowserNetworkRecord, DEFAULT_NETWORK_MAX_FILE_BYTES,
+    DEFAULT_NETWORK_MAX_PAYLOAD_BYTES, MAX_NETWORK_FILE_BYTES, MAX_NETWORK_PAYLOAD_BYTES, MAX_NETWORK_URL_PATTERNS,
+};
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget,

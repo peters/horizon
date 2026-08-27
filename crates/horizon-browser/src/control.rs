@@ -5,7 +5,7 @@
 //! stays independent of that filesystem and of Horizon's panel model.
 
 use crate::session::BrowserCommand;
-use crate::{BrowserInput, BrowserKey, BrowserTarget};
+use crate::{BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget};
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -61,6 +61,12 @@ pub enum BrowserControlAction {
     Evaluate {
         expression: String,
     },
+    /// Start, inspect, or stop a bounded network capture export.
+    Network {
+        operation: BrowserNetworkOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        options: Option<BrowserNetworkCaptureOptions>,
+    },
 }
 
 impl BrowserControlAction {
@@ -100,6 +106,13 @@ impl BrowserControlAction {
                 Ok(())
             }
             Self::Evaluate { expression } => validate_expression(expression),
+            Self::Network { operation, options } => match operation {
+                BrowserNetworkOperation::Start => options.clone().unwrap_or_default().validate(),
+                BrowserNetworkOperation::Status | BrowserNetworkOperation::Stop if options.is_some() => {
+                    Err("network status and stop do not accept capture options")
+                }
+                BrowserNetworkOperation::Status | BrowserNetworkOperation::Stop => Ok(()),
+            },
             Self::Reload | Self::Back | Self::Forward => Ok(()),
         }
     }
@@ -117,7 +130,8 @@ impl BrowserControlAction {
             | Self::Click { .. }
             | Self::Fill { .. }
             | Self::Scroll { .. }
-            | Self::Evaluate { .. } => None,
+            | Self::Evaluate { .. }
+            | Self::Network { .. } => None,
         }
     }
 }

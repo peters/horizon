@@ -35,6 +35,9 @@ impl Driver {
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
             BrowserControlAction::Evaluate { expression } => self.semantic_evaluate(expression),
+            BrowserControlAction::Network { operation, options } => {
+                self.network_action(request, *operation, options.clone(), event_tx)
+            }
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

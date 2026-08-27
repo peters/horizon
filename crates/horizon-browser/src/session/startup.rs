@@ -479,6 +479,7 @@ mod tests {
             height: 200,
             frame_slot: Arc::new(FrameSlot::new()),
             coordination: None,
+            capture_directory: None,
         })
         .unwrap_or_else(|error| panic!("start browser session: {error}"));
 

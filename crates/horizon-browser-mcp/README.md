@@ -27,6 +27,11 @@ binary.
   `count: 2` on a click for a backend-native trusted double-click.
 - `browser_wait` verifies present, visible, or hidden selector state.
 - `browser_evaluate` evaluates an explicit size-bounded expression.
+- `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
+  capture and returns an explicit private NDJSON path plus connection state,
+  frame/byte counts, drops, truncation, and writer health. Start it before
+  navigation for a complete socket lifecycle; while active, agents may use
+  ordinary read-only tools such as `tail -f`, `jq`, or `rg` on that exact path.
 - `browser_handoff` pauses automation so the user can steer.
 - `browser_audit` returns redacted ordered action records.
 
@@ -34,6 +39,12 @@ The server automatically claims and heartbeats a panel using
 `HORIZON_BROWSER_ACTOR`. Tool schemas and results never expose raw CDP, BiDi,
 WebDriver, manifest, audit-file, or result-file locations. Horizon's locked
 manifest queue remains private implementation plumbing, not a second API.
+
+Chromium WebSocket frames come directly from CDP. Standard WebDriver BiDi
+currently exposes HTTP lifecycle events but not WebSocket frames, so Firefox
+uses an explicitly advertised, pre-document page bridge that batches frames
+before crossing BiDi. This bridge is observable by page code and is not an
+undetectability feature. Safari network capture is reported as unsupported.
 
 ## Dependency boundary
 

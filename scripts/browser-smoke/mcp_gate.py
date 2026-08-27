@@ -22,6 +22,7 @@ TOOL_NAMES = [
     "browser_handoff",
     "browser_list",
     "browser_navigate",
+    "browser_network",
     "browser_panel",
     "browser_query",
     "browser_snapshot",
@@ -29,10 +30,13 @@ TOOL_NAMES = [
 ]
 PRIVATE_MARKERS = [
     "browser_ws",
+    "automation_ws",
+    "webSocketUrl",
     "manifest_path",
     "audit_path",
     "result_path",
-    "ws://",
+    "devtools/browser",
+    "devtools/page",
     ".horizon/runtime",
 ]
 CAPABILITIES = [
@@ -50,6 +54,7 @@ CAPABILITIES = [
     "handoff",
     "audit",
 ]
+NETWORK_CAPABILITIES = ["network_capture", "websocket_capture", "ndjson_export"]
 
 
 class McpClient:
@@ -160,6 +165,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError(result)
     if "sole agent control contract" not in result["instructions"]:
         raise AssertionError(result["instructions"])
+    if "browser_network start before browser_navigate" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach the network capture workflow")
     client.notify("notifications/initialized")
 
     tools = client.request("tools/list")["result"]["tools"]
@@ -171,6 +178,9 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     count = act["inputSchema"]["properties"].get("count")
     if count is None:
         raise AssertionError("browser_act does not advertise click count")
+    network = next(tool for tool in tools if tool["name"] == "browser_network")
+    if "tail -f" not in network["description"] or "Start only" not in json.dumps(network["inputSchema"]):
+        raise AssertionError("browser_network is not self-discovering")
     return tools
 
 
@@ -294,6 +304,122 @@ def assert_no_private_markers(encoded: str, context: str) -> None:
             raise AssertionError(f"{context} exposed private marker {marker}")
 
 
+def exercise_network_capture(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+    action_ids: list[str],
+    failed_ids: list[str],
+) -> dict[str, Any]:
+    if args.backend == "safari":
+        _, error = client.call(
+            "browser_network",
+            {"panel_id": panel_id, "operation": "start"},
+            expect_error=True,
+        )
+        assert error is not None and "unsupported_backend" in error
+        failed_ids.append(failed_action_id(error))
+        return {"supported": False}
+
+    started = record_action(
+        client,
+        "browser_network",
+        {
+            "panel_id": panel_id,
+            "operation": "start",
+            "include_http": True,
+            "url_patterns": ["/websocket.html", "/market-stream"],
+            "max_payload_bytes": 4096,
+            "max_file_bytes": 16 * 1024 * 1024,
+        },
+        action_ids,
+    )
+    capture_path = Path(started["path"])
+    if not capture_path.is_absolute() or not capture_path.is_file():
+        raise AssertionError(f"capture path is not an explicit readable file: {capture_path}")
+    if os.name != "nt" and capture_path.stat().st_mode & 0o777 != 0o600:
+        raise AssertionError(f"capture file mode is not private: {capture_path}")
+    record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/websocket.html"},
+        action_ids,
+    )
+    record_action(
+        client,
+        "browser_wait",
+        {
+            "panel_id": panel_id,
+            "selector": "#stream-status[data-state='closed']",
+            "state": "visible",
+            "timeout_millis": 30000,
+        },
+        action_ids,
+    )
+
+    deadline = time.monotonic() + 30
+    status: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        status = record_action(
+            client,
+            "browser_network",
+            {"panel_id": panel_id, "operation": "status"},
+            action_ids,
+        )
+        connections = status["known_connections"]
+        if connections and connections[0]["state"] == "closed" and connections[0]["received_frames"] >= 4096:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError(f"network capture did not converge: {status}")
+
+    stopped = record_action(
+        client,
+        "browser_network",
+        {"panel_id": panel_id, "operation": "stop"},
+        action_ids,
+    )
+    if stopped["active"]:
+        raise AssertionError(stopped)
+    if stopped["records_dropped"] or stopped["writer_failed"] or stopped["file_limit_reached"]:
+        raise AssertionError(stopped)
+    records = [json.loads(line) for line in capture_path.read_text(encoding="utf-8").splitlines()]
+    if not records:
+        raise AssertionError("network capture file is empty")
+    sequences = [record["sequence"] for record in records]
+    if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
+        raise AssertionError("network capture sequence is not monotonic and unique")
+    kinds = {record["kind"] for record in records}
+    required = {
+        "capture_started",
+        "http_request",
+        "websocket_created",
+        "websocket_opened",
+        "websocket_frame_sent",
+        "websocket_frame_received",
+        "websocket_closed",
+        "capture_stopped",
+    }
+    if not required.issubset(kinds):
+        raise AssertionError({"missing": sorted(required - kinds), "kinds": sorted(kinds)})
+    received = [record for record in records if record["kind"] == "websocket_frame_received"]
+    if len(received) != 4096:
+        raise AssertionError(f"expected 4096 received frames, got {len(received)}")
+    if json.loads(received[-1]["payload"])["sequence"] != 4095:
+        raise AssertionError("network capture omitted the final high-rate frame")
+    encoded = json.dumps(records, sort_keys=True)
+    if "MCP_NETWORK_URL_SECRET" in encoded:
+        raise AssertionError("network capture leaked URL query data")
+    return {
+        "capture_id": stopped["capture_id"],
+        "path": str(capture_path),
+        "records": len(records),
+        "received_frames": len(received),
+        "supported": True,
+        "transport": stopped["transport"],
+    }
+
+
 def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     initialize(client)
     panel = wait_for_panel(client, args.backend, args.panel_timeout)
@@ -307,11 +433,20 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(panel)
     detail, _ = client.call("browser_panel", {"panel_id": panel_id})
     assert detail is not None
-    if detail["capabilities"] != CAPABILITIES:
+    expected_capabilities = CAPABILITIES + ([] if args.backend == "safari" else NETWORK_CAPABILITIES)
+    if detail["capabilities"] != expected_capabilities:
         raise AssertionError(detail)
+    network_capability = detail["network_capture"]
+    if network_capability["supported"] != (args.backend != "safari"):
+        raise AssertionError(network_capability)
+    if args.backend == "firefox" and not network_capability["page_instrumentation"]:
+        raise AssertionError(network_capability)
+    if args.backend == "chromium" and network_capability["page_instrumentation"]:
+        raise AssertionError(network_capability)
 
     action_ids: list[str] = []
     failed_ids: list[str] = []
+    network_capture = exercise_network_capture(client, args, panel_id, action_ids, failed_ids)
     secret_origin = args.base_url.replace(
         "://",
         "://MCP_USER_SECRET:MCP_PASSWORD_SECRET@",
@@ -464,6 +599,21 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if final_snapshot["title"] != "Horizon Browser Smoke - Navigation Complete":
         raise AssertionError(final_snapshot)
 
+    if network_capture["supported"]:
+        active_close = record_action(
+            client,
+            "browser_network",
+            {
+                "panel_id": panel_id,
+                "operation": "start",
+                "url_patterns": ["/active-close-fixture"],
+                "max_payload_bytes": 1024,
+                "max_file_bytes": 1024 * 1024,
+            },
+            action_ids,
+        )
+        network_capture["active_close_path"] = active_close["path"]
+
     audit_entries = len(verify_audit(client, panel_id, action_ids, failed_ids, double_click_id))
     handoff_request = None
     if args.handoff:
@@ -544,6 +694,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         "completed_actions": len(action_ids),
         "double_click": {"count": 2, "trusted": True},
         "handoff_request_id": handoff_request,
+        "network_capture": network_capture,
         "panel_id": panel_id,
         "protocol": panel["protocol"],
         "scroll_y": scroll_y,

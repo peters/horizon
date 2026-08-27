@@ -49,6 +49,9 @@ impl DriverState {
             BrowserControlAction::Evaluate { expression } => {
                 self.semantic_evaluate(link, event_tx, frame_slot, expression)
             }
+            BrowserControlAction::Network { operation, options } => {
+                self.network_action(link, event_tx, frame_slot, request, *operation, options.clone())
+            }
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

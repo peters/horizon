@@ -317,6 +317,32 @@ def audit_journals(root: Path) -> tuple[list[str], list[str]]:
     return journals, findings
 
 
+def network_capture_findings(root: Path, backend: str, expect_exports: bool) -> tuple[list[str], list[str]]:
+    capture_root = root / "home" / ".horizon" / "browser-captures"
+    paths = sorted(capture_root.rglob("*.ndjson")) if capture_root.is_dir() else []
+    findings: list[str] = []
+    if expect_exports and backend != "safari" and len(paths) < 2:
+        findings.append("MCP lane did not produce both stopped and active-close network exports")
+    if backend == "safari" and paths:
+        findings.append("unsupported Safari network capture unexpectedly created an export")
+    for path in paths:
+        if os.name != "nt" and path.stat().st_mode & 0o777 != 0o600:
+            findings.append(f"network capture mode is {path.stat().st_mode & 0o777:o}, expected 600: {path}")
+        try:
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        except (OSError, json.JSONDecodeError) as error:
+            findings.append(f"network capture is not readable NDJSON: {path}: {error}")
+            continue
+        if not records or records[0].get("kind") != "capture_started":
+            findings.append(f"network capture has no start marker: {path}")
+        if not records or records[-1].get("kind") != "capture_stopped":
+            findings.append(f"network capture did not flush on stop/normal close: {path}")
+        sequences = [record.get("sequence") for record in records]
+        if any(not isinstance(sequence, int) for sequence in sequences) or sequences != sorted(set(sequences)):
+            findings.append(f"network capture sequence is not monotonic and unique: {path}")
+    return [str(path) for path in paths], findings
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     validate_platform(args.backend)
@@ -408,6 +434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     journals, audit_findings = audit_journals(root)
     if not args.skip_mcp and not journals:
         audit_findings.append("MCP lane produced no persistent audit journal")
+    capture_exports, capture_findings = network_capture_findings(root, args.backend, not args.skip_mcp)
     tracked_process_count = len(tracker.identities) if tracker is not None else 0
     survivors = sorted(set((tracker.survivors() if tracker is not None else []) + root_path_survivors(root)))
     report = {
@@ -417,6 +444,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "mcp_status": mcp_status,
         "audit_journals": journals,
         "audit_permission_findings": audit_findings,
+        "network_capture_exports": capture_exports,
+        "network_capture_findings": capture_findings,
         "remaining_manifests": manifests,
         "surviving_browser_processes": survivors,
         "tracked_process_count": tracked_process_count,
@@ -424,7 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_path = root / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({**report, "report": str(report_path)}, sort_keys=True), flush=True)
-    if candidate_status != 0 or mcp_status != 0 or audit_findings or manifests or survivors:
+    if candidate_status != 0 or mcp_status != 0 or audit_findings or capture_findings or manifests or survivors:
         return 1
     return 0
 

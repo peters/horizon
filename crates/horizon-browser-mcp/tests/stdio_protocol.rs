@@ -86,6 +86,12 @@ fn exercise_protocol(protocol_version: &str) {
     }));
     assert_eq!(initialize["result"]["protocolVersion"], protocol_version);
     assert_eq!(initialize["result"]["serverInfo"]["name"], "horizon-browser");
+    assert!(
+        initialize["result"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains("browser_network start before browser_navigate")),
+        "server instructions must teach the network capture workflow"
+    );
     process.notify(&json!({
         "jsonrpc": "2.0",
         "method": "notifications/initialized"
@@ -98,7 +104,17 @@ fn exercise_protocol(protocol_version: &str) {
         "params": {}
     }));
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(10));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(11));
+    let network = tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network"))
+        .expect("browser_network tool");
+    assert!(
+        network["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("tail -f"))
+    );
+    assert!(network["inputSchema"].to_string().contains("Start only"));
     assert!(!encoded_tools.contains("browser_ws"));
     assert!(!encoded_tools.contains("manifest_path"));
 

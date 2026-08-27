@@ -36,6 +36,7 @@ cumulative.
 | Automation disclosure or browser launch arguments | Both disclosure policies on Chromium and Firefox; Safari capability/status check; startup/history consistency |
 | Browser config schema, defaults, migration, discovery paths | Auto-discovery plus explicit-path launch, persistence/migration, and update this runner's generated config |
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
+| Network events, WebSocket capture, NDJSON writer, or capture directory | High-rate network fixture through MCP on Chromium and Firefox; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; normal close during capture |
 | Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
 | Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
 
@@ -82,10 +83,13 @@ The reusable runner:
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
 - launches the exact Horizon binary and one configured Browser panel;
-- invokes only the ten public `browser_*` MCP tools;
+- invokes only the eleven public `browser_*` MCP tools;
 - checks discovery, schemas, navigation, snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
+- starts a filtered capture before navigation to the high-rate WebSocket
+  fixture, verifies HTTP plus sent/received/open/close records and a zero-drop
+  4,096-frame tail, then stops and parses only the path returned by MCP;
 - waits for the tester to close the exact Horizon window normally; and
 - fails if the candidate exits badly or a task-owned browser process or live
   manifest remains.
@@ -275,6 +279,15 @@ Run once per host OS after the semantic gate:
 5. Verify audit order and action IDs; queued/dispatched/terminal states;
    mode `0600` on Unix; URL credentials/query/fragment, selectors, scripts, and
    filled text redaction; and no runtime path or raw endpoint in MCP results.
+6. Inspect the `network_capture` discovery object. On Chromium it must report
+   protocol-native frames; on Firefox it must disclose page instrumentation;
+   on Safari it must report unsupported. Follow the advertised
+   `browser_network start` before navigation, status/tail, and stop workflow.
+   The returned capture file must be private, monotonic NDJSON; URL query data
+   must be redacted; `records_dropped`, `writer_failed`, and
+   `file_limit_reached` must remain false for the deterministic 4,096-frame
+   stream. Repeat normal close while a capture is active and prove it flushes
+   and leaves no writer thread or live manifest.
 
 ## Fixture inventory
 
@@ -285,6 +298,7 @@ Run once per host OS after the semantic gate:
 | `next.html` | Blue committed navigation/history target |
 | `alternate.html` | Red alternating navigation-latency target |
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
+| `websocket.html` | High-rate deterministic WebSocket lifecycle, sent frame, 4,096 received frames, URL redaction, bounded NDJSON export |
 
 Keep selectors stable. When a browser behavior needs a new deterministic
 oracle, extend these fixtures and the gate together instead of creating another

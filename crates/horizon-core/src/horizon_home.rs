@@ -106,6 +106,17 @@ impl HorizonHome {
         self.root.join("audit").join("browsers")
     }
 
+    /// Private agent-requested browser network exports.
+    #[must_use]
+    pub fn browser_captures_dir(&self) -> PathBuf {
+        self.root.join("browser-captures")
+    }
+
+    #[must_use]
+    pub fn browser_capture_dir(&self, local_id: &str) -> PathBuf {
+        self.browser_captures_dir().join(safe_local_id(local_id))
+    }
+
     #[must_use]
     pub fn browser_profile_dir(&self, local_id: &str) -> PathBuf {
         self.root.join("browser-profiles").join(safe_local_id(local_id))
@@ -170,6 +181,14 @@ mod tests {
         assert_eq!(
             home.browser_audit_dir(),
             PathBuf::from("/tmp/horizon-home/audit/browsers")
+        );
+        assert_eq!(
+            home.browser_captures_dir(),
+            PathBuf::from("/tmp/horizon-home/browser-captures")
+        );
+        assert_eq!(
+            home.browser_capture_dir("panel-1"),
+            PathBuf::from("/tmp/horizon-home/browser-captures/%70616e656c2d31")
         );
         assert_eq!(
             home.browser_profile_dir("panel-1"),

@@ -21,8 +21,10 @@ use super::http::HttpError;
 use super::service::{WebDriverService, prepare_profile};
 
 mod coordination;
+mod network;
 mod safari;
 mod semantic;
+mod shutdown;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -147,6 +149,8 @@ struct Driver {
     owner_seen: Option<String>,
     handoff_seen: Option<String>,
     semantic: SemanticState,
+    network: crate::network::NetworkCaptureState,
+    firefox_network: Option<network::FirefoxNetworkBridge>,
 }
 
 struct PendingHistoryStart {
@@ -241,7 +245,7 @@ pub(crate) fn run_webdriver(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    driver.close();
+    driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }
 
@@ -347,6 +351,8 @@ impl Driver {
             owner_seen: None,
             handoff_seen: None,
             semantic: SemanticState::default(),
+            network: crate::network::NetworkCaptureState::default(),
+            firefox_network: None,
         })
     }
 
@@ -657,6 +663,9 @@ impl Driver {
     }
 
     fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
+        if self.handle_network_bidi_event(event) {
+            return;
+        }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
         if let Some(context) = params.get("context").and_then(Value::as_str)
@@ -775,19 +784,6 @@ impl Driver {
 
     fn session_path(&self, suffix: &str) -> String {
         format!("/session/{}/{}", self.session_id, suffix.trim_start_matches('/'))
-    }
-
-    fn close(&mut self) {
-        let _ = self.classic_delete("actions");
-        let _ = self.service.http.delete(&format!("/session/{}", self.session_id));
-        let _ = self.service.process.kill();
-    }
-
-    fn classic_delete(&self, suffix: &str) -> Result<Value, String> {
-        self.service
-            .http
-            .delete(&self.session_path(suffix))
-            .map_err(|error| error.to_string())
     }
 }
 

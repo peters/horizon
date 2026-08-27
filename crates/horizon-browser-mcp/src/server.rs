@@ -19,8 +19,8 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, EvaluateInput, EvaluateOutput,
-    HandoffInput, HandoffOutput, NavigateInput, NodeOutput, NodesOutput, PanelInput, QueryInput, SnapshotInput,
-    SnapshotOutput, WaitInput, WaitOutput, WaitState,
+    HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput, NodeOutput, NodesOutput, PanelInput,
+    QueryInput, SnapshotInput, SnapshotOutput, WaitInput, WaitOutput, WaitState,
 };
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
@@ -196,6 +196,26 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_network",
+        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation for complete WebSocket lifecycle, then inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium frames are protocol-native; Firefox frames use disclosed page instrumentation; Safari is unsupported."
+    )]
+    async fn browser_network(
+        &self,
+        Parameters(input): Parameters<NetworkInput>,
+    ) -> Result<Json<NetworkOutput>, String> {
+        let action = input.build_action()?;
+        let receipt = self
+            .controller
+            .execute(&input.panel_id, action, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        let BrowserControlValue::Network { capture } = receipt.value else {
+            return Err("browser returned an unexpected network capture result".to_string());
+        };
+        Ok(Json(NetworkOutput::new(input.panel_id, receipt.action_id, capture)))
+    }
+
+    #[tool(
         name = "browser_wait",
         description = "Wait for a CSS selector to become present, visible, or hidden using bounded audited queries."
     )]
@@ -267,7 +287,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. List panels, take a fresh semantic snapshot or query, act through refs, then verify. Never use raw browser endpoints.",
+                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list: each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate, inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -395,6 +415,7 @@ mod tests {
                 "browser_handoff",
                 "browser_list",
                 "browser_navigate",
+                "browser_network",
                 "browser_panel",
                 "browser_query",
                 "browser_snapshot",

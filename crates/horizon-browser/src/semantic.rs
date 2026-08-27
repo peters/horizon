@@ -65,6 +65,9 @@ pub enum BrowserControlValue {
     Json {
         value: Value,
     },
+    Network {
+        capture: crate::BrowserNetworkCapture,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

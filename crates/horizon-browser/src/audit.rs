@@ -116,6 +116,23 @@ pub enum BrowserAuditAction {
     Evaluate {
         expression_characters: usize,
     },
+    Network {
+        operation: crate::BrowserNetworkOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_http: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_websocket: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_sent: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_received: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url_filter_count: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_payload_bytes: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_file_bytes: Option<u64>,
+    },
     HandoffRequested,
     HandoffDone,
     Stop,
@@ -157,6 +174,20 @@ impl BrowserAuditAction {
             BrowserControlAction::Evaluate { expression } => Self::Evaluate {
                 expression_characters: expression.chars().count(),
             },
+            BrowserControlAction::Network { operation, options } => {
+                let options =
+                    (*operation == crate::BrowserNetworkOperation::Start).then(|| options.clone().unwrap_or_default());
+                Self::Network {
+                    operation: *operation,
+                    include_http: options.as_ref().map(|options| options.include_http),
+                    include_websocket: options.as_ref().map(|options| options.include_websocket),
+                    include_sent: options.as_ref().map(|options| options.frames.include_sent),
+                    include_received: options.as_ref().map(|options| options.frames.include_received),
+                    url_filter_count: options.as_ref().map(|options| options.url_patterns.len()),
+                    max_payload_bytes: options.as_ref().map(|options| options.max_payload_bytes),
+                    max_file_bytes: options.as_ref().map(|options| options.max_file_bytes),
+                }
+            }
         }
     }
 
@@ -318,13 +349,13 @@ const fn default_click_count() -> u32 {
     crate::DEFAULT_CLICK_COUNT
 }
 
-fn redact_url(url: &str) -> String {
+pub(crate) fn redact_url(url: &str) -> String {
     let trimmed = url.trim();
     let scheme_end = trimmed.find(':');
     if scheme_end.is_some_and(|end| {
         !matches!(
             &trimmed[..end].to_ascii_lowercase()[..],
-            "http" | "https" | "file" | "about"
+            "http" | "https" | "ws" | "wss" | "file" | "about"
         )
     }) {
         return scheme_end.map_or_else(
@@ -377,6 +408,14 @@ mod tests {
             }
         );
         assert_eq!(text, BrowserAuditAction::InsertText { characters: 28 });
+    }
+
+    #[test]
+    fn websocket_urls_keep_the_endpoint_but_redact_credentials_and_query_data() {
+        assert_eq!(
+            redact_url("wss://user:secret@example.test/market?token=private#fragment"),
+            "wss://<redacted>@example.test/market?<redacted>#<redacted>"
+        );
     }
 
     #[test]

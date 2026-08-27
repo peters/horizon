@@ -1,3 +1,7 @@
+mod network;
+
+pub(crate) use network::{NetworkInput, NetworkOutput};
+
 use horizon_browser::{BackendKind, BrowserBounds, BrowserNode, BrowserSnapshot, BrowserTarget};
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use schemars::JsonSchema;
@@ -23,6 +27,7 @@ pub(crate) struct BrowserPanel {
     pub(crate) user_active: bool,
     pub(crate) handoff_pending: bool,
     pub(crate) capabilities: Vec<String>,
+    pub(crate) network_capture: NetworkCaptureCapability,
 }
 
 impl BrowserPanel {
@@ -43,7 +48,50 @@ impl BrowserPanel {
             owned_by_caller,
             user_active,
             handoff_pending,
-            capabilities: semantic_capabilities(),
+            capabilities: semantic_capabilities(value.backend),
+            network_capture: NetworkCaptureCapability::for_backend(value.backend),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NetworkCaptureCapability {
+    pub(crate) supported: bool,
+    pub(crate) transport: Option<String>,
+    pub(crate) websocket_frames: bool,
+    pub(crate) page_instrumentation: bool,
+    pub(crate) workflow: String,
+}
+
+impl NetworkCaptureCapability {
+    fn for_backend(backend: BackendKind) -> Self {
+        let workflow = if backend == BackendKind::SafariWebDriver {
+            "Network capture is unavailable for this backend.".to_string()
+        } else {
+            "Call browser_network start before navigation, inspect status or tail the returned private NDJSON path, then call stop to flush.".to_string()
+        };
+        match backend {
+            BackendKind::ChromiumCdp => Self {
+                supported: true,
+                transport: Some("cdp".to_string()),
+                websocket_frames: true,
+                page_instrumentation: false,
+                workflow,
+            },
+            BackendKind::FirefoxBidi => Self {
+                supported: true,
+                transport: Some("webdriver_bidi_page_instrumentation".to_string()),
+                websocket_frames: true,
+                page_instrumentation: true,
+                workflow,
+            },
+            BackendKind::SafariWebDriver => Self {
+                supported: false,
+                transport: None,
+                websocket_frames: false,
+                page_instrumentation: false,
+                workflow,
+            },
         }
     }
 }
@@ -330,14 +378,18 @@ fn backend_name(backend: BackendKind) -> &'static str {
     }
 }
 
-fn semantic_capabilities() -> Vec<String> {
-    [
+fn semantic_capabilities(backend: BackendKind) -> Vec<String> {
+    let mut capabilities = [
         "navigate", "snapshot", "query", "click", "fill", "scroll", "reload", "back", "forward", "evaluate", "wait",
         "handoff", "audit",
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
+    .collect::<Vec<_>>();
+    if backend != BackendKind::SafariWebDriver {
+        capabilities.extend(["network_capture", "websocket_capture", "ndjson_export"].map(str::to_string));
+    }
+    capabilities
 }
 
 fn required_target(reference: Option<&str>, selector: Option<&str>) -> Result<BrowserTarget, String> {

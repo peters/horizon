@@ -31,6 +31,7 @@ mod events;
 mod handle;
 mod lifecycle;
 mod manifest_io;
+mod network;
 mod semantic;
 mod shutdown;
 mod startup;
@@ -43,6 +44,7 @@ pub use handle::{BrowserEventWaker, CommittedUrl};
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -139,6 +141,9 @@ pub struct BrowserSessionConfig {
     /// Optional host-owned agent/session coordination. Standalone engine
     /// users leave this unset.
     pub coordination: Option<Arc<dyn crate::BrowserCoordination>>,
+    /// Host-owned directory for explicit network-capture exports. Standalone
+    /// embedders can opt in without depending on Horizon's home layout.
+    pub capture_directory: Option<PathBuf>,
 }
 
 /// The panel-side handle to a running driver.
@@ -474,6 +479,7 @@ struct DriverState {
     owner_seen: Option<String>,
     handoff_seen: Option<String>,
     semantic: SemanticState,
+    network: crate::network::NetworkCaptureState,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -524,6 +530,7 @@ impl DriverState {
             owner_seen: None,
             handoff_seen: None,
             semantic: SemanticState::default(),
+            network: crate::network::NetworkCaptureState::default(),
             stop_requested,
         }
     }

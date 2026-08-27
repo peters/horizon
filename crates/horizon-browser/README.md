@@ -74,6 +74,7 @@ let session = start_session(BrowserSessionConfig {
     height: 800,
     frame_slot: Arc::clone(&frames),
     coordination: None,
+    capture_directory: None,
 })?;
 
 let _accepted = session.send(BrowserCommand::Reload);
@@ -102,6 +103,17 @@ bounded visible DOM summaries with short-lived `g…s…e…` references. `Click
 selector; `Evaluate` returns a size-bounded JSON value. A new snapshot replaces
 the previous reference set, and navigation invalidates it, so callers must
 ground an action in fresh page state instead of reusing stale handles.
+
+`BrowserControlAction::Network` lets a host start, inspect, and stop a bounded
+network export without coupling the engine to the host's filesystem layout.
+The embedder opts in with `BrowserSessionConfig::capture_directory`; successful
+start/status/stop results contain an explicit NDJSON path, aggregate writer
+health, and known WebSocket lifecycle/counters. Chromium consumes native CDP
+events. Firefox batches WebSocket records through disclosed pre-document page
+instrumentation because standard WebDriver BiDi does not currently provide
+frame events. Safari returns a typed unsupported-backend failure. Payload and
+file limits, URL filters, a bounded channel, and a dedicated buffered writer
+keep busy streams off the render and protocol paths.
 
 Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
 terminal `Completed` audit record means the engine finished handling the

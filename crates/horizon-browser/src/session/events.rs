@@ -217,6 +217,9 @@ impl DriverState {
         event: CdpEvent<'_>,
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
+        if on_page_session {
+            self.handle_network_event(&event);
+        }
         match event.method {
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
@@ -573,6 +576,7 @@ mod tests {
                 height: 800,
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: None,
+                capture_directory: None,
             },
             "ws://127.0.0.1/devtools/browser/test",
             None,
