@@ -51,7 +51,14 @@ impl CommandSender {
             return true;
         }
         if state.commands.len() == COMMAND_CAPACITY {
-            if let Some(index) = state.commands.iter().position(is_discardable) {
+            let eviction = state.commands.iter().position(is_discardable).or_else(|| {
+                if is_state_closing(&command) {
+                    state.commands.iter().position(|queued| !is_state_closing(queued))
+                } else {
+                    None
+                }
+            });
+            if let Some(index) = eviction {
                 state.commands.remove(index);
                 self.frame_slot.record_command_coalesced();
             } else {
@@ -103,7 +110,19 @@ fn coalesce_tail(commands: &mut VecDeque<BrowserCommand>, incoming: &BrowserComm
 fn is_discardable(command: &BrowserCommand) -> bool {
     matches!(
         command,
-        BrowserCommand::SetViewport { .. } | BrowserCommand::Input(crate::BrowserInput::MouseMove { .. })
+        BrowserCommand::SetViewport { .. }
+            | BrowserCommand::Input(
+                crate::BrowserInput::MouseMove { .. }
+                    | crate::BrowserInput::Wheel { .. }
+                    | crate::BrowserInput::KeyDown { repeat: true, .. }
+            )
+    )
+}
+
+fn is_state_closing(command: &BrowserCommand) -> bool {
+    matches!(
+        command,
+        BrowserCommand::Input(crate::BrowserInput::MouseRelease { .. } | crate::BrowserInput::KeyUp { .. })
     )
 }
 
@@ -111,7 +130,7 @@ fn is_discardable(command: &BrowserCommand) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{BrowserInput, BrowserModifiers, FrameSlot};
+    use crate::{BrowserButton, BrowserInput, BrowserModifiers, FrameSlot};
 
     use super::{BrowserCommand, COMMAND_CAPACITY, channel};
 
@@ -173,6 +192,45 @@ mod tests {
         assert_eq!(batch.commands.len(), COMMAND_CAPACITY);
         assert!(matches!(batch.commands.last(), Some(BrowserCommand::Reload)));
         assert_eq!(frame_slot.metrics().commands_coalesced, 1);
+        assert_eq!(frame_slot.metrics().commands_rejected, 0);
+    }
+
+    #[test]
+    fn bounded_queue_never_drops_a_pointer_release() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, receiver) = channel(Arc::clone(&frame_slot));
+        let modifiers = BrowserModifiers::none();
+        assert!(sender.send(BrowserCommand::Input(BrowserInput::MousePress {
+            x: 1.0,
+            y: 1.0,
+            button: BrowserButton::Left,
+            click_count: 1,
+            buttons: 1,
+            modifiers,
+        })));
+        for _ in 1..COMMAND_CAPACITY {
+            assert!(sender.send(BrowserCommand::Input(BrowserInput::Wheel {
+                x: 1.0,
+                y: 1.0,
+                delta_x: 0.0,
+                delta_y: 1.0,
+                modifiers,
+            })));
+        }
+        assert!(sender.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+            x: 1.0,
+            y: 1.0,
+            button: BrowserButton::Left,
+            click_count: 1,
+            buttons: 0,
+            modifiers,
+        })));
+
+        let batch = receiver.drain(COMMAND_CAPACITY);
+        assert!(matches!(
+            batch.commands.last(),
+            Some(BrowserCommand::Input(BrowserInput::MouseRelease { .. }))
+        ));
         assert_eq!(frame_slot.metrics().commands_rejected, 0);
     }
 }

@@ -112,7 +112,11 @@ impl InputState {
             .into_iter()
             .filter_map(|input| match input {
                 BrowserInput::KeyDown { text: Some(text), .. } => {
-                    Some(self.actions.payload(BrowserInput::InsertText { text }))
+                    let mut payload = self.actions.payload(BrowserInput::InsertText { text });
+                    if let Some(events) = payload["actions"][0]["actions"].as_array_mut() {
+                        events.push(json!({ "type": "keyUp", "value": "\u{e008}" }));
+                    }
+                    Some(payload)
                 }
                 BrowserInput::KeyUp { text: Some(_), .. } => None,
                 input => Some(self.actions.payload(input)),
@@ -300,7 +304,11 @@ mod tests {
         let dispatch = state
             .take_ready(std::time::Instant::now() + std::time::Duration::from_secs(1))
             .unwrap_or_else(|| panic!("released gesture should become ready"));
-        assert!(matches!(dispatch, InputDispatch::Foreground(payloads) if payloads.len() == 4));
+        let InputDispatch::Foreground(payloads) = dispatch else {
+            panic!("released gesture should dispatch foreground input");
+        };
+        assert_eq!(payloads.len(), 4);
+        assert_eq!(payloads[3]["actions"][0]["actions"][2]["value"], "\u{e008}");
     }
 
     #[test]

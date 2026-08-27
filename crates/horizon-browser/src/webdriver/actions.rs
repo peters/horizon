@@ -80,16 +80,15 @@ impl ActionState {
                 sources.push(key_source(actions));
             }
             BrowserInput::InsertText { text } => {
-                let actions = text
-                    .chars()
-                    .flat_map(|character| {
-                        let value = character.to_string();
-                        [
-                            json!({ "type": "keyDown", "value": value }),
-                            json!({ "type": "keyUp", "value": value }),
-                        ]
-                    })
-                    .collect::<Vec<_>>();
+                let mut actions = modifier_transitions(self.modifiers, BrowserModifiers::none());
+                self.modifiers = BrowserModifiers::none();
+                actions.extend(text.chars().flat_map(|character| {
+                    let value = character.to_string();
+                    [
+                        json!({ "type": "keyDown", "value": value }),
+                        json!({ "type": "keyUp", "value": value }),
+                    ]
+                }));
                 sources.push(key_source(actions));
             }
         }
@@ -255,8 +254,15 @@ mod tests {
 
     #[test]
     fn raw_text_becomes_balanced_key_actions() {
-        let payload = ActionState::default().payload(BrowserInput::InsertText { text: "ab".to_string() });
-        assert_eq!(payload["actions"][0]["actions"].as_array().map(Vec::len), Some(4));
+        let mut state = ActionState::default();
+        state.modifiers.meta = true;
+        let payload = state.payload(BrowserInput::InsertText { text: "ab".to_string() });
+        let actions = payload["actions"][0]["actions"].as_array();
+        assert_eq!(actions.map(Vec::len), Some(5));
+        assert_eq!(
+            actions.and_then(|actions| actions[0]["value"].as_str()),
+            Some("\u{e03d}")
+        );
     }
 
     #[test]
