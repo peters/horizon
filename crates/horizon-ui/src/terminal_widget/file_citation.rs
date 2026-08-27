@@ -6,7 +6,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::point_to_viewport;
 use egui::epaint::text::FontsView;
 use egui::{CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
-use horizon_core::{TERMINAL_FILE_CITATION_PREFIX, parse_terminal_file_citation, terminal_file_citation_end};
+use horizon_core::next_terminal_file_citation;
 
 use crate::theme;
 
@@ -60,40 +60,28 @@ pub(super) fn file_citation_shapes(
     }
     let (text, char_cells) = visible_text(cells);
     let mut search_start = 0;
-    while let Some(relative_start) = text[search_start..].find(TERMINAL_FILE_CITATION_PREFIX) {
-        let start = search_start + relative_start;
-        let Some(end) = terminal_file_citation_end(&text, start) else {
-            break;
-        };
-        if let Some(citation) = parse_terminal_file_citation(&text[start..end]) {
-            let start_char = text[..start].chars().count();
-            let char_count = text[start..end].chars().count();
-            let char_range = start_char..start_char + char_count;
-            let selected = selection.is_some_and(|selection| {
-                char_cells[char_range.clone()]
-                    .iter()
-                    .flatten()
-                    .any(|&index| selection.contains(cells[index].point))
-            });
-            let segments = (!selected).then(|| {
-                citation_segments(
-                    char_range,
-                    &char_cells,
-                    cells,
-                    hidden_cells,
-                    display_offset,
-                    rect,
-                    metrics,
-                )
-            });
-            if let Some(placement) = segments
-                .as_deref()
-                .and_then(|items| items.iter().max_by(|a, b| a.width().total_cmp(&b.width())))
-            {
-                append_chip(fonts, &mut shapes, *placement, &citation.display_label, metrics);
+    while let Some((byte_range, citation)) = next_terminal_file_citation(&text, search_start) {
+        let start_char = text[..byte_range.start].chars().count();
+        let char_count = text[byte_range.clone()].chars().count();
+        let char_range = start_char..start_char + char_count;
+        let selected = selection.is_some_and(|selection| {
+            char_cells[char_range.clone()]
+                .iter()
+                .flatten()
+                .any(|&index| selection.contains(cells[index].point))
+        });
+        let segments = (!selected)
+            .then(|| citation_segments(char_range.clone(), &char_cells, cells, display_offset, rect, metrics));
+        if let Some(placement) = segments
+            .as_deref()
+            .and_then(|items| items.iter().max_by(|a, b| a.width().total_cmp(&b.width())))
+            && append_chip(fonts, &mut shapes, *placement, &citation.display_label, metrics)
+        {
+            for cell_index in char_cells[char_range].iter().flatten() {
+                hidden_cells[*cell_index] = true;
             }
         }
-        search_start = end;
+        search_start = byte_range.end;
     }
     shapes
 }
@@ -108,7 +96,11 @@ fn visible_text(cells: &[Indexed<&Cell>]) -> (String, Vec<Option<usize>>) {
             text.push('\n');
             char_cells.push(None);
         }
-        text.push(indexed.cell.c);
+        text.push(if indexed.cell.zerowidth().is_some() {
+            '\u{FFFD}'
+        } else {
+            indexed.cell.c
+        });
         char_cells.push(Some(index));
         previous_line = Some(indexed.point.line);
         previous_row_wrapped = indexed.cell.flags.contains(Flags::WRAPLINE);
@@ -120,7 +112,6 @@ fn citation_segments(
     chars: Range<usize>,
     char_cells: &[Option<usize>],
     cells: &[Indexed<&Cell>],
-    hidden_cells: &mut [bool],
     display_offset: usize,
     rect: Rect,
     metrics: &GridMetrics,
@@ -128,9 +119,6 @@ fn citation_segments(
     let mut segments: Vec<Rect> = Vec::new();
     let mut previous_point = None;
     for cell_index in char_cells.get(chars).into_iter().flatten().flatten().copied() {
-        if let Some(hidden) = hidden_cells.get_mut(cell_index) {
-            *hidden = true;
-        }
         let Some(indexed) = cells.get(cell_index) else {
             continue;
         };
@@ -162,12 +150,13 @@ fn append_chip(
     placement: Rect,
     display_label: &str,
     metrics: &GridMetrics,
-) {
+) -> bool {
     let color = theme::PALETTE_CYAN();
-    let pad_x = 5.0;
-    let available_chars = f32_to_usize(((placement.width() - pad_x * 2.0 - 2.0).max(0.0) / metrics.char_width).floor());
+    let Some((pad_x, available_chars)) = chip_text_layout(placement.width(), metrics.char_width) else {
+        return false;
+    };
     let Some(label) = fitted_label(display_label, available_chars) else {
-        return;
+        return false;
     };
     let desired_width = usize_to_f32(label.chars().count()) * metrics.char_width + pad_x * 2.0;
     let chip_rect = Rect::from_min_size(
@@ -196,6 +185,17 @@ fn append_chip(
         metrics.font_id.clone(),
         color,
     ));
+    true
+}
+
+fn chip_text_layout(placement_width: f32, char_width: f32) -> Option<(f32, usize)> {
+    let inner_width = (placement_width - 2.0).max(0.0);
+    if inner_width < char_width {
+        return None;
+    }
+    let pad_x = ((inner_width - char_width) / 2.0).clamp(0.0, 5.0);
+    let available_chars = f32_to_usize(((inner_width - pad_x * 2.0) / char_width).floor());
+    Some((pad_x, available_chars))
 }
 
 fn fitted_label(label: &str, available_chars: usize) -> Option<String> {
@@ -210,4 +210,17 @@ fn fitted_label(label: &str, available_chars: usize) -> Option<String> {
         return Some("…".to_owned());
     }
     Some(label.chars().take(available_chars - 1).chain(['…']).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chip_text_layout;
+
+    #[test]
+    fn chip_layout_reduces_padding_for_two_columns_and_rejects_one() {
+        let (padding, available_chars) = chip_text_layout(16.0, 8.0).expect("two-column chip");
+        assert!(padding < 5.0);
+        assert_eq!(available_chars, 1);
+        assert!(chip_text_layout(8.0, 8.0).is_none());
+    }
 }

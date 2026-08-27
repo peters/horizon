@@ -1,6 +1,4 @@
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point};
-use alacritty_terminal::term::{Term, viewport_to_point};
+use std::ops::Range;
 
 pub const TERMINAL_FILE_CITATION_PREFIX: &str = ":codex-file-citation{";
 
@@ -14,8 +12,8 @@ pub struct TerminalFileCitation {
 pub fn parse_terminal_file_citation(token: &str) -> Option<TerminalFileCitation> {
     let body = token.strip_prefix(TERMINAL_FILE_CITATION_PREFIX)?.strip_suffix('}')?;
     let (path, purpose) = parse_attributes(body)?;
-    let path = path?.trim().to_owned();
-    if path.is_empty() || path.chars().any(char::is_control) {
+    let path = path?;
+    if path.trim().is_empty() || !path.is_ascii() || path.chars().any(char::is_control) {
         return None;
     }
     let kind = match purpose?.as_str() {
@@ -35,24 +33,27 @@ pub fn parse_terminal_file_citation(token: &str) -> Option<TerminalFileCitation>
     })
 }
 
-pub(super) fn file_citation_target_at_column(chars: &[char], column: usize) -> Option<String> {
-    let text: String = chars.iter().collect();
-    let mut search_start = 0;
-    while let Some(relative_start) = text[search_start..].find(TERMINAL_FILE_CITATION_PREFIX) {
+#[must_use]
+pub fn next_terminal_file_citation(
+    text: &str,
+    mut search_start: usize,
+) -> Option<(Range<usize>, TerminalFileCitation)> {
+    while let Some(relative_start) = text.get(search_start..)?.find(TERMINAL_FILE_CITATION_PREFIX) {
         let start = search_start + relative_start;
-        let end = terminal_file_citation_end(&text, start)?;
-        let start_column = text[..start].chars().count();
-        let end_column = start_column + text[start..end].chars().count();
-        if (start_column..end_column).contains(&column) {
-            return parse_terminal_file_citation(&text[start..end]).map(|citation| citation.path);
+        let Some(end) = terminal_file_citation_end(text, start) else {
+            search_start = start + TERMINAL_FILE_CITATION_PREFIX.len();
+            continue;
+        };
+        if let Some(citation) = parse_terminal_file_citation(&text[start..end]) {
+            return Some((start..end, citation));
         }
-        search_start = end;
+        search_start = start + TERMINAL_FILE_CITATION_PREFIX.len();
     }
     None
 }
 
 #[must_use]
-pub fn terminal_file_citation_end(text: &str, start: usize) -> Option<usize> {
+fn terminal_file_citation_end(text: &str, start: usize) -> Option<usize> {
     let body_start = start + TERMINAL_FILE_CITATION_PREFIX.len();
     let (mut quoted, mut escaped) = (false, false);
     for (offset, character) in text.get(body_start..)?.char_indices() {
@@ -68,40 +69,6 @@ pub fn terminal_file_citation_end(text: &str, start: usize) -> Option<usize> {
         }
     }
     None
-}
-
-pub(super) fn wrapped_line_contains_file_citation<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> bool {
-    if col >= cols {
-        return false;
-    }
-    let grid = term.grid();
-    if row >= grid.screen_lines() {
-        return false;
-    }
-    let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
-    let start = term.line_search_left(point);
-    let end = term.line_search_right(point);
-    let prefix = TERMINAL_FILE_CITATION_PREFIX.as_bytes();
-    let mut matched = 0;
-    let mut line = start.line;
-
-    loop {
-        for column in 0..cols {
-            let character = grid[line][Column(column)].c;
-            if character == char::from(prefix[matched]) {
-                matched += 1;
-                if matched == prefix.len() {
-                    return true;
-                }
-            } else {
-                matched = usize::from(character == char::from(prefix[0]));
-            }
-        }
-        if line == end.line {
-            return false;
-        }
-        line += 1;
-    }
 }
 
 fn parse_attributes(body: &str) -> Option<(Option<String>, Option<String>)> {
@@ -153,7 +120,7 @@ fn parse_quoted_value(input: &str) -> Option<(String, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_citation_target_at_column, parse_terminal_file_citation};
+    use super::{next_terminal_file_citation, parse_terminal_file_citation};
 
     #[test]
     fn parses_source_citation_and_uses_the_file_name() {
@@ -167,17 +134,43 @@ mod tests {
     }
 
     #[test]
-    fn finds_click_target_inside_one_of_multiple_citations() {
+    fn finds_one_of_multiple_citations() {
         let text = concat!(
             "first :codex-file-citation{path=\"/tmp/a.pdf\" purpose=\"source\"} ",
             "second :codex-file-citation{path=\"/tmp/b.pdf\" purpose=\"source\"}",
         );
-        let chars: Vec<char> = text.chars().collect();
-        let column = text.find("b.pdf").expect("second path");
+        let (_, first) = next_terminal_file_citation(text, 0).expect("first citation");
+        let second_start = text.find("second").expect("second marker");
+        let (_, second) = next_terminal_file_citation(text, second_start).expect("second citation");
+
+        assert_eq!(first.path, "/tmp/a.pdf");
+        assert_eq!(second.path, "/tmp/b.pdf");
+    }
+
+    #[test]
+    fn preserves_exact_ascii_paths_and_rejects_unicode_paths() {
+        let exact = r#":codex-file-citation{path=" /tmp/report.pdf " purpose="output"}"#;
+        let unicode = concat!(
+            r#":codex-file-citation{path="/tmp/resume"#,
+            "\u{301}",
+            r#".pdf" purpose="source"}"#,
+        );
 
         assert_eq!(
-            file_citation_target_at_column(&chars, column),
-            Some("/tmp/b.pdf".to_owned())
+            parse_terminal_file_citation(exact).map(|citation| citation.path),
+            Some(" /tmp/report.pdf ".into())
         );
+        assert_eq!(parse_terminal_file_citation(unicode), None);
+    }
+
+    #[test]
+    fn recovers_a_valid_citation_after_a_malformed_candidate() {
+        let text = concat!(
+            ":codex-file-citation{broken ",
+            ":codex-file-citation{path=\"/tmp/report.pdf\" purpose=\"output\"}",
+        );
+        let (_, citation) = next_terminal_file_citation(text, 0).expect("valid citation");
+
+        assert_eq!(citation.path, "/tmp/report.pdf");
     }
 }

@@ -2,9 +2,7 @@ use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
 use super::{
     Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, TerminalEventProxy,
-    current_cwd_for_pid,
-    file_citation::{file_citation_target_at_column, wrapped_line_contains_file_citation},
-    find_file_path_at_column, find_url_at_column, viewport_to_point,
+    current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
 };
 
 impl Terminal {
@@ -205,7 +203,7 @@ impl Terminal {
     }
 
     /// Return a clickable target at the given viewport-relative row and
-    /// column. Semantic links take priority over in-band URL or path text.
+    /// column. OSC 8 hyperlinks take priority over in-band URL or path text.
     #[must_use]
     pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
@@ -215,24 +213,7 @@ impl Terminal {
         }
         let (line_chars, logical_col) = wrapped_line_chars_at_viewport_point(&term, cols, row, col)?;
 
-        file_citation_target_at_column(&line_chars, logical_col)
-            .or_else(|| find_url_at_column(&line_chars, logical_col))
-            .or_else(|| find_file_path_at_column(&line_chars, logical_col))
-    }
-
-    /// Return a target that is safe to open with an unmodified primary click.
-    #[must_use]
-    pub fn plain_clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
-        let term = self.term.lock();
-        let cols = usize::from(self.cols);
-        if let Some(uri) = hyperlink_uri_at_viewport_point(&term, cols, row, col) {
-            return Some(uri);
-        }
-        if !wrapped_line_contains_file_citation(&term, cols, row, col) {
-            return None;
-        }
-        let (line_chars, logical_col) = wrapped_line_chars_at_viewport_point(&term, cols, row, col)?;
-        file_citation_target_at_column(&line_chars, logical_col)
+        find_url_at_column(&line_chars, logical_col).or_else(|| find_file_path_at_column(&line_chars, logical_col))
     }
 
     /// Return the OSC 8 hyperlink URI at the given viewport-relative cell.
@@ -567,21 +548,6 @@ mod tests {
         assert_eq!(
             hyperlink_uri_at_viewport_point(&term, 40, 0, 8),
             Some("https://x.ai/terms".to_string())
-        );
-    }
-
-    #[test]
-    fn wrapped_file_citation_is_plain_clickable() {
-        let token = r#":codex-file-citation{path="/tmp/guides/Linux install.pdf" purpose="source"}"#;
-        let mut term = test_term(6, 24);
-        let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
-        parser.advance(&mut term, format!("Read {token}").as_bytes());
-        let (line_chars, logical_col) =
-            wrapped_line_chars_at_viewport_point(&term, 24, 2, 5).expect("wrapped citation");
-
-        assert_eq!(
-            crate::terminal::file_citation::file_citation_target_at_column(&line_chars, logical_col),
-            Some("/tmp/guides/Linux install.pdf".to_owned())
         );
     }
 }

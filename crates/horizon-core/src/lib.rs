@@ -71,8 +71,8 @@ pub use session_store::{
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{
-    AgentNotification, TERMINAL_FILE_CITATION_PREFIX, Terminal, TerminalFileCitation, open_url,
-    parse_terminal_file_citation, terminal_file_citation_end,
+    AgentNotification, TERMINAL_FILE_CITATION_PREFIX, Terminal, TerminalFileCitation, next_terminal_file_citation,
+    open_url, parse_terminal_file_citation,
 };
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;

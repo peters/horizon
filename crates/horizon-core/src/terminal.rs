@@ -28,7 +28,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use crate::error::{Error, Result};
 
 pub use self::file_citation::{
-    TERMINAL_FILE_CITATION_PREFIX, TerminalFileCitation, parse_terminal_file_citation, terminal_file_citation_end,
+    TERMINAL_FILE_CITATION_PREFIX, TerminalFileCitation, next_terminal_file_citation, parse_terminal_file_citation,
 };
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
