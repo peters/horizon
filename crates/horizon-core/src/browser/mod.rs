@@ -100,6 +100,7 @@ pub struct BrowserPanelState {
     /// Latest page selection copied by Chrome and not yet written to the host
     /// clipboard by the UI.
     pending_clipboard_text: Option<String>,
+    host_focus_request: Option<()>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
     /// User-typed navigation kept as the display and retry target until the
@@ -153,6 +154,7 @@ impl BrowserPanelState {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -361,6 +363,11 @@ impl BrowserPanelState {
         self.pending_clipboard_text.take()
     }
 
+    /// Take a Safari request to restore focus to the host viewport.
+    pub fn take_host_focus_request(&mut self) -> bool {
+        self.host_focus_request.take().is_some()
+    }
+
     /// Tell the driver the user handed the panel back to the agent.
     pub fn hand_back(&mut self) {
         self.handoff_error = None;
@@ -535,6 +542,10 @@ impl BrowserPanelState {
                 self.pending_clipboard_text = Some(text);
                 output.had_output = true;
             }
+            BrowserEvent::HostFocusRequested => {
+                self.host_focus_request = Some(());
+                output.had_output = true;
+            }
             BrowserEvent::OwnerChanged(owner) => {
                 if self.owner != owner {
                     self.owner = owner;
@@ -677,6 +688,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -715,6 +727,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -747,6 +760,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -787,6 +801,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -825,6 +840,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -897,6 +913,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -931,6 +948,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: Some("stale error".to_string()),
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -964,6 +982,7 @@ mod tests {
             handoff_error: None,
             handoff_resolution_pending: false,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,
@@ -1000,6 +1019,7 @@ mod tests {
             handoff_error: Some("driver unavailable".to_string()),
             handoff_resolution_pending: true,
             pending_clipboard_text: None,
+            host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
             persisted_config_changed: false,

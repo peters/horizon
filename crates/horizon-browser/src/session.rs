@@ -87,6 +87,9 @@ pub enum BrowserEvent {
     /// Selected page text copied by headless Chrome, ready for the host
     /// clipboard bridge in the UI.
     ClipboardText(String),
+    /// Safari finished a user input action and the host viewport should
+    /// reclaim focus on its UI thread.
+    HostFocusRequested,
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
 }

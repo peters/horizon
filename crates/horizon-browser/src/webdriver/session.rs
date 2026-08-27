@@ -21,6 +21,7 @@ use super::http::HttpError;
 use super::service::{WebDriverService, prepare_profile};
 
 mod coordination;
+mod safari;
 mod semantic;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -128,6 +129,7 @@ struct Driver {
     bidi: Option<JsonWsLink>,
     automation_ws: String,
     context_id: Option<String>,
+    safari: Option<safari::InputState>,
     actions: ActionState,
     frames: AdaptiveFrames,
     scroll_state_refresh_at: Instant,
@@ -206,6 +208,7 @@ pub(crate) fn run_webdriver(
         if stop {
             break;
         }
+        driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
             if let Err(message) = request.action.validate() {
                 driver.audit_agent_action(&request, crate::BrowserAuditStatus::Rejected);
@@ -310,6 +313,15 @@ impl Driver {
             context_id = None;
         }
         let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
+        let safari = if config.browser.backend == BackendKind::SafariWebDriver {
+            let response = service
+                .http
+                .get(&format!("/session/{session_id}/window"))
+                .map_err(|error| format!("failed to read Safari window handle: {error}"))?;
+            Some(safari::InputState::from_window_response(&response)?)
+        } else {
+            None
+        };
         Ok(Self {
             config: config.clone(),
             service,
@@ -317,6 +329,7 @@ impl Driver {
             bidi,
             automation_ws,
             context_id,
+            safari,
             actions: ActionState::default(),
             frames: AdaptiveFrames::new(),
             scroll_state_refresh_at: Instant::now(),
@@ -390,7 +403,13 @@ impl Driver {
             )
             .map(|_| ())
         } else {
-            self.classic_post("url", &json!({ "url": url })).map(|_| ())
+            self.classic_post("url", &json!({ "url": url }))
+                .and_then(|_| self.classic_get("url"))
+                .and_then(|response| {
+                    classic_navigation_committed(&response, url, &self.url)
+                        .then_some(())
+                        .ok_or_else(|| "browser did not commit a reachable URL".to_string())
+                })
         };
         match result {
             Ok(()) => {
@@ -478,6 +497,15 @@ impl Driver {
             )
             .map(|_| ())
         } else {
+            // Safari sizes the decorated window while screenshots contain only its viewport.
+            let (width, height) = self
+                .classic_post(
+                    "execute/sync",
+                    &json!({ "script": safari::WINDOW_CHROME_SCRIPT, "args": [] }),
+                )
+                .map_or((width, height), |response| {
+                    safari::window_rect(&response, width, height)
+                });
             self.classic_post("window/rect", &json!({ "width": width, "height": height }))
                 .map(|_| ())
         };
@@ -493,17 +521,23 @@ impl Driver {
         if activity {
             self.pending_classic_history_start = None;
         }
-        let mut payload = self.actions.payload(input);
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
+            let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
-            self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
+            (
+                self.call_bidi("input.performActions", &payload, event_tx).map(|_| ()),
+                activity,
+            )
+        } else if self.safari.is_some() {
+            return self.queue_safari_input(input);
         } else {
-            self.classic_post("actions", &payload).map(|_| ())
+            let payload = self.actions.payload(input);
+            (self.classic_post("actions", &payload).map(|_| ()), activity)
         };
         if let Err(error) = &result {
             tracing::warn!("WebDriver input failed: {error}");
         }
-        if activity && !self.retain_frame_during_navigation {
+        if demand_frame && !self.retain_frame_during_navigation {
             self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
@@ -898,6 +932,16 @@ fn webdriver_value(response: &Value) -> Option<&Value> {
     response.get("value").or(Some(response))
 }
 
+fn classic_navigation_committed(response: &Value, requested: &str, previous: &str) -> bool {
+    webdriver_value(response)
+        .and_then(Value::as_str)
+        .is_some_and(|committed| {
+            !committed.is_empty()
+                && (committed != "about:blank" || requested == committed)
+                && (committed != previous || requested == previous)
+        })
+}
+
 fn safe_session_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -954,8 +998,8 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 mod tests {
     use super::{
         AdaptiveFrames, PendingHistoryStart, bidi_navigation_complete, bidi_navigation_failed, capture_is_current,
-        consume_pending_history_start, new_session_capabilities, parse_new_session_response, safe_session_id,
-        validate_firefox_args,
+        classic_navigation_committed, consume_pending_history_start, new_session_capabilities,
+        parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -964,6 +1008,35 @@ mod tests {
         assert!(safe_session_id("abc-123_def"));
         assert!(!safe_session_id("../session"));
         assert!(!safe_session_id("contains/slash"));
+    }
+
+    #[test]
+    fn classic_navigation_requires_a_committed_url() {
+        assert!(classic_navigation_committed(
+            &serde_json::json!({ "value": "https://example.test/next" }),
+            "https://example.test/next",
+            "https://example.test/previous",
+        ));
+        assert!(classic_navigation_committed(
+            &serde_json::json!({ "value": "https://example.test/current" }),
+            "https://example.test/current",
+            "https://example.test/current",
+        ));
+        assert!(!classic_navigation_committed(
+            &serde_json::json!({ "value": "https://example.test/previous" }),
+            "https://unreachable.test/",
+            "https://example.test/previous",
+        ));
+        assert!(!classic_navigation_committed(
+            &serde_json::json!({ "value": "" }),
+            "https://unreachable.test/",
+            "https://example.test/previous",
+        ));
+        assert!(!classic_navigation_committed(
+            &serde_json::json!({ "value": "about:blank" }),
+            "https://unreachable.test/",
+            "https://example.test/previous",
+        ));
     }
 
     #[test]

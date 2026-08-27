@@ -16,6 +16,7 @@ mod render;
 use egui::{Event, Pos2, TextureHandle, Ui};
 use horizon_core::browser::{BackendKind, BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
 use horizon_core::{AppShortcuts, Panel};
+use std::{sync::Arc, time::Duration};
 
 /// Per-panel UI state that must survive across frames.
 #[derive(Default)]
@@ -69,6 +70,7 @@ pub struct BrowserUiState {
     /// Escape exits panel fullscreen after the app has already cleared the
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,
+    host_focus_requested_at: Option<f64>,
 }
 
 impl BrowserUiState {
@@ -142,6 +144,13 @@ impl<'a> BrowserView<'a> {
             && let Some(text) = browser.take_clipboard_text()
         {
             ui.ctx().copy_text(text);
+        }
+        if let Some(browser) = self.panel.browser_mut() {
+            if browser.backend() == BackendKind::SafariWebDriver && browser.needs_event_waker() {
+                let ctx = ui.ctx().clone();
+                browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
+            }
+            restore_host_focus(ui, state, browser.take_host_focus_request());
         }
 
         let (url_focused, chrome_clicked) = {
@@ -231,6 +240,22 @@ impl<'a> BrowserView<'a> {
         // convention as the terminal body); an unconditional request would
         // steal focus from other panels every frame.
         chrome_clicked || body.body_clicked
+    }
+}
+
+fn restore_host_focus(ui: &Ui, state: &mut BrowserUiState, requested: bool) {
+    let (now, focused) = ui.input(|input| (input.time, input.viewport().focused));
+    if requested {
+        state.host_focus_requested_at = Some(now);
+    }
+    let Some(requested_at) = state.host_focus_requested_at else {
+        return;
+    };
+    if focused == Some(false) || now - requested_at >= 0.05 {
+        state.host_focus_requested_at = None;
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+    } else {
+        ui.ctx().request_repaint_after(Duration::from_millis(10));
     }
 }
 
