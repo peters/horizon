@@ -7,6 +7,11 @@
 
 const VIEWPORT_RETRY_INTERVAL_SECONDS: f64 = 0.25;
 const MAX_VIEWPORT_CONVERGENCE_RETRIES: u8 = 8;
+// Window-manager decoration convergence can leave an otherwise current
+// screencast within four physical pixels of the requested content viewport.
+// Letterboxing already scales that small skew; larger differences still block
+// input and trigger the bounded retry path.
+const VIEWPORT_FRAME_TOLERANCE: f32 = 4.0;
 // Keep fallback focus recovery beyond the WebDriver HTTP timeout.
 const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 12.0;
 
@@ -148,7 +153,7 @@ impl<'a> BrowserView<'a> {
             ui.ctx().copy_text(text);
         }
         if let Some(browser) = self.panel.browser_mut() {
-            if browser.backend() == BackendKind::SafariWebDriver && browser.needs_event_waker() {
+            if browser.needs_event_waker() {
                 let ctx = ui.ctx().clone();
                 browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
             }
@@ -281,9 +286,9 @@ fn synchronize_viewport(
     };
     let now = ui.input(|input| input.time);
     let frame_matches = frame_matches_viewport(body.frame_size, Some(viewport), state.last_viewport);
-    if frame_matches {
-        state.viewport_retry_count = 0;
-    }
+    // Keep the retry count cumulative for this target. A forced exact-size
+    // capture can arrive before an older screencast frame; resetting here
+    // would let that pair reopen the retry loop indefinitely.
     if viewport == state.last_viewport
         && !frame_matches
         && state.viewport_retry_count < MAX_VIEWPORT_CONVERGENCE_RETRIES
@@ -349,8 +354,8 @@ fn frame_matches_viewport(
         return false;
     };
     desired_viewport == sent_viewport
-        && (frame_size[0] - f32::from(width)).abs() <= f32::EPSILON
-        && (frame_size[1] - f32::from(height)).abs() <= f32::EPSILON
+        && (frame_size[0] - f32::from(width)).abs() <= VIEWPORT_FRAME_TOLERANCE
+        && (frame_size[1] - f32::from(height)).abs() <= VIEWPORT_FRAME_TOLERANCE
 }
 
 fn viewport_command_due(
@@ -420,6 +425,16 @@ mod tests {
             Some((800, 600)),
             (800, 600)
         ));
+        assert!(frame_matches_viewport(
+            Some([796.0, 604.0]),
+            Some((800, 600)),
+            (800, 600)
+        ));
+        assert!(!frame_matches_viewport(
+            Some([795.0, 605.0]),
+            Some((800, 600)),
+            (800, 600)
+        ));
         assert!(!frame_matches_viewport(
             Some([1280.0, 800.0]),
             Some((800, 600)),
@@ -444,7 +459,7 @@ mod tests {
             0
         ));
         assert!(!viewport_command_due(
-            Some([804.0, 600.0]),
+            Some([805.0, 600.0]),
             (800, 600),
             (800, 600),
             1.0,
@@ -452,7 +467,7 @@ mod tests {
             0
         ));
         assert!(viewport_command_due(
-            Some([804.0, 600.0]),
+            Some([805.0, 600.0]),
             (800, 600),
             (800, 600),
             2.0,
@@ -468,7 +483,7 @@ mod tests {
             0
         ));
         assert!(!viewport_command_due(
-            Some([804.0, 600.0]),
+            Some([805.0, 600.0]),
             (800, 600),
             (800, 600),
             3.0,
