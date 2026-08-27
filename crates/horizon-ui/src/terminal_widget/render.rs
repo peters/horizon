@@ -468,6 +468,27 @@ mod tests {
     use alacritty_terminal::vte::ansi::{self, Color as TerminalColor, CursorShape, NamedColor};
     use egui::{Color32, FontId, Pos2, Rect, Shape, Vec2};
 
+    /// Restores the global theme on drop so a panicking assertion cannot leak
+    /// a test theme into the other tests running in parallel threads.
+    struct ThemeGuard {
+        previous: theme::ResolvedTheme,
+    }
+
+    impl ThemeGuard {
+        /// Set `active` as the global theme for the guard's lifetime.
+        fn set(active: theme::ResolvedTheme) -> Self {
+            let previous = theme::current_theme();
+            theme::set_theme(active);
+            Self { previous }
+        }
+    }
+
+    impl Drop for ThemeGuard {
+        fn drop(&mut self) {
+            theme::set_theme(self.previous);
+        }
+    }
+
     struct NoopProxy;
 
     impl EventListener for NoopProxy {
@@ -591,8 +612,7 @@ mod tests {
 
     #[test]
     fn dim_foreground_is_flattened_before_contrast_in_light_theme() {
-        let previous = theme::current_theme();
-        theme::set_theme(theme::ResolvedTheme::Light);
+        let _light = ThemeGuard::set(theme::ResolvedTheme::Light);
 
         let cell = Cell {
             fg: TerminalColor::Named(NamedColor::DimForeground),
@@ -609,7 +629,5 @@ mod tests {
         assert_eq!(bg, theme::PANEL_BG());
         assert_eq!(fg, expected);
         assert_eq!(fg.a(), u8::MAX);
-
-        theme::set_theme(previous);
     }
 }
