@@ -674,7 +674,12 @@ Add crate-focused contract tests to shorten iteration, but never substitute them
 
 ### UI and lifecycle smoke
 
-Any UI-related PR creates an extensive temporary plan under `docs/testing/`. Test only a task-owned candidate process and isolated config/profile; never signal or reuse an existing Horizon process.
+Use the durable [`browser-panel-gate.md`](../testing/browser-panel-gate.md) to
+select the required backend, MCP, lifecycle, and performance lanes. A
+UI-related PR may add a temporary delta plan for feature-specific steps, but it
+must link the durable gate instead of copying its fixture or baseline checks.
+Test only a task-owned candidate process and isolated config/profile; never
+signal or reuse an existing Horizon process.
 
 - Launch, initial frame, navigation, URL commit/failure, back/forward/reload.
 - Keyboard, pointer, wheel, focus loss, clipboard, IME, and accessibility.

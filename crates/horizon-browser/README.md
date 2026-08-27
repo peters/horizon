@@ -152,3 +152,11 @@ standalone archive with `cargo package -p horizon-browser --locked`, inspect its
 contents, and only then run an explicitly authorized
 `cargo publish -p horizon-browser --locked`. Neither command publishes during a
 normal Horizon build, and this rollout does not execute the publish step.
+
+## Validation
+
+Horizon integration changes use the durable
+[`browser-panel-gate.md`](https://github.com/peters/horizon/blob/main/docs/testing/browser-panel-gate.md),
+committed loopback fixtures, and MCP-only smoke harness. The harness stays
+outside this crate so a future package does not ship Horizon UI, MCP, or
+test-site assets.

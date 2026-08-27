@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Horizon Browser Smoke - Scroll</title>
+  <style>
+    body { margin: 0; min-height: 3200px; background: #f8fafc; font: 20px system-ui, sans-serif; }
+    main { padding: 30px; }
+    button { padding: 10px; }
+    .space { height: 2500px; background: linear-gradient(#f8fafc, #dbeafe); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="scroll-marker">Semantic scroll page</h1>
+    <button id="click-target" type="button">Click target</button>
+    <p id="status">clicks=0 trusted=false scrollY=0</p>
+    <div class="space"></div>
+    <h2 id="bottom-marker">Bottom</h2>
+  </main>
+  <script>
+    let clicks = 0;
+    function status(trusted = false) {
+      document.querySelector('#status').textContent = `clicks=${clicks} trusted=${trusted} scrollY=${Math.round(scrollY)}`;
+    }
+    document.querySelector('#click-target').addEventListener('click', (event) => {
+      clicks += 1;
+      status(event.isTrusted);
+    });
+    addEventListener('scroll', () => status(), { passive: true });
+  </script>
+</body>
+</html>
