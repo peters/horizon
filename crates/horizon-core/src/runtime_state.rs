@@ -807,6 +807,7 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+        board.shutdown_terminal_panels();
     }
 
     #[test]
