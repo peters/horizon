@@ -5,16 +5,25 @@ mod control;
 #[cfg(any(windows, test))]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Child;
+use std::process::{ChildStderr, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use process_wrap::std::{ChildWrapper, CommandWrap, JobObject};
 use thiserror::Error;
 
 use crate::AutomationDisclosurePolicy;
 use crate::cdp::parse_devtools_ws_url;
 
 pub(crate) use control::{ChromeProcessControl, ServiceProcess};
+
+#[cfg(windows)]
+pub(super) type ProcessChild = Box<dyn ChildWrapper>;
+#[cfg(not(windows))]
+pub(super) type ProcessChild = Child;
 
 #[derive(Error, Debug)]
 pub enum ChromeError {
@@ -63,7 +72,7 @@ pub struct ChromeLaunch {
 
 /// A running headless `Chrome` process plus its captured `DevTools` endpoint.
 pub struct ChromeProcess {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<ProcessChild>>,
     control: ChromeProcessControl,
     /// Cached once the child has been reaped, so repeated
     /// [`ChromeProcess::child_status`]/[`ChromeProcess::kill`] calls stay cheap.
@@ -93,8 +102,8 @@ impl ChromeProcess {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn()?;
-        let Some(stderr) = child.stderr.take() else {
+        let mut child = spawn_process(command)?;
+        let Some(stderr) = take_stderr(&mut child) else {
             let _ = kill_and_reap(&mut child, Duration::from_secs(3));
             return Err(std::io::Error::other("failed to capture chrome stderr").into());
         };
@@ -283,16 +292,44 @@ fn validate_extra_args(extra_args: &[String], automation_disclosure: AutomationD
     Ok(())
 }
 
-/// Kill and reap a child using only non-blocking status polls. A process that
-/// cannot be killed must not strand browser teardown indefinitely.
-fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
+pub(super) fn spawn_process(command: Command) -> std::io::Result<ProcessChild> {
+    #[cfg(windows)]
+    {
+        let mut command = CommandWrap::from(command);
+        command.wrap(JobObject);
+        command.spawn()
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = command;
+        command.spawn()
+    }
+}
+
+pub(super) fn take_stderr(child: &mut ProcessChild) -> Option<ChildStderr> {
+    #[cfg(windows)]
+    {
+        child.stderr().take()
+    }
+    #[cfg(not(windows))]
+    {
+        child.stderr.take()
+    }
+}
+
+/// Kill and reap a child with deadline-bounded status polling. Windows uses a
+/// retained Job Object so descendant completion is part of the reap result.
+pub(super) fn kill_and_reap(
+    child: &mut ProcessChild,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
     if let Some(status) = poll_and_cleanup_exited_tree(child)? {
         return Ok(Some(status));
     }
     terminate_process_tree(child)?;
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = poll_and_cleanup_exited_tree(child)? {
             return Ok(Some(status));
         }
         if Instant::now() >= deadline {
@@ -306,7 +343,9 @@ fn kill_and_reap(child: &mut Child, timeout: Duration) -> std::io::Result<Option
 /// still living in its owned process tree. `WebDriver` services can exit before
 /// the browser they launched, leaving a locked profile behind unless the
 /// process group is cleaned at the point the exit is observed.
-fn poll_and_cleanup_exited_tree(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+pub(super) fn poll_and_cleanup_exited_tree(
+    child: &mut ProcessChild,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
     let status = child.try_wait()?;
     if status.is_some() {
         cleanup_reaped_process_tree(child)?;
@@ -315,23 +354,29 @@ fn poll_and_cleanup_exited_tree(child: &mut Child) -> std::io::Result<Option<std
 }
 
 #[cfg(unix)]
-fn cleanup_reaped_process_tree(child: &mut Child) -> std::io::Result<()> {
+fn cleanup_reaped_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
     // This runs immediately after reaping the exact retained child handle.
     // The Unix process group remains addressable while an owned descendant is
     // alive, even after its leader has exited.
     terminate_process_tree(child)
 }
 
-#[cfg(not(unix))]
-fn cleanup_reaped_process_tree(_child: &mut Child) -> std::io::Result<()> {
-    // Windows `taskkill` accepts only a numeric PID. Once the retained child
-    // has exited, that PID may be reused, so post-reap cleanup must never
-    // target it. Live-child teardown still uses the exact retained handle.
+#[cfg(windows)]
+fn cleanup_reaped_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
+    // The retained Job Object outlives the exited service leader. Terminate
+    // and wait on that exact kernel-owned tree before reporting cleanup, so a
+    // Firefox/Safari descendant cannot keep the profile locked.
+    child.start_kill()?;
+    child.wait().map(|_| ())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn cleanup_reaped_process_tree(_child: &mut ProcessChild) -> std::io::Result<()> {
     Ok(())
 }
 
 #[cfg(unix)]
-fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
+fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
     let process_group = format!("-{}", child.id());
     let tree_killed = Command::new("/bin/kill")
         // GNU kill otherwise accepts a negative PID as another option and
@@ -352,18 +397,14 @@ fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
-    // `taskkill` reopens a numeric PID that may be reused after our status
-    // check. `Child::kill` instead uses the retained process handle.
-    match child.kill() {
-        Ok(()) => Ok(()),
-        Err(_error) if child.try_wait()?.is_some() => Ok(()),
-        Err(error) => Err(error),
-    }
+fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
+    // `JobObjectChild::start_kill` terminates the exact retained Job Object,
+    // including descendants, without reopening a numeric PID.
+    child.start_kill()
 }
 
 #[cfg(not(any(unix, windows)))]
-fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
+fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
     child.kill()
 }
 

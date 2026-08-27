@@ -1,27 +1,27 @@
 //! Exact child ownership and bounded automation-service teardown.
 
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
-use super::{kill_and_reap, poll_and_cleanup_exited_tree};
+use super::{ProcessChild, kill_and_reap, poll_and_cleanup_exited_tree, spawn_process, take_stderr};
 
 /// Exact loopback automation-service process (`geckodriver` or
 /// `safaridriver`). The service owns the browser session it creates; normal
 /// teardown deletes that session before this child is terminated and reaped.
 pub(crate) struct ServiceProcess {
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<ProcessChild>>,
     control: ChromeProcessControl,
     exit_status: Option<std::process::ExitStatus>,
     stderr_tail: Arc<Mutex<String>>,
     label: &'static str,
 }
 
-/// Exact child handle retained outside the driver so an application-exit
+/// Exact process-tree handle retained outside the driver so an application-exit
 /// deadline can terminate and reap the browser even if its driver is stuck in
-/// teardown. Retaining `Child`, rather than only its PID, avoids targeting a
-/// later process that reused the number.
+/// teardown. Retaining the native child or Windows Job Object, rather than
+/// only its PID, avoids targeting a later process that reused the number.
 #[derive(Clone, Default)]
 pub(crate) struct ChromeProcessControl {
     inner: Arc<Mutex<ChromeProcessControlState>>,
@@ -29,13 +29,13 @@ pub(crate) struct ChromeProcessControl {
 
 #[derive(Default)]
 struct ChromeProcessControlState {
-    child: Option<Arc<Mutex<Child>>>,
+    child: Option<Arc<Mutex<ProcessChild>>>,
     force_requested: bool,
     registration_settled: bool,
 }
 
 impl ChromeProcessControl {
-    pub(super) fn register(&self, child: &Arc<Mutex<Child>>) {
+    pub(super) fn register(&self, child: &Arc<Mutex<ProcessChild>>) {
         let force_requested = {
             let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.child = Some(Arc::clone(child));
@@ -54,12 +54,12 @@ impl ChromeProcessControl {
             .registration_settled = true;
     }
 
-    pub(super) fn clear(&self, child: &Arc<Mutex<Child>>) {
+    pub(super) fn clear(&self, child: &Arc<Mutex<ProcessChild>>) {
         let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_registered_child(&mut state, child);
     }
 
-    fn clear_until(&self, child: &Arc<Mutex<Child>>, deadline: Instant) -> bool {
+    fn clear_until(&self, child: &Arc<Mutex<ProcessChild>>, deadline: Instant) -> bool {
         let Some(mut state) = lock_until(&self.inner, deadline) else {
             return false;
         };
@@ -170,8 +170,8 @@ impl ServiceProcess {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn()?;
-        let Some(stderr) = child.stderr.take() else {
+        let mut child = spawn_process(command)?;
+        let Some(stderr) = take_stderr(&mut child) else {
             let _ = kill_and_reap(&mut child, Duration::from_secs(3));
             return Err(std::io::Error::other(format!("failed to capture {label} stderr")));
         };
@@ -267,7 +267,7 @@ impl Drop for ServiceProcess {
     }
 }
 
-fn clear_registered_child(state: &mut ChromeProcessControlState, child: &Arc<Mutex<Child>>) {
+fn clear_registered_child(state: &mut ChromeProcessControlState, child: &Arc<Mutex<ProcessChild>>) {
     if state
         .child
         .as_ref()

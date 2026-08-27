@@ -4,12 +4,16 @@ use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::AgentActionResult;
 
 use super::ManifestLock;
 use crate::horizon_home::{HorizonHome, safe_local_id};
+
+const MAX_RETAINED_RESULTS: usize = 256;
+const RESULT_RETENTION: Duration = Duration::from_mins(5);
 
 #[must_use]
 pub fn action_result_path_for_root(root: &Path, panel_local_id: &str, action_id: &str) -> PathBuf {
@@ -45,9 +49,13 @@ fn remove_stale_at(root: &Path, panel_local_id: &str) -> std::io::Result<()> {
 }
 
 fn write_at(path: &Path, result: &AgentActionResult) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "browser action result path has no parent",
+        ));
+    };
+    std::fs::create_dir_all(parent)?;
     let _lock = ManifestLock::acquire(path)?;
     let encoded = serde_json::to_vec(result).map_err(std::io::Error::other)?;
     let mut options = OpenOptions::new();
@@ -56,7 +64,53 @@ fn write_at(path: &Path, result: &AgentActionResult) -> std::io::Result<()> {
     options.mode(0o600);
     AtomicFile::new(path, AllowOverwrite)
         .write_with_options(|file| std::io::Write::write_all(file, &encoded), options)
-        .map_err(Into::into)
+        .map_err(std::io::Error::from)?;
+    prune_results_at(parent, path, MAX_RETAINED_RESULTS, SystemTime::now() - RESULT_RETENTION)
+}
+
+fn prune_results_at(
+    directory: &Path,
+    current_path: &Path,
+    max_results: usize,
+    stale_before: SystemTime,
+) -> std::io::Result<()> {
+    let mut results = std::fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|extension| extension.to_str()) == Some("json")).then(|| {
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                (modified, path)
+            })
+        })
+        .collect::<Vec<_>>();
+    results.sort();
+    let fresh_count = results.iter().filter(|(modified, _)| *modified >= stale_before).count();
+    let count_excess = fresh_count.saturating_sub(max_results);
+    let mut fresh_removed = 0;
+    for (modified, path) in results {
+        if path == current_path || (modified >= stale_before && fresh_removed >= count_excess) {
+            continue;
+        }
+        let _lock = match ManifestLock::acquire_with_timeout(&path, Duration::ZERO) {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(error) => return Err(error),
+        };
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                if modified >= stale_before {
+                    fresh_removed += 1;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Atomically consume an action result if the driver has published it.
@@ -158,6 +212,30 @@ mod tests {
             std::io::ErrorKind::InvalidData
         );
         assert!(path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn result_retention_prunes_oldest_unconsumed_files() {
+        let root = std::env::temp_dir().join(format!("horizon-browser-results-retention-{}", std::process::id()));
+        let directory = root.join("runtime/browser-results/panel");
+        std::fs::create_dir_all(&directory).unwrap();
+        let paths = ["first.json", "second.json", "current.json"].map(|name| directory.join(name));
+        for path in &paths {
+            std::fs::write(path, b"{}").unwrap();
+        }
+
+        prune_results_at(&directory, &paths[2], 2, SystemTime::UNIX_EPOCH).unwrap();
+
+        assert!(paths[2].exists());
+        assert_eq!(
+            std::fs::read_dir(&directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().and_then(|extension| extension.to_str()) == Some("json"))
+                .count(),
+            2
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -330,8 +330,12 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
             const labelled = labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ');
             if (compact(labelled)) return compact(labelled);
         }
+        const tag = element.tagName.toLowerCase();
+        const type = tag === 'input' ? (element.getAttribute('type') || 'text').toLowerCase() : '';
+        const buttonValue = tag === 'input' && (type === 'button' || type === 'submit' || type === 'reset')
+            ? element.value : '';
         return compact(element.getAttribute('alt') || element.getAttribute('title') ||
-            element.getAttribute('placeholder') || element.value || element.textContent);
+            element.getAttribute('placeholder') || buttonValue || element.textContent);
     };
     const cssPath = (element) => {
         if (element.id) {
@@ -467,6 +471,15 @@ mod tests {
 
         assert!(expression.contains("\"button'); throw new Error('owned\""));
         assert!(expression.ends_with(", 10, false)"));
+    }
+
+    #[test]
+    fn scan_script_never_uses_editable_values_as_semantic_names() {
+        let expression = scan_expression(None, 10);
+
+        assert!(expression.contains("const buttonValue"));
+        assert!(expression.contains("element.getAttribute('placeholder') || buttonValue"));
+        assert!(!expression.contains("element.getAttribute('placeholder') || element.value"));
     }
 
     #[test]
