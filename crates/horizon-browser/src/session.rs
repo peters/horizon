@@ -261,7 +261,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
                 &slot,
                 &driver_stop_requested,
                 completion_tx,
-                driver_process_control,
+                &driver_process_control,
             ),
         })
         .map_err(crate::BrowserError::DriverThread)?;

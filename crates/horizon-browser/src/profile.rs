@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{BrowserConfig, paths};
+use crate::{BackendKind, BrowserConfig, paths};
 
 pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<BrowserConfig> {
     let mut resolved = config.clone();
@@ -19,10 +19,15 @@ pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<Bro
 
 #[must_use]
 pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> PathBuf {
-    match &config.profile_root {
+    let panel_root = match &config.profile_root {
         Some(root) => paths::expand_tilde(&root.to_string_lossy()).join(paths::safe_local_id(panel_local_id)),
         None => paths::browser_profile_dir(&paths::default_root(), panel_local_id),
-    }
+    };
+    panel_root.join(match config.backend {
+        BackendKind::ChromiumCdp => "chromium",
+        BackendKind::FirefoxBidi => "firefox",
+        BackendKind::SafariWebDriver => "safari",
+    })
 }
 
 pub(crate) fn schedule_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<std::io::Result<()>> {

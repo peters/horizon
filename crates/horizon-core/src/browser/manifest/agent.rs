@@ -138,6 +138,7 @@ pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserCon
         action,
     };
     let mut failure = None;
+    let mut audit_failure = None;
     update(panel_local_id, |manifest| {
         let now = now_millis();
         if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
@@ -149,31 +150,41 @@ pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserCon
             failure = Some((std::io::ErrorKind::WouldBlock, "user is steering this browser panel"));
         } else if manifest.actions.len() >= MAX_PENDING_ACTIONS {
             failure = Some((std::io::ErrorKind::WouldBlock, "browser action queue is full"));
+        } else if let Err(error) = super::audit::append(
+            &BrowserAuditEntry::new(
+                action_id.clone(),
+                BrowserAuditActor::Agent {
+                    name: agent_name.to_string(),
+                },
+                BrowserAuditStatus::Queued,
+                summary.clone(),
+            ),
+            panel_local_id,
+        ) {
+            audit_failure = Some(error);
         } else {
             manifest.actions.push(request);
             manifest.updated_at = now;
         }
     })?;
 
-    let status = if failure.is_some() {
-        BrowserAuditStatus::Rejected
-    } else {
-        BrowserAuditStatus::Queued
-    };
-    if let Err(error) = super::audit::append(
-        &BrowserAuditEntry::new(
-            action_id.clone(),
-            BrowserAuditActor::Agent {
-                name: agent_name.to_string(),
-            },
-            status,
-            summary,
-        ),
-        panel_local_id,
-    ) {
-        tracing::warn!(target: "browser", "failed to append queued-action audit: {error}");
+    if let Some(error) = audit_failure {
+        return Err(error);
     }
     if let Some((kind, message)) = failure {
+        if let Err(error) = super::audit::append(
+            &BrowserAuditEntry::new(
+                action_id,
+                BrowserAuditActor::Agent {
+                    name: agent_name.to_string(),
+                },
+                BrowserAuditStatus::Rejected,
+                summary,
+            ),
+            panel_local_id,
+        ) {
+            tracing::warn!(target: "browser", "failed to append rejected-action audit: {error}");
+        }
         Err(std::io::Error::new(kind, message))
     } else {
         Ok(action_id)

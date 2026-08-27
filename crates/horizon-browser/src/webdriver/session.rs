@@ -170,7 +170,7 @@ pub(crate) fn run_webdriver(
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,
     completion_tx: mpsc::Sender<()>,
-    process_control: ChromeProcessControl,
+    process_control: &ChromeProcessControl,
 ) {
     let _completion = Completion {
         tx: Some(completion_tx),
@@ -252,7 +252,7 @@ pub(crate) fn run_webdriver(
 impl Driver {
     fn start(
         config: &BrowserSessionConfig,
-        process_control: ChromeProcessControl,
+        process_control: &ChromeProcessControl,
         stop_requested: &AtomicBool,
     ) -> Result<Self, String> {
         let service = WebDriverService::start(&config.browser, process_control, || {

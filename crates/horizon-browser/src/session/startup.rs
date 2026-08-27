@@ -444,10 +444,15 @@ mod tests {
 
         assert_eq!(
             profile_dir(&config, "../outside/profile"),
-            std::path::PathBuf::from("/tmp/horizon-browser-profiles/%2e2e2f6f7574736964652f70726f66696c65")
+            std::path::PathBuf::from("/tmp/horizon-browser-profiles/%2e2e2f6f7574736964652f70726f66696c65/chromium")
         );
         assert_ne!(profile_dir(&config, "a/b"), profile_dir(&config, "a_b"));
         assert_ne!(profile_dir(&config, "Panel-A"), profile_dir(&config, "panel-a"));
+        let firefox = BrowserConfig {
+            backend: crate::BackendKind::FirefoxBidi,
+            ..config.clone()
+        };
+        assert_ne!(profile_dir(&config, "panel"), profile_dir(&firefox, "panel"));
     }
 
     #[test]

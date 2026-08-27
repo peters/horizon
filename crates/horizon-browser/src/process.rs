@@ -353,17 +353,12 @@ fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn terminate_process_tree(child: &mut Child) -> std::io::Result<()> {
-    let pid = child.id().to_string();
-    let tree_killed = Command::new("taskkill")
-        .args(["/PID", pid.as_str(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if tree_killed || child.try_wait()?.is_some() {
-        Ok(())
-    } else {
-        child.kill()
+    // `taskkill` reopens a numeric PID that may be reused after our status
+    // check. `Child::kill` instead uses the retained process handle.
+    match child.kill() {
+        Ok(()) => Ok(()),
+        Err(_error) if child.try_wait()?.is_some() => Ok(()),
+        Err(error) => Err(error),
     }
 }
 

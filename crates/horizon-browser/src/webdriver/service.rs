@@ -10,6 +10,7 @@ use super::http::HttpClient;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTUP_POLL: Duration = Duration::from_millis(25);
+const STARTUP_ATTEMPTS: usize = 3;
 static SAFARI_SESSION_LEASED: AtomicBool = AtomicBool::new(false);
 
 pub(super) struct WebDriverService {
@@ -39,10 +40,10 @@ impl Drop for SafariLease {
 impl WebDriverService {
     pub(super) fn start(
         config: &BrowserConfig,
-        control: ChromeProcessControl,
+        control: &ChromeProcessControl,
         cancelled: impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let (command, args, label, safari_lease) = match config.backend {
+        let (command, base_args, label, safari_lease) = match config.backend {
             BackendKind::FirefoxBidi => (
                 resolve_service(config.geckodriver_command.as_deref(), &["geckodriver"])
                     .map_err(|error| format!("Firefox requires geckodriver: {error}"))?,
@@ -71,55 +72,61 @@ impl WebDriverService {
             BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
         };
 
-        let webdriver_listener = reserve_loopback_listener()?;
-        let address = webdriver_listener
-            .local_addr()
-            .map_err(|error| format!("failed to read reserved WebDriver port: {error}"))?;
-        let bidi_listener = if config.backend == BackendKind::FirefoxBidi {
-            Some(reserve_loopback_listener()?)
-        } else {
-            None
-        };
-        let bidi_port = bidi_listener
-            .as_ref()
-            .map(TcpListener::local_addr)
-            .transpose()
-            .map_err(|error| format!("failed to read reserved Firefox BiDi port: {error}"))?
-            .map(|address| address.port());
-        let mut args = service_args(config.backend, address.port(), bidi_port, args);
-        drop(bidi_listener);
-        drop(webdriver_listener);
-        let mut process = ServiceProcess::spawn(&command, &args, control, label)
-            .map_err(|error| format!("failed to start {label}: {error}"))?;
-        args.clear();
-        let http = HttpClient::new(address).map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + STARTUP_TIMEOUT;
-        loop {
-            if cancelled() {
-                let _ = process.kill();
-                return Err(format!("{label} startup cancelled"));
+        for attempt in 1..=STARTUP_ATTEMPTS {
+            let webdriver_listener = reserve_loopback_listener()?;
+            let address = webdriver_listener
+                .local_addr()
+                .map_err(|error| format!("failed to read reserved WebDriver port: {error}"))?;
+            let bidi_listener = if config.backend == BackendKind::FirefoxBidi {
+                Some(reserve_loopback_listener()?)
+            } else {
+                None
+            };
+            let bidi_port = bidi_listener
+                .as_ref()
+                .map(TcpListener::local_addr)
+                .transpose()
+                .map_err(|error| format!("failed to read reserved Firefox BiDi port: {error}"))?
+                .map(|address| address.port());
+            let args = service_args(config.backend, address.port(), bidi_port, base_args.clone());
+            drop(bidi_listener);
+            drop(webdriver_listener);
+            let mut process = ServiceProcess::spawn(&command, &args, control.clone(), label)
+                .map_err(|error| format!("failed to start {label}: {error}"))?;
+            let http = HttpClient::new(address).map_err(|error| error.to_string())?;
+            let deadline = Instant::now() + STARTUP_TIMEOUT;
+            loop {
+                if cancelled() {
+                    let _ = process.kill();
+                    return Err(format!("{label} startup cancelled"));
+                }
+                if http.get("/status").is_ok_and(|status| status_is_ready(&status)) {
+                    return Ok(Self {
+                        http,
+                        process,
+                        _safari_lease: safari_lease,
+                    });
+                }
+                if let Some(status) = process.child_status() {
+                    let error = format!(
+                        "{label} exited before becoming ready ({status}); stderr: {}",
+                        process.stderr_tail()
+                    );
+                    if attempt == STARTUP_ATTEMPTS {
+                        return Err(error);
+                    }
+                    tracing::warn!(attempt, "{error}; retrying with fresh reserved ports");
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let stderr = process.stderr_tail();
+                    let _ = process.kill();
+                    return Err(format!("timed out waiting for {label}; stderr: {stderr}"));
+                }
+                std::thread::sleep(STARTUP_POLL);
             }
-            if http.get("/status").is_ok_and(|status| status_is_ready(&status)) {
-                break;
-            }
-            if let Some(status) = process.child_status() {
-                return Err(format!(
-                    "{label} exited before becoming ready ({status}); stderr: {}",
-                    process.stderr_tail()
-                ));
-            }
-            if Instant::now() >= deadline {
-                let stderr = process.stderr_tail();
-                let _ = process.kill();
-                return Err(format!("timed out waiting for {label}; stderr: {stderr}"));
-            }
-            std::thread::sleep(STARTUP_POLL);
         }
-        Ok(Self {
-            http,
-            process,
-            _safari_lease: safari_lease,
-        })
+        Err(format!("{label} exhausted startup attempts"))
     }
 }
 
