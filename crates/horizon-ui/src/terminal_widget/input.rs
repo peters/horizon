@@ -154,15 +154,15 @@ pub(super) fn handle_terminal_pointer_input(
 
     handle_scrollbar_drag(ui, panel, interaction, visible_rows);
 
-    // OSC 8 hyperlinks are plain-clickable; URLs and paths still need Ctrl/Cmd.
+    // OSC 8 hyperlinks and file citations are plain-clickable; URLs and paths still need Ctrl/Cmd.
     if let Some(point) = pointer_context.hovered_point
         && let Some(terminal) = panel.terminal()
     {
         let modifiers = ui.input(|input| input.modifiers);
-        let has_hyperlink = terminal.has_hyperlink_at_point(point.line, point.column);
-        if (pointer_button_opens_osc8_hyperlink(PointerButton::Primary, modifiers) && has_hyperlink)
+        let has_plain_clickable = terminal.plain_clickable_at_point(point.line, point.column).is_some();
+        if (pointer_button_opens_osc8_hyperlink(PointerButton::Primary, modifiers) && has_plain_clickable)
             || ((modifiers.ctrl || modifiers.command)
-                && (has_hyperlink || terminal.clickable_at_point(point.line, point.column).is_some()))
+                && terminal.clickable_at_point(point.line, point.column).is_some())
         {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -700,6 +700,7 @@ fn replay_osc8_press(
     true
 }
 
+// File citations reuse the OSC 8 click path; Shift still bypasses it for selection.
 fn osc8_hyperlink_at(panel: &Panel, pointer: &PointerContext<'_>, pos: Pos2) -> Option<String> {
     let point = grid_point_from_position(
         pointer.interaction.layout.body,
@@ -708,7 +709,7 @@ fn osc8_hyperlink_at(panel: &Panel, pointer: &PointerContext<'_>, pos: Pos2) -> 
         pointer.visible_rows,
         pointer.visible_cols,
     )?;
-    panel.terminal()?.hyperlink_at_point(point.line, point.column)
+    panel.terminal()?.plain_clickable_at_point(point.line, point.column)
 }
 
 fn maybe_copy_selection_to_primary(

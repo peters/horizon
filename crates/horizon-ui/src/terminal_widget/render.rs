@@ -6,6 +6,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Shape, StrokeKind, Vec2};
 
 use crate::theme;
 
+use super::file_citation::{CitationDisplayCells, file_citation_shapes};
 use super::layout::{GridMetrics, usize_to_f32};
 
 struct TextRun {
@@ -70,6 +71,7 @@ pub(super) fn render_grid(
     metrics: &GridMetrics,
     grid_cache: Option<&mut TerminalGridCache>,
     allow_grid_cache: bool,
+    decorate_file_citations: bool,
 ) {
     let painter = ui.painter_at(rect);
     let key = GridCacheKey::new(rect, content.display_offset, metrics);
@@ -81,7 +83,7 @@ pub(super) fn render_grid(
             return;
         }
 
-        let shapes = build_grid_shapes(ui, rect, content, metrics);
+        let shapes = build_grid_shapes(ui, rect, content, metrics, decorate_file_citations);
         if has_selection {
             // Copy/cut clear the model selection outside this render pass, and
             // the cache key tracks only geometry and scroll offset. Retaining
@@ -98,20 +100,42 @@ pub(super) fn render_grid(
         return;
     }
 
-    painter.extend(build_grid_shapes(ui, rect, content, metrics));
+    painter.extend(build_grid_shapes(ui, rect, content, metrics, decorate_file_citations));
 }
 
-fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
+fn build_grid_shapes(
+    ui: &egui::Ui,
+    rect: Rect,
+    content: RenderableContent<'_>,
+    metrics: &GridMetrics,
+    decorate_file_citations: bool,
+) -> Vec<Shape> {
     // Text runs can legitimately span cells whose background changes later in the line.
     // Keep backgrounds in a separate layer so those later fills never paint over glyphs.
     let mut background_shapes = Vec::new();
     let mut foreground_shapes = Vec::new();
+    let mut citation_shapes = Vec::new();
+    let display_cells = CitationDisplayCells::new(content.display_iter, decorate_file_citations);
+    let mut hidden_citation_cells = Vec::new();
 
     ui.fonts_mut(|fonts| {
         let mut text_run: Option<TextRun> = None;
         let mut background_run: Option<BackgroundRun> = None;
 
-        for indexed in content.display_iter {
+        if let Some(cells) = display_cells.citation_cells() {
+            hidden_citation_cells.resize(cells.len(), false);
+            citation_shapes = file_citation_shapes(
+                fonts,
+                &mut hidden_citation_cells,
+                cells,
+                content.selection,
+                content.display_offset,
+                rect,
+                metrics,
+            );
+        }
+
+        for (cell_index, indexed) in display_cells.enumerate() {
             let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
                 continue;
             };
@@ -141,6 +165,10 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                     bg,
                     selected,
                 );
+            }
+            if hidden_citation_cells.get(cell_index).copied().unwrap_or(false) {
+                flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
+                continue;
             }
 
             if let Some(ch) = batchable_char {
@@ -194,6 +222,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
         flush_background_run(&mut background_shapes, &mut background_run);
     });
 
+    foreground_shapes.extend(citation_shapes);
     merge_shape_layers(background_shapes, foreground_shapes)
 }
 
@@ -515,6 +544,7 @@ mod tests {
                         metrics,
                         Some(cache),
                         allow_grid_cache,
+                        false,
                     );
                 });
             })

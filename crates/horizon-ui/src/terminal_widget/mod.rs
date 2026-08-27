@@ -1,3 +1,4 @@
+mod file_citation;
 mod ime;
 mod input;
 mod layout;
@@ -5,7 +6,7 @@ mod render;
 mod scrollbar;
 
 use egui::{Context, FontId, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, PanelKind};
 
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
@@ -113,6 +114,7 @@ impl<'a> TerminalView<'a> {
         let body_hovered = interaction.body.hovered();
         let modifiers = body_hovered.then(|| ui.input(|input| input.modifiers));
         let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
+        let decorate_file_citations = self.panel.kind == PanelKind::Codex;
 
         if ui.is_rect_visible(interaction.layout.outer)
             && let Some(terminal) = self.panel.terminal_mut()
@@ -136,6 +138,7 @@ impl<'a> TerminalView<'a> {
                     &metrics,
                     grid_cache.as_deref_mut(),
                     allow_grid_cache,
+                    decorate_file_citations,
                 );
                 render_cursor(
                     ui,

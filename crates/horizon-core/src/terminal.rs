@@ -1,5 +1,6 @@
 mod content;
 mod events;
+mod file_citation;
 mod lifecycle;
 mod replay;
 mod resize;
@@ -26,6 +27,9 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
+pub use self::file_citation::{
+    TERMINAL_FILE_CITATION_PREFIX, TerminalFileCitation, parse_terminal_file_citation, terminal_file_citation_end,
+};
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
