@@ -597,10 +597,14 @@ mod tests {
 
     #[test]
     fn light_terminal_palette_keeps_contrast_on_panel_background() {
+        // Matches the >= 4.2:1 contrast promised for the light terminal palette;
+        // this is stricter than the render-time floor in ensure_terminal_text_contrast.
+        const MIN_LIGHT_PALETTE_CONTRAST: f32 = 4.2;
+
         let panel_bg = palette_for(ResolvedTheme::Light).panel_bg;
         for color in palette_for(ResolvedTheme::Light).terminal_palette {
             assert!(
-                contrast_ratio(color, panel_bg) >= 3.6,
+                contrast_ratio(color, panel_bg) >= MIN_LIGHT_PALETTE_CONTRAST,
                 "terminal color {color:?} is too close to the light panel background",
             );
         }
