@@ -177,8 +177,8 @@ impl Driver {
         }) else {
             return;
         };
-        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
         let _ = event_tx.send(BrowserEvent::HostFocusRequested);
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
         if let Err(error) = result {
             tracing::warn!("WebDriver input failed: {error}");
             self.reset_safari_input();
@@ -202,8 +202,8 @@ impl Driver {
             };
             (state.click_dispatch(x, y, count)?, state.window_handle.clone())
         };
-        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
         let _ = event_tx.send(BrowserEvent::HostFocusRequested);
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
         if let Err(error) = &result {
             tracing::warn!("WebDriver input failed: {error}");
             self.reset_safari_input();
