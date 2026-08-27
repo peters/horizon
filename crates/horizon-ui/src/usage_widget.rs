@@ -6,8 +6,19 @@ use horizon_core::{DailyUsage, Panel, ToolUsage, UsageSnapshot, format_cost, for
 
 use crate::{loading_spinner, theme};
 
-const CODEX_COLOR: Color32 = Color32::from_rgb(100, 200, 120);
-const OPENCODE_COLOR: Color32 = Color32::from_rgb(102, 214, 173);
+fn codex_color() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => Color32::from_rgb(100, 200, 120),
+        theme::ResolvedTheme::Light => Color32::from_rgb(16, 124, 72),
+    }
+}
+
+fn opencode_color() -> Color32 {
+    match theme::current_theme() {
+        theme::ResolvedTheme::Dark => Color32::from_rgb(102, 214, 173),
+        theme::ResolvedTheme::Light => Color32::from_rgb(0, 112, 143),
+    }
+}
 const SECTION_FONT_SIZE: f32 = 11.0;
 const STAT_LABEL_SIZE: f32 = 12.0;
 const STAT_VALUE_SIZE: f32 = 14.0;
@@ -96,7 +107,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
                 ui,
                 "Codex CLI",
                 &snapshot.codex,
-                CODEX_COLOR,
+                codex_color(),
                 false,
                 card_width,
                 card_height,
@@ -106,7 +117,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
                 ui,
                 "OpenCode",
                 &snapshot.opencode,
-                OPENCODE_COLOR,
+                opencode_color(),
                 false,
                 card_width,
                 card_height,
@@ -128,7 +139,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
             ui,
             "Codex CLI",
             &snapshot.codex,
-            CODEX_COLOR,
+            codex_color(),
             false,
             card_width,
             card_height,
@@ -138,7 +149,7 @@ fn render_today_section(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
             ui,
             "OpenCode",
             &snapshot.opencode,
-            OPENCODE_COLOR,
+            opencode_color(),
             false,
             card_width,
             card_height,
@@ -294,9 +305,9 @@ fn render_daily_chart_header(ui: &mut egui::Ui, date_width: f32, bar_area_width:
         ui.add_space(date_width + 8.0 + bar_area_width + 4.0);
         ui.label(RichText::new("Claude").size(10.0).color(theme::ACCENT()).strong());
         ui.add_space(8.0);
-        ui.label(RichText::new("Codex").size(10.0).color(CODEX_COLOR).strong());
+        ui.label(RichText::new("Codex").size(10.0).color(codex_color()).strong());
         ui.add_space(8.0);
-        ui.label(RichText::new("OpenCode").size(10.0).color(OPENCODE_COLOR).strong());
+        ui.label(RichText::new("OpenCode").size(10.0).color(opencode_color()).strong());
     });
 }
 
@@ -358,13 +369,13 @@ fn paint_daily_chart_bar(
     let bar_y = row_rect.center().y - BAR_HEIGHT / 2.0;
 
     paint_daily_chart_bar_segment(painter, bar_x, bar_y, claude_width, theme::ACCENT());
-    paint_daily_chart_bar_segment(painter, bar_x + claude_width, bar_y, codex_width, CODEX_COLOR);
+    paint_daily_chart_bar_segment(painter, bar_x + claude_width, bar_y, codex_width, codex_color());
     paint_daily_chart_bar_segment(
         painter,
         bar_x + claude_width + codex_width,
         bar_y,
         opencode_width,
-        OPENCODE_COLOR,
+        opencode_color(),
     );
 }
 

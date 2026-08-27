@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use egui::{Color32, Context, Pos2, Rect, Vec2};
 use horizon_core::{WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
+use crate::theme;
+
 use super::util::{OverlayExclusion, workspace_label_width};
 use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
 
@@ -291,8 +293,7 @@ impl HorizonApp {
                     return None;
                 }
 
-                let (r, g, b) = workspace.accent();
-                let color = Color32::from_rgb(r, g, b);
+                let color = theme::workspace_accent(workspace.color_idx);
                 let is_active = self.board.active_workspace == Some(workspace.id);
                 let (workspace_canvas_rect, screen_rect, is_empty) =
                     if let Some((min, max)) = workspace_bounds.get(&workspace.id).copied() {

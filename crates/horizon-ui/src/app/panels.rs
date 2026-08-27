@@ -342,11 +342,12 @@ impl HorizonApp {
         // Reuse workspace color vec across frames (avoids per-frame String
         // clones — names are looked up lazily in the context menu).
         self.workspace_colors.clear();
-        self.workspace_colors
-            .extend(self.board.workspaces.iter().map(|workspace| {
-                let (r, g, b) = workspace.accent();
-                (workspace.id, Color32::from_rgb(r, g, b))
-            }));
+        self.workspace_colors.extend(
+            self.board
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.id, theme::workspace_accent(workspace.color_idx))),
+        );
 
         // Reuse panel ordering vec across frames. Collect into a local first,
         // then swap into the field, because the filter borrows self immutably
@@ -717,17 +718,31 @@ impl HorizonApp {
             // context menu is actually open, so the per-workspace iteration and
             // formatting cost is not paid on every frame.
             for workspace in &self.board.workspaces {
-                let (r, g, b) = workspace.accent();
-                let workspace_color = Color32::from_rgb(r, g, b);
+                let workspace_color = theme::workspace_accent(workspace.color_idx);
                 let is_current = current_workspace_id == workspace.id;
-                let label = if is_current {
-                    format!("● {}", workspace.name)
-                } else {
-                    format!("  {}", workspace.name)
-                };
-                let text = egui::RichText::new(label)
-                    .color(if is_current { workspace_color } else { theme::FG_SOFT() })
-                    .size(12.0);
+                // The name stays in the theme's text color: some workspace
+                // accents do not hold 4.5:1 for 12 px text on the panel background.
+                let font_id = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+                let mut job = egui::text::LayoutJob::default();
+                job.append(
+                    if is_current { "\u{25cf} " } else { "  " },
+                    0.0,
+                    egui::text::TextFormat {
+                        font_id: font_id.clone(),
+                        color: workspace_color,
+                        ..Default::default()
+                    },
+                );
+                job.append(
+                    &workspace.name,
+                    0.0,
+                    egui::text::TextFormat {
+                        font_id,
+                        color: if is_current { theme::FG() } else { theme::FG_SOFT() },
+                        ..Default::default()
+                    },
+                );
+                let text = egui::WidgetText::LayoutJob(std::sync::Arc::new(job));
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
                     outcome.workspace_assignment = Some(workspace.id);
                     ui.close();

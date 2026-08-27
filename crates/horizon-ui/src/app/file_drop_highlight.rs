@@ -48,8 +48,5 @@ fn workspace_accent(board: &horizon_core::Board, workspace_id: horizon_core::Wor
         .workspaces
         .iter()
         .find(|ws| ws.id == workspace_id)
-        .map_or(theme::ACCENT(), |ws| {
-            let (r, g, b) = ws.accent();
-            Color32::from_rgb(r, g, b)
-        })
+        .map_or(theme::ACCENT(), |ws| theme::workspace_accent(ws.color_idx))
 }
