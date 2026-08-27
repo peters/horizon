@@ -342,11 +342,12 @@ impl HorizonApp {
         // Reuse workspace color vec across frames (avoids per-frame String
         // clones — names are looked up lazily in the context menu).
         self.workspace_colors.clear();
-        self.workspace_colors
-            .extend(self.board.workspaces.iter().map(|workspace| {
-                let (r, g, b) = workspace.accent();
-                (workspace.id, Color32::from_rgb(r, g, b))
-            }));
+        self.workspace_colors.extend(
+            self.board
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.id, theme::workspace_accent(workspace.color_idx))),
+        );
 
         // Reuse panel ordering vec across frames. Collect into a local first,
         // then swap into the field, because the filter borrows self immutably
@@ -717,8 +718,7 @@ impl HorizonApp {
             // context menu is actually open, so the per-workspace iteration and
             // formatting cost is not paid on every frame.
             for workspace in &self.board.workspaces {
-                let (r, g, b) = workspace.accent();
-                let workspace_color = Color32::from_rgb(r, g, b);
+                let workspace_color = theme::workspace_accent(workspace.color_idx);
                 let is_current = current_workspace_id == workspace.id;
                 let label = if is_current {
                     format!("● {}", workspace.name)

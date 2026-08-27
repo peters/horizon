@@ -35,20 +35,20 @@ struct ThemePalette {
 const DARK_THEME: ThemePalette = ThemePalette {
     bg: Color32::from_rgb(7, 10, 16),
     bg_elevated: Color32::from_rgb(12, 16, 24),
-    panel_bg: Color32::from_rgb(15, 19, 28),
-    panel_bg_alt: Color32::from_rgb(21, 26, 37),
-    fg: Color32::from_rgb(224, 230, 241),
-    fg_soft: Color32::from_rgb(170, 181, 199),
-    fg_dim: Color32::from_rgb(108, 120, 142),
-    cursor: Color32::from_rgb(196, 223, 255),
-    grid_dot: Color32::from_rgb(28, 34, 46),
-    accent: Color32::from_rgb(116, 162, 247),
-    border_subtle: Color32::from_rgb(37, 46, 61),
-    border_strong: Color32::from_rgb(63, 78, 101),
+    panel_bg: Color32::from_rgb(16, 20, 30),
+    panel_bg_alt: Color32::from_rgb(22, 27, 39),
+    fg: Color32::from_rgb(228, 233, 244),
+    fg_soft: Color32::from_rgb(174, 185, 205),
+    fg_dim: Color32::from_rgb(112, 125, 150),
+    cursor: Color32::from_rgb(178, 200, 255),
+    grid_dot: Color32::from_rgb(29, 35, 48),
+    accent: Color32::from_rgb(106, 144, 255),
+    border_subtle: Color32::from_rgb(39, 48, 66),
+    border_strong: Color32::from_rgb(68, 84, 112),
     titlebar_bg: Color32::from_rgb(8, 11, 17),
     toolbar_bg: Color32::from_rgb(11, 15, 22),
-    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(77, 112, 220, 20),
-    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(255, 146, 80, 28),
+    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(92, 122, 235, 22),
+    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(255, 152, 86, 24),
     btn_close: Color32::from_rgb(235, 96, 88),
     palette_green: Color32::from_rgb(166, 227, 161),
     palette_red: Color32::from_rgb(243, 139, 168),
@@ -75,46 +75,61 @@ const DARK_THEME: ThemePalette = ThemePalette {
 };
 
 const LIGHT_THEME: ThemePalette = ThemePalette {
-    bg: Color32::from_rgb(247, 244, 239),
-    bg_elevated: Color32::from_rgb(253, 251, 247),
-    panel_bg: Color32::from_rgb(254, 253, 250),
-    panel_bg_alt: Color32::from_rgb(243, 240, 233),
-    fg: Color32::from_rgb(24, 28, 34),
-    fg_soft: Color32::from_rgb(77, 86, 96),
-    fg_dim: Color32::from_rgb(131, 143, 154),
-    cursor: Color32::from_rgb(94, 106, 210),
-    grid_dot: Color32::from_rgb(222, 216, 204),
-    accent: Color32::from_rgb(94, 106, 210),
-    border_subtle: Color32::from_rgb(229, 224, 213),
-    border_strong: Color32::from_rgb(202, 194, 177),
-    titlebar_bg: Color32::from_rgb(248, 246, 240),
-    toolbar_bg: Color32::from_rgb(248, 246, 240),
-    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(94, 106, 210, 14),
-    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(243, 158, 80, 22),
-    btn_close: Color32::from_rgb(214, 67, 67),
-    palette_green: Color32::from_rgb(5, 150, 105),
-    palette_red: Color32::from_rgb(210, 15, 57),
-    palette_yellow: Color32::from_rgb(217, 119, 6),
-    palette_cyan: Color32::from_rgb(8, 145, 178),
+    bg: Color32::from_rgb(243, 240, 234),
+    bg_elevated: Color32::from_rgb(250, 248, 243),
+    panel_bg: Color32::from_rgb(252, 251, 247),
+    panel_bg_alt: Color32::from_rgb(240, 236, 228),
+    fg: Color32::from_rgb(26, 30, 38),
+    fg_soft: Color32::from_rgb(80, 89, 100),
+    fg_dim: Color32::from_rgb(124, 134, 147),
+    cursor: Color32::from_rgb(64, 92, 210),
+    grid_dot: Color32::from_rgb(214, 207, 193),
+    accent: Color32::from_rgb(58, 86, 212),
+    border_subtle: Color32::from_rgb(219, 212, 199),
+    border_strong: Color32::from_rgb(178, 168, 147),
+    titlebar_bg: Color32::from_rgb(246, 243, 236),
+    toolbar_bg: Color32::from_rgb(246, 243, 236),
+    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(94, 106, 210, 10),
+    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(233, 168, 106, 12),
+    btn_close: Color32::from_rgb(207, 55, 66),
+    palette_green: Color32::from_rgb(18, 134, 84),
+    palette_red: Color32::from_rgb(199, 22, 54),
+    palette_yellow: Color32::from_rgb(163, 92, 0),
+    palette_cyan: Color32::from_rgb(0, 116, 146),
+    // Bright variants are the strong versions in light mode: emphasis on paper
+    // reads as deeper and more saturated, not as washed-out pastels.
     terminal_palette: [
-        Color32::from_rgb(92, 95, 119),
+        Color32::from_rgb(35, 38, 48),
         Color32::from_rgb(210, 15, 57),
-        Color32::from_rgb(64, 160, 43),
-        Color32::from_rgb(223, 142, 29),
-        Color32::from_rgb(30, 102, 245),
-        Color32::from_rgb(136, 57, 239),
-        Color32::from_rgb(4, 165, 229),
-        Color32::from_rgb(76, 79, 105),
-        Color32::from_rgb(124, 127, 147),
-        Color32::from_rgb(224, 108, 129),
-        Color32::from_rgb(83, 168, 66),
-        Color32::from_rgb(228, 160, 71),
-        Color32::from_rgb(79, 135, 255),
-        Color32::from_rgb(158, 84, 235),
-        Color32::from_rgb(54, 180, 231),
-        Color32::from_rgb(42, 47, 64),
+        Color32::from_rgb(21, 128, 61),
+        Color32::from_rgb(146, 94, 0),
+        Color32::from_rgb(27, 96, 232),
+        Color32::from_rgb(131, 52, 227),
+        Color32::from_rgb(0, 122, 158),
+        Color32::from_rgb(55, 60, 78),
+        Color32::from_rgb(104, 110, 130),
+        Color32::from_rgb(231, 26, 68),
+        Color32::from_rgb(13, 111, 53),
+        Color32::from_rgb(178, 101, 0),
+        Color32::from_rgb(20, 74, 209),
+        Color32::from_rgb(152, 42, 232),
+        Color32::from_rgb(0, 104, 133),
+        Color32::from_rgb(17, 20, 28),
     ],
 };
+
+/// Light-mode workspace accents: deep enough to hold contrast when blended
+/// into paper-white fills. Indices match `horizon_core::WORKSPACE_COLORS`.
+const WORKSPACE_ACCENTS_LIGHT: &[(u8, u8, u8)] = &[
+    (49, 108, 235), // blue
+    (24, 143, 88),  // green
+    (188, 128, 0),  // yellow
+    (214, 36, 84),  // red
+    (201, 87, 160), // pink
+    (0, 146, 168),  // teal
+    (139, 88, 226), // mauve
+    (219, 111, 40), // peach
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolvedTheme {
@@ -377,6 +392,23 @@ fn palette_for(theme: ResolvedTheme) -> &'static ThemePalette {
     }
 }
 
+/// Theme-aware workspace accent for `color_idx` under the active theme.
+#[must_use]
+pub fn workspace_accent(color_idx: usize) -> Color32 {
+    workspace_accent_for(current_theme(), color_idx)
+}
+
+/// Theme-aware workspace accent for `color_idx` under `theme`.
+#[must_use]
+pub fn workspace_accent_for(theme: ResolvedTheme, color_idx: usize) -> Color32 {
+    let accents = match theme {
+        ResolvedTheme::Dark => horizon_core::WORKSPACE_COLORS,
+        ResolvedTheme::Light => WORKSPACE_ACCENTS_LIGHT,
+    };
+    let (r, g, b) = accents[color_idx % accents.len()];
+    Color32::from_rgb(r, g, b)
+}
+
 fn active_palette() -> &'static ThemePalette {
     palette_for(current_theme())
 }
@@ -544,7 +576,8 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedTheme, alpha, bg_for, composite_over, contrast_ratio, ensure_terminal_text_contrast, resolve_theme,
+        ResolvedTheme, alpha, bg_for, composite_over, contrast_ratio, ensure_terminal_text_contrast, palette_for,
+        resolve_theme, workspace_accent_for,
     };
     use egui::{Color32, Theme};
     use horizon_core::AppearanceTheme;
@@ -560,6 +593,28 @@ mod tests {
     #[test]
     fn light_and_dark_backgrounds_differ() {
         assert_ne!(bg_for(ResolvedTheme::Dark), bg_for(ResolvedTheme::Light));
+    }
+
+    #[test]
+    fn light_terminal_palette_keeps_contrast_on_panel_background() {
+        let panel_bg = palette_for(ResolvedTheme::Light).panel_bg;
+        for color in palette_for(ResolvedTheme::Light).terminal_palette {
+            assert!(
+                contrast_ratio(color, panel_bg) >= 3.6,
+                "terminal color {color:?} is too close to the light panel background",
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_accent_varies_by_theme() {
+        for idx in 0..horizon_core::WORKSPACE_COLORS.len() {
+            assert_ne!(
+                workspace_accent_for(ResolvedTheme::Dark, idx),
+                workspace_accent_for(ResolvedTheme::Light, idx),
+                "workspace accent {idx} should have distinct dark and light variants",
+            );
+        }
     }
 
     #[test]

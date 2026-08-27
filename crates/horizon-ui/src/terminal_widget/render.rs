@@ -591,6 +591,7 @@ mod tests {
 
     #[test]
     fn dim_foreground_is_flattened_before_contrast_in_light_theme() {
+        let previous = theme::current_theme();
         theme::set_theme(theme::ResolvedTheme::Light);
 
         let cell = Cell {
@@ -608,5 +609,7 @@ mod tests {
         assert_eq!(bg, theme::PANEL_BG());
         assert_eq!(fg, expected);
         assert_eq!(fg.a(), u8::MAX);
+
+        theme::set_theme(previous);
     }
 }
