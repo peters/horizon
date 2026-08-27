@@ -24,7 +24,9 @@ mod websocket;
 use std::path::PathBuf;
 
 pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
-pub use control::{AgentAction, BrowserControlAction, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES};
+pub use control::{
+    AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, MAX_CLICK_COUNT, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
+};
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;

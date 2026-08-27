@@ -96,6 +96,25 @@ impl ActionState {
         json!({ "actions": sources })
     }
 
+    pub(super) fn click_payload(
+        &mut self,
+        x: f64,
+        y: f64,
+        button: BrowserButton,
+        count: u32,
+        modifiers: BrowserModifiers,
+    ) -> Value {
+        let mut sources = Vec::new();
+        self.push_modifier_source(modifiers, &mut sources);
+        let mut actions = vec![pointer_move(x, y)];
+        for _ in 0..count {
+            actions.push(json!({ "type": "pointerDown", "button": button_number(button) }));
+            actions.push(json!({ "type": "pointerUp", "button": button_number(button) }));
+        }
+        sources.push(pointer_source(actions));
+        json!({ "actions": sources })
+    }
+
     fn push_modifier_source(&mut self, modifiers: BrowserModifiers, sources: &mut Vec<Value>) {
         let actions = modifier_transitions(self.modifiers, modifiers);
         self.modifiers = modifiers;
@@ -212,8 +231,10 @@ fn finite_i64_from_f64(value: f64) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::ActionState;
-    use crate::{BrowserInput, BrowserKey, BrowserModifiers};
+    use crate::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
 
     #[test]
     fn printable_key_uses_w3c_key_source_and_modifier_transition() {
@@ -236,5 +257,29 @@ mod tests {
     fn raw_text_becomes_balanced_key_actions() {
         let payload = ActionState::default().payload(BrowserInput::InsertText { text: "ab".to_string() });
         assert_eq!(payload["actions"][0]["actions"].as_array().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn multiple_clicks_share_one_pointer_action_chain() {
+        let payload =
+            ActionState::default().click_payload(12.0, 24.0, BrowserButton::Left, 2, BrowserModifiers::none());
+        let actions = payload["actions"][0]["actions"].as_array();
+
+        assert_eq!(payload["actions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(actions.map(Vec::len), Some(5));
+        assert_eq!(
+            actions
+                .and_then(|actions| actions.get(1))
+                .and_then(|action| action.get("type"))
+                .and_then(Value::as_str),
+            Some("pointerDown")
+        );
+        assert_eq!(
+            actions
+                .and_then(|actions| actions.get(4))
+                .and_then(|action| action.get("type"))
+                .and_then(Value::as_str),
+            Some("pointerUp")
+        );
     }
 }

@@ -93,6 +93,16 @@ impl InputState {
         InputDispatch::Pending
     }
 
+    fn click_dispatch(&mut self, x: f64, y: f64, count: u32) -> Result<InputDispatch, String> {
+        if !self.pending.is_empty() || self.buttons != 0 || !self.keys_down.is_empty() {
+            return Err("Safari input is still settling".to_string());
+        }
+        let payload =
+            self.actions
+                .click_payload(x, y, crate::BrowserButton::Left, count, crate::BrowserModifiers::none());
+        Ok(InputDispatch::Foreground(vec![payload]))
+    }
+
     fn take_ready(&mut self, now: Instant) -> Option<InputDispatch> {
         if self.ready_at.is_none_or(|ready_at| now < ready_at) {
             return None;
@@ -155,6 +165,31 @@ impl Driver {
             self.scroll_state_refresh_at = Instant::now();
             self.frames.demand();
         }
+    }
+
+    pub(super) fn perform_safari_click(
+        &mut self,
+        x: f64,
+        y: f64,
+        count: u32,
+        event_tx: &BrowserEventSender,
+    ) -> Result<(), String> {
+        let (dispatch, handle) = {
+            let Some(state) = &mut self.safari else {
+                return Err("Safari input state unavailable".to_string());
+            };
+            (state.click_dispatch(x, y, count)?, state.window_handle.clone())
+        };
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested);
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+            self.reset_safari_input();
+        } else if !self.retain_frame_during_navigation {
+            self.scroll_state_refresh_at = Instant::now();
+            self.frames.demand();
+        }
+        result
     }
 
     fn reset_safari_input(&mut self) {
@@ -273,5 +308,20 @@ mod tests {
         let response = serde_json::json!({ "value": { "width": 0, "height": 52 } });
         assert_eq!(window_rect(&response, 1104, 668), (1104, 720));
         assert_eq!(window_rect(&serde_json::Value::Null, 1104, 668), (1104, 668));
+    }
+
+    #[test]
+    fn semantic_double_click_is_one_foreground_action_chain() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let dispatch = state
+            .click_dispatch(10.0, 20.0, 2)
+            .unwrap_or_else(|error| panic!("double-click dispatch failed: {error}"));
+        let InputDispatch::Foreground(payloads) = dispatch else {
+            panic!("semantic click should require foreground dispatch");
+        };
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
     }
 }

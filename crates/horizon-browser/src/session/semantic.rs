@@ -35,7 +35,9 @@ impl DriverState {
             BrowserControlAction::Query { selector, max_results } => {
                 self.semantic_query(link, event_tx, frame_slot, selector, *max_results)
             }
-            BrowserControlAction::Click { target } => self.semantic_click(link, event_tx, frame_slot, target),
+            BrowserControlAction::Click { target, count } => {
+                self.semantic_click(link, event_tx, frame_slot, target, *count)
+            }
             BrowserControlAction::Fill { target, value } => {
                 self.semantic_fill(link, event_tx, frame_slot, target, value)
             }
@@ -104,13 +106,16 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         target: &crate::BrowserTarget,
+        count: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
         let value = self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
         self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
-        self.send_semantic_input(link, event_tx, frame_slot, pointer_press(x, y))?;
-        self.send_semantic_input(link, event_tx, frame_slot, pointer_release(x, y))?;
+        for click_count in 1..=count {
+            self.send_semantic_input(link, event_tx, frame_slot, pointer_press(x, y, click_count))?;
+            self.send_semantic_input(link, event_tx, frame_slot, pointer_release(x, y, click_count))?;
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
@@ -219,23 +224,23 @@ impl DriverState {
     }
 }
 
-fn pointer_press(x: f64, y: f64) -> BrowserInput {
+fn pointer_press(x: f64, y: f64, click_count: u32) -> BrowserInput {
     BrowserInput::MousePress {
         x,
         y,
         button: BrowserButton::Left,
-        click_count: 1,
+        click_count,
         buttons: 1,
         modifiers: BrowserModifiers::none(),
     }
 }
 
-fn pointer_release(x: f64, y: f64) -> BrowserInput {
+fn pointer_release(x: f64, y: f64, click_count: u32) -> BrowserInput {
     BrowserInput::MouseRelease {
         x,
         y,
         button: BrowserButton::Left,
-        click_count: 1,
+        click_count,
         buttons: 0,
         modifiers: BrowserModifiers::none(),
     }

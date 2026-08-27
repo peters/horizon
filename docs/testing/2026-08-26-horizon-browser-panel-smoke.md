@@ -89,13 +89,18 @@ browser session.
   that Horizon had not installed its minimization preload. Chromium retained
   its native `HeadlessChrome` user agent in this mode and Firefox retained its
   native Firefox user agent.
-- Firefox double-click limitation: Horizon correctly emitted consecutive
-  trusted WebDriver presses with click counts one and two, but stock Firefox
-  154/geckodriver 0.35 did not emit a DOM `dblclick` across separate W3C Actions
-  commands. WebDriver BiDi Actions has no click-count parameter. Buffering every
-  first click would add double-click-interval latency, while synthesizing a DOM
-  event would make it untrusted, so neither workaround was accepted. Single
-  click, drag, simultaneous-button, wheel, and keyboard assertions passed.
+- Finding fixed and rerun: `browser_act` now accepts `count: 1..=3` for semantic
+  clicks. Firefox batches the pointer move plus every down/up pair into one
+  WebDriver Actions command, preserving Firefox's click tracker without DOM
+  event injection or single-click latency; Chromium sends the corresponding
+  CDP sequence with click counts one then two. On the rebuilt candidate,
+  Firefox 154/geckodriver 0.35 and Chromium 151 each reported
+  `clicks=0 trusted=true double=1 globalUp=2` after an MCP-only `count: 2`
+  action. Both audits recorded `queued`, `dispatched`, and `completed` with
+  `count=2`, and both exact process trees and live manifests cleaned up after
+  the normal window-manager close path. Consecutive physical UI clicks remain
+  streamed as separate commands, so this fix is deliberately the atomic agent
+  action rather than a delay added to every user single click.
 - Exact final-build teardown: normal window close removed the task-owned
   Horizon, Chromium, geckodriver, and Firefox processes, CDP/WebDriver/BiDi
   listeners, and live manifest. The private audit journal remained at mode
@@ -331,30 +336,35 @@ implementation-level security and cleanup evidence.
    page state, and exercise reload/back/forward. Verify each tool result and
    the visible page result on Chromium and Firefox. Repeat the same semantic
    sequence in Safari during the macOS lane.
-4. Mutate or navigate the document, then try an old ref. It must fail as stale;
+4. Call `browser_act` with `action: "click"` and `count: 2` against a fresh ref
+   whose page listeners record `dblclick`, `isTrusted`, and pointer-up events.
+   Expect exactly one trusted double-click and two pointer-up events. Verify the
+   correlated audit entries retain `count: 2`. Repeat in Chromium, Firefox, and
+   Safari; a DOM-dispatched synthetic event does not satisfy this lane.
+5. Mutate or navigate the document, then try an old ref. It must fail as stale;
    take a new snapshot or query and verify the replacement ref succeeds.
-5. Correlate each MCP-returned action id with `queued`, `dispatched`, and
+6. Correlate each MCP-returned action id with `queued`, `dispatched`, and
    terminal `completed` or `failed` entries returned by `browser_audit`.
    Verify a failed selector action is reported as an MCP tool error and has a
    corresponding terminal audit entry.
-6. Interact with the page as the user, then immediately call an MCP action. It
+7. Interact with the page as the user, then immediately call an MCP action. It
    must return `WouldBlock`. Repeat with URL submission and browser navigation
    controls, not only page clicks or keys.
-7. Call `browser_handoff` with a visible reason. Verify the panel shows the
+8. Call `browser_handoff` with a visible reason. Verify the panel shows the
    paused banner and rejects MCP actions until the user activates **Done — hand
    back to agent**. Poll `browser_list` until `handoff_pending` is false, take a
    fresh snapshot, and resume. Verify the exact request is acknowledged and a
    replacement request cannot be cleared accidentally.
-8. Read the journal through `browser_audit`. Verify actor, action id, ordering,
+9. Read the journal through `browser_audit`. Verify actor, action id, ordering,
    and status; mode `0600` on Unix; URL user-info, query values, fragments,
    selectors, and script/data payloads redacted; and filled text represented
    only by character count. Confirm the MCP response itself contains no raw
    runtime path.
-9. Verify queue bounds, stale-owner rejection, lease expiry, malformed-action
+10. Verify queue bounds, stale-owner rejection, lease expiry, malformed-action
    rejection, and crash/relaunch behavior. A `dispatched` record proves the
    command reached the backend adapter; page-level success still requires the
    corresponding URL/title/frame or error evidence.
-10. Close normally and verify the live panel disappears from `browser_list`
+11. Close normally and verify the live panel disappears from `browser_list`
    while its append-only audit journal remains available to the user through a
    later live instance of that saved panel.
 

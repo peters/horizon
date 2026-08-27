@@ -23,7 +23,8 @@ binary.
 - `browser_navigate` changes the top-level page.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs.
-- `browser_act` clicks, fills, scrolls, reloads, or traverses history.
+- `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
+  `count: 2` on a click for a backend-native trusted double-click.
 - `browser_wait` verifies present, visible, or hidden selector state.
 - `browser_evaluate` evaluates an explicit size-bounded expression.
 - `browser_handoff` pauses automation so the user can steer.

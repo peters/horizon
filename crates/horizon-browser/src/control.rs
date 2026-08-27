@@ -13,6 +13,8 @@ const MAX_SELECTOR_BYTES: usize = 16 * 1024;
 const MAX_EXPRESSION_BYTES: usize = 128 * 1024;
 pub const MAX_SNAPSHOT_NODES: u32 = 1_000;
 pub const MAX_QUERY_RESULTS: u32 = 250;
+pub const DEFAULT_CLICK_COUNT: u32 = 1;
+pub const MAX_CLICK_COUNT: u32 = 3;
 
 /// One action an external controller can ask a live browser session to take.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -39,6 +41,9 @@ pub enum BrowserControlAction {
     /// Click the center of a visible element through the backend input path.
     Click {
         target: BrowserTarget,
+        /// Number of consecutive clicks dispatched as one semantic action.
+        #[serde(default = "default_click_count")]
+        count: u32,
     },
     /// Focus, clear, and type into an editable element through backend input.
     Fill {
@@ -73,7 +78,10 @@ impl BrowserControlAction {
                 validate_selector(selector)?;
                 validate_query_limit(*max_results)
             }
-            Self::Click { target } => validate_target(target),
+            Self::Click { target, count } => {
+                validate_target(target)?;
+                validate_click_count(*count)
+            }
             Self::Fill { target, value } => {
                 validate_target(target)?;
                 validate_text(value)
@@ -214,10 +222,7 @@ fn validate_input(input: &BrowserInput) -> Result<(), &'static str> {
         } => {
             validate_point(*x, *y)?;
             validate_buttons(*buttons)?;
-            if !(1..=3).contains(click_count) {
-                return Err("click count must be between one and three");
-            }
-            Ok(())
+            validate_click_count(*click_count)
         }
         BrowserInput::Wheel {
             x, y, delta_x, delta_y, ..
@@ -247,6 +252,18 @@ fn validate_input(input: &BrowserInput) -> Result<(), &'static str> {
             validate_optional_text(text.as_deref())
         }
         BrowserInput::InsertText { text } => validate_text(text),
+    }
+}
+
+const fn default_click_count() -> u32 {
+    DEFAULT_CLICK_COUNT
+}
+
+fn validate_click_count(click_count: u32) -> Result<(), &'static str> {
+    if (DEFAULT_CLICK_COUNT..=MAX_CLICK_COUNT).contains(&click_count) {
+        Ok(())
+    } else {
+        Err("click count must be between one and three")
     }
 }
 
@@ -354,6 +371,46 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+        assert!(
+            BrowserControlAction::Click {
+                target: BrowserTarget::Selector {
+                    selector: "#row".to_string()
+                },
+                count: 2,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserControlAction::Click {
+                target: BrowserTarget::Selector {
+                    selector: "#row".to_string()
+                },
+                count: 0,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn click_deserialization_defaults_to_a_single_click() {
+        let Ok(decoded) = serde_json::from_value::<BrowserControlAction>(serde_json::json!({
+            "type": "click",
+            "target": { "type": "selector", "selector": "#save" }
+        })) else {
+            panic!("click action should deserialize");
+        };
+
+        assert_eq!(
+            decoded,
+            BrowserControlAction::Click {
+                target: BrowserTarget::Selector {
+                    selector: "#save".to_string()
+                },
+                count: DEFAULT_CLICK_COUNT,
+            }
         );
     }
 }

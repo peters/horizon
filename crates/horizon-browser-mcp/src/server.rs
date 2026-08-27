@@ -148,7 +148,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_act",
-        description = "Click, fill, scroll, reload, go back, or go forward. Prefer a fresh ref from browser_snapshot or browser_query over a selector."
+        description = "Click (including trusted double-click with count=2), fill, scroll, reload, go back, or go forward. Prefer a fresh ref from browser_snapshot or browser_query over a selector."
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
         let action = input.build_action()?;

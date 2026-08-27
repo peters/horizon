@@ -118,6 +118,8 @@ pub(crate) struct ActInput {
     pub(crate) delta_x: Option<f64>,
     /// Vertical CSS-pixel delta for `scroll` (default 0).
     pub(crate) delta_y: Option<f64>,
+    /// Consecutive trusted clicks for `click` (1-3, default 1).
+    pub(crate) count: Option<u32>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
 }
@@ -126,10 +128,20 @@ impl ActInput {
     pub(crate) fn build_action(&self) -> Result<horizon_browser::BrowserControlAction, String> {
         use horizon_browser::BrowserControlAction;
 
+        if !matches!(self.action, ActKind::Click) && self.count.is_some() {
+            return Err("count is only accepted for click".to_string());
+        }
         match self.action {
-            ActKind::Click => Ok(BrowserControlAction::Click {
-                target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
-            }),
+            ActKind::Click => {
+                let count = self.count.unwrap_or(horizon_browser::DEFAULT_CLICK_COUNT);
+                if !(horizon_browser::DEFAULT_CLICK_COUNT..=horizon_browser::MAX_CLICK_COUNT).contains(&count) {
+                    return Err("click count must be between one and three".to_string());
+                }
+                Ok(BrowserControlAction::Click {
+                    target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
+                    count,
+                })
+            }
             ActKind::Fill => Ok(BrowserControlAction::Fill {
                 target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
                 value: self.value.clone().ok_or_else(|| "fill requires value".to_string())?,
@@ -354,8 +366,9 @@ fn no_target_or_value(
         || input.value.is_some()
         || input.delta_x.is_some()
         || input.delta_y.is_some()
+        || input.count.is_some()
     {
-        Err("navigation-history actions do not accept target, value, or deltas".to_string())
+        Err("navigation-history actions do not accept target, value, deltas, or count".to_string())
     } else {
         Ok(action)
     }
@@ -374,6 +387,7 @@ mod tests {
             value: None,
             delta_x: None,
             delta_y: None,
+            count: None,
             timeout_millis: None,
         }
     }
@@ -386,7 +400,8 @@ mod tests {
         assert!(matches!(
             click.build_action(),
             Ok(horizon_browser::BrowserControlAction::Click {
-                target: BrowserTarget::Ref { .. }
+                target: BrowserTarget::Ref { .. },
+                count: horizon_browser::DEFAULT_CLICK_COUNT,
             })
         ));
         click.selector = Some("button".to_string());
@@ -408,5 +423,25 @@ mod tests {
         let mut reload = act(ActKind::Reload);
         reload.delta_y = Some(1.0);
         assert!(reload.build_action().is_err());
+    }
+
+    #[test]
+    fn click_count_is_bounded_and_click_only() {
+        let mut click = act(ActKind::Click);
+        click.selector = Some("#row".to_string());
+        click.count = Some(2);
+        assert!(matches!(
+            click.build_action(),
+            Ok(horizon_browser::BrowserControlAction::Click { count: 2, .. })
+        ));
+
+        click.count = Some(0);
+        assert!(click.build_action().is_err());
+        click.count = Some(4);
+        assert!(click.build_action().is_err());
+
+        let mut scroll = act(ActKind::Scroll);
+        scroll.count = Some(2);
+        assert!(scroll.build_action().is_err());
     }
 }

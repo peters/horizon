@@ -101,6 +101,8 @@ pub enum BrowserAuditAction {
     },
     Click {
         target: String,
+        #[serde(default = "default_click_count")]
+        count: u32,
     },
     Fill {
         target: String,
@@ -135,8 +137,9 @@ impl BrowserAuditAction {
                 selector_characters: selector.chars().count(),
                 max_results: *max_results,
             },
-            BrowserControlAction::Click { target } => Self::Click {
+            BrowserControlAction::Click { target, count } => Self::Click {
                 target: audit_target(target),
+                count: *count,
             },
             BrowserControlAction::Fill { target, value } => Self::Fill {
                 target: audit_target(target),
@@ -311,6 +314,10 @@ fn audit_target(target: &crate::BrowserTarget) -> String {
     }
 }
 
+const fn default_click_count() -> u32 {
+    crate::DEFAULT_CLICK_COUNT
+}
+
 fn redact_url(url: &str) -> String {
     let trimmed = url.trim();
     let scheme_end = trimmed.find(':');
@@ -411,5 +418,23 @@ mod tests {
         assert!(!json.contains("password"));
         assert!(!json.contains("correct horse"));
         assert!(!json.contains("document.cookie"));
+    }
+
+    #[test]
+    fn semantic_click_audit_records_the_click_count() {
+        let click = BrowserAuditAction::from_control(&BrowserControlAction::Click {
+            target: crate::BrowserTarget::Selector {
+                selector: "#private-row".to_string(),
+            },
+            count: 2,
+        });
+
+        assert_eq!(
+            click,
+            BrowserAuditAction::Click {
+                target: "selector:12".to_string(),
+                count: 2,
+            }
+        );
     }
 }

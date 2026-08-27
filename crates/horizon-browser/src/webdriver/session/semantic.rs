@@ -8,8 +8,8 @@ use crate::semantic::{
 };
 use crate::session::BrowserEventSender;
 use crate::{
-    AgentAction, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue, BrowserInput,
-    BrowserModifiers, BrowserSnapshot,
+    AgentAction, BackendKind, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue,
+    BrowserInput, BrowserModifiers, BrowserSnapshot,
 };
 
 use super::{Driver, webdriver_value};
@@ -27,7 +27,7 @@ impl Driver {
         match &request.action {
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
             BrowserControlAction::Query { selector, max_results } => self.semantic_query(selector, *max_results),
-            BrowserControlAction::Click { target } => self.semantic_click(target, event_tx),
+            BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
             BrowserControlAction::Scroll {
                 target,
@@ -74,16 +74,39 @@ impl Driver {
     fn semantic_click(
         &mut self,
         target: &crate::BrowserTarget,
+        count: u32,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
-        self.perform_input(pointer_press(x, y), event_tx)
-            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
-        self.perform_input(pointer_release(x, y), event_tx)
+        self.perform_click(x, y, count, event_tx)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         Ok(BrowserControlValue::Accepted)
+    }
+
+    fn perform_click(&mut self, x: f64, y: f64, count: u32, event_tx: &BrowserEventSender) -> Result<(), String> {
+        self.pending_classic_history_start = None;
+        if self.safari.is_some() {
+            return self.perform_safari_click(x, y, count, event_tx);
+        }
+        let mut payload = self
+            .actions
+            .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
+        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+            payload["context"] = json!(self.context_id);
+            self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
+        } else {
+            self.classic_post("actions", &payload).map(|_| ())
+        };
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+        }
+        if !self.retain_frame_during_navigation {
+            self.scroll_state_refresh_at = std::time::Instant::now();
+            self.frames.demand();
+        }
+        result
     }
 
     fn semantic_fill(
@@ -134,27 +157,5 @@ impl Driver {
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;
         bounded_control_value(value)
-    }
-}
-
-fn pointer_press(x: f64, y: f64) -> BrowserInput {
-    BrowserInput::MousePress {
-        x,
-        y,
-        button: BrowserButton::Left,
-        click_count: 1,
-        buttons: 1,
-        modifiers: BrowserModifiers::none(),
-    }
-}
-
-fn pointer_release(x: f64, y: f64) -> BrowserInput {
-    BrowserInput::MouseRelease {
-        x,
-        y,
-        button: BrowserButton::Left,
-        click_count: 1,
-        buttons: 0,
-        modifiers: BrowserModifiers::none(),
     }
 }
