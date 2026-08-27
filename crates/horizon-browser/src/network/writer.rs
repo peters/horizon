@@ -265,7 +265,9 @@ mod tests {
 
         let encoded = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("capture read failed: {error}"));
         assert!(encoded.contains("capture_started"));
-        assert!(path.starts_with(root.path()));
+        let canonical_root =
+            std::fs::canonicalize(root.path()).unwrap_or_else(|error| panic!("canonicalize tempdir failed: {error}"));
+        assert_eq!(path.parent(), Some(canonical_root.as_path()));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
