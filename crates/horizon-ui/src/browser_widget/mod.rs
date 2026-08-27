@@ -7,7 +7,8 @@
 
 const VIEWPORT_RETRY_INTERVAL_SECONDS: f64 = 0.25;
 const MAX_VIEWPORT_CONVERGENCE_RETRIES: u8 = 8;
-const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 0.5;
+// Keep fallback focus recovery beyond the WebDriver HTTP timeout.
+const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 12.0;
 
 mod chrome;
 mod ime;

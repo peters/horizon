@@ -12,7 +12,7 @@ use super::Driver;
 pub(super) const WINDOW_CHROME_SCRIPT: &str = "return { width: Math.max(0, window.outerWidth - window.innerWidth), height: Math.max(0, window.outerHeight - window.innerHeight) };";
 const WINDOW_FOCUS_SETTLE: Duration = Duration::from_millis(20);
 // Keep one native click-and-type burst ahead of Safari's temporary focus steal.
-const INPUT_SETTLE: Duration = Duration::from_millis(200);
+const INPUT_SETTLE: Duration = Duration::from_millis(500);
 
 pub(super) struct InputState {
     pub(super) window_handle: String,
@@ -126,20 +126,19 @@ impl InputState {
             let payload = self.actions.click_payload(*x, *y, *button, 2, *modifiers);
             return Some(InputDispatch::Foreground(vec![payload]));
         }
-        let payloads = pending
-            .into_iter()
-            .filter_map(|input| match input {
-                BrowserInput::KeyDown { text: Some(text), .. } => {
-                    let mut payload = self.actions.payload(BrowserInput::InsertText { text });
-                    if let Some(events) = payload["actions"][0]["actions"].as_array_mut() {
-                        events.push(json!({ "type": "keyUp", "value": "\u{e008}" }));
-                    }
-                    Some(payload)
+        let mut payloads = Vec::new();
+        let mut text = String::new();
+        for input in pending {
+            match input {
+                BrowserInput::KeyDown { text: Some(value), .. } => text.push_str(&value),
+                BrowserInput::KeyUp { text: Some(_), .. } => {}
+                input => {
+                    flush_text_payload(&mut self.actions, &mut payloads, &mut text);
+                    payloads.push(self.actions.payload(input));
                 }
-                BrowserInput::KeyUp { text: Some(_), .. } => None,
-                input => Some(self.actions.payload(input)),
-            })
-            .collect::<Vec<_>>();
+            }
+        }
+        flush_text_payload(&mut self.actions, &mut payloads, &mut text);
         Some(InputDispatch::Foreground(payloads))
     }
 
@@ -153,6 +152,19 @@ impl InputState {
             ready_at: None,
         };
     }
+}
+
+fn flush_text_payload(actions: &mut ActionState, payloads: &mut Vec<Value>, text: &mut String) {
+    if text.is_empty() {
+        return;
+    }
+    let mut payload = actions.payload(BrowserInput::InsertText {
+        text: std::mem::take(text),
+    });
+    if let Some(events) = payload["actions"][0]["actions"].as_array_mut() {
+        events.push(json!({ "type": "keyUp", "value": "\u{e008}" }));
+    }
+    payloads.push(payload);
 }
 
 impl Driver {
@@ -300,26 +312,29 @@ mod tests {
             }),
             InputDispatch::Pending
         ));
-        assert!(matches!(
-            state.dispatch(BrowserInput::KeyDown {
-                physical_key: Some(BrowserKey::Char('a')),
-                key: BrowserKey::Char('a'),
-                text: Some("a".to_string()),
-                modifiers,
-                repeat: false,
-                edit_command: None,
-            }),
-            InputDispatch::Pending
-        ));
-        assert!(matches!(
-            state.dispatch(BrowserInput::KeyUp {
-                physical_key: Some(BrowserKey::Char('a')),
-                key: BrowserKey::Char('a'),
-                text: Some("a".to_string()),
-                modifiers,
-            }),
-            InputDispatch::Pending
-        ));
+        for character in ['a', 'b'] {
+            let text = character.to_string();
+            assert!(matches!(
+                state.dispatch(BrowserInput::KeyDown {
+                    physical_key: Some(BrowserKey::Char(character)),
+                    key: BrowserKey::Char(character),
+                    text: Some(text.clone()),
+                    modifiers,
+                    repeat: false,
+                    edit_command: None,
+                }),
+                InputDispatch::Pending
+            ));
+            assert!(matches!(
+                state.dispatch(BrowserInput::KeyUp {
+                    physical_key: Some(BrowserKey::Char(character)),
+                    key: BrowserKey::Char(character),
+                    text: Some(text),
+                    modifiers,
+                }),
+                InputDispatch::Pending
+            ));
+        }
         assert!(state.take_ready(std::time::Instant::now()).is_none());
         let dispatch = state
             .take_ready(std::time::Instant::now() + std::time::Duration::from_secs(1))
@@ -328,7 +343,7 @@ mod tests {
             panic!("released gesture should dispatch foreground input");
         };
         assert_eq!(payloads.len(), 4);
-        assert_eq!(payloads[3]["actions"][0]["actions"][2]["value"], "\u{e008}");
+        assert_eq!(payloads[3]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
     }
 
     #[test]
