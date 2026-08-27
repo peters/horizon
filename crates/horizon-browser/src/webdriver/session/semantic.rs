@@ -21,8 +21,15 @@ impl Driver {
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         if let Some(command) = request.action.to_command() {
-            let _ = self.handle_command(command, event_tx, false);
-            return Ok(BrowserControlValue::Accepted);
+            let failure_code = if matches!(command, crate::session::BrowserCommand::Input(_)) {
+                "input_failed"
+            } else {
+                "navigation_failed"
+            };
+            return self
+                .run_command(command, event_tx, false)
+                .map(|_| BrowserControlValue::Accepted)
+                .map_err(|error| BrowserControlFailure::new(failure_code, error));
         }
         match &request.action {
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
@@ -42,7 +49,10 @@ impl Driver {
             | BrowserControlAction::Reload
             | BrowserControlAction::Back
             | BrowserControlAction::Forward
-            | BrowserControlAction::Input { .. } => Ok(BrowserControlValue::Accepted),
+            | BrowserControlAction::Input { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "command action was not dispatched",
+            )),
         }
     }
 

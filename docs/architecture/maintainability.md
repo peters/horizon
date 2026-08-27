@@ -18,8 +18,9 @@ back into large multi-purpose modules.
   transitions, host coordination, lifecycle, startup, and shutdown belong in
   focused `session/` leaves.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
-  belongs in `webdriver/session/coordination.rs`; HTTP, action translation, and
-  service/process responsibilities stay in their existing WebDriver leaves.
+  belongs in `webdriver/session/coordination.rs`, synchronous navigation
+  outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,
+  and service/process responsibilities stay in their existing WebDriver leaves.
 
 ### `horizon-core`
 

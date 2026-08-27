@@ -29,7 +29,10 @@ impl DriverState {
         let batch = command_rx.drain(256);
         for command in batch.commands {
             self.audit_user_command(&command);
-            if self.dispatch_command(link, event_tx, frame_slot, command, true) {
+            if self
+                .dispatch_command(link, event_tx, frame_slot, command, true)
+                .is_ok_and(|stop| stop)
+            {
                 return true;
             }
         }
@@ -68,7 +71,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         command: BrowserCommand,
         user_origin: bool,
-    ) -> bool {
+    ) -> Result<bool, BrowserControlFailure> {
         if user_origin && command.is_user_activity() {
             self.stamp_user_active();
         }
@@ -87,31 +90,42 @@ impl DriverState {
             self.vertical_scrollbar_drag = None;
         }
         match command {
-            BrowserCommand::Stop => return true,
+            BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
                 self.invalidate_scrollbar_layout();
-                self.navigate_to(link, event_tx, frame_slot, &url);
+                self.navigate_to(link, event_tx, frame_slot, &url)?;
+                Ok(false)
             }
             BrowserCommand::Reload => {
                 self.invalidate_scrollbar_layout();
-                self.pending_restart_at = Some(Instant::now());
-                let _ = self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({}));
+                match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
+                    Ok(_) => {
+                        self.pending_restart_at = Some(Instant::now());
+                        Ok(false)
+                    }
+                    Err(error) => {
+                        Err(self.page_command_failure(event_tx, "reload", "protocol_error", error.to_string()))
+                    }
+                }
             }
             BrowserCommand::Back => {
                 self.invalidate_scrollbar_layout();
-                self.navigate_history(link, event_tx, frame_slot, -1);
+                self.navigate_history(link, event_tx, frame_slot, -1)?;
+                Ok(false)
             }
             BrowserCommand::Forward => {
                 self.invalidate_scrollbar_layout();
-                self.navigate_history(link, event_tx, frame_slot, 1);
+                self.navigate_history(link, event_tx, frame_slot, 1)?;
+                Ok(false)
             }
             BrowserCommand::SetViewport { width, height } => {
                 self.vertical_scrollbar_drag = None;
                 self.set_viewport(link, event_tx, frame_slot, width, height);
+                Ok(false)
             }
             BrowserCommand::Input(input) => {
                 if self.handle_vertical_scrollbar_input(link, &input) {
-                    return false;
+                    return Ok(false);
                 }
                 // Input cannot block on a roundtrip: a detaching session
                 // would otherwise stall every frame for the call timeout.
@@ -120,16 +134,36 @@ impl DriverState {
                 }
                 let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
                 let (method, params) = input.cdp();
-                if let Some(session) = self.session_id.clone() {
-                    let _ = link.send_request(method, &params, Some(session.as_str()));
-                }
+                let session = self.session_id.clone().ok_or_else(|| {
+                    BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
+                })?;
+                link.send_request(method, &params, Some(session.as_str()))
+                    .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
                 if refresh_scrollbar_layout {
                     self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
                 }
+                Ok(false)
             }
-            BrowserCommand::HandoffDone => self.resolve_handoff(event_tx),
+            BrowserCommand::HandoffDone => {
+                self.resolve_handoff(event_tx);
+                Ok(false)
+            }
         }
-        false
+    }
+
+    fn page_command_failure(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        action: &str,
+        code: &str,
+        message: String,
+    ) -> BrowserControlFailure {
+        self.interaction_started_at = None;
+        let _ = event_tx.send(super::BrowserEvent::NavigationFailed(format!(
+            "{action} failed: {message}"
+        )));
+        let _ = event_tx.send(super::BrowserEvent::Loading(false));
+        BrowserControlFailure::new(code, message)
     }
 
     fn handle_vertical_scrollbar_input(&mut self, link: &mut CdpLink, input: &BrowserInput) -> bool {
@@ -423,32 +457,55 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         delta: i64,
-    ) {
+    ) -> Result<(), BrowserControlFailure> {
         let Some(session) = self.session_id.clone() else {
-            return;
+            return Err(self.page_command_failure(
+                event_tx,
+                "history traversal",
+                "browser_unavailable",
+                "the Chromium page session is not attached".to_string(),
+            ));
         };
-        let Ok(history) = self.call_and_ack(
+        let history = match self.call_and_ack(
             link,
             event_tx,
             frame_slot,
             "Page.getNavigationHistory",
             &serde_json::json!({}),
             Some(session.as_str()),
-        ) else {
-            return;
+        ) {
+            Ok(history) => history,
+            Err(error) => {
+                return Err(self.page_command_failure(
+                    event_tx,
+                    "history traversal",
+                    "protocol_error",
+                    error.to_string(),
+                ));
+            }
         };
         let Some(current) = history.get("currentIndex").and_then(serde_json::Value::as_i64) else {
-            return;
+            return Err(self.page_command_failure(
+                event_tx,
+                "history traversal",
+                "invalid_result",
+                "CDP returned no current history index".to_string(),
+            ));
         };
         let Some(entries) = history.get("entries").and_then(serde_json::Value::as_array) else {
-            return;
+            return Err(self.page_command_failure(
+                event_tx,
+                "history traversal",
+                "invalid_result",
+                "CDP returned no history entries".to_string(),
+            ));
         };
         let Some(last) = i64::try_from(entries.len()).ok().and_then(|len| len.checked_sub(1)) else {
-            return;
+            return Ok(());
         };
         let target = (current + delta).clamp(0, last);
         if target == current {
-            return;
+            return Ok(());
         }
         let entry_index = usize::try_from(target).unwrap_or(0);
         // Chrome returns `id`; the request calls the same value `entryId`.
@@ -458,16 +515,28 @@ impl DriverState {
             .or_else(|| entry_value.get("id"))
             .and_then(serde_json::Value::as_i64)
         else {
-            return;
+            return Err(self.page_command_failure(
+                event_tx,
+                "history traversal",
+                "invalid_result",
+                "CDP returned a history entry without an identifier".to_string(),
+            ));
         };
-        self.pending_restart_at = Some(Instant::now());
-        let _ = self.send_page_command(
+        match self.send_page_command(
             link,
             event_tx,
             frame_slot,
             "Page.navigateToHistoryEntry",
             &serde_json::json!({ "entryId": entry_id }),
-        );
+        ) {
+            Ok(_) => {
+                self.pending_restart_at = Some(Instant::now());
+                Ok(())
+            }
+            Err(error) => {
+                Err(self.page_command_failure(event_tx, "history traversal", "protocol_error", error.to_string()))
+            }
+        }
     }
 }
 

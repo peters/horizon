@@ -87,6 +87,8 @@ The reusable runner:
 - checks discovery, schemas, navigation, snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
+- proves an immediate backend navigation rejection returns a typed MCP failure,
+  retains the last valid page, and is audited as failed rather than completed;
 - starts a filtered capture before navigation to the high-rate WebSocket
   fixture, verifies HTTP plus sent/received/open/close records and a zero-drop
   4,096-frame tail, then stops and parses only the path returned by MCP;

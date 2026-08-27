@@ -599,6 +599,20 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if final_snapshot["title"] != "Horizon Browser Smoke - Navigation Complete":
         raise AssertionError(final_snapshot)
 
+    _, navigation_error = client.call(
+        "browser_navigate",
+        {"panel_id": panel_id, "url": "http://[::1"},
+        expect_error=True,
+    )
+    if navigation_error is None or not any(
+        code in navigation_error for code in ("navigation_failed", "protocol_error")
+    ):
+        raise AssertionError(f"immediate navigation failure was not typed: {navigation_error}")
+    failed_ids.append(failed_action_id(navigation_error))
+    retained_snapshot = record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
+    if retained_snapshot["title"] != final_snapshot["title"]:
+        raise AssertionError(retained_snapshot)
+
     if network_capture["supported"]:
         active_close = record_action(
             client,

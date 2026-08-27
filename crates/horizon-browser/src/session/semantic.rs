@@ -25,8 +25,10 @@ impl DriverState {
         request: &AgentAction,
     ) -> (Result<BrowserControlValue, BrowserControlFailure>, bool) {
         if let Some(command) = request.action.to_command() {
-            let stop = self.dispatch_command(link, event_tx, frame_slot, command, false);
-            return (Ok(BrowserControlValue::Accepted), stop);
+            return match self.dispatch_command(link, event_tx, frame_slot, command, false) {
+                Ok(stop) => (Ok(BrowserControlValue::Accepted), stop),
+                Err(error) => (Err(error), false),
+            };
         }
         let result = match &request.action {
             BrowserControlAction::Snapshot { max_nodes } => {

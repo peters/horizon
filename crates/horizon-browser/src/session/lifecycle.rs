@@ -129,7 +129,7 @@ impl DriverState {
         if let Some(initial) = initial_url
             && initial != "about:blank"
         {
-            self.navigate_to(link, event_tx, frame_slot, &initial);
+            let _ = self.navigate_to(link, event_tx, frame_slot, &initial);
         }
     }
 

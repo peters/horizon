@@ -54,7 +54,7 @@ use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
 use crate::{ActiveBackendCapabilities, BackendKind};
-use crate::{BrowserConfig, BrowserInput};
+use crate::{BrowserConfig, BrowserControlFailure, BrowserInput};
 
 /// What the driver reports to the panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -635,7 +635,7 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         url: &str,
-    ) {
+    ) -> Result<(), BrowserControlFailure> {
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
         let result = self.send_page_command(
@@ -656,13 +656,14 @@ impl DriverState {
                         "could not navigate to {url}: {error}"
                     )));
                     let _ = event_tx.send(BrowserEvent::Loading(false));
-                    return;
+                    return Err(BrowserControlFailure::new("navigation_failed", error));
                 }
                 // The committed URL remains authoritative and arrives via a
                 // navigation event. Do not overwrite it with a merely
                 // requested value.
                 self.pending_restart_at = Some(Instant::now());
                 let _ = event_tx.send(BrowserEvent::Loading(true));
+                Ok(())
             }
             Err(error) => {
                 self.navigation_failed = true;
@@ -671,6 +672,7 @@ impl DriverState {
                     "could not navigate to {url}: {error}"
                 )));
                 let _ = event_tx.send(BrowserEvent::Loading(false));
+                Err(BrowserControlFailure::new("protocol_error", error.to_string()))
             }
         }
     }
