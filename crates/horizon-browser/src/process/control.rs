@@ -307,7 +307,7 @@ mod tests {
         let pid_file = root.path().join("descendant.pid");
         let args = vec![
             "-c".to_string(),
-            "trap '' HUP; sleep 30 & echo $! > \"$1\"".to_string(),
+            "trap '' HUP; sleep 30 & printf '%s\\n' \"$!\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"".to_string(),
             "horizon-service-process-test".to_string(),
             pid_file.display().to_string(),
         ];
