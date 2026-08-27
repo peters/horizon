@@ -360,6 +360,7 @@ impl DriverState {
             .filter(|url| !url.is_empty())
         {
             self.retain_frame_during_navigation = true;
+            self.navigation_failed = true;
             self.interaction_started_at = None;
             self.title_fetch_at = None;
             let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
@@ -369,6 +370,7 @@ impl DriverState {
             return;
         }
         self.retain_frame_during_navigation = false;
+        self.navigation_failed = false;
         if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
             && normalized_committed_url(target_url) != self.url
         {
@@ -408,6 +410,7 @@ impl DriverState {
             return;
         }
         self.retain_frame_during_navigation = false;
+        self.navigation_failed = false;
         self.invalidate_scrollbar_layout();
         let url = normalized_committed_url(target_url);
         if url == self.url {
@@ -684,6 +687,7 @@ mod tests {
         assert_eq!(state.url, "https://example.test/good");
         assert_eq!(state.title, "Good page");
         assert!(state.retain_frame_during_navigation);
+        assert!(state.navigation_failed);
         assert!(matches!(rx.recv(), Ok(BrowserEvent::NavigationFailed(_))));
         assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(false)));
 
@@ -717,6 +721,7 @@ mod tests {
             true,
         );
         assert!(!state.retain_frame_during_navigation);
+        assert!(!state.navigation_failed);
         assert_eq!(state.url, "https://example.test/good#fragment");
     }
 

@@ -447,6 +447,7 @@ struct DriverState {
     /// Keep the last good pixels while an explicit navigation has not yet
     /// committed a reachable top-level document.
     retain_frame_during_navigation: bool,
+    navigation_failed: bool,
     clipboard: ClipboardState,
     url: String,
     title: String,
@@ -507,6 +508,7 @@ impl DriverState {
             scrollbar_layout: ScrollbarLayoutCache::new(),
             interaction_started_at: None,
             retain_frame_during_navigation: false,
+            navigation_failed: false,
             clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
@@ -575,6 +577,9 @@ impl DriverState {
                 self.handle_message(link, event_tx, frame_slot, message);
             }
         }
+        if self.navigation_failed {
+            return;
+        }
         let Some(target_id) = self.target_id.clone() else {
             return;
         };
@@ -628,6 +633,7 @@ impl DriverState {
         url: &str,
     ) {
         self.retain_frame_during_navigation = true;
+        self.navigation_failed = false;
         let result = self.send_page_command(
             link,
             event_tx,
@@ -640,6 +646,7 @@ impl DriverState {
                 if let Some(error) = result.get("errorText").and_then(serde_json::Value::as_str)
                     && !error.is_empty()
                 {
+                    self.navigation_failed = true;
                     self.interaction_started_at = None;
                     let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
                         "could not navigate to {url}: {error}"
@@ -654,6 +661,7 @@ impl DriverState {
                 let _ = event_tx.send(BrowserEvent::Loading(true));
             }
             Err(error) => {
+                self.navigation_failed = true;
                 self.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
                     "could not navigate to {url}: {error}"
