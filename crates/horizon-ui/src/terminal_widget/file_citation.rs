@@ -65,10 +65,7 @@ pub(super) fn file_citation_shapes(
         let char_count = text[byte_range.clone()].chars().count();
         let char_range = start_char..start_char + char_count;
         let selected = selection.is_some_and(|selection| {
-            char_cells[char_range.clone()]
-                .iter()
-                .flatten()
-                .any(|&index| selection.contains(cells[index].point))
+            citation_cell_indices(char_range.clone(), &char_cells).any(|index| selection.contains(cells[index].point))
         });
         let segments = (!selected)
             .then(|| citation_segments(char_range.clone(), &char_cells, cells, display_offset, rect, metrics));
@@ -77,8 +74,8 @@ pub(super) fn file_citation_shapes(
             .and_then(|items| items.iter().max_by(|a, b| a.width().total_cmp(&b.width())))
             && append_chip(fonts, &mut shapes, *placement, &citation.display_label, metrics)
         {
-            for cell_index in char_cells[char_range].iter().flatten() {
-                hidden_cells[*cell_index] = true;
+            for cell_index in citation_cell_indices(char_range, &char_cells) {
+                hidden_cells[cell_index] = true;
             }
         }
         search_start = byte_range.end;
@@ -118,7 +115,7 @@ fn citation_segments(
 ) -> Vec<Rect> {
     let mut segments: Vec<Rect> = Vec::new();
     let mut previous_point = None;
-    for cell_index in char_cells.get(chars).into_iter().flatten().flatten().copied() {
+    for cell_index in citation_cell_indices(chars, char_cells) {
         let Some(indexed) = cells.get(cell_index) else {
             continue;
         };
@@ -142,6 +139,10 @@ fn citation_segments(
         previous_point = Some((point.line, point.column.0));
     }
     segments
+}
+
+fn citation_cell_indices(chars: Range<usize>, char_cells: &[Option<usize>]) -> impl Iterator<Item = usize> + '_ {
+    char_cells.get(chars).into_iter().flatten().flatten().copied()
 }
 
 fn append_chip(
@@ -214,13 +215,54 @@ fn fitted_label(label: &str, available_chars: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::chip_text_layout;
+    use alacritty_terminal::grid::Indexed;
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::selection::SelectionRange;
+    use alacritty_terminal::term::cell::{Cell, Flags};
+    use horizon_core::next_terminal_file_citation;
 
+    use super::{chip_text_layout, citation_cell_indices, visible_text};
     #[test]
     fn chip_layout_reduces_padding_for_two_columns_and_rejects_one() {
         let (padding, available_chars) = chip_text_layout(16.0, 8.0).expect("two-column chip");
         assert!(padding < 5.0);
         assert_eq!(available_chars, 1);
         assert!(chip_text_layout(8.0, 8.0).is_none());
+    }
+    #[test]
+    fn wrapped_citation_mapping_covers_hidden_and_selected_cells() {
+        let token = r#":codex-file-citation{path="/tmp/report.pdf" purpose="source"}"#;
+        let split = 40;
+        let mut raw: Vec<_> = token.chars().map(|c| Cell { c, ..Cell::default() }).collect();
+        raw[split - 1].flags.insert(Flags::WRAPLINE);
+        let cells: Vec<_> = raw
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| Indexed {
+                point: Point::new(Line(i32::from(index >= split)), Column(index % split)),
+                cell,
+            })
+            .collect();
+        let (text, map) = visible_text(&cells);
+        let (bytes, _) = next_terminal_file_citation(&text, 0).expect("citation");
+        let chars = text[..bytes.start].chars().count()..text[..bytes.end].chars().count();
+        let mapped: Vec<_> = citation_cell_indices(chars, &map).collect();
+        let mut hidden = vec![false; raw.len()];
+        for &index in &mapped {
+            hidden[index] = true;
+        }
+        let selection = SelectionRange::new(cells[split].point, cells[split].point, false);
+        assert_eq!(text, token);
+        assert_eq!(mapped.len(), raw.len());
+        assert_eq!(hidden, vec![true; raw.len()]);
+        assert!(mapped.iter().any(|&index| selection.contains(cells[index].point)));
+    }
+    #[test]
+    fn malformed_and_unicode_tokens_have_no_display_match() {
+        let cases = [
+            r#":codex-file-citation{path="/tmp/a"purpose="source"}"#,
+            r#":codex-file-citation{path="/tmp/résumé.pdf" purpose="source"}"#,
+        ];
+        assert!(cases.iter().all(|text| next_terminal_file_citation(text, 0).is_none()));
     }
 }

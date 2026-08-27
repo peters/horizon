@@ -45,7 +45,7 @@ printf 'Wrapped pair: :codex-file-citation{path="/tmp/very-long-folder/Baxi.Agen
 printf 'Malformed then valid: :codex-file-citation{broken :codex-file-citation{path="/tmp/recovered.pdf" purpose="source"}\r\n'
 printf 'Unsupported: :codex-file-citation{path="/tmp/preview.pdf" purpose="preview"}\r\n'
 printf 'Unicode literal: :codex-file-citation{path="/tmp/résumé.pdf" purpose="source"}\r\n'
-printf 'Decomposed literal: :codex-file-citation{path="/tmp/resume\u0301.pdf" purpose="source"}\r\n'
+printf 'Decomposed literal: :codex-file-citation{path="/tmp/resume\314\201.pdf" purpose="source"}\r\n'
 printf 'Exact spaces: :codex-file-citation{path=" /tmp/report.pdf " purpose="output"}\r\n'
 exec /bin/bash --noprofile --norc
 ```

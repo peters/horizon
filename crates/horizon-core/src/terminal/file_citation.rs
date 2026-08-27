@@ -86,6 +86,13 @@ fn parse_attributes(body: &str) -> Option<(Option<String>, Option<String>)> {
         rest = rest[key_end..].trim_start();
         rest = rest.strip_prefix('=')?.trim_start();
         let (value, remainder) = parse_quoted_value(rest)?;
+        if remainder
+            .chars()
+            .next()
+            .is_some_and(|character| !character.is_whitespace())
+        {
+            return None;
+        }
         rest = remainder;
         match key {
             "path" => path = Some(value),
@@ -121,18 +128,15 @@ fn parse_quoted_value(input: &str) -> Option<(String, &str)> {
 #[cfg(test)]
 mod tests {
     use super::{next_terminal_file_citation, parse_terminal_file_citation};
-
     #[test]
     fn parses_source_citation_and_uses_the_file_name() {
         let citation = parse_terminal_file_citation(
             r#":codex-file-citation{path="/tmp/guides/Linux install.pdf" purpose="source"}"#,
         )
         .expect("citation");
-
         assert_eq!(citation.path, "/tmp/guides/Linux install.pdf");
         assert_eq!(citation.display_label, "Source · Linux install.pdf");
     }
-
     #[test]
     fn finds_one_of_multiple_citations() {
         let text = concat!(
@@ -142,11 +146,9 @@ mod tests {
         let (_, first) = next_terminal_file_citation(text, 0).expect("first citation");
         let second_start = text.find("second").expect("second marker");
         let (_, second) = next_terminal_file_citation(text, second_start).expect("second citation");
-
         assert_eq!(first.path, "/tmp/a.pdf");
         assert_eq!(second.path, "/tmp/b.pdf");
     }
-
     #[test]
     fn preserves_exact_ascii_paths_and_rejects_unicode_paths() {
         let exact = r#":codex-file-citation{path=" /tmp/report.pdf " purpose="output"}"#;
@@ -155,14 +157,14 @@ mod tests {
             "\u{301}",
             r#".pdf" purpose="source"}"#,
         );
-
+        let concatenated = r#":codex-file-citation{path="/tmp/a"purpose="source"}"#;
         assert_eq!(
             parse_terminal_file_citation(exact).map(|citation| citation.path),
             Some(" /tmp/report.pdf ".into())
         );
         assert_eq!(parse_terminal_file_citation(unicode), None);
+        assert_eq!(parse_terminal_file_citation(concatenated), None);
     }
-
     #[test]
     fn recovers_a_valid_citation_after_a_malformed_candidate() {
         let text = concat!(
@@ -170,7 +172,6 @@ mod tests {
             ":codex-file-citation{path=\"/tmp/report.pdf\" purpose=\"output\"}",
         );
         let (_, citation) = next_terminal_file_citation(text, 0).expect("valid citation");
-
         assert_eq!(citation.path, "/tmp/report.pdf");
     }
 }
