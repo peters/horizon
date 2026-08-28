@@ -1,23 +1,19 @@
-//! Private, bounded host requests for creating visible browser panels.
+//! Private, bounded host requests for creating browser panels.
 
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::{
     BackendKind, BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserControlAction, new_action_id,
     normalize_navigation_target,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 use super::ManifestLock;
+use super::request_queue::{
+    MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json,
+};
 use crate::horizon_home::{HorizonHome, safe_local_id};
-
-const MAX_PENDING_REQUESTS: usize = 32;
-const CREATE_RETENTION: Duration = Duration::from_mins(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserCreateAuditStatus {
@@ -35,6 +31,8 @@ pub struct BrowserCreateRequest {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
+    #[serde(default = "default_visible")]
+    pub visible: bool,
     pub requested_at_millis: i64,
     pub deadline_at_millis: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,9 +85,10 @@ pub fn enqueue_create(
     actor: &str,
     url: Option<String>,
     backend: Option<BackendKind>,
+    visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
-    enqueue_at(HorizonHome::resolve().root(), actor, url, backend, timeout)
+    enqueue_at(HorizonHome::resolve().root(), actor, url, backend, visible, timeout)
 }
 
 fn enqueue_at(
@@ -97,6 +96,7 @@ fn enqueue_at(
     actor: &str,
     url: Option<String>,
     backend: Option<BackendKind>,
+    visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
     super::agent::validate_actor(actor)?;
@@ -134,6 +134,7 @@ fn enqueue_at(
         actor: actor.to_string(),
         url,
         backend,
+        visible,
         requested_at_millis,
         deadline_at_millis: requested_at_millis.saturating_add(timeout_millis),
         claimed_by_pid: None,
@@ -315,7 +316,7 @@ pub fn record_create_status(
                 BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
                 BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
             },
-            BrowserAuditAction::session_created(backend, request.url.as_deref()),
+            BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
         ),
         panel_local_id,
     )
@@ -323,10 +324,6 @@ pub fn record_create_status(
 
 fn create_directory(root: &Path) -> PathBuf {
     root.join("runtime").join("browser-create")
-}
-
-fn queue_lock_path(directory: &Path) -> PathBuf {
-    directory.join("queue.json")
 }
 
 fn request_path(root: &Path, request_id: &str) -> PathBuf {
@@ -337,61 +334,8 @@ fn result_path(root: &Path, request_id: &str) -> PathBuf {
     create_directory(root).join(format!("{}.result.json", safe_local_id(request_id)))
 }
 
-fn request_count(directory: &Path) -> std::io::Result<usize> {
-    Ok(std::fs::read_dir(directory)?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".request.json"))
-        .count())
-}
-
-fn prune_at(directory: &Path) -> std::io::Result<()> {
-    let stale_before = SystemTime::now()
-        .checked_sub(CREATE_RETENTION)
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        let path = entry.path();
-        let is_create_file = entry.file_name().to_string_lossy().ends_with(".request.json")
-            || entry.file_name().to_string_lossy().ends_with(".result.json");
-        let is_stale = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified < stale_before);
-        if !is_create_file || !is_stale {
-            continue;
-        }
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-fn write_private_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let encoded = serde_json::to_vec(value).map_err(std::io::Error::other)?;
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| std::io::Write::write_all(file, &encoded), options)
-        .map_err(std::io::Error::from)
-}
-
-fn read_json<T: DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {
-    let encoded = match std::fs::read(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    serde_json::from_slice(&encoded)
-        .map(Some)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+const fn default_visible() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -411,12 +355,14 @@ mod tests {
             actor,
             Some("example.test/path".to_string()),
             Some(BackendKind::FirefoxBidi),
+            false,
             Duration::from_secs(30),
         )
         .expect("enqueue create");
         let requests = list_at(root.path()).expect("list create requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].url.as_deref(), Some("https://example.test/path"));
+        assert!(!requests[0].visible);
 
         let claimed = claim_at(root.path(), &request_id, actor, 42)
             .expect("claim create")
@@ -447,7 +393,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let another = enqueue_at(root.path(), actor, None, None, Duration::from_secs(30)).expect("second request");
+            let another =
+                enqueue_at(root.path(), actor, None, None, true, Duration::from_secs(30)).expect("second request");
             assert_eq!(
                 std::fs::metadata(request_path(root.path(), &another))
                     .expect("request metadata")
@@ -463,7 +410,7 @@ mod tests {
     fn create_request_requires_a_horizon_actor_and_exact_result_identity() {
         let root = root();
         assert_eq!(
-            enqueue_at(root.path(), "external", None, None, Duration::from_secs(30))
+            enqueue_at(root.path(), "external", None, None, true, Duration::from_secs(30))
                 .expect_err("external actor must fail")
                 .kind(),
             std::io::ErrorKind::PermissionDenied
@@ -475,6 +422,7 @@ mod tests {
             actor,
             Some("http://127.0.0.1:3000".to_string()),
             None,
+            true,
             Duration::from_secs(30),
         )
         .expect("enqueue create");
@@ -512,6 +460,7 @@ mod tests {
                     &format!("horizon:agent-{index}"),
                     None,
                     None,
+                    true,
                     Duration::from_secs(30),
                 )
             }));

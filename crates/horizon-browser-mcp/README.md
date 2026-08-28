@@ -11,6 +11,7 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
+env_vars = ["HORIZON_BROWSER_ACTOR"]
 default_tools_approval_mode = "approve"
 ```
 
@@ -23,9 +24,12 @@ shell commands, files, or other MCP servers.
 ## Tool contract
 
 - `browser_list` and `browser_panel` discover safe live-panel state.
-- `browser_create` opens a normal visible panel in the calling agent's Horizon
-  workspace and returns only after it is ready and owned by that agent. It uses
-  the configured backend unless explicitly overridden.
+- `browser_create` opens a panel in the calling agent's Horizon workspace and
+  returns only after it is ready and owned by that agent. It uses the configured
+  backend unless explicitly overridden. Set `visible: false` to start a live
+  background panel.
+- `browser_visibility` shows or hides an existing panel without stopping its
+  browser, ownership lease, network capture, or MCP control.
 - `browser_navigate` changes the top-level page.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs.
@@ -40,13 +44,20 @@ shell commands, files, or other MCP servers.
   `include_http_bodies: true` together with `include_http: true` to add native,
   size-bounded `http_response_body` records. While active, agents may use
   ordinary read-only tools such as `tail -f`, `jq`, or `rg` on that exact path.
+- `browser_network_watch` long-polls that Horizon-owned capture for a bounded,
+  filtered batch. Reuse its `capture_id` and `next_sequence` to avoid duplicate
+  delivery. It accepts no file path, excludes payloads by default, reports
+  sequence gaps and capture health explicitly, and wakes on a matching record,
+  capture stop, capture replacement, or timeout.
 - `browser_handoff` pauses automation so the user can steer.
 - `browser_audit` returns redacted ordered action records.
 
 The server automatically claims and heartbeats a panel using
-`HORIZON_BROWSER_ACTOR`. Creation requests are accepted only from an identity
-injected into a live Horizon agent panel and are routed to that panel's
-workspace. Panel creation and later actions share the redacted audit identity.
+`HORIZON_BROWSER_ACTOR`. Horizon injects that identity into the agent process
+and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
+visibility requests are accepted only from an identity belonging to a live
+Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
+and later actions share the redacted audit identity.
 Tool schemas and results never expose raw CDP, BiDi, WebDriver, manifest,
 audit-file, or result-file locations. Horizon's locked manifest queue remains
 private implementation plumbing, not a second API.

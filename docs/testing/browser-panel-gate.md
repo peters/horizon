@@ -23,7 +23,7 @@ cumulative.
 | Change | Required smoke lanes |
 | --- | --- |
 | Documentation or fixture text only | Fixture self-check; validate every command or selector changed |
-| `crates/horizon-browser-mcp/**`, agent registration, bundled skills, coordination manifests, audit | MCP contract on one available backend; discovery; audit/redaction; handoff/hand-back |
+| `crates/horizon-browser-mcp/**`, agent registration, bundled skills, coordination manifests, audit | MCP contract on one available backend; real bundled-agent discovery and actor forwarding; audit/redaction; handoff/hand-back |
 | Semantic snapshot/query/ref or action model | MCP contract on Chromium and Firefox; Safari on macOS if shared WebDriver code changed |
 | Click, pointer, keyboard, IME, wheel, scrollbar, focus, or viewport input | Physical input + MCP input on every affected backend; no-manual-resize regression; resize/fit |
 | `cdp.rs`, `websocket.rs`, Chromium process/frames/input | Chromium protocol, visual, navigation, input, failure, cleanup; performance if frame delivery changed |
@@ -31,12 +31,12 @@ cumulative.
 | Firefox BiDi/preload/disclosure | Firefox protocol, disclosure, input, first-frame/no-resize, failure, cleanup on Linux and macOS |
 | Safari/classic WebDriver/optional BiDi | Full macOS Safari lane, including capability fallback and single-session arbitration |
 | `frames.rs`, adaptive capture, JPEG/decode, wakeups, texture/render code | Visual/layout on all affected backends; static decay, animation, latency, rapid resize, 1/3/5-panel scale |
-| Browser widget chrome, canvas, detach, focus, panel layout | Visual/layout, physical input, detach motion trace, persistence on the host OS |
+| Browser widget chrome, canvas, detach, focus, panel layout, visibility | Visible/hidden creation and toggle; hidden-session persistence; visual/layout, physical input, detach motion trace, persistence on the host OS |
 | Process ownership, shutdown, Retry, profiles, paths, persistence | Crash/Retry, normal close, relaunch, backend switch, permanent panel close, exact-child/listener/manifest cleanup |
 | Automation disclosure or browser launch arguments | Both disclosure policies on Chromium and Firefox; Safari capability/status check; startup/history consistency |
 | Browser config schema, defaults, migration, discovery paths | Auto-discovery plus explicit-path launch, persistence/migration, and update this runner's generated config |
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
-| Network events, HTTP response bodies, WebSocket capture, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; E24 live-data correctness probe on both when body capture changes and the market is open; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; age/count/aggregate-byte retention probe; normal close during capture; permanent profile cleanup |
+| Network events, HTTP response bodies, WebSocket capture/watch, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; E24 live-data correctness probe on both when body capture changes and the market is open; Safari unsupported response; cursor/filter/timeout/stop/gap/truncation/drop/lifecycle/audit checks; age/count/aggregate-byte retention probe; hidden capture; normal close during capture; permanent profile cleanup |
 | Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
 | Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
 
@@ -83,9 +83,10 @@ The reusable runner:
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
 - launches the exact Horizon binary with an agent panel and no Browser panel;
-- invokes only the twelve public `browser_*` MCP tools;
-- proves empty discovery followed by an audited `browser_create` in the
-  requesting agent's workspace, then checks schemas, navigation,
+- invokes only the fourteen public `browser_*` MCP tools;
+- proves empty discovery followed by an audited hidden `browser_create` in the
+  requesting agent's workspace, controls it while hidden, shows it through
+  `browser_visibility`, then checks schemas, navigation,
   snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
@@ -95,10 +96,13 @@ The reusable runner:
   rediscovers the exact live panel, and proves resumed snapshot plus complete
   audit states without restarting the browser;
 - starts a filtered capture before navigation to the high-rate WebSocket
-  fixture, verifies a native bounded HTTP response body plus
-  sent/received/open/close records, a zero-drop 4,096-frame burst, and a
-  separate 17-frame reconnect before stopping and parsing only the path
-  returned by MCP;
+  fixture, hides the panel without stopping capture, and verifies a native
+  bounded HTTP response body plus sent/received/open/close records, a zero-drop
+  4,096-frame burst, and a separate 17-frame reconnect;
+- proves `browser_network_watch` delayed and immediate matches, URL/event
+  filtering, cursor resume without duplicates, payload exclusion and an
+  additional return-size limit, bounded empty timeout, and wake-up on capture
+  stop before parsing only the path returned by MCP;
 - waits for the tester to close the exact Horizon window normally; and
 - fails if the candidate exits badly or a task-owned browser process or live
   manifest remains.
@@ -383,9 +387,10 @@ Safari requirements:
 2. Record returned capabilities and whether `webSocketUrl` negotiated. If it is
    rejected, expect one clean retry in classic-only mode; never claim BiDi from
    a requested capability alone.
-3. Repeat no-manual-resize click/wheel/scrollbar/viewport convergence, atomic
-   trusted MCP double-click, navigation, layout, persistence, performance, and
-   cleanup.
+3. Repeat hidden creation, show/hide persistence, no-manual-resize
+   click/wheel/scrollbar/viewport convergence, atomic trusted MCP double-click,
+   navigation, layout, performance, and cleanup. Both `browser_network start`
+   and `browser_network_watch` must return the typed unsupported-backend result.
 4. Start a second Safari panel. It must report a safe busy state without
    disturbing the first. Close the first normally, wait for cleanup, then Retry
    the second.
@@ -414,18 +419,23 @@ Run once per host OS after the semantic gate:
    permanent MCP registration to the operator's configuration.
 2. Create a default supported agent panel with no Browser panel. The default
    launch receives the transient `horizon-browser` stdio MCP registration and
-   stable `HORIZON_BROWSER_ACTOR`. The default Codex registration sets only
-   this MCP server's tool approval mode to `approve`, so browser calls proceed
-   without repeated operator prompts while unrelated tool approvals keep their
-   normal policy; a custom agent command remains unchanged.
+   stable `HORIZON_BROWSER_ACTOR`, and that exact variable is forwarded to the
+   stdio MCP child. The default Codex registration sets only this MCP server's
+   tool approval mode to `approve`, so browser calls proceed without repeated
+   operator prompts while unrelated tool approvals keep their normal policy; a
+   custom agent command remains unchanged. Prove the forwarding with a real
+   in-panel `browser_create`, not only by testing a synthetic MCP process with
+   an actor injected directly.
 3. From the agent, start with `browser_list`, observe the empty result, and call
-   `browser_create` to open a visible panel in the same workspace. Verify its
-   queued/dispatched/completed `session_created` audit records, then take a
-   snapshot/query, interact by fresh ref, verify the result, request handoff,
-   wait for hand-back, and inspect `browser_audit`. The default Codex panel must
-   complete this sequence without per-call MCP approval prompts. It must not
-   know a manifest path or raw endpoint and must not invoke a browser-control
-   CLI.
+   `browser_create` with `visible: false` in the same workspace. Verify its
+   queued/dispatched/completed `session_created` audit records, control it while
+   hidden, show it with `browser_visibility`, take a snapshot/query, interact by
+   fresh ref, verify the result, hide and show it again, request handoff, wait
+   for hand-back, and inspect `browser_audit`. Save and relaunch an isolated
+   session once to prove hidden state restores without losing the live browser
+   contract. The default Codex panel must complete this sequence without
+   per-call MCP approval prompts. It must not know a manifest path or raw
+   endpoint and must not invoke a browser-control CLI.
 4. Confirm user click, key, URL submission, and navigation preempt agent
    actions for the bounded user-active interval. Handoff visibly blocks further
    agent actions until the exact request is acknowledged.
@@ -436,8 +446,14 @@ Run once per host OS after the semantic gate:
    protocol-native frames and CDP response bodies; on Firefox it must disclose
    page instrumentation for frames and native WebDriver BiDi response bodies;
    on Safari it must report unsupported. Follow the advertised
-   `browser_network start` before navigation, opt-in body, status/tail, and stop
-   workflow.
+   `browser_network start` before navigation, opt-in body,
+   `browser_network_watch` cursor loop, optional status/tail, and stop workflow.
+   Hide the panel during part of the stream and prove counters and cursor
+   delivery continue. Verify immediate and delayed matches, an empty timeout,
+   capture-stop wake-up, URL/event filtering, no duplicate sequence after
+   resume, payload exclusion by default, explicit returned-payload truncation,
+   partial/malformed final-line handling, sequence-gap and connection-map
+   truncation reporting, and explicit capture replacement/reset state.
    The returned capture file must be private, monotonic NDJSON; URL query data
    must be redacted; `records_dropped`, `writer_failed`, and
    `file_limit_reached` must remain false for the deterministic 4,096-frame

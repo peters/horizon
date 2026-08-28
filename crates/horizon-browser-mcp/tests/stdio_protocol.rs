@@ -90,7 +90,9 @@ fn exercise_protocol(protocol_version: &str) {
         initialize["result"]["instructions"]
             .as_str()
             .is_some_and(|instructions| instructions.contains("browser_create")
-                && instructions.contains("browser_network start before browser_navigate")),
+                && instructions.contains("browser_network start before browser_navigate")
+                && instructions.contains("browser_network_watch")
+                && instructions.contains("browser_visibility")),
         "server instructions must teach creation and network capture workflows"
     );
     process.notify(&json!({
@@ -105,7 +107,7 @@ fn exercise_protocol(protocol_version: &str) {
         "params": {}
     }));
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(12));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(14));
     let create = tools["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_create"))
@@ -125,6 +127,22 @@ fn exercise_protocol(protocol_version: &str) {
             .is_some_and(|description| description.contains("tail -f"))
     );
     assert!(network["inputSchema"].to_string().contains("Start only"));
+    let watch = tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network_watch"))
+        .expect("browser_network_watch tool");
+    assert!(watch["description"].as_str().is_some_and(|description| {
+        description.contains("next_sequence") && description.contains("no capture path")
+    }));
+    let visibility = tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_visibility"))
+        .expect("browser_visibility tool");
+    assert!(
+        visibility["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("without stopping"))
+    );
     assert!(!encoded_tools.contains("browser_ws"));
     assert!(!encoded_tools.contains("manifest_path"));
 

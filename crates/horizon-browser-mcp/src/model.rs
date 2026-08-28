@@ -1,6 +1,9 @@
 mod network;
 
-pub(crate) use network::{NetworkInput, NetworkOutput};
+pub(crate) use network::{
+    NetworkInput, NetworkOutput, NetworkWatchCaptureState, NetworkWatchDeliveryState, NetworkWatchEventKind,
+    NetworkWatchInput, NetworkWatchOutput, NetworkWatchRecord,
+};
 
 use horizon_browser::{BackendKind, BrowserBounds, BrowserNode, BrowserSnapshot, BrowserTarget};
 use horizon_core::browser::manifest::{self, BrowserManifest};
@@ -22,12 +25,19 @@ pub(crate) struct BrowserPanel {
     pub(crate) protocol: ProtocolKind,
     pub(crate) url: String,
     pub(crate) title: String,
+    pub(crate) visible: bool,
     pub(crate) owner: Option<String>,
+    #[serde(flatten)]
+    pub(crate) agent_state: BrowserPanelAgentState,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) network_capture: NetworkCaptureCapability,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct BrowserPanelAgentState {
     pub(crate) owned_by_caller: bool,
     pub(crate) user_active: bool,
     pub(crate) handoff_pending: bool,
-    pub(crate) capabilities: Vec<String>,
-    pub(crate) network_capture: NetworkCaptureCapability,
 }
 
 impl BrowserPanel {
@@ -44,10 +54,13 @@ impl BrowserPanel {
             protocol,
             url: value.url,
             title: value.title,
+            visible: !value.hidden,
             owner,
-            owned_by_caller,
-            user_active,
-            handoff_pending,
+            agent_state: BrowserPanelAgentState {
+                owned_by_caller,
+                user_active,
+                handoff_pending,
+            },
             capabilities: semantic_capabilities(value.backend),
             network_capture: NetworkCaptureCapability::for_backend(value.backend),
         }
@@ -69,7 +82,7 @@ impl NetworkCaptureCapability {
         let workflow = if backend == BackendKind::SafariWebDriver {
             "Network capture is unavailable for this backend.".to_string()
         } else {
-            "Call browser_network start before navigation; opt into native bounded HTTP bodies with include_http_bodies, inspect status or tail the returned private NDJSON path, then call stop to flush.".to_string()
+            "Call browser_network start before navigation; opt into native bounded HTTP bodies with include_http_bodies, consume filtered records with browser_network_watch and its sequence cursor (or tail the returned private NDJSON path), then call stop to flush.".to_string()
         };
         match backend {
             BackendKind::ChromiumCdp => Self {
@@ -129,6 +142,8 @@ pub(crate) struct CreateInput {
     pub(crate) url: Option<String>,
     /// Browser override. Omit this to use Horizon's configured browser backend.
     pub(crate) backend: Option<CreateBackend>,
+    /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
+    pub(crate) visible: Option<bool>,
     /// Total host-and-browser startup timeout in milliseconds (5000-60000, default 60000).
     pub(crate) timeout_millis: Option<u64>,
 }
@@ -138,6 +153,22 @@ pub(crate) struct CreateOutput {
     /// Auditable identity for the panel creation lifecycle.
     pub(crate) action_id: String,
     /// Ready panel state. Use `panel.panel_id` with all other browser tools.
+    pub(crate) panel: BrowserPanel,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct VisibilityInput {
+    /// Stable panel id returned by `browser_list`.
+    pub(crate) panel_id: String,
+    /// Show (`true`) or hide (`false`) the panel without stopping its browser session.
+    pub(crate) visible: bool,
+    /// Host coordination timeout in milliseconds (1-60000, default 15000).
+    pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct VisibilityOutput {
+    pub(crate) action_id: String,
     pub(crate) panel: BrowserPanel,
 }
 

@@ -39,7 +39,9 @@ back into large multi-purpose modules.
   retry/teardown behavior. Locked live coordination stays in
   `browser/manifest.rs`, with agent-side lease/action helpers in
   `browser/manifest/agent.rs`, bounded host-routed panel creation in
-  `browser/manifest/create.rs`, and append-only audit storage in
+  `browser/manifest/create.rs`, visibility requests in
+  `browser/manifest/visibility.rs`, their shared private queue primitives in
+  `browser/manifest/request_queue.rs`, and append-only audit storage in
   `browser/manifest/audit.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
@@ -61,8 +63,8 @@ back into large multi-purpose modules.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
-  - `browser_requests`: transient host polling and visible-panel creation for
-    authenticated requests routed from a live agent panel
+  - `browser_requests`: transient host polling, panel creation, and visibility
+    changes for authenticated requests routed from a live agent panel
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`

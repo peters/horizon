@@ -42,7 +42,9 @@ mod agent;
 mod audit;
 mod capture;
 mod create;
+mod request_queue;
 mod result;
+mod visibility;
 
 pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
@@ -51,6 +53,11 @@ pub use create::{
     complete_create_request, enqueue_create, list_create_requests, record_create_status, take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
+pub use visibility::{
+    BrowserVisibilityAuditStatus, BrowserVisibilityOutcome, BrowserVisibilityRequest, BrowserVisibilityResult,
+    claim_visibility_request, complete_visibility_request, enqueue_visibility, list_visibility_requests,
+    record_visibility_status, take_visibility_result,
+};
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
@@ -101,6 +108,10 @@ pub struct BrowserManifest {
     pub target_id: String,
     pub url: String,
     pub title: String,
+    /// Host-owned presentation state. Hidden panels keep their browser
+    /// session and control channel alive.
+    #[serde(default)]
+    pub hidden: bool,
     /// Private append-only JSONL action journal for this panel identity.
     #[serde(default)]
     pub audit_path: String,
@@ -596,6 +607,7 @@ mod tests {
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
+            hidden: false,
             audit_path: String::new(),
             owner: None,
             user_active: false,

@@ -5,7 +5,7 @@ use horizon_browser::{
     AgentActionResult, BackendKind, BrowserActionOutcome, BrowserControlAction, BrowserControlValue,
 };
 use horizon_core::browser::manifest;
-use horizon_core::browser::manifest::BrowserCreateOutcome;
+use horizon_core::browser::manifest::{BrowserCreateOutcome, BrowserVisibilityOutcome};
 use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
@@ -34,6 +34,12 @@ pub(crate) struct CreateReceipt {
     pub(crate) panel: BrowserPanel,
 }
 
+#[derive(Debug)]
+pub(crate) struct VisibilityReceipt {
+    pub(crate) action_id: String,
+    pub(crate) panel: BrowserPanel,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum ControlError {
     #[error("{operation}: {reason}")]
@@ -51,6 +57,12 @@ pub(crate) enum ControlError {
     CreateTimeout { action_id: String, timeout_millis: u64 },
     #[error("browser_create is available only to an agent panel launched inside Horizon")]
     CreateUnavailable,
+    #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
+    VisibilityUnavailable,
+    #[error(
+        "browser visibility request {action_id} timed out after {timeout_millis} ms; call browser_panel before retrying because the change may have completed late"
+    )]
+    VisibilityTimeout { action_id: String, timeout_millis: u64 },
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -89,14 +101,21 @@ impl BrowserController {
         &self,
         url: Option<String>,
         backend: Option<BackendKind>,
+        visible: bool,
         timeout_millis: Option<u64>,
     ) -> Result<CreateReceipt, ControlError> {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CreateUnavailable);
         }
         let timeout_millis = bounded_create_timeout(timeout_millis);
-        let action_id = manifest::enqueue_create(&self.actor, url, backend, Duration::from_millis(timeout_millis))
-            .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
+        let action_id = manifest::enqueue_create(
+            &self.actor,
+            url,
+            backend,
+            visible,
+            Duration::from_millis(timeout_millis),
+        )
+        .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
         let started = Instant::now();
         loop {
             if let Some(result) = manifest::take_create_result(&action_id, &self.actor)
@@ -128,6 +147,66 @@ impl BrowserController {
                     action_id,
                     timeout_millis,
                 });
+            }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
+    }
+
+    pub(crate) async fn set_visibility(
+        &self,
+        panel_id: &str,
+        visible: bool,
+        timeout_millis: Option<u64>,
+    ) -> Result<VisibilityReceipt, ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Err(ControlError::VisibilityUnavailable);
+        }
+        let timeout_millis = bounded_timeout(timeout_millis);
+        self.ensure_claim(panel_id)?;
+        let action_id =
+            manifest::enqueue_visibility(&self.actor, panel_id, visible, Duration::from_millis(timeout_millis))
+                .map_err(|source| ControlError::internal_io("could not queue browser visibility change", source))?;
+        let started = Instant::now();
+        let mut last_heartbeat = started;
+        loop {
+            if let Some(result) = manifest::take_visibility_result(&action_id, &self.actor)
+                .map_err(|source| ControlError::internal_io("could not read browser visibility result", source))?
+            {
+                return match result.outcome {
+                    BrowserVisibilityOutcome::Ready { visible: actual } => {
+                        let manifest = manifest::read(panel_id).ok_or_else(|| {
+                            ControlError::internal_io(
+                                "could not read updated browser panel",
+                                io::Error::new(io::ErrorKind::NotFound, "browser manifest disappeared"),
+                            )
+                        })?;
+                        if actual != visible || manifest.hidden == visible {
+                            return Err(ControlError::internal_io(
+                                "could not verify browser visibility",
+                                io::Error::new(io::ErrorKind::InvalidData, "visibility result did not match request"),
+                            ));
+                        }
+                        Ok(VisibilityReceipt {
+                            action_id,
+                            panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                        })
+                    }
+                    BrowserVisibilityOutcome::Failed { code, message } => Err(ControlError::Browser {
+                        action_id,
+                        code,
+                        message,
+                    }),
+                };
+            }
+            if started.elapsed() >= Duration::from_millis(timeout_millis) {
+                return Err(ControlError::VisibilityTimeout {
+                    action_id,
+                    timeout_millis,
+                });
+            }
+            if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                self.refresh_claim(panel_id)?;
+                last_heartbeat = Instant::now();
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
         }
@@ -169,6 +248,11 @@ impl BrowserController {
         }
     }
 
+    pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
+        manifest::heartbeat(panel_id, &self.actor)
+            .map_err(|source| ControlError::internal_io("lost browser ownership while waiting", source))
+    }
+
     async fn wait_for_result(
         &self,
         panel_id: &str,
@@ -191,9 +275,7 @@ impl BrowserController {
                 });
             }
             if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                manifest::heartbeat(panel_id, &self.actor).map_err(|source| {
-                    ControlError::internal_io("lost browser ownership while waiting for a result", source)
-                })?;
+                self.refresh_claim(panel_id)?;
                 last_heartbeat = Instant::now();
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;

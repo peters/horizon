@@ -226,6 +226,8 @@ mod tests {
                 .expect("browser skill should be exported"),
             BROWSER_SKILL_FILES[0].content,
         );
+        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
+        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
         let mcp_config = std::fs::read_to_string(horizon_home.claude_plugin_dir().join(".mcp.json"))
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));

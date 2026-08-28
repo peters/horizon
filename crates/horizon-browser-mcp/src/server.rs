@@ -19,9 +19,11 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
-    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput, NodeOutput,
-    NodesOutput, PanelInput, QueryInput, SnapshotInput, SnapshotOutput, WaitInput, WaitOutput, WaitState,
+    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput,
+    NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput, SnapshotInput,
+    SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
 };
+use crate::network_watch::NetworkWatchState;
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
 const DEFAULT_QUERY_RESULTS: u32 = 50;
@@ -32,6 +34,7 @@ const DEFAULT_WAIT_POLL_MILLIS: u64 = 250;
 #[derive(Clone, Debug)]
 pub struct HorizonBrowserMcp {
     controller: BrowserController,
+    network_watch: NetworkWatchState,
     tool_router: ToolRouter<Self>,
 }
 
@@ -45,6 +48,7 @@ impl HorizonBrowserMcp {
     fn new(controller: BrowserController) -> Self {
         Self {
             controller,
+            network_watch: NetworkWatchState::default(),
             tool_router: Self::tool_router(),
         }
     }
@@ -64,15 +68,39 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a visible browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty or a separate session is needed. Omit backend to use Horizon's configured browser; bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty or a separate session is needed. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
         let receipt = self
             .controller
-            .create(input.url, input.backend.map(Into::into), input.timeout_millis)
+            .create(
+                input.url,
+                input.backend.map(Into::into),
+                input.visible.unwrap_or(true),
+                input.timeout_millis,
+            )
             .await
             .map_err(|error| error.to_string())?;
         Ok(Json(CreateOutput {
+            action_id: receipt.action_id,
+            panel: receipt.panel,
+        }))
+    }
+
+    #[tool(
+        name = "browser_visibility",
+        description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable."
+    )]
+    async fn browser_visibility(
+        &self,
+        Parameters(input): Parameters<VisibilityInput>,
+    ) -> Result<Json<VisibilityOutput>, String> {
+        let receipt = self
+            .controller
+            .set_visibility(&input.panel_id, input.visible, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Json(VisibilityOutput {
             action_id: receipt.action_id,
             panel: receipt.panel,
         }))
@@ -232,6 +260,17 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_network_watch",
+        description = "Wait up to 60 seconds for a bounded batch of matching records from the active Horizon-owned network capture. Resume with capture_id and next_sequence; filters run before records are returned, payloads are excluded by default, and no capture path is accepted or exposed."
+    )]
+    async fn browser_network_watch(
+        &self,
+        Parameters(input): Parameters<NetworkWatchInput>,
+    ) -> Result<Json<NetworkWatchOutput>, String> {
+        self.network_watch.watch(&self.controller, input).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_wait",
         description = "Wait for a CSS selector to become present, visible, or hidden using bounded audited queries."
     )]
@@ -303,7 +342,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create to open a visible panel in your current Horizon workspace. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -433,9 +472,11 @@ mod tests {
                 "browser_list",
                 "browser_navigate",
                 "browser_network",
+                "browser_network_watch",
                 "browser_panel",
                 "browser_query",
                 "browser_snapshot",
+                "browser_visibility",
                 "browser_wait",
             ]
         );

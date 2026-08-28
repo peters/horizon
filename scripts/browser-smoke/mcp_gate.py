@@ -11,6 +11,7 @@ import re
 import selectors
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -25,9 +26,11 @@ TOOL_NAMES = [
     "browser_list",
     "browser_navigate",
     "browser_network",
+    "browser_network_watch",
     "browser_panel",
     "browser_query",
     "browser_snapshot",
+    "browser_visibility",
     "browser_wait",
 ]
 PRIVATE_MARKERS = [
@@ -176,6 +179,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError("MCP instructions do not teach empty-workspace browser creation")
     if "browser_network start before browser_navigate" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach the network capture workflow")
+    if "browser_network_watch" not in result["instructions"] or "browser_visibility" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach watch and visibility workflows")
     client.notify("notifications/initialized")
 
     tools = client.request("tools/list")["result"]["tools"]
@@ -193,6 +198,12 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     create = next(tool for tool in tools if tool["name"] == "browser_create")
     if "browser_list is empty" not in create["description"]:
         raise AssertionError("browser_create is not self-discovering")
+    watch = next(tool for tool in tools if tool["name"] == "browser_network_watch")
+    if "next_sequence" not in watch["description"] or "no capture path" not in watch["description"]:
+        raise AssertionError("browser_network_watch is not self-discovering")
+    visibility = next(tool for tool in tools if tool["name"] == "browser_visibility")
+    if "without stopping" not in visibility["description"]:
+        raise AssertionError("browser_visibility is not self-discovering")
     return tools
 
 
@@ -206,13 +217,19 @@ def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str,
         {
             "url": f"{args.base_url}/index.html",
             "backend": args.backend,
+            "visible": False,
             "timeout_millis": 45_000,
         },
     )
     assert created is not None
     panel = created["panel"]
     action_id = created["action_id"]
-    if panel["backend"] != args.backend or not panel["panel_id"] or not panel["owned_by_caller"]:
+    if (
+        panel["backend"] != args.backend
+        or not panel["panel_id"]
+        or not panel["owned_by_caller"]
+        or panel["visible"]
+    ):
         raise AssertionError(created)
     audit, _ = client.call(
         "browser_audit",
@@ -224,6 +241,7 @@ def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str,
         "type": "session_created",
         "backend": args.backend,
         "destination": f"{args.base_url}/index.html",
+        "visible": False,
     }
     if statuses != {"queued", "dispatched", "completed"}:
         raise AssertionError((action_id, statuses))
@@ -374,12 +392,124 @@ def exercise_network_capture(
         raise AssertionError(f"capture path is not an explicit readable file: {capture_path}")
     if os.name != "nt" and capture_path.stat().st_mode & 0o777 != 0o600:
         raise AssertionError(f"capture file mode is not private: {capture_path}")
+    hidden = record_action(
+        client,
+        "browser_visibility",
+        {"panel_id": panel_id, "visible": False},
+        action_ids,
+    )
+    if hidden["panel"]["visible"]:
+        raise AssertionError("browser_visibility did not hide the live panel")
+    delayed: dict[str, Any] = {}
+    watch_client = McpClient(
+        args.horizon,
+        args.log.with_name(f"{args.log.stem}-watch{args.log.suffix}"),
+        args.timeout,
+        args.actor,
+    )
+    initialize(watch_client)
+
+    def wait_for_navigation_event() -> None:
+        try:
+            result, _ = watch_client.call(
+                "browser_network_watch",
+                {
+                    "panel_id": panel_id,
+                    "after_sequence": 0,
+                    "wait_millis": 5_000,
+                    "max_records": 10,
+                    "url_patterns": ["/websocket.html"],
+                    "event_kinds": ["http_response"],
+                },
+            )
+            delayed["result"] = result
+        except BaseException as error:  # Preserve worker failures for the main smoke thread.
+            delayed["error"] = error
+        finally:
+            watch_client.close()
+
+    watch_thread = threading.Thread(target=wait_for_navigation_event, name="horizon-network-watch", daemon=True)
+    watch_thread.start()
+    time.sleep(0.2)
     record_action(
         client,
         "browser_navigate",
         {"panel_id": panel_id, "url": f"{args.base_url}/websocket.html"},
         action_ids,
     )
+    watch_thread.join(timeout=10)
+    if watch_thread.is_alive():
+        raise AssertionError("browser_network_watch did not wake after matching navigation traffic")
+    if "error" in delayed:
+        raise delayed["error"]
+    delayed_watch = delayed.get("result")
+    if not delayed_watch or not delayed_watch["records"] or delayed_watch["timed_out"]:
+        raise AssertionError("browser_network_watch did not return the delayed HTTP match")
+
+    payload_watch = record_action(
+        client,
+        "browser_network_watch",
+        {
+            "panel_id": panel_id,
+            "after_sequence": 0,
+            "wait_millis": 5_000,
+            "max_records": 1,
+            "url_patterns": ["/websocket.html"],
+            "event_kinds": ["http_response_body"],
+            "include_payload": True,
+            "max_payload_bytes": 32,
+        },
+        action_ids,
+    )
+    if (
+        len(payload_watch["records"]) != 1
+        or len(payload_watch["records"][0].get("payload", "").encode("utf-8")) > 32
+        or not payload_watch["records"][0]["truncated"]
+        or payload_watch["returned_payloads_truncated"] != 1
+    ):
+        raise AssertionError("browser_network_watch did not enforce its returned payload bound")
+
+    watched = record_action(
+        client,
+        "browser_network_watch",
+        {
+            "panel_id": panel_id,
+            "after_sequence": 0,
+            "wait_millis": 5_000,
+            "max_records": 10,
+            "url_patterns": ["/market-stream"],
+            "event_kinds": ["websocket_frame_received"],
+        },
+        action_ids,
+    )
+    if not watched["records"] or any(record.get("payload") is not None for record in watched["records"]):
+        raise AssertionError("browser_network_watch did not return metadata-only matching records")
+    resumed = record_action(
+        client,
+        "browser_network_watch",
+        {
+            "panel_id": panel_id,
+            "capture_id": watched["capture_id"],
+            "after_sequence": watched["next_sequence"],
+            "wait_millis": 5_000,
+            "max_records": 10,
+            "url_patterns": ["/market-stream"],
+            "event_kinds": ["websocket_frame_received"],
+        },
+        action_ids,
+    )
+    first_sequences = {record["sequence"] for record in watched["records"]}
+    resumed_sequences = {record["sequence"] for record in resumed["records"]}
+    if not resumed_sequences or first_sequences & resumed_sequences:
+        raise AssertionError("browser_network_watch cursor repeated or omitted the next matching batch")
+    shown = record_action(
+        client,
+        "browser_visibility",
+        {"panel_id": panel_id, "visible": True},
+        action_ids,
+    )
+    if not shown["panel"]["visible"]:
+        raise AssertionError("browser panel did not return from background capture mode")
     record_action(
         client,
         "browser_wait",
@@ -413,12 +543,79 @@ def exercise_network_capture(
     else:
         raise AssertionError(f"network capture did not converge: {status}")
 
+    timed_out = record_action(
+        client,
+        "browser_network_watch",
+        {
+            "panel_id": panel_id,
+            "capture_id": started["capture_id"],
+            "after_sequence": 0,
+            "wait_millis": 150,
+            "max_records": 1,
+            "url_patterns": ["/never-matches-horizon-smoke"],
+        },
+        action_ids,
+    )
+    if timed_out["records"] or not timed_out["timed_out"] or not timed_out["capture_active"]:
+        raise AssertionError("browser_network_watch did not report a bounded empty timeout")
+
+    stopped_watch: dict[str, Any] = {}
+    stop_watch_client = McpClient(
+        args.horizon,
+        args.log.with_name(f"{args.log.stem}-stop-watch{args.log.suffix}"),
+        args.timeout,
+        args.actor,
+    )
+    initialize(stop_watch_client)
+
+    def wait_for_capture_stop() -> None:
+        try:
+            result, _ = stop_watch_client.call(
+                "browser_network_watch",
+                {
+                    "panel_id": panel_id,
+                    "capture_id": started["capture_id"],
+                    "after_sequence": timed_out["next_sequence"],
+                    "wait_millis": 5_000,
+                    "max_records": 1,
+                    "url_patterns": ["/never-matches-horizon-smoke"],
+                },
+            )
+            stopped_watch["result"] = result
+        except BaseException as error:  # Preserve worker failures for the main smoke thread.
+            stopped_watch["error"] = error
+        finally:
+            stop_watch_client.close()
+
+    stop_watch_thread = threading.Thread(
+        target=wait_for_capture_stop,
+        name="horizon-network-stop-watch",
+        daemon=True,
+    )
+    stop_watch_thread.start()
+    time.sleep(0.2)
     stopped = record_action(
         client,
         "browser_network",
         {"panel_id": panel_id, "operation": "stop"},
         action_ids,
     )
+    stop_watch_thread.join(timeout=10)
+    if stop_watch_thread.is_alive():
+        raise AssertionError("browser_network_watch did not wake when capture stopped")
+    if "error" in stopped_watch:
+        raise stopped_watch["error"]
+    stopped_watch_result = stopped_watch.get("result")
+    if (
+        not stopped_watch_result
+        or stopped_watch_result["timed_out"]
+        or stopped_watch_result["capture_active"]
+        or stopped_watch_result["capture_id"] != stopped["capture_id"]
+    ):
+        raise AssertionError("browser_network_watch did not report capture stop explicitly")
+    watch_results = [delayed_watch, payload_watch, watched, resumed, timed_out, stopped_watch_result]
+    if any(result["connection_urls_truncated"] for result in watch_results):
+        raise AssertionError("browser_network_watch truncated its bounded connection URL cache")
     if stopped["active"]:
         raise AssertionError(stopped)
     if stopped["records_dropped"] or stopped["writer_failed"] or stopped["file_limit_reached"]:
@@ -479,6 +676,11 @@ def exercise_network_capture(
         "connection_frame_counts": frame_counts,
         "response_bodies": len(bodies),
         "received_frames": len(received),
+        "watch_records": len(watched["records"]) + len(resumed["records"]),
+        "watch_delayed_match": True,
+        "watch_payload_bound": True,
+        "watch_stop": True,
+        "watch_timeout": True,
         "supported": True,
         "transport": stopped["transport"],
     }
@@ -579,6 +781,15 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     action_ids: list[str] = [create_action_id]
     failed_ids: list[str] = []
+    record_action(client, "browser_snapshot", {"panel_id": panel_id, "max_nodes": 25}, action_ids)
+    shown = record_action(
+        client,
+        "browser_visibility",
+        {"panel_id": panel_id, "visible": True},
+        action_ids,
+    )
+    if not shown["panel"]["visible"]:
+        raise AssertionError("browser_visibility did not reveal the hidden live panel")
     network_capture = exercise_network_capture(client, args, panel_id, action_ids, failed_ids)
     secret_origin = args.base_url.replace(
         "://",

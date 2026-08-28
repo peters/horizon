@@ -1,6 +1,6 @@
 use horizon_browser::{
     BrowserControlAction, BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection,
-    BrowserNetworkConnectionState, BrowserNetworkOperation,
+    BrowserNetworkConnectionState, BrowserNetworkEventKind, BrowserNetworkOperation, BrowserNetworkRecord,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -193,6 +193,194 @@ impl NetworkOutput {
                     .to_string()
             },
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NetworkWatchEventKind {
+    CaptureStarted,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBody,
+    HttpCompleted,
+    HttpFailed,
+    WebsocketCreated,
+    WebsocketOpened,
+    WebsocketFrameSent,
+    WebsocketFrameReceived,
+    WebsocketError,
+    WebsocketClosed,
+    CaptureStopped,
+}
+
+impl NetworkWatchEventKind {
+    pub(crate) const fn matches(self, kind: BrowserNetworkEventKind) -> bool {
+        matches!(
+            (self, kind),
+            (Self::CaptureStarted, BrowserNetworkEventKind::CaptureStarted)
+                | (Self::HttpRequest, BrowserNetworkEventKind::HttpRequest)
+                | (Self::HttpResponse, BrowserNetworkEventKind::HttpResponse)
+                | (Self::HttpResponseBody, BrowserNetworkEventKind::HttpResponseBody)
+                | (Self::HttpCompleted, BrowserNetworkEventKind::HttpCompleted)
+                | (Self::HttpFailed, BrowserNetworkEventKind::HttpFailed)
+                | (Self::WebsocketCreated, BrowserNetworkEventKind::WebsocketCreated)
+                | (Self::WebsocketOpened, BrowserNetworkEventKind::WebsocketOpened)
+                | (Self::WebsocketFrameSent, BrowserNetworkEventKind::WebsocketFrameSent)
+                | (
+                    Self::WebsocketFrameReceived,
+                    BrowserNetworkEventKind::WebsocketFrameReceived
+                )
+                | (Self::WebsocketError, BrowserNetworkEventKind::WebsocketError)
+                | (Self::WebsocketClosed, BrowserNetworkEventKind::WebsocketClosed)
+                | (Self::CaptureStopped, BrowserNetworkEventKind::CaptureStopped)
+        )
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct NetworkWatchInput {
+    /// Stable panel id returned by `browser_list`.
+    pub(crate) panel_id: String,
+    /// Optional capture id from the previous response. A changed capture resets the cursor explicitly.
+    pub(crate) capture_id: Option<String>,
+    /// Return records strictly after this monotonic capture sequence (default 0).
+    pub(crate) after_sequence: Option<u64>,
+    /// Bounded long-poll duration in milliseconds (1-60000, default 60000).
+    pub(crate) wait_millis: Option<u64>,
+    /// Maximum matching records returned at once (1-250, default 100).
+    pub(crate) max_records: Option<u32>,
+    /// Optional URL substring filters applied before records are returned.
+    pub(crate) url_patterns: Option<Vec<String>>,
+    /// Optional event kinds. Omit or pass an empty list to accept every kind.
+    pub(crate) event_kinds: Option<Vec<NetworkWatchEventKind>>,
+    /// Include bounded payload text (default false).
+    pub(crate) include_payload: Option<bool>,
+    /// Aggregate payload-byte budget for the whole response (1-65536, default
+    /// 16384). Oversized payloads are metadata-only in multi-record batches;
+    /// use `max_records=1` for a bounded prefix. Requires `include_payload=true`.
+    pub(crate) max_payload_bytes: Option<u32>,
+    /// Per-status action timeout in milliseconds (1-60000).
+    pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NetworkWatchRecord {
+    pub(crate) sequence: u64,
+    pub(crate) timestamp_millis: i64,
+    pub(crate) backend: String,
+    pub(crate) kind: String,
+    pub(crate) connection_id: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) method: Option<String>,
+    pub(crate) status: Option<u16>,
+    pub(crate) resource_type: Option<String>,
+    pub(crate) direction: Option<String>,
+    pub(crate) opcode: Option<u8>,
+    pub(crate) payload: Option<String>,
+    pub(crate) payload_encoding: Option<String>,
+    pub(crate) payload_bytes: Option<u64>,
+    pub(crate) truncated: bool,
+    pub(crate) error: Option<String>,
+}
+
+impl NetworkWatchRecord {
+    pub(crate) fn from_record(
+        mut value: BrowserNetworkRecord,
+        include_payload: bool,
+        max_payload_bytes: usize,
+    ) -> Self {
+        let watcher_truncated = value.payload.as_mut().is_some_and(|payload| {
+            if !include_payload {
+                payload.clear();
+                return false;
+            }
+            if payload.len() <= max_payload_bytes {
+                return false;
+            }
+            let mut boundary = max_payload_bytes;
+            while boundary > 0 && !payload.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            payload.truncate(boundary);
+            true
+        });
+        let payload = include_payload.then_some(value.payload).flatten();
+        Self {
+            sequence: value.sequence,
+            timestamp_millis: value.timestamp_millis,
+            backend: super::backend_name(value.backend).to_string(),
+            kind: event_kind_name(value.kind).to_string(),
+            connection_id: value.connection_id,
+            url: value.url,
+            method: value.method,
+            status: value.status,
+            resource_type: value.resource_type,
+            direction: value.direction.map(|direction| match direction {
+                horizon_browser::BrowserNetworkDirection::Sent => "sent".to_string(),
+                horizon_browser::BrowserNetworkDirection::Received => "received".to_string(),
+            }),
+            opcode: value.opcode,
+            payload,
+            payload_encoding: value.payload_encoding.map(|encoding| match encoding {
+                horizon_browser::BrowserNetworkPayloadEncoding::Text => "text".to_string(),
+                horizon_browser::BrowserNetworkPayloadEncoding::Base64 => "base64".to_string(),
+            }),
+            payload_bytes: value.payload_bytes,
+            truncated: value.truncated || watcher_truncated,
+            error: value.error,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NetworkWatchOutput {
+    pub(crate) panel_id: String,
+    pub(crate) action_id: String,
+    pub(crate) capture_id: String,
+    pub(crate) records: Vec<NetworkWatchRecord>,
+    pub(crate) next_sequence: u64,
+    #[serde(flatten)]
+    pub(crate) delivery: NetworkWatchDeliveryState,
+    pub(crate) sequence_gaps: u64,
+    pub(crate) malformed_records: u64,
+    pub(crate) connection_urls_truncated: u64,
+    pub(crate) records_dropped: u64,
+    pub(crate) payloads_truncated: u64,
+    pub(crate) returned_payloads_truncated: u64,
+    #[serde(flatten)]
+    pub(crate) capture_state: NetworkWatchCaptureState,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NetworkWatchDeliveryState {
+    pub(crate) timed_out: bool,
+    pub(crate) capture_changed: bool,
+    pub(crate) file_reset: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NetworkWatchCaptureState {
+    pub(crate) capture_active: bool,
+    pub(crate) file_limit_reached: bool,
+    pub(crate) writer_failed: bool,
+}
+
+pub(crate) const fn event_kind_name(kind: BrowserNetworkEventKind) -> &'static str {
+    match kind {
+        BrowserNetworkEventKind::CaptureStarted => "capture_started",
+        BrowserNetworkEventKind::HttpRequest => "http_request",
+        BrowserNetworkEventKind::HttpResponse => "http_response",
+        BrowserNetworkEventKind::HttpResponseBody => "http_response_body",
+        BrowserNetworkEventKind::HttpCompleted => "http_completed",
+        BrowserNetworkEventKind::HttpFailed => "http_failed",
+        BrowserNetworkEventKind::WebsocketCreated => "websocket_created",
+        BrowserNetworkEventKind::WebsocketOpened => "websocket_opened",
+        BrowserNetworkEventKind::WebsocketFrameSent => "websocket_frame_sent",
+        BrowserNetworkEventKind::WebsocketFrameReceived => "websocket_frame_received",
+        BrowserNetworkEventKind::WebsocketError => "websocket_error",
+        BrowserNetworkEventKind::WebsocketClosed => "websocket_closed",
+        BrowserNetworkEventKind::CaptureStopped => "capture_stopped",
     }
 }
 

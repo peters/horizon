@@ -8,6 +8,7 @@
 
 mod controller;
 mod model;
+mod network_watch;
 mod server;
 
 pub use server::HorizonBrowserMcp;

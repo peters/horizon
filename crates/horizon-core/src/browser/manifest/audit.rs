@@ -32,6 +32,10 @@ pub(super) fn append(entry: &BrowserAuditEntry, panel_local_id: &str) -> std::io
     append_at(&default_audit_path(panel_local_id), entry)
 }
 
+pub(super) fn append_at_path(path: &Path, entry: &BrowserAuditEntry) -> std::io::Result<()> {
+    append_at(path, entry)
+}
+
 fn append_at(path: &Path, entry: &BrowserAuditEntry) -> std::io::Result<()> {
     append_at_with_limit(path, entry, MAX_AUDIT_SEGMENT_BYTES)
 }
@@ -141,7 +145,7 @@ pub fn read_audit(panel_local_id: &str) -> std::io::Result<Vec<BrowserAuditEntry
     read_at(&default_audit_path(panel_local_id))
 }
 
-fn read_at(path: &Path) -> std::io::Result<Vec<BrowserAuditEntry>> {
+pub(super) fn read_at(path: &Path) -> std::io::Result<Vec<BrowserAuditEntry>> {
     // Writers serialize one complete JSONL record while holding this same
     // inter-process lock. Taking it for the read prevents a live auditor from
     // mistaking an in-progress final append for journal corruption.

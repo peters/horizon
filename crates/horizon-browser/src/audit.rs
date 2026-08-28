@@ -16,6 +16,10 @@ use crate::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, Browser
 static AUDIT_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const POINTER_AUDIT_INTERVAL: Duration = Duration::from_millis(100);
 
+const fn default_visible() -> bool {
+    true
+}
+
 /// Bounds durable audit work for high-rate, already-coalesced pointer motion.
 /// Presses, releases, wheel input, keys, and page actions are always recorded.
 #[derive(Debug, Default)]
@@ -75,6 +79,11 @@ pub enum BrowserAuditAction {
         backend: crate::BackendKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         destination: Option<String>,
+        #[serde(default = "default_visible")]
+        visible: bool,
+    },
+    PanelVisibility {
+        visible: bool,
     },
     Navigate {
         destination: String,
@@ -177,10 +186,11 @@ pub enum BrowserAuditAction {
 impl BrowserAuditAction {
     /// Summarize a host-created browser session without retaining URL secrets.
     #[must_use]
-    pub fn session_created(backend: crate::BackendKind, destination: Option<&str>) -> Self {
+    pub fn session_created(backend: crate::BackendKind, destination: Option<&str>, visible: bool) -> Self {
         Self::SessionCreated {
             backend,
             destination: destination.map(redact_url),
+            visible,
         }
     }
 
@@ -449,6 +459,7 @@ mod tests {
         let created = BrowserAuditAction::session_created(
             crate::BackendKind::FirefoxBidi,
             Some("https://user:secret@example.test/start?token=secret#private"),
+            false,
         );
 
         assert_eq!(
@@ -463,6 +474,7 @@ mod tests {
             BrowserAuditAction::SessionCreated {
                 backend: crate::BackendKind::FirefoxBidi,
                 destination: Some("https://<redacted>@example.test/start?<redacted>#<redacted>".to_string()),
+                visible: false,
             }
         );
     }

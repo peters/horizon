@@ -1,8 +1,11 @@
-//! Host-side handling for agent-requested visible browser panels.
+//! Host-side handling for agent-requested browser panel lifecycle changes.
 
 use std::time::{Duration, Instant};
 
-use horizon_core::browser::manifest::{self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult};
+use horizon_core::browser::manifest::{
+    self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult, BrowserVisibilityAuditStatus,
+    BrowserVisibilityRequest, BrowserVisibilityResult,
+};
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
@@ -21,6 +24,12 @@ struct PendingBrowserCreate {
     panel_id: PanelId,
     panel_local_id: String,
     backend: BackendKind,
+}
+
+#[derive(Clone, Copy)]
+struct ActorPanel {
+    panel_id: PanelId,
+    workspace_id: WorkspaceId,
 }
 
 enum BrowserCreateCompletion {
@@ -50,7 +59,7 @@ impl HorizonApp {
             }
         };
         for request in requests {
-            let Some(workspace_id) = actor_workspace(&self.board, &request.actor) else {
+            let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
                 continue;
             };
             let request = match manifest::claim_create_request(&request.request_id, &request.actor, std::process::id())
@@ -63,12 +72,14 @@ impl HorizonApp {
                 }
             };
             changed = true;
-            self.start_requested_browser(request, workspace_id);
+            self.start_requested_browser(request, actor_panel);
         }
+        changed |= self.poll_browser_visibility_requests();
+        changed |= self.sync_browser_manifest_visibility();
         changed
     }
 
-    fn start_requested_browser(&mut self, request: BrowserCreateRequest, workspace_id: WorkspaceId) {
+    fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
         if request.deadline_at_millis < manifest::now_millis() {
             complete_failure(
                 &request,
@@ -96,10 +107,11 @@ impl HorizonApp {
         let options = PanelOptions {
             command: request.url.clone(),
             kind: PanelKind::Browser,
+            visible: request.visible,
             browser_config: Some(browser_config),
             ..PanelOptions::default()
         };
-        let panel_id = match self.board.create_panel(options, workspace_id) {
+        let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
                 tracing::error!(request_id = %request.request_id, %error, "failed to create requested browser panel");
@@ -141,6 +153,138 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
+    fn poll_browser_visibility_requests(&mut self) -> bool {
+        let requests = match manifest::list_visibility_requests() {
+            Ok(requests) => requests,
+            Err(error) => {
+                tracing::warn!(error = %error, "could not poll browser visibility requests");
+                return false;
+            }
+        };
+        let mut changed = false;
+        for request in requests {
+            let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
+                continue;
+            };
+            let request = match manifest::claim_visibility_request(
+                &request.request_id,
+                &request.actor,
+                std::process::id(),
+            ) {
+                Ok(Some(request)) => request,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(request_id = %request.request_id, error = %error, "could not claim browser visibility request");
+                    continue;
+                }
+            };
+            changed |= self.apply_browser_visibility_request(&request, actor_panel);
+        }
+        changed
+    }
+
+    fn apply_browser_visibility_request(
+        &mut self,
+        request: &BrowserVisibilityRequest,
+        actor_panel: ActorPanel,
+    ) -> bool {
+        if request.deadline_at_millis < manifest::now_millis() {
+            complete_visibility_failure(request, "request_expired", "browser visibility request expired");
+            return false;
+        }
+        let Some(panel_id) = self.board.panel_id_by_local_id(&request.panel_local_id) else {
+            complete_visibility_failure(
+                request,
+                "panel_not_in_host",
+                "browser panel is not hosted by the requesting agent's Horizon instance",
+            );
+            return false;
+        };
+        let Some(panel) = self.board.panel(panel_id) else {
+            complete_visibility_failure(request, "panel_closed", "browser panel is not live");
+            return false;
+        };
+        if panel.kind != PanelKind::Browser {
+            complete_visibility_failure(request, "not_browser_panel", "target panel is not a browser panel");
+            return false;
+        }
+        let original_visible = panel.visible;
+        let owned_by_actor = manifest::read(&request.panel_local_id)
+            .and_then(|manifest| {
+                manifest
+                    .live_owner(manifest::now_millis())
+                    .map(|owner| owner.name.clone())
+            })
+            .as_deref()
+            == Some(request.actor.as_str());
+        if !owned_by_actor {
+            complete_visibility_failure(request, "ownership_changed", "browser panel ownership changed");
+            return false;
+        }
+        if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Dispatched) {
+            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility dispatch");
+            complete_visibility_failure(
+                request,
+                "audit_failed",
+                "Horizon refused an unaudited visibility change",
+            );
+            return false;
+        }
+        if let Err(error) = set_manifest_visibility(&request.panel_local_id, request.visible) {
+            tracing::warn!(request_id = %request.request_id, %error, "could not update browser manifest visibility");
+            complete_visibility_failure(
+                request,
+                "manifest_update_failed",
+                "browser panel visibility could not be updated",
+            );
+            return false;
+        }
+        let local_changed = self.board.set_panel_visible(panel_id, request.visible);
+        if !request.visible && self.fullscreen_panel == Some(panel_id) {
+            self.fullscreen_panel = None;
+        }
+        if !request.visible && self.board.focused.is_none() {
+            self.board.focus(actor_panel.panel_id);
+        }
+        if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Completed) {
+            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility completion");
+            let _ = set_manifest_visibility(&request.panel_local_id, original_visible);
+            let _ = self.board.set_panel_visible(panel_id, original_visible);
+            complete_visibility_failure(request, "audit_failed", "visibility change could not be audited");
+            return false;
+        }
+        complete_visibility_result(&BrowserVisibilityResult::ready(request));
+        if local_changed {
+            self.mark_runtime_dirty();
+        }
+        local_changed
+    }
+
+    fn sync_browser_manifest_visibility(&self) -> bool {
+        let mut changed = false;
+        for panel in self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| panel.kind == PanelKind::Browser)
+        {
+            let Some(current) = manifest::read(&panel.local_id) else {
+                continue;
+            };
+            let expected_hidden = !panel.visible;
+            if current.hidden == expected_hidden {
+                continue;
+            }
+            match set_manifest_visibility(&panel.local_id, panel.visible) {
+                Ok(()) => changed = true,
+                Err(error) => {
+                    tracing::warn!(panel_id = %panel.local_id, %error, "could not synchronize browser visibility");
+                }
+            }
+        }
+        changed
+    }
+
     fn finish_pending_browser_creates(&mut self) -> bool {
         if self.browser_create_host.pending.is_empty() {
             return false;
@@ -166,12 +310,15 @@ impl HorizonApp {
     }
 }
 
-fn actor_workspace(board: &Board, actor: &str) -> Option<WorkspaceId> {
+fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
     board
         .panels
         .iter()
         .find(|panel| panel.kind.is_agent() && browser_actor(&panel.local_id) == actor)
-        .map(|panel| panel.workspace_id)
+        .map(|panel| ActorPanel {
+            panel_id: panel.id,
+            workspace_id: panel.workspace_id,
+        })
 }
 
 fn backend_session_limit_reached(board: &Board, backend: BackendKind) -> bool {
@@ -197,6 +344,15 @@ fn finish_ready_browser_create(pending: &PendingBrowserCreate) -> BrowserCreateC
             pending,
             "ownership_failed",
             "Horizon could not assign the new browser panel to the requesting agent",
+        );
+        return BrowserCreateCompletion::Failed;
+    }
+    if let Err(error) = set_manifest_visibility(&pending.panel_local_id, pending.request.visible) {
+        tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser visibility");
+        record_and_complete_failure(
+            pending,
+            "manifest_update_failed",
+            "Horizon could not publish the new browser panel's visibility",
         );
         return BrowserCreateCompletion::Failed;
     }
@@ -278,14 +434,35 @@ fn complete_result(result: &BrowserCreateResult) {
     }
 }
 
+fn set_manifest_visibility(panel_local_id: &str, visible: bool) -> std::io::Result<()> {
+    manifest::update(panel_local_id, |manifest| {
+        manifest.hidden = !visible;
+        manifest.updated_at = manifest::now_millis();
+    })
+    .map(|_| ())
+}
+
+fn complete_visibility_failure(request: &BrowserVisibilityRequest, code: &str, message: &str) {
+    if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Failed) {
+        tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser visibility audit");
+    }
+    complete_visibility_result(&BrowserVisibilityResult::failed(request, code, message));
+}
+
+fn complete_visibility_result(result: &BrowserVisibilityResult) {
+    if let Err(error) = manifest::complete_visibility_request(result) {
+        tracing::error!(request_id = %result.request_id, %error, "could not publish browser visibility result");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn only_the_exact_horizon_actor_matches_a_panel() {
-        assert!(actor_workspace(&Board::new(), "horizon:missing").is_none());
-        assert!(actor_workspace(&Board::new(), "external").is_none());
+        assert!(actor_panel(&Board::new(), "horizon:missing").is_none());
+        assert!(actor_panel(&Board::new(), "external").is_none());
     }
 
     #[test]
