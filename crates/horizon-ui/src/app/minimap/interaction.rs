@@ -184,10 +184,10 @@ impl<'a> Iterator for MinimapPanelSource<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Board(panels) => panels.next(),
+            Self::Board(panels) => panels.find(|panel| panel.visible),
             Self::Workspace { board, panel_ids } => loop {
                 let panel_id = *panel_ids.next()?;
-                if let Some(panel) = board.panel(panel_id) {
+                if let Some(panel) = board.panel(panel_id).filter(|panel| panel.visible) {
                     return Some(panel);
                 }
             },

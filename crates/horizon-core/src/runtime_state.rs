@@ -240,6 +240,7 @@ impl RuntimeState {
                             browser_profile: browser.map(|browser| BrowserProfileState {
                                 root: browser.profile_root_for_persistence().map(Path::to_path_buf),
                                 backend: Some(browser.backend()),
+                                hidden: !panel.visible,
                             }),
                             // `Some("")` is meaningful: Chrome committed its
                             // blank startup target, so restore must not fall
@@ -550,6 +551,7 @@ impl PanelState {
             resume: self.resume.clone(),
             position: self.position,
             size: self.size,
+            visible: self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
             local_id: Some(self.local_id.clone()),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
@@ -592,6 +594,9 @@ pub struct BrowserProfileState {
     pub root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<crate::browser::BackendKind>,
+    /// Hidden browser panels stay live and controllable but do not render.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -766,6 +771,7 @@ mod tests {
                 PanelOptions {
                     kind: PanelKind::Browser,
                     local_id: Some("saved-browser".to_string()),
+                    visible: false,
                     browser_config: Some(crate::browser::BrowserConfig {
                         command: Some(temp.path().join("missing-chrome").display().to_string()),
                         profile_root: Some(launched_root.clone()),
@@ -783,6 +789,12 @@ mod tests {
         assert_eq!(
             saved.browser_profile.as_ref().and_then(|profile| profile.root.as_ref()),
             Some(&launched_root)
+        );
+        assert!(saved.browser_profile.as_ref().is_some_and(|profile| profile.hidden));
+        assert!(
+            !saved
+                .to_panel_options(&crate::browser::BrowserConfig::default())
+                .visible
         );
         board.shutdown_terminal_panels();
     }
@@ -849,6 +861,7 @@ mod tests {
             browser_profile: Some(BrowserProfileState {
                 root: Some(PathBuf::from("/profiles/used-at-launch")),
                 backend: None,
+                hidden: false,
             }),
             ..PanelState::default()
         };

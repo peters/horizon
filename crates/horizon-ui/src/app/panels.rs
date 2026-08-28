@@ -268,6 +268,7 @@ impl HorizonApp {
         self.board
             .panels
             .iter()
+            .filter(|panel| panel.visible)
             .filter(|panel| match visible_workspace {
                 Some(workspace_id) => panel.workspace_id == workspace_id,
                 None => !self.workspace_is_detached(panel.workspace_id),
@@ -312,6 +313,10 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
+        if !self.board.panel(panel_id).is_some_and(|panel| panel.visible) {
+            self.fullscreen_panel = None;
+            return;
+        }
         let raw_events = ui.ctx().input(|input| input.events.clone());
         self.terminal_keyboard_events = self.terminal_events_for_viewport(ui.ctx(), &raw_events);
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
@@ -419,7 +424,7 @@ impl HorizonApp {
             self.board
                 .panels
                 .iter()
-                .filter(|panel| !self.workspace_is_detached(panel.workspace_id))
+                .filter(|panel| panel.visible && !self.workspace_is_detached(panel.workspace_id))
                 .enumerate()
                 .map(|(index, panel)| (panel.id, index)),
         );
@@ -486,43 +491,46 @@ impl HorizonApp {
 
     #[profiling::function]
     fn panel_snapshot(&self, panel_id: PanelId, canvas_rect: Rect) -> Option<PanelSnapshot> {
-        self.board.panel(panel_id).and_then(|panel| {
-            let geometry = self.panel_screen_geometry(panel, canvas_rect)?;
-            let terminal = panel.terminal();
-            let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
-            let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
+        self.board
+            .panel(panel_id)
+            .filter(|panel| panel.visible)
+            .and_then(|panel| {
+                let geometry = self.panel_screen_geometry(panel, canvas_rect)?;
+                let terminal = panel.terminal();
+                let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+                let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
 
-            let workspace_accent = self
-                .workspace_colors
-                .iter()
-                .find(|(workspace_id, _)| *workspace_id == panel.workspace_id)
-                .map(|(_, color)| *color);
+                let workspace_accent = self
+                    .workspace_colors
+                    .iter()
+                    .find(|(workspace_id, _)| *workspace_id == panel.workspace_id)
+                    .map(|(_, color)| *color);
 
-            let attention_badge = if self.template_config.features.attention_feed {
-                self.board
-                    .unresolved_attention_for_panel(panel_id)
-                    .map(|item| (item.severity, item.summary.clone()))
-            } else {
-                None
-            };
+                let attention_badge = if self.template_config.features.attention_feed {
+                    self.board
+                        .unresolved_attention_for_panel(panel_id)
+                        .map(|item| (item.severity, item.summary.clone()))
+                } else {
+                    None
+                };
 
-            Some(PanelSnapshot {
-                screen_rect: geometry.screen_rect,
-                terminal_body_screen_rect: geometry.terminal_body_screen_rect,
-                canvas_position,
-                canvas_size,
-                current_workspace_id: panel.workspace_id,
-                kind: panel.kind,
-                agent_status: panel.agent_status(),
-                history_size: terminal.map_or(0, horizon_core::Terminal::history_size),
-                scrollback_limit: terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
-                workspace_accent,
-                is_focused: self.board.focused == Some(panel_id),
-                is_renaming: self.renaming_panel == Some(panel_id),
-                attention_badge,
-                ssh_status: panel.ssh_status(),
+                Some(PanelSnapshot {
+                    screen_rect: geometry.screen_rect,
+                    terminal_body_screen_rect: geometry.terminal_body_screen_rect,
+                    canvas_position,
+                    canvas_size,
+                    current_workspace_id: panel.workspace_id,
+                    kind: panel.kind,
+                    agent_status: panel.agent_status(),
+                    history_size: terminal.map_or(0, horizon_core::Terminal::history_size),
+                    scrollback_limit: terminal.map_or(0, horizon_core::Terminal::scrollback_limit),
+                    workspace_accent,
+                    is_focused: self.board.focused == Some(panel_id),
+                    is_renaming: self.renaming_panel == Some(panel_id),
+                    attention_badge,
+                    ssh_status: panel.ssh_status(),
+                })
             })
-        })
     }
 
     #[profiling::function]

@@ -183,11 +183,12 @@ impl Board {
 
         if let Some(local_id) = &state.focused_panel_local_id
             && let Some(panel_id) = board.panel_id_by_local_id(local_id)
+            && board.panel(panel_id).is_some_and(|panel| panel.visible)
         {
             board.focused = Some(panel_id);
             board.active_workspace = board.panel_workspace_id(panel_id);
         } else {
-            board.focused = board.panels.first().map(|panel| panel.id);
+            board.focused = board.panels.iter().find(|panel| panel.visible).map(|panel| panel.id);
         }
 
         Ok(board)
@@ -343,7 +344,7 @@ impl Board {
         for panel in &mut self.panels {
             let panel_output: PanelProcessOutput = panel.process_output();
             output.activity.terminal |= panel_output.activity.terminal;
-            output.activity.browser |= panel_output.activity.browser;
+            output.activity.browser |= panel.visible && panel_output.activity.browser;
             output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
         }
@@ -371,17 +372,24 @@ impl Board {
     }
 
     pub fn focus(&mut self, id: PanelId) {
+        let Some(workspace_id) = self.panel_workspace_id(id) else {
+            return;
+        };
+        let _ = self.set_panel_visible(id, true);
         self.focused = Some(id);
-        self.active_workspace = self.panel_workspace_id(id);
+        self.active_workspace = Some(workspace_id);
     }
 
     pub fn focus_workspace(&mut self, id: WorkspaceId) {
         self.active_workspace = Some(id);
-        if let Some(workspace) = self.workspace(id)
-            && let Some(&panel_id) = workspace.panels.last()
-        {
-            self.focused = Some(panel_id);
-        }
+        self.focused = self.workspace(id).and_then(|workspace| {
+            workspace
+                .panels
+                .iter()
+                .rev()
+                .copied()
+                .find(|panel_id| self.panel(*panel_id).is_some_and(|panel| panel.visible))
+        });
     }
 
     #[must_use]

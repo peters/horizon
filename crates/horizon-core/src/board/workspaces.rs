@@ -100,7 +100,9 @@ impl Board {
 
         let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
         let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
+        let visible = opts.visible;
         let mut panel = spawn_panel(id, workspace, opts)?;
+        panel.visible = visible;
         panel.move_to(layout_position);
         panel.resize_layout(layout_size);
         self.panels.push(panel);
@@ -110,13 +112,60 @@ impl Board {
         }
         self.retained_empty_workspaces.remove(&workspace);
 
-        self.focus(id);
+        if visible {
+            self.focus(id);
+        }
         if let Some(layout) = workspace_layout {
             self.apply_workspace_layout(workspace, layout);
         }
         self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
 
         Ok(id)
+    }
+
+    /// Show or hide a panel without stopping its underlying session.
+    /// Returns whether the state changed.
+    pub fn set_panel_visible(&mut self, id: PanelId, visible: bool) -> bool {
+        let Some((workspace_id, was_visible)) = self.panel(id).map(|panel| (panel.workspace_id, panel.visible)) else {
+            return false;
+        };
+        if was_visible == visible {
+            return false;
+        }
+        let previous_frame = self.workspace_frame_rect(workspace_id);
+        if let Some(panel) = self.panel_mut(id) {
+            panel.visible = visible;
+        }
+        if visible {
+            self.focused = Some(id);
+            self.active_workspace = Some(workspace_id);
+        } else if self.focused == Some(id) {
+            self.focused = self
+                .workspace(workspace_id)
+                .and_then(|workspace| {
+                    workspace
+                        .panels
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|candidate| self.panel(*candidate).is_some_and(|panel| panel.visible))
+                })
+                .or_else(|| {
+                    self.panels
+                        .iter()
+                        .rev()
+                        .find(|panel| panel.visible)
+                        .map(|panel| panel.id)
+                });
+            if let Some(focused) = self.focused {
+                self.active_workspace = self.panel_workspace_id(focused);
+            }
+        }
+        self.reflow_workspace_layout(workspace_id);
+        if visible {
+            self.resolve_workspace_collisions_after_frame_growth(workspace_id, previous_frame);
+        }
+        true
     }
 
     pub fn close_panel(&mut self, id: PanelId) {

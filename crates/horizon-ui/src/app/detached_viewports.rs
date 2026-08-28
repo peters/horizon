@@ -409,6 +409,7 @@ impl HorizonApp {
             .workspace(workspace_id)
             .map(|workspace| workspace.panels.clone())
             .unwrap_or_default();
+        panel_ids.retain(|panel_id| self.board.panel(*panel_id).is_some_and(|panel| panel.visible));
         let focused = self.board.focused;
         panel_ids.sort_by_key(|panel_id| Some(*panel_id) == focused);
 
