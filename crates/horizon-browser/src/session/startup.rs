@@ -319,7 +319,11 @@ pub(super) fn run_driver(
         completion_tx: Some(completion_tx),
         process_control: process_control.clone(),
     };
-    let _coordination_lifetime = crate::coordination::CoordinationLifetime::start(config);
+    let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
+        let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return;
+    };
     let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
         return;
     };

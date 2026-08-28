@@ -3,6 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(crate) const PREPARE_FAILURE: &str = "failed to clear stale browser coordination; retry startup";
+
 /// Live backend endpoint and page metadata exported to an optional host
 /// coordination layer. Horizon uses this boundary for agent steering and
 /// handoff; standalone users can omit coordination entirely.
@@ -93,16 +95,17 @@ pub(crate) struct CoordinationLifetime {
 }
 
 impl CoordinationLifetime {
-    pub(crate) fn start(config: &crate::BrowserSessionConfig) -> Self {
+    pub(crate) fn start(config: &crate::BrowserSessionConfig) -> Option<Self> {
         if let Some(coordination) = &config.coordination
             && !coordination.prepare(&config.panel_local_id, Duration::from_secs(2))
         {
             tracing::warn!(target: "browser", "failed to remove stale browser coordination before startup");
+            return None;
         }
-        Self {
+        Some(Self {
             coordination: config.coordination.clone(),
             panel_local_id: config.panel_local_id.clone(),
-        }
+        })
     }
 }
 
@@ -111,5 +114,61 @@ impl Drop for CoordinationLifetime {
         if let Some(coordination) = &self.coordination {
             let _ = coordination.remove(&self.panel_local_id, Duration::from_secs(2));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct RefusingCoordination;
+
+    impl BrowserCoordination for RefusingCoordination {
+        fn prepare(&self, _panel_local_id: &str, _timeout: Duration) -> bool {
+            false
+        }
+
+        fn initialize(&self, _panel_local_id: &str, _state: &CoordinationState) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn update(&self, _panel_local_id: &str, _state: &CoordinationState) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn set_user_active(&self, _panel_local_id: &str, _active: bool) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn signals(&self, _panel_local_id: &str) -> std::io::Result<CoordinationSignals> {
+            Ok(CoordinationSignals::default())
+        }
+
+        fn acknowledge_handoff(&self, _panel_local_id: &str, _request_id: &str) -> std::io::Result<bool> {
+            Ok(false)
+        }
+
+        fn remove(&self, _panel_local_id: &str, _timeout: Duration) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn failed_stale_state_cleanup_aborts_coordination_startup() {
+        let config = crate::BrowserSessionConfig {
+            browser: crate::BrowserConfig::default(),
+            panel_local_id: "panel".into(),
+            initial_url: None,
+            width: 1,
+            height: 1,
+            frame_slot: Arc::new(crate::FrameSlot::new()),
+            coordination: Some(Arc::new(RefusingCoordination)),
+            capture_directory: None,
+        };
+
+        assert!(CoordinationLifetime::start(&config).is_none());
     }
 }

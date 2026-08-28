@@ -181,7 +181,11 @@ pub(crate) fn run_webdriver(
         tx: Some(completion_tx),
         process: process_control.clone(),
     };
-    let _coordination_lifetime = crate::coordination::CoordinationLifetime::start(config);
+    let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
+        let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return;
+    };
     let mut driver = match Driver::start(config, process_control, stop_requested) {
         Ok(driver) => driver,
         Err(error) => {
