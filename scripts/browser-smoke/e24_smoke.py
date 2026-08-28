@@ -17,7 +17,7 @@ import traceback
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Sequence, TextIO
+from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 sys.dont_write_bytecode = True
@@ -103,6 +103,25 @@ def mcp_client(command: Path, log: Path, environment: dict[str, str], backend: s
         os.environ.clear()
         os.environ.update(original)
 
+
+def wait_for_panel(
+    client: mcp_gate.McpClient,
+    backend: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        listed, _ = client.call("browser_list", {})
+        assert listed is not None
+        matching = [panel for panel in listed["panels"] if panel["backend"] == backend]
+        if len(matching) == 1:
+            return matching[0]
+        if len(matching) > 1:
+            raise AssertionError(f"E24 smoke found multiple {backend} browser panels: {matching}")
+        time.sleep(0.1)
+    raise AssertionError(f"E24 smoke did not discover its {backend} browser panel")
+
+
 def evaluate_quotes(
     client: mcp_gate.McpClient,
     panel_id: str,
@@ -117,28 +136,6 @@ def evaluate_quotes(
     if not isinstance(result, dict) or not isinstance(result.get("quotes"), list):
         raise AssertionError(f"E24 DOM quote extraction returned an unexpected value: {result}")
     return result
-
-def wait_for_payload(path: Path, timeout: float, after_sequence: int = 0) -> dict[str, Any] | None:
-    deadline = time.monotonic() + timeout
-    with path.open("r", encoding="utf-8") as stream:
-        while time.monotonic() < deadline:
-            line = stream.readline()
-            if not line:
-                time.sleep(0.025)
-                continue
-            record = json.loads(line)
-            if record.get("kind") == "http_response_body" and int(record.get("sequence", 0)) > after_sequence:
-                return record
-    return None
-
-def last_capture_sequence(path: Path) -> int:
-    sequence = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            sequence = max(sequence, int(json.loads(line).get("sequence", 0)))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-    return sequence
 
 def decimal_value(value: str) -> Decimal | None:
     match = re.search(r"[-+]?\d[\d\s\u00a0\u202f.]*(?:,\d+)?|[-+]?\d+(?:\.\d+)?", value)
@@ -171,6 +168,10 @@ def json_decimal(value: Any) -> Decimal | None:
         return None
 
 def feed_items(record: dict[str, Any]) -> list[dict[str, Any]]:
+    # A watch response may deliberately return only a bounded prefix for a
+    # large, unrelated market body. Never interpret partial JSONP as quotes.
+    if record.get("truncated"):
+        return []
     text = payload_text(record).strip()
     match = re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*\((.*)\)\s*;?", text, re.DOTALL)
     if match is None:
@@ -195,27 +196,87 @@ def feed_items(record: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-class NdjsonTail:
-    """Incrementally read complete records without repeatedly parsing the capture file."""
+@dataclass
+class NetworkWatch:
+    """Consume one Horizon-owned capture through the bounded MCP cursor contract."""
 
-    def __init__(self, path: Path) -> None:
-        self.stream: TextIO = path.open("r", encoding="utf-8")
+    client: mcp_gate.McpClient
+    panel_id: str
+    capture_id: str
+    action_ids: list[str]
+    retain_records: bool = False
+    next_sequence: int = 0
+    records: list[dict[str, Any]] = field(default_factory=list)
+    calls: int = 0
+    timed_out_calls: int = 0
+    returned_payloads_truncated: int = 0
+    sequence_gaps: int = 0
+    malformed_records: int = 0
+    connection_urls_truncated: int = 0
+    capture_changed: bool = False
+    file_reset: bool = False
+    records_dropped: int = 0
+    payloads_truncated: int = 0
+    file_limit_reached: bool = False
+    writer_failed: bool = False
 
-    def drain(self) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        while True:
-            position = self.stream.tell()
-            line = self.stream.readline()
-            if not line:
-                break
-            if not line.endswith("\n"):
-                self.stream.seek(position)
-                break
-            records.append(json.loads(line))
+    def poll(self, wait_seconds: float) -> list[dict[str, Any]]:
+        wait_millis = max(1, min(60_000, math.ceil(wait_seconds * 1000)))
+        result = mcp_gate.record_action(
+            self.client,
+            "browser_network_watch",
+            {
+                "panel_id": self.panel_id,
+                "capture_id": self.capture_id,
+                "after_sequence": self.next_sequence,
+                "wait_millis": wait_millis,
+                "max_records": 250,
+                "url_patterns": ["mws.fcgi"],
+                "event_kinds": ["http_response_body"],
+                "include_payload": True,
+                "max_payload_bytes": 64 * 1024,
+                "timeout_millis": 60_000,
+            },
+            self.action_ids,
+        )
+        if result["capture_id"] != self.capture_id:
+            raise AssertionError(
+                f"E24 capture changed from {self.capture_id} to {result['capture_id']}"
+            )
+        self.next_sequence = int(result["next_sequence"])
+        self.calls += 1
+        self.timed_out_calls += int(bool(result["timed_out"]))
+        self.returned_payloads_truncated += int(result["returned_payloads_truncated"])
+        self.sequence_gaps += int(result["sequence_gaps"])
+        self.malformed_records += int(result["malformed_records"])
+        self.connection_urls_truncated += int(result["connection_urls_truncated"])
+        self.capture_changed |= bool(result["capture_changed"])
+        self.file_reset |= bool(result["file_reset"])
+        self.records_dropped = max(self.records_dropped, int(result["records_dropped"]))
+        self.payloads_truncated = max(self.payloads_truncated, int(result["payloads_truncated"]))
+        self.file_limit_reached |= bool(result["file_limit_reached"])
+        self.writer_failed |= bool(result["writer_failed"])
+        records = result["records"]
+        if self.retain_records:
+            self.records.extend(records)
         return records
 
-    def close(self) -> None:
-        self.stream.close()
+    def health(self) -> dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "timed_out_calls": self.timed_out_calls,
+            "next_sequence": self.next_sequence,
+            "returned_payloads_truncated": self.returned_payloads_truncated,
+            "sequence_gaps": self.sequence_gaps,
+            "malformed_records": self.malformed_records,
+            "connection_urls_truncated": self.connection_urls_truncated,
+            "capture_changed": self.capture_changed,
+            "file_reset": self.file_reset,
+            "records_dropped": self.records_dropped,
+            "payloads_truncated": self.payloads_truncated,
+            "file_limit_reached": self.file_limit_reached,
+            "writer_failed": self.writer_failed,
+        }
 
 
 @dataclass
@@ -228,8 +289,6 @@ class MarketState:
     response_body_errors: int = 0
     response_body_truncations: int = 0
     stock_updates: int = 0
-    first_kind: str | None = None
-    last_kind: str | None = None
 
     def ingest(self, records: list[dict[str, Any]]) -> tuple[dict[str, int], set[str]]:
         counts = {"new_response_bodies": 0, "new_stock_updates": 0}
@@ -237,15 +296,15 @@ class MarketState:
         for record in records:
             self.records += 1
             kind = str(record.get("kind", ""))
-            self.first_kind = self.first_kind or kind
-            self.last_kind = kind
             if kind != "http_response_body":
                 continue
             counts["new_response_bodies"] += 1
             self.response_bodies += 1
             self.response_body_bytes += int(record.get("payload_bytes", 0) or 0)
             self.response_body_errors += int(bool(record.get("error")))
-            self.response_body_truncations += int(bool(record.get("truncated")))
+            if record.get("truncated"):
+                self.response_body_truncations += 1
+                continue
             timestamp = int(record.get("timestamp_millis", 0) or 0)
             for item in feed_items(record):
                 price = json_decimal(item.get("lastprice"))
@@ -310,6 +369,7 @@ class MarketState:
             "elapsed_seconds": round(elapsed_seconds, 3),
             **new_counts,
             "captured_response_bodies": self.response_bodies,
+            "bounded_response_bodies": self.response_body_truncations,
             "captured_stock_updates": self.stock_updates,
             "current_stocks": len(self.latest),
             "latest_feed_age_ms": (
@@ -368,7 +428,7 @@ def compare_latest_quotes(
 
 
 def wait_for_market_batch(
-    tail: NdjsonTail,
+    watch: NetworkWatch,
     state: MarketState,
     timeout_seconds: float,
 ) -> tuple[dict[str, int], set[str]]:
@@ -376,19 +436,28 @@ def wait_for_market_batch(
     totals = {"new_response_bodies": 0, "new_stock_updates": 0}
     instruments: set[str] = set()
     while time.monotonic() < deadline:
-        counts, updated = state.ingest(tail.drain())
+        remaining = max(0.001, deadline - time.monotonic())
+        counts, updated = state.ingest(watch.poll(remaining))
         instruments.update(updated)
         for key, value in counts.items():
             totals[key] += value
         if totals["new_stock_updates"] > 0:
-            time.sleep(0.25)
-            counts, updated = state.ingest(tail.drain())
+            counts, updated = state.ingest(watch.poll(0.25))
             instruments.update(updated)
             for key, value in counts.items():
                 totals[key] += value
             return totals, instruments
-        time.sleep(0.05)
     raise AssertionError("fresh E24 market response did not arrive through the browser capture")
+
+
+def observe_until(watch: NetworkWatch, state: MarketState, deadline: float) -> dict[str, int]:
+    totals = {"new_response_bodies": 0, "new_stock_updates": 0}
+    while time.monotonic() < deadline:
+        records = watch.poll(max(0.001, deadline - time.monotonic()))
+        counts, _ = state.ingest(records)
+        for key, value in counts.items():
+            totals[key] += value
+    return totals
 
 
 def reload_with_fallback(
@@ -548,7 +617,7 @@ def verify_audit(
 def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: float) -> dict[str, Any]:
     mcp_gate.initialize(client)
     action_ids: list[str] = []
-    panel = mcp_gate.wait_for_panel(client, args.backend, 90)
+    panel = wait_for_panel(client, args.backend, 90)
     panel_ready = time.monotonic()
     panel_id = panel["panel_id"]
     detail, _ = client.call("browser_panel", {"panel_id": panel_id})
@@ -558,6 +627,7 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
     if detail["network_capture"].get("http_response_body_transport") not in {"cdp", "webdriver_bidi"}:
         raise AssertionError(f"native HTTP response bodies are unavailable: {detail['network_capture']}")
     started_at = time.monotonic()
+    capture_started_wall_millis = int(time.time() * 1000)
     started = mcp_gate.record_action(
         client,
         "browser_network",
@@ -574,6 +644,8 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
         action_ids,
     )
     capture_path = Path(started["path"])
+    watch = NetworkWatch(client, panel_id, started["capture_id"], action_ids, retain_records=True)
+    state = MarketState()
     stopped: dict[str, Any] | None = None
     try:
         navigation_started = time.monotonic()
@@ -596,49 +668,32 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
             action_ids,
         )
         dom_ready = time.monotonic()
-        first_payload = wait_for_payload(capture_path, args.feed_timeout_seconds)
+        wait_for_market_batch(watch, state, args.feed_timeout_seconds)
         first_payload_seen = time.monotonic()
         dom_start = evaluate_quotes(client, panel_id, action_ids)
-        refreshed_payload: dict[str, Any] | None = None
-        refresh_boundary = 0
-        refresh_started: float | None = None
-        refresh_finished: float | None = None
-        refresh_payload_seen: float | None = None
-        if first_payload is not None:
-            deadline = time.monotonic() + args.observation_seconds
-            while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                print(
-                    json.dumps({"capture_active": True, "remaining_seconds": round(max(0.0, remaining), 1)}),
-                    flush=True,
-                )
-                time.sleep(min(5.0, max(0.05, remaining)))
-            refresh_boundary = last_capture_sequence(capture_path)
-            refresh_started = time.monotonic()
-            mcp_gate.record_action(
-                client,
-                "browser_act",
-                {"panel_id": panel_id, "action": "reload", "timeout_millis": 60_000},
-                action_ids,
-            )
-            refresh_finished = time.monotonic()
-            refreshed_payload = wait_for_payload(
-                capture_path,
-                args.feed_timeout_seconds,
-                refresh_boundary,
-            )
-            refresh_payload_seen = time.monotonic()
-            mcp_gate.record_action(
-                client,
-                "browser_wait",
-                {
-                    "panel_id": panel_id,
-                    "selector": "table.millistream-list-table",
-                    "state": "present",
-                    "timeout_millis": 60_000,
-                },
-                action_ids,
-            )
+        observe_until(watch, state, time.monotonic() + args.observation_seconds)
+        refresh_boundary = watch.next_sequence
+        refresh_started = time.monotonic()
+        mcp_gate.record_action(
+            client,
+            "browser_act",
+            {"panel_id": panel_id, "action": "reload", "timeout_millis": 60_000},
+            action_ids,
+        )
+        refresh_finished = time.monotonic()
+        wait_for_market_batch(watch, state, args.feed_timeout_seconds)
+        refresh_payload_seen = time.monotonic()
+        mcp_gate.record_action(
+            client,
+            "browser_wait",
+            {
+                "panel_id": panel_id,
+                "selector": "table.millistream-list-table",
+                "state": "present",
+                "timeout_millis": 60_000,
+            },
+            action_ids,
+        )
         dom_final_started = time.monotonic()
         dom_final = evaluate_quotes(client, panel_id, action_ids)
         dom_final_finished = time.monotonic()
@@ -657,9 +712,19 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
     assert stopped is not None
     stop_finished = time.monotonic()
     verify_jq(capture_path)
-    records = [json.loads(line) for line in capture_path.read_text(encoding="utf-8").splitlines()]
+    records = watch.records
     decode_started = time.monotonic()
     received = [record for record in records if record.get("kind") == "http_response_body"]
+    complete_received = [record for record in received if not record.get("truncated")]
+    first_payload = complete_received[0] if complete_received else None
+    refreshed_payload = next(
+        (
+            record
+            for record in complete_received
+            if int(record.get("sequence", 0)) > refresh_boundary
+        ),
+        None,
+    )
     initial_matches = match_quotes(dom_start, records)
     final_matches = match_quotes(dom_final, records)
     matches = initial_matches + final_matches
@@ -672,6 +737,21 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
         key
         for key in ["records_dropped", "payloads_truncated", "file_limit_reached", "writer_failed"]
         if stopped.get(key) not in (0, False)
+    ]
+    watch_health_failures = [
+        key
+        for key in [
+            "capture_changed",
+            "file_reset",
+            "sequence_gaps",
+            "malformed_records",
+            "connection_urls_truncated",
+            "records_dropped",
+            "payloads_truncated",
+            "file_limit_reached",
+            "writer_failed",
+        ]
+        if watch.health()[key] not in (0, False)
     ]
     failures = []
     if first_payload is None:
@@ -690,11 +770,12 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
         failures.append("one or more E24 response bodies could not be retrieved")
     if health_failures:
         failures.append(f"capture health failed: {', '.join(health_failures)}")
+    if watch_health_failures:
+        failures.append(f"network watch health failed: {', '.join(watch_health_failures)}")
     if audit["missing_terminal_states"]:
         failures.append("one or more MCP actions lack complete audit states")
     first_timestamp = first_payload.get("timestamp_millis") if first_payload else None
     refreshed_timestamp = refreshed_payload.get("timestamp_millis") if refreshed_payload else None
-    capture_start_timestamp = records[0].get("timestamp_millis") if records else None
     return {
         "audit": audit,
         "backend": args.backend,
@@ -704,8 +785,10 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
             "path": str(capture_path),
             "response_body_bytes": sum(record.get("payload_bytes", 0) or 0 for record in received),
             "response_bodies": len(received),
-            "records": len(records),
+            "bounded_response_bodies": len(received) - len(complete_received),
+            "records": stopped["records_written"],
             "transport": stopped["transport"],
+            "watch": watch.health(),
         },
         "dom": {
             "final_observed_at_millis": dom_final["observedAtMillis"],
@@ -719,8 +802,8 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
         "passed": not failures,
         "timings_ms": {
             "capture_start_to_first_payload": (
-                first_timestamp - capture_start_timestamp
-                if isinstance(first_timestamp, int) and isinstance(capture_start_timestamp, int)
+                first_timestamp - capture_started_wall_millis
+                if isinstance(first_timestamp, int)
                 else None
             ),
             "decode_and_match": round((decode_finished - decode_started) * 1000, 3),
@@ -729,12 +812,8 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
             "navigation": round((navigation_finished - navigation_started) * 1000, 3),
             "panel_ready_to_capture_start": round((started_at - panel_ready) * 1000, 3),
             "feed_wait": round((first_payload_seen - dom_ready) * 1000, 3),
-            "refresh": round((refresh_finished - refresh_started) * 1000, 3)
-            if refresh_started is not None and refresh_finished is not None
-            else None,
-            "refresh_feed_wait": round((refresh_payload_seen - refresh_finished) * 1000, 3)
-            if refresh_payload_seen is not None and refresh_finished is not None
-            else None,
+            "refresh": round((refresh_finished - refresh_started) * 1000, 3),
+            "refresh_feed_wait": round((refresh_payload_seen - refresh_finished) * 1000, 3),
             "snapshot_interval": refreshed_timestamp - first_timestamp
             if isinstance(refreshed_timestamp, int) and isinstance(first_timestamp, int)
             else None,
@@ -747,7 +826,7 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
             "refreshed_match_count": len(final_matches),
             "minimum_matches": args.minimum_matches,
             "sample_dom_rows": dom_final["quotes"][:8],
-            "sample_received_payloads": [payload_text(record)[:300] for record in received[:4]],
+            "sample_received_payloads": [payload_text(record)[:300] for record in complete_received[:4]],
         },
     }
 
@@ -760,7 +839,7 @@ def exercise_periodic(
     mcp_gate.initialize(client)
     action_ids: list[str] = []
     failed_action_ids: list[str] = []
-    panel = mcp_gate.wait_for_panel(client, args.backend, 90)
+    panel = wait_for_panel(client, args.backend, 90)
     panel_id = panel["panel_id"]
     detail, _ = client.call("browser_panel", {"panel_id": panel_id})
     assert detail is not None
@@ -785,8 +864,8 @@ def exercise_periodic(
         action_ids,
     )
     capture_path = Path(started["path"])
+    watch = NetworkWatch(client, panel_id, started["capture_id"], action_ids)
     stopped: dict[str, Any] | None = None
-    tail = NdjsonTail(capture_path)
     state = MarketState()
     summaries: list[dict[str, Any]] = []
     reload_retries: list[dict[str, Any]] = []
@@ -808,7 +887,7 @@ def exercise_periodic(
             },
             action_ids,
         )
-        wait_for_market_batch(tail, state, args.feed_timeout_seconds)
+        wait_for_market_batch(watch, state, args.feed_timeout_seconds)
         state.previous_prices = {
             instrument: price
             for instrument, (_, item) in state.latest.items()
@@ -819,11 +898,7 @@ def exercise_periodic(
         expected_intervals = math.ceil(args.observation_seconds / interval_seconds)
         for interval in range(1, expected_intervals + 1):
             deadline = monitor_started + min(args.observation_seconds, interval * interval_seconds)
-            while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                time.sleep(min(0.25, max(0.01, remaining)))
-
-            state.ingest(tail.drain())
+            observe_until(watch, state, deadline)
             reload_started = time.monotonic()
             boundary_delay_ms = max(0.0, (reload_started - deadline) * 1000)
             retry = reload_with_fallback(
@@ -848,7 +923,7 @@ def exercise_periodic(
             )
             reload_finished = time.monotonic()
             new_counts, fresh_instruments = wait_for_market_batch(
-                tail,
+                watch,
                 state,
                 args.feed_timeout_seconds,
             )
@@ -881,6 +956,7 @@ def exercise_periodic(
                     "payloads_truncated": status["payloads_truncated"],
                     "file_limit_reached": status["file_limit_reached"],
                     "writer_failed": status["writer_failed"],
+                    "network_watch": watch.health(),
                 },
                 "reload_retry": retry,
             }
@@ -894,17 +970,11 @@ def exercise_periodic(
             action_ids,
         )
     finally:
-        try:
-            if stopped is None:
-                stopped, _ = client.call(
-                    "browser_network",
-                    {"panel_id": panel_id, "operation": "stop", "timeout_millis": 60_000},
-                )
-        finally:
-            try:
-                state.ingest(tail.drain())
-            finally:
-                tail.close()
+        if stopped is None:
+            stopped, _ = client.call(
+                "browser_network",
+                {"panel_id": panel_id, "operation": "stop", "timeout_millis": 60_000},
+            )
     assert stopped is not None
     verify_jq(capture_path)
     audit = verify_audit(client, panel_id, action_ids, failed_action_ids)
@@ -934,8 +1004,6 @@ def exercise_periodic(
         )
     if state.response_body_errors:
         failures.append(f"{state.response_body_errors} response bodies could not be retrieved")
-    if state.response_body_truncations:
-        failures.append(f"{state.response_body_truncations} response bodies were truncated")
     health_failures = [
         key
         for key in ["records_dropped", "payloads_truncated", "file_limit_reached", "writer_failed"]
@@ -943,8 +1011,23 @@ def exercise_periodic(
     ]
     if health_failures:
         failures.append(f"capture health failed: {', '.join(health_failures)}")
-    if state.first_kind != "capture_started" or state.last_kind != "capture_stopped":
-        failures.append(f"capture lifecycle was incomplete: {state.first_kind} -> {state.last_kind}")
+    watch_health_failures = [
+        key
+        for key in [
+            "capture_changed",
+            "file_reset",
+            "sequence_gaps",
+            "malformed_records",
+            "connection_urls_truncated",
+            "records_dropped",
+            "payloads_truncated",
+            "file_limit_reached",
+            "writer_failed",
+        ]
+        if watch.health()[key] not in (0, False)
+    ]
+    if watch_health_failures:
+        failures.append(f"network watch health failed: {', '.join(watch_health_failures)}")
     if audit["missing_terminal_states"] or audit["missing_failed_states"]:
         failures.append("one or more MCP actions lack complete audit states")
     return {
@@ -954,12 +1037,14 @@ def exercise_periodic(
             "active_summary_intervals": active_intervals,
             "bytes_written": stopped["bytes_written"],
             "path": str(capture_path),
-            "records": state.records,
+            "records": stopped["records_written"],
             "response_bodies": state.response_bodies,
+            "bounded_response_bodies": state.response_body_truncations,
             "response_body_bytes": state.response_body_bytes,
             "stock_updates": state.stock_updates,
             "stocks": len(state.latest),
             "transport": stopped["transport"],
+            "watch": watch.health(),
         },
         "failures": failures,
         "git_head": browser_smoke.git_head(Path(__file__).resolve().parents[2]),

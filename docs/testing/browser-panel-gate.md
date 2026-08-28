@@ -142,9 +142,11 @@ before changing anything.
 
 Run this targeted online gate when HTTP response-body capture, native network
 transport, or high-rate processing changes. It controls the panel only through
-MCP: E24 is loaded by the browser, and the runner parses only the private NDJSON
-path returned by `browser_network`. It never fetches market data independently
-with Python, curl, or another HTTP client.
+MCP: E24 and every script/data response are loaded by the browser. The runner
+consumes filtered records through `browser_network_watch`; it may use read-only
+Unix tools only on the exact private NDJSON path returned by `browser_network`.
+It never fetches market data independently with Python, curl, or another HTTP
+client.
 
 During Oslo market hours (weekdays 09:00–16:20), run both supported network
 backends from a clean exact-head checkout:
@@ -154,15 +156,20 @@ python3 scripts/browser-smoke/e24_smoke.py --backend firefox --horizon target/de
 python3 scripts/browser-smoke/e24_smoke.py --backend chromium --horizon target/debug/horizon
 ```
 
-Each run captures native, filtered `mws.fcgi` response bodies, waits one minute,
-reloads, and requires visible DOM prices and daily changes to match the captured
-feed both before and after the interval. It also checks audit completeness,
-capture bounds, drops, truncation, normal window close, manifests, and exact
-task-owned browser cleanup. The report records timings and a compact market
-summary. Use `--allow-dirty` only for provisional diagnosis and `--keep-open`
-only when a tester is present to close the exact window. Because this gate uses
-a public site, report external markup/feed drift separately from a browser
-regression and keep G1 as the deterministic pass/fail oracle.
+Each run captures native, filtered market responses, waits one minute, reloads,
+and requires visible DOM prices and daily changes to match readable payload
+values loaded by E24 in that browser, both before and after the interval. If a
+future wire body is encrypted, locate the already-loaded minified bundle and
+observe or invoke its page-world decode path through `browser_evaluate`; do not
+independently download the bundle, invent a key, or label the encrypted
+envelope as a quote. The run also checks watch cursors,
+audit completeness, capture bounds, drops, truncation, normal window close,
+manifests, and exact task-owned browser cleanup. The report records timings and
+a compact market summary. Use `--allow-dirty` only for provisional diagnosis
+and `--keep-open` only when a tester is present to close the exact window.
+Because this gate uses a public site, report external markup/feed drift
+separately from a browser regression and keep G1 as the deterministic pass/fail
+oracle.
 
 Use the periodic mode to prove sustained, low-overhead consumption and produce
 an agent-readable summary every 30 seconds for five minutes:
@@ -174,15 +181,20 @@ python3 scripts/browser-smoke/e24_smoke.py --backend chromium --horizon target/d
   --observation-seconds 300 --summary-interval-seconds 30
 ```
 
-The runner incrementally tails the private NDJSON file returned by MCP, so each
-interval processes only newly appended records. E24 currently populates this
-view with browser-originated HTTP/JSONP snapshots rather than a WebSocket and
-does not refresh the table autonomously, so the runner reloads through MCP at
-each boundary. Every `e24_market_summary` line includes price changes, daily
-gainers and losers, fresh-body counts, capture health, timing, and an exact
-DOM/feed comparison. A typed reload timeout gets one audited
-`browser_navigate` fallback and remains visible in `reload_retry`; any failed
-fallback, missing interval, capture loss, or weak DOM match fails the gate.
+The runner advances the `browser_network_watch` sequence cursor, so each
+interval processes only new browser-originated records without rereading the
+capture. E24 currently populates `/bors` with readable HTTP/JSONP snapshots
+rather than a WebSocket and does not update the table autonomously, so the
+runner reloads through MCP at each boundary. Every `e24_market_summary` line includes
+price changes, daily gainers and losers, fresh-record counts, capture health,
+timing, and an exact DOM/feed comparison. A typed reload timeout gets one
+audited `browser_navigate` fallback and remains visible in `reload_retry`; any
+failed fallback, missing interval, capture loss, or weak DOM match fails the
+gate.
+The watch contract may return only bounded metadata/prefixes for E24's very
+large non-quote responses. The runner reports those records, never decodes a
+record marked `truncated`, and derives quotes only from complete browser-loaded
+JSONP. Any truncation or drop in the underlying capture remains a failure.
 
 ### G2 — backend UI and lifecycle lane
 
