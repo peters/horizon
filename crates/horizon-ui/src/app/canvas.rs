@@ -178,7 +178,7 @@ impl HorizonApp {
                                 if ui.add(super::util::chrome_button("New Terminal")).clicked() {
                                     if let Some(preset) = self.presets.first().cloned() {
                                         let workspace_id = self.ensure_workspace_visible(ctx);
-                                        self.add_panel_to_workspace(workspace_id, preset, None);
+                                        self.add_panel_to_workspace(ctx, workspace_id, preset, None);
                                     } else {
                                         self.create_panel(ctx);
                                     }

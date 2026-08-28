@@ -99,7 +99,7 @@ impl HorizonApp {
             CommandId::NewPanel => {
                 let workspace_id = self.ensure_workspace_visible(ctx);
                 if let Some(preset) = self.presets.first().cloned() {
-                    self.add_panel_to_workspace(workspace_id, preset, None);
+                    self.add_panel_to_workspace(ctx, workspace_id, preset, None);
                 } else {
                     self.create_panel(ctx);
                 }
@@ -112,7 +112,7 @@ impl HorizonApp {
                         .board
                         .active_workspace
                         .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
-                    self.add_panel_to_workspace(workspace_id, preset, None);
+                    self.add_panel_to_workspace(ctx, workspace_id, preset, None);
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),

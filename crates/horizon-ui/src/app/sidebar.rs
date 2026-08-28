@@ -288,9 +288,18 @@ impl HorizonApp {
         self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
 
         if row_clicked {
-            if workspace.panels.len() == 1 {
-                actions.focus_panel = Some(workspace.panels[0].id);
-                actions.pan_to_panel = Some(workspace.panels[0].id);
+            // With the accordion the panel rows are collapsed, so selecting a
+            // workspace reveals its selected panel instead of panning to the
+            // whole workspace. Single-panel workspaces behave the same in
+            // both modes.
+            let reveal = if accordion || workspace.panels.len() <= 1 {
+                self.workspace_reveal_panel(workspace.id, &workspace.panels)
+            } else {
+                None
+            };
+            if let Some(panel_id) = reveal {
+                actions.focus_panel = Some(panel_id);
+                actions.pan_to_panel = Some(panel_id);
             } else {
                 actions.pan_to_workspace = Some(workspace.id);
             }
@@ -304,6 +313,15 @@ impl HorizonApp {
             }
         }
         ui.add_space(8.0);
+    }
+
+    /// The panel a workspace-row click reveals: the focused panel when it
+    /// belongs to the workspace, otherwise the workspace's first panel.
+    fn workspace_reveal_panel(&self, workspace_id: WorkspaceId, panels: &[SidebarPanelEntry]) -> Option<PanelId> {
+        self.board
+            .focused
+            .filter(|panel_id| self.board.panel_workspace_id(*panel_id) == Some(workspace_id))
+            .or_else(|| panels.first().map(|panel| panel.id))
     }
 
     fn handle_sidebar_workspace_drag(
@@ -861,8 +879,8 @@ fn paint_panel_row_bg(ui: &mut egui::Ui, item_rect: Rect, workspace_color: Color
 #[cfg(test)]
 mod tests {
     use super::{
-        SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
-        sidebar_workspace_name_width, sidebar_workspace_shows_panels,
+        SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock,
+        sidebar_workspace_insert_dock_side, sidebar_workspace_name_width, sidebar_workspace_shows_panels,
     };
     use horizon_core::WorkspaceDockSide;
 
@@ -915,5 +933,71 @@ mod tests {
         let width = sidebar_workspace_name_width(143.0, true);
         assert!(width < 48.0);
         assert!((width - 43.0).abs() <= f32::EPSILON);
+    }
+
+    fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
+        SidebarPanelEntry {
+            id,
+            title: "panel".to_string(),
+            kind: horizon_core::PanelKind::Editor,
+            is_focused,
+            attention: None,
+        }
+    }
+
+    fn editor_panel_options(name: &str) -> horizon_core::PanelOptions {
+        horizon_core::PanelOptions {
+            name: Some(name.to_string()),
+            kind: horizon_core::PanelKind::Editor,
+            command: Some("seed".to_string()),
+            ..horizon_core::PanelOptions::default()
+        }
+    }
+
+    #[test]
+    fn workspace_reveal_panel_prefers_the_focused_panel_of_the_workspace() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("a");
+        let first = app
+            .board
+            .create_panel(editor_panel_options("first"), workspace)
+            .expect("panel");
+        let second = app
+            .board
+            .create_panel(editor_panel_options("second"), workspace)
+            .expect("panel");
+        app.board.focus(second);
+
+        let panels = [sidebar_entry(first, false), sidebar_entry(second, true)];
+        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(second));
+    }
+
+    #[test]
+    fn workspace_reveal_panel_falls_back_to_first_panel() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("a");
+        let other = app.board.create_workspace("b");
+        let first = app
+            .board
+            .create_panel(editor_panel_options("first"), workspace)
+            .expect("panel");
+        let second = app
+            .board
+            .create_panel(editor_panel_options("second"), workspace)
+            .expect("panel");
+        let outsider = app
+            .board
+            .create_panel(editor_panel_options("other"), other)
+            .expect("panel");
+
+        // Focus lives in another workspace -> the workspace's first panel.
+        app.board.focus(outsider);
+        let panels = [sidebar_entry(first, false), sidebar_entry(second, false)];
+        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(first));
+
+        // No focus at all -> first panel; no panels -> nothing to reveal.
+        app.board.focused = None;
+        assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(first));
+        assert_eq!(app.workspace_reveal_panel(other, &[]), None);
     }
 }

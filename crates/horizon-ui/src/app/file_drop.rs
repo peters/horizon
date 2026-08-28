@@ -312,8 +312,9 @@ impl HorizonApp {
                 size: Some(editor_panel_size_for_file(&path)),
                 ..PanelOptions::default()
             };
-            if let Err(error) = self.create_panel_with_options(options, workspace_id) {
-                tracing::error!("failed to create editor panel from dropped file: {error}");
+            match self.create_panel_with_options(options, workspace_id) {
+                Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
+                Err(error) => tracing::error!("failed to create editor panel from dropped file: {error}"),
             }
             self.mark_runtime_dirty();
         }
