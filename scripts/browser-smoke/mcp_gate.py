@@ -599,6 +599,34 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if final_snapshot["title"] != "Horizon Browser Smoke - Navigation Complete":
         raise AssertionError(final_snapshot)
 
+    retained_title = final_snapshot["title"]
+    if args.backend == "safari":
+        record_action(
+            client,
+            "browser_navigate",
+            {
+                "panel_id": panel_id,
+                "url": f"{args.base_url}/slow-navigation.html",
+                "timeout_millis": 60000,
+            },
+            action_ids,
+        )
+        record_action(
+            client,
+            "browser_wait",
+            {
+                "panel_id": panel_id,
+                "selector": "#slow-marker",
+                "state": "visible",
+                "timeout_millis": 60000,
+            },
+            action_ids,
+        )
+        slow_snapshot = record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
+        retained_title = slow_snapshot["title"]
+        if retained_title != "Horizon Browser Smoke - Slow Navigation":
+            raise AssertionError(slow_snapshot)
+
     _, navigation_error = client.call(
         "browser_navigate",
         {"panel_id": panel_id, "url": "http://[::1"},
@@ -610,7 +638,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(f"immediate navigation failure was not typed: {navigation_error}")
     failed_ids.append(failed_action_id(navigation_error))
     retained_snapshot = record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
-    if retained_snapshot["title"] != final_snapshot["title"]:
+    if retained_snapshot["title"] != retained_title:
         raise AssertionError(retained_snapshot)
 
     if network_capture["supported"]:

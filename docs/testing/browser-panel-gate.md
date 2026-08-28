@@ -258,6 +258,10 @@ Safari requirements:
    settings, profiles, and default-browser choice did not change.
 6. Under signal minimization Safari reports that the policy is unsupported by
    the backend; do not claim parity with Chromium/Firefox preload behavior.
+7. Run the MCP gate's 11-second delayed navigation. It must complete through
+   Safari's eager, bounded page-load policy instead of failing at the ordinary
+   10-second WebDriver I/O limit; the following invalid navigation must still
+   return a typed failure and retain the delayed page.
 
 Safari is not release-supported until this exact-head lane passes on macOS.
 

@@ -28,6 +28,8 @@ mod semantic;
 mod shutdown;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
+const NAVIGATION_HTTP_TIMEOUT: Duration = Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS + 5_000);
 const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
 const STATIC_CONFIRMATIONS: u8 = 3;
@@ -752,6 +754,8 @@ fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, reques
                 "browserName": "firefox",
                 "webSocketUrl": true,
                 "acceptInsecureCerts": false,
+                "pageLoadStrategy": "eager",
+                "timeouts": { "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS },
                 "moz:firefoxOptions": Value::Object(options),
             }))
         }
@@ -759,6 +763,8 @@ fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, reques
             let mut capabilities = Map::new();
             capabilities.insert("browserName".to_string(), json!("safari"));
             capabilities.insert("acceptInsecureCerts".to_string(), json!(false));
+            capabilities.insert("pageLoadStrategy".to_string(), json!("eager"));
+            capabilities.insert("timeouts".to_string(), json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
             if request_bidi {
                 capabilities.insert("webSocketUrl".to_string(), json!(true));
             }
@@ -913,9 +919,9 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, PendingHistoryStart, bidi_navigation_complete, bidi_navigation_failed, capture_is_current,
-        classic_navigation_committed, consume_pending_history_start, new_session_capabilities,
-        parse_new_session_response, safe_session_id, validate_firefox_args,
+        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, bidi_navigation_complete,
+        bidi_navigation_failed, capture_is_current, classic_navigation_committed, consume_pending_history_start,
+        new_session_capabilities, parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -1090,5 +1096,23 @@ mod tests {
 
         assert_eq!(with_bidi["webSocketUrl"], true);
         assert!(classic.get("webSocketUrl").is_none());
+    }
+
+    #[test]
+    fn webdriver_navigation_is_eager_and_bounded() {
+        let Some(profile_root) = tempfile::tempdir().ok() else {
+            panic!("temporary profile root should be available");
+        };
+        for backend in [BackendKind::FirefoxBidi, BackendKind::SafariWebDriver] {
+            let config = BrowserConfig {
+                backend,
+                profile_root: Some(profile_root.path().to_path_buf()),
+                ..BrowserConfig::default()
+            };
+            let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+
+            assert_eq!(capabilities["pageLoadStrategy"], "eager");
+            assert_eq!(capabilities["timeouts"]["pageLoad"], PAGE_LOAD_TIMEOUT_MILLIS);
+        }
     }
 }

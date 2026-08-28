@@ -30,10 +30,20 @@ class SmokeHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        if self.path.split("?", 1)[0] == "/market-stream":
+        path = self.path.split("?", 1)[0]
+        if path == "/market-stream":
             self._serve_market_stream()
             return
-        if self.path.split("?", 1)[0] == "/healthz":
+        if path == "/slow-navigation.html":
+            time.sleep(11)
+            body = b"<!doctype html><title>Horizon Browser Smoke - Slow Navigation</title><p id='slow-marker'>ready</p>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/healthz":
             body = b"horizon-browser-smoke\n"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")

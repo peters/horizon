@@ -47,24 +47,39 @@ impl HttpClient {
     }
 
     pub(super) fn get(&self, path: &str) -> Result<Value, HttpError> {
-        self.request("GET", path, None)
+        self.request("GET", path, None, IO_TIMEOUT)
     }
 
     pub(super) fn post(&self, path: &str, body: &Value) -> Result<Value, HttpError> {
-        self.request("POST", path, Some(body))
+        self.request("POST", path, Some(body), IO_TIMEOUT)
+    }
+
+    pub(super) fn post_with_read_timeout(
+        &self,
+        path: &str,
+        body: &Value,
+        read_timeout: Duration,
+    ) -> Result<Value, HttpError> {
+        self.request("POST", path, Some(body), read_timeout)
     }
 
     pub(super) fn delete(&self, path: &str) -> Result<Value, HttpError> {
-        self.request("DELETE", path, None)
+        self.request("DELETE", path, None, IO_TIMEOUT)
     }
 
-    fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, HttpError> {
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        read_timeout: Duration,
+    ) -> Result<Value, HttpError> {
         if !path.starts_with('/') || path.contains(['\r', '\n']) {
             return Err(HttpError::InvalidResponse(format!("invalid request path {path:?}")));
         }
         let body = body.map_or_else(String::new, Value::to_string);
         let mut stream = TcpStream::connect_timeout(&self.address, CONNECT_TIMEOUT)?;
-        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        stream.set_read_timeout(Some(read_timeout))?;
         stream.set_write_timeout(Some(IO_TIMEOUT))?;
         stream.set_nodelay(true)?;
         write!(

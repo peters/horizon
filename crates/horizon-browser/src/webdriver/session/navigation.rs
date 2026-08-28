@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::BackendKind;
 use crate::session::{BrowserEvent, BrowserEventSender};
 
-use super::{Driver, PendingHistoryStart, classic_navigation_committed};
+use super::{Driver, NAVIGATION_HTTP_TIMEOUT, PendingHistoryStart, classic_navigation_committed};
 
 impl Driver {
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
@@ -21,7 +21,7 @@ impl Driver {
             )
             .map(|_| ())
         } else {
-            self.classic_post("url", &json!({ "url": url }))
+            self.classic_navigation_post("url", &json!({ "url": url }))
                 .and_then(|_| self.classic_get("url"))
                 .and_then(|response| {
                     classic_navigation_committed(&response, url, &self.url)
@@ -61,7 +61,7 @@ impl Driver {
             )
             .map(|_| ())
         } else {
-            self.classic_post("refresh", &json!({})).map(|_| ())
+            self.classic_navigation_post("refresh", &json!({})).map(|_| ())
         };
         self.finish_page(result, "reload", event_tx)
     }
@@ -72,7 +72,7 @@ impl Driver {
         // use its blocking classic endpoint and suppress the matching late
         // navigationStarted event that would otherwise cancel this capture.
         let result = self
-            .classic_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
+            .classic_navigation_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
             .map(|_| ());
         if result.is_ok() && self.config.browser.backend == BackendKind::FirefoxBidi {
             self.retain_frame_during_navigation = false;
@@ -107,5 +107,12 @@ impl Driver {
             self.frames.demand();
         }
         Ok(())
+    }
+
+    fn classic_navigation_post(&self, suffix: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        self.service
+            .http
+            .post_with_read_timeout(&self.session_path(suffix), body, NAVIGATION_HTTP_TIMEOUT)
+            .map_err(|error| error.to_string())
     }
 }
