@@ -92,7 +92,9 @@ fn exercise_protocol(protocol_version: &str) {
             .is_some_and(|instructions| instructions.contains("browser_create")
                 && instructions.contains("browser_network start before browser_navigate")
                 && instructions.contains("browser_network_watch")
-                && instructions.contains("browser_visibility")),
+                && instructions.contains("browser_visibility")
+                && instructions.contains("allow_additional=true")
+                && instructions.contains("original panel")),
         "server instructions must teach creation and network capture workflows"
     );
     process.notify(&json!({
@@ -115,8 +117,11 @@ fn exercise_protocol(protocol_version: &str) {
     assert!(
         create["description"]
             .as_str()
-            .is_some_and(|description| description.contains("browser_list is empty"))
+            .is_some_and(|description| description.contains("browser_list is empty")
+                && description.contains("never create a helper panel")
+                && description.contains("allow_additional=true"))
     );
+    assert!(create["inputSchema"].to_string().contains("allow_additional"));
     let network = tools["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network"))

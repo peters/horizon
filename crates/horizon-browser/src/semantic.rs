@@ -309,6 +309,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
         if (tag === 'textarea') return 'textbox';
         if (tag === 'select') return 'combobox';
         if (tag === 'img') return 'img';
+        if (tag === 'iframe') return 'iframe';
         if (/^h[1-6]$/.test(tag)) return 'heading';
         if (tag === 'li') return 'listitem';
         if (tag === 'input') {
@@ -480,6 +481,13 @@ mod tests {
         assert!(expression.contains("const buttonValue"));
         assert!(expression.contains("element.getAttribute('placeholder') || buttonValue"));
         assert!(!expression.contains("element.getAttribute('placeholder') || element.value"));
+    }
+
+    #[test]
+    fn semantic_snapshot_keeps_iframes_discoverable_in_the_original_panel() {
+        let expression = scan_expression(None, 10);
+
+        assert!(expression.contains("if (tag === 'iframe') return 'iframe'"));
     }
 
     #[test]

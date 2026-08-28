@@ -27,12 +27,16 @@ shell commands, files, or other MCP servers.
 - `browser_create` opens a panel in the calling agent's Horizon workspace and
   returns only after it is ready and owned by that agent. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
-  background panel.
+  background panel. If the same agent already owns a panel, creation is rejected
+  unless the user explicitly requested another independent session and the call
+  sets `allow_additional: true`. Reuse the original panel for iframe, popup,
+  dialog, and consent flows instead of creating a helper panel.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
 - `browser_navigate` changes the top-level page.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
-  short-lived refs.
+  short-lived refs. Snapshots keep iframe boundaries discoverable even when
+  cross-origin policy prevents inspecting the frame document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
 - `browser_wait` verifies present, visible, or hidden selector state.
@@ -58,6 +62,9 @@ and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
 visibility requests are accepted only from an identity belonging to a live
 Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
+When embedded frame content cannot be controlled by the current top-level
+semantic tools, the supported fallback is a user handoff on the original panel,
+not a separate helper panel.
 Tool schemas and results never expose raw CDP, BiDi, WebDriver, manifest,
 audit-file, or result-file locations. Horizon's locked manifest queue remains
 private implementation plumbing, not a second API.

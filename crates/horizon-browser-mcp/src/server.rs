@@ -68,7 +68,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty or a separate session is needed. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
         let receipt = self
@@ -77,6 +77,7 @@ impl HorizonBrowserMcp {
                 input.url,
                 input.backend.map(Into::into),
                 input.visible.unwrap_or(true),
+                input.allow_additional.unwrap_or(false),
                 input.timeout_millis,
             )
             .await
@@ -342,7 +343,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 

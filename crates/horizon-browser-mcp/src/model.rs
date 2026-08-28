@@ -144,6 +144,8 @@ pub(crate) struct CreateInput {
     pub(crate) backend: Option<CreateBackend>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
+    /// Explicitly permit another panel when this agent already owns one. Use only for a user-requested independent session.
+    pub(crate) allow_additional: Option<bool>,
     /// Total host-and-browser startup timeout in milliseconds (5000-60000, default 60000).
     pub(crate) timeout_millis: Option<u64>,
 }

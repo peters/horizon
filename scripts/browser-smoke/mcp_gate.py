@@ -181,6 +181,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError("MCP instructions do not teach the network capture workflow")
     if "browser_network_watch" not in result["instructions"] or "browser_visibility" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach watch and visibility workflows")
+    if "allow_additional=true" not in result["instructions"] or "original panel" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not prevent accidental helper panels")
     client.notify("notifications/initialized")
 
     tools = client.request("tools/list")["result"]["tools"]
@@ -196,7 +198,12 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     if "tail -f" not in network["description"] or "Start only" not in json.dumps(network["inputSchema"]):
         raise AssertionError("browser_network is not self-discovering")
     create = next(tool for tool in tools if tool["name"] == "browser_create")
-    if "browser_list is empty" not in create["description"]:
+    if (
+        "browser_list is empty" not in create["description"]
+        or "never create a helper panel" not in create["description"]
+        or "allow_additional=true" not in create["description"]
+        or "allow_additional" not in create["inputSchema"]["properties"]
+    ):
         raise AssertionError("browser_create is not self-discovering")
     watch = next(tool for tool in tools if tool["name"] == "browser_network_watch")
     if "next_sequence" not in watch["description"] or "no capture path" not in watch["description"]:
@@ -248,6 +255,30 @@ def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str,
     if any(entry["action"] != expected_action for entry in audit["entries"]):
         raise AssertionError(audit)
     return panel, action_id
+
+
+def verify_additional_panel_guard(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+) -> None:
+    _, error = client.call(
+        "browser_create",
+        {
+            "url": f"{args.base_url}/next.html",
+            "backend": args.backend,
+            "visible": False,
+            "timeout_millis": 45_000,
+        },
+        expect_error=True,
+    )
+    if error is None or "allow_additional=true" not in error:
+        raise AssertionError(f"browser_create did not require explicit additional-session opt-in: {error}")
+    listed, _ = client.call("browser_list", {})
+    assert listed is not None
+    panel_ids = [panel["panel_id"] for panel in listed["panels"]]
+    if panel_ids != [panel_id]:
+        raise AssertionError(f"rejected helper-panel creation changed the live panel set: {panel_ids}")
 
 
 def record_action(
@@ -752,6 +783,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     initialize(client)
     panel, create_action_id = create_panel(client, args)
     panel_id = panel["panel_id"]
+    verify_additional_panel_guard(client, args, panel_id)
     expected_protocols = {
         "chromium": {"cdp"},
         "firefox": {"web_driver_bidi"},
@@ -864,7 +896,19 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if filled != marker:
         raise AssertionError(filled)
 
-    record_action(client, "browser_snapshot", {"panel_id": panel_id, "max_nodes": 100}, action_ids)
+    semantic_snapshot = record_action(
+        client,
+        "browser_snapshot",
+        {"panel_id": panel_id, "max_nodes": 100},
+        action_ids,
+    )
+    consent_frames = [
+        node
+        for node in semantic_snapshot["nodes"]
+        if node.get("role") == "iframe" and node.get("name") == "Cookie settings"
+    ]
+    if len(consent_frames) != 1 or not consent_frames[0].get("visible") or not consent_frames[0].get("bounds"):
+        raise AssertionError(f"semantic snapshot did not expose the cross-origin consent frame: {consent_frames}")
     _, stale_error = client.call(
         "browser_act",
         {"panel_id": panel_id, "action": "fill", "ref": field_ref, "value": "stale"},

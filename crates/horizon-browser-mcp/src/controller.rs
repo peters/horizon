@@ -57,6 +57,10 @@ pub(crate) enum ControlError {
     CreateTimeout { action_id: String, timeout_millis: u64 },
     #[error("browser_create is available only to an agent panel launched inside Horizon")]
     CreateUnavailable,
+    #[error(
+        "browser panel {panel_id} is already owned by this agent; reuse it, or set allow_additional=true only when the user explicitly requested an independent browser session"
+    )]
+    AdditionalPanelRequiresOptIn { panel_id: String },
     #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
     VisibilityUnavailable,
     #[error(
@@ -102,10 +106,14 @@ impl BrowserController {
         url: Option<String>,
         backend: Option<BackendKind>,
         visible: bool,
+        allow_additional: bool,
         timeout_millis: Option<u64>,
     ) -> Result<CreateReceipt, ControlError> {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CreateUnavailable);
+        }
+        if !allow_additional && let Some(panel_id) = self.existing_actor_panel_id() {
+            return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
         }
         let timeout_millis = bounded_create_timeout(timeout_millis);
         let action_id = manifest::enqueue_create(
@@ -150,6 +158,15 @@ impl BrowserController {
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
         }
+    }
+
+    fn existing_actor_panel_id(&self) -> Option<String> {
+        let directory = manifest::default_manifest_dir();
+        manifest::list_panels_in(&directory)
+            .into_iter()
+            .filter_map(|panel_id| manifest::read(&panel_id))
+            .find(|panel| panel_belongs_to_actor(panel, &self.actor))
+            .map(|panel| panel.panel_local_id)
     }
 
     pub(crate) async fn set_visibility(
@@ -356,6 +373,10 @@ fn is_horizon_actor(actor: &str) -> bool {
         .is_some_and(|identity| !identity.is_empty())
 }
 
+fn panel_belongs_to_actor(panel: &manifest::BrowserManifest, actor: &str) -> bool {
+    panel.owner.as_ref().is_some_and(|owner| owner.name == actor)
+}
+
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
     match backend {
         BackendKind::ChromiumCdp => ProtocolKind::Cdp,
@@ -387,6 +408,22 @@ mod tests {
         assert!(!is_horizon_actor("horizon:"));
         assert!(!is_horizon_actor("agent"));
         assert_eq!(BrowserController::with_actor("agent").actor, "agent");
+    }
+
+    #[test]
+    fn existing_panel_guard_remembers_the_creating_actor_after_heartbeat_expiry() {
+        let panel = manifest::BrowserManifest {
+            panel_local_id: "browser-panel".to_string(),
+            owner: Some(manifest::ManifestOwner {
+                name: "horizon:agent-panel".to_string(),
+                tty: None,
+                updated_at: 1,
+            }),
+            ..manifest::BrowserManifest::default()
+        };
+
+        assert!(panel_belongs_to_actor(&panel, "horizon:agent-panel"));
+        assert!(!panel_belongs_to_actor(&panel, "horizon:other-panel"));
     }
 
     #[test]

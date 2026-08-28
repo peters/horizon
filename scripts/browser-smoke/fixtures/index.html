@@ -21,6 +21,7 @@
     #horizontal { width: 360px; overflow: auto; border: 1px solid #64748b; }
     #horizontal > div { width: 1000px; padding: 10px; background: linear-gradient(90deg, #fee2e2, #dcfce7); }
     #right-edge { position: fixed; right: 8px; top: 250px; z-index: 3; background: #7c3aed; }
+    #consent-frame { position: absolute; left: 18px; top: 900px; width: 420px; height: 180px; border: 2px solid #0f766e; }
     .spacer { height: 2200px; background: linear-gradient(#f8fafc, #e2e8f0); }
     #bottom { padding: 30px; background: #dcfce7; }
   </style>
@@ -46,6 +47,7 @@
     <p id="key-status">keys=</p>
     <pre id="fingerprint">collecting</pre>
     <iframe id="probe-frame" title="automation disclosure probe" hidden></iframe>
+    <iframe id="consent-frame" title="Cookie settings"></iframe>
     <div class="spacer"></div>
     <div id="bottom"><h2>Bottom marker</h2><button id="bottom-button" type="button">Bottom button</button></div>
   </main>
@@ -126,6 +128,10 @@
 
     const frame = document.querySelector('#probe-frame');
     frame.srcdoc = '<!doctype html><script>parent.__iframeWebdriver = navigator.webdriver; parent.postMessage({kind:"probe-ready"}, "*");<\/script>';
+    const consentFrame = document.querySelector('#consent-frame');
+    const consentUrl = new URL('/next.html', location.href);
+    consentUrl.hostname = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+    consentFrame.src = consentUrl.href;
 
     async function collectFingerprint() {
       const canvas = document.createElement('canvas');

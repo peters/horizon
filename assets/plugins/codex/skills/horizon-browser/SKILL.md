@@ -12,7 +12,11 @@ the Horizon browser MCP server is not connected.
 
 Start with `browser_list` when the panel id is unknown. If it returns no panels,
 call `browser_create`; this opens a panel in the current agent's Horizon
-workspace and returns its ready panel id. Omit `backend` to use Horizon's
+workspace and returns its ready panel id. If it returns a usable panel, reuse
+that panel for iframe, popup, dialog, and consent interactions. Never create or
+reveal a helper panel as a workaround. Only when the user explicitly requests
+another independent browser session may you call `browser_create` with
+`allow_additional: true`. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
@@ -23,6 +27,11 @@ interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
 before an action when the page may have changed.
+
+Snapshots expose iframe boundaries as `iframe` nodes. If the current top-level
+semantic tools cannot reach the embedded frame content, call `browser_handoff`
+on the original panel so the user can complete the interaction; do not open a
+separate panel for the frame.
 
 After navigation or interaction, verify the visible outcome with
 `browser_wait`, `browser_query`, or a new snapshot. Use `browser_evaluate` only
