@@ -524,9 +524,14 @@ def close_candidate(candidate: subprocess.Popen[Any]) -> str:
     elif platform.system() == "Darwin":
         script = (
             'tell application "System Events" to tell '
-            f'(first process whose unix id is {candidate.pid}) to perform action "AXClose" of window 1'
+            f'(first process whose unix id is {candidate.pid}) to click button 1 of window 1'
         )
-        if subprocess.run(["osascript", "-e", script], check=False).returncode == 0:
+        if subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0:
             return "macos_ax_close"
     os.killpg(candidate.pid, 15)
     return "task_owned_terminate_fallback"
