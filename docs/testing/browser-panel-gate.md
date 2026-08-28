@@ -146,22 +146,29 @@ Run these checks on each selected backend while G1 is open:
    track. Click **Right-edge content** to prove gutter handling does not steal
    page input. Firefox must show Horizon's validated overlay while its real
    WebDriver gutter remains authoritative.
-5. Navigate among `index.html`, `next.html`, and `alternate.html`; exercise
+5. Open `upload.html`. If the backend surfaces a native picker, select the
+   committed `upload.txt` and verify its name, size, and type in the page
+   oracle. Then drag that file from Finder or the host file manager onto the
+   drop target. Horizon currently owns host file drops as workspace file-open
+   actions: verify an editor panel opens and the page's `dropped` list remains
+   empty. Record when a headless backend provides no native picker; do not use
+   synthetic JavaScript events as evidence of physical upload or drop support.
+6. Navigate among `index.html`, `next.html`, and `alternate.html`; exercise
    back, forward, reload, URL submission, and an unreachable loopback URL. An
    error retains the last valid frame and committed URL and offers Retry.
-6. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
+7. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
    off-screen placement, detach, native-window move/resize, and reattach.
    Capture launch and post-interaction screenshots. Record a native position
    trace or short video for detach/resize motion; still screenshots alone do
    not prove motion behavior.
-7. Switch backends and save. Normal close and isolated relaunch must restore
+8. Switch backends and save. Normal close and isolated relaunch must restore
    backend, committed URL/title, profile, geometry, and focus. Permanently
    closing a separate panel removes only its profile after the browser exits.
-8. Break only a task-owned disposable browser or driver. Verify cleared stale
+9. Break only a task-owned disposable browser or driver. Verify cleared stale
    pixels, actionable error, bounded teardown, Retry after cleanup, and no PID
    reuse assumptions. Close during active navigation/capture/resize as a
    separate focused pass.
-9. After every normal close, verify the exact browser/driver tree, driver
+10. After every normal close, verify the exact browser/driver tree, driver
    thread, loopback listeners, live manifest, and disposable profile state.
    Never use a broad process-name kill or inspect/reuse an existing session.
 
@@ -174,8 +181,11 @@ and interaction script for comparisons.
    and completions must decay to zero; Chromium performs no decode/upload
    without a repaint.
 2. Collect at least 20 one-input-to-visible-frame samples and 20 alternating
-   `next.html`/`alternate.html` navigation samples. Current Firefox gate:
-   median at most 100 ms and p95 at most 180 ms.
+   `next.html`/`alternate.html` navigation samples. Current engine-side Firefox
+   gate: median at most 100 ms and p95 at most 180 ms. ScreenCaptureKit
+   end-to-end samples include host capture-delivery cost; when that path misses
+   the absolute gate, report both the exact values and a workload-matched base
+   build on the same host instead of hiding the miss or inferring a regression.
 3. Run `animation.html` for at least three seconds. Adaptive capture stays
    active at no more than 30 fps and decays after returning to the static page.
 4. Stress rapid input, scroll, and resize. At most one adaptive capture is in
@@ -223,8 +233,24 @@ the focused disclosure lane with `--automation-disclosure browser_default`.
 ## Full macOS gate
 
 Prerequisites: logged-in GUI session, Xcode Command Line Tools, Chromium,
-Firefox, geckodriver, Safari, and Accessibility permission for the selected
-native automation tool. Identify windows by exact PID, not application name.
+Firefox, geckodriver, Safari, Accessibility permission for native input, and
+Screen Recording permission for visible-frame latency. Identify windows by
+exact PID, not application name.
+
+Compile the committed helpers into a temporary directory. The native helper
+accepts global display-point coordinates and always activates a root or
+detached window belonging to the exact PID. The latency helper binds both the
+PID and Core Graphics window ID; its crop is window-local capture pixels.
+
+```bash
+browser_smoke_tools=$(mktemp -d)
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  scripts/browser-smoke/macos_native.swift \
+  -o "$browser_smoke_tools/native"
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  scripts/browser-smoke/macos_latency.swift \
+  -o "$browser_smoke_tools/latency"
+```
 
 Run G0 once, then run G1–G3 for all three backends:
 
@@ -233,6 +259,54 @@ python3 scripts/browser-smoke/run.py --backend chromium --horizon target/debug/h
 python3 scripts/browser-smoke/run.py --backend firefox --horizon target/debug/horizon
 python3 scripts/browser-smoke/run.py --backend safari --horizon target/debug/horizon
 ```
+
+For each runner PID, enumerate its windows before driving it and capture the
+exact window ID with `screencapture`. Useful native actions are intentionally
+small and composable:
+
+```bash
+"$browser_smoke_tools/native" "$candidate_pid" any windows
+screencapture -x -l "$window_id" browser-launch.png
+"$browser_smoke_tools/native" "$candidate_pid" root click X Y
+"$browser_smoke_tools/native" "$candidate_pid" root double X Y
+"$browser_smoke_tools/native" "$candidate_pid" root text 'Az09!?ø漢🙂'
+"$browser_smoke_tools/native" "$candidate_pid" root key 48 shift
+"$browser_smoke_tools/native" "$candidate_pid" root repeat 0 '' 8
+"$browser_smoke_tools/native" "$candidate_pid" root buttons X Y
+"$browser_smoke_tools/native" "$candidate_pid" root scroll X Y DX DY
+"$browser_smoke_tools/native" "$candidate_pid" root drag X1 Y1 X2 Y2 30 shift-release
+"$browser_smoke_tools/native" "$candidate_pid" root close
+```
+
+Use `key` for physical key/modifier coverage and `text` for an exact Unicode
+oracle; punctuation produced by a physical key code depends on the active
+keyboard layout. The drag form above deliberately changes to Shift before an
+outside release and therefore catches gesture-ownership bugs. After detaching,
+wait five seconds for native-window membership to settle, use `detached`, and
+run a trace concurrently with a title-bar or resize-edge drag:
+
+```bash
+"$browser_smoke_tools/native" "$candidate_pid" detached trace 300 5 > motion.csv &
+browser_motion_trace_pid=$!
+"$browser_smoke_tools/native" "$candidate_pid" detached drag X1 Y1 X2 Y2 30
+wait "$browser_motion_trace_pid"
+```
+
+The trace must show monotonic progress without alternating coordinates or snap
+back. Re-resolve coordinates after Fit, detach, zoom, or resize; never reuse a
+stale screenshot. Move or fit a panel before lower-right assertions if the
+Horizon minimap covers the page. To collect the two G3 latency sets:
+
+```bash
+"$browser_smoke_tools/latency" "$candidate_pid" "$window_id" input \
+  INPUT_GLOBAL_X INPUT_GLOBAL_Y CROP_X CROP_Y CROP_W CROP_H input.json
+"$browser_smoke_tools/latency" "$candidate_pid" "$window_id" navigation \
+  URL_GLOBAL_X URL_GLOBAL_Y CROP_X CROP_Y CROP_W CROP_H navigation.json \
+  "$fixture_base_url"
+```
+
+Inspect every crop once before trusting the numbers. The native helper drives
+the foreground GUI, so do not work in the same desktop while it samples.
 
 For Chromium, first run without `--chromium-command` to prove discovery from
 `/Applications`; do the same for Firefox where the host installation permits.
@@ -259,9 +333,13 @@ Safari requirements:
 6. Under signal minimization Safari reports that the policy is unsupported by
    the backend; do not claim parity with Chromium/Firefox preload behavior.
 7. Run the MCP gate's 11-second delayed navigation. It must complete through
-   Safari's eager, bounded page-load policy instead of failing at the ordinary
+   Safari's bounded page-load policy instead of failing at the ordinary
    10-second WebDriver I/O limit; the following invalid navigation must still
    return a typed failure and retain the delayed page.
+
+Never terminate or automate an unrelated Safari window. Break only the
+`safaridriver` descendant owned by the printed candidate PID, and re-enumerate
+the exact Horizon windows after Retry.
 
 Safari is not release-supported until this exact-head lane passes on macOS.
 
@@ -312,6 +390,7 @@ Run once per host OS after the semantic gate:
 | `alternate.html` | Red alternating navigation-latency target |
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
 | `websocket.html` | High-rate deterministic WebSocket lifecycle, sent frame, 4,096 received frames, URL redaction, bounded NDJSON export |
+| `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
 
 Keep selectors stable. When a browser behavior needs a new deterministic
 oracle, extend these fixtures and the gate together instead of creating another

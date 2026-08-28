@@ -24,6 +24,7 @@ mod coordination;
 mod navigation;
 mod network;
 mod safari;
+mod scrollbar;
 mod semantic;
 mod shutdown;
 
@@ -137,7 +138,7 @@ struct Driver {
     safari: Option<safari::InputState>,
     actions: ActionState,
     frames: AdaptiveFrames,
-    scroll_state_refresh_at: Instant,
+    scrollbar: scrollbar::State,
     url: String,
     title: String,
     generation: u64,
@@ -340,7 +341,7 @@ impl Driver {
             safari,
             actions: ActionState::default(),
             frames: AdaptiveFrames::new(),
-            scroll_state_refresh_at: Instant::now(),
+            scrollbar: scrollbar::State::new(),
             url: String::new(),
             title: String::new(),
             generation: 0,
@@ -449,6 +450,9 @@ impl Driver {
         if activity {
             self.pending_classic_history_start = None;
         }
+        if self.config.browser.backend == BackendKind::SafariWebDriver && self.handle_safari_scrollbar_input(&input)? {
+            return Ok(());
+        }
         let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
@@ -466,7 +470,7 @@ impl Driver {
             tracing::warn!("WebDriver input failed: {error}");
         }
         if demand_frame && !self.retain_frame_during_navigation {
-            self.scroll_state_refresh_at = Instant::now();
+            self.scrollbar.refresh_at = Instant::now();
             self.frames.demand();
         }
         result
@@ -545,10 +549,10 @@ impl Driver {
 
     fn refresh_page_scroll_state(&mut self, frame_slot: &FrameSlot) -> bool {
         let now = Instant::now();
-        if now < self.scroll_state_refresh_at {
+        if now < self.scrollbar.refresh_at {
             return false;
         }
-        self.scroll_state_refresh_at = now + SCROLL_STATE_INTERVAL;
+        self.scrollbar.refresh_at = now + SCROLL_STATE_INTERVAL;
         let Ok(response) = self.classic_post(
             "execute/sync",
             &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
@@ -561,6 +565,7 @@ impl Driver {
         let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
             return false;
         };
+        self.scrollbar.sample(state);
         frame_slot.publish_page_scroll_state(state)
     }
 
@@ -642,7 +647,7 @@ impl Driver {
 
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.scroll_state_refresh_at = Instant::now();
+        self.scrollbar.reset();
         if !self.retain_frame_during_navigation {
             self.frames.invalidate();
         }
@@ -655,7 +660,7 @@ impl Driver {
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
         self.refresh_pending_at = None;
-        self.scroll_state_refresh_at = Instant::now();
+        self.scrollbar.reset();
         self.frames.suspend_for_navigation();
     }
 
@@ -763,7 +768,6 @@ fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, reques
             let mut capabilities = Map::new();
             capabilities.insert("browserName".to_string(), json!("safari"));
             capabilities.insert("acceptInsecureCerts".to_string(), json!(false));
-            capabilities.insert("pageLoadStrategy".to_string(), json!("eager"));
             capabilities.insert("timeouts".to_string(), json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
             if request_bidi {
                 capabilities.insert("webSocketUrl".to_string(), json!(true));
@@ -1099,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn webdriver_navigation_is_eager_and_bounded() {
+    fn webdriver_navigation_is_bounded_and_uses_supported_strategy() {
         let Some(profile_root) = tempfile::tempdir().ok() else {
             panic!("temporary profile root should be available");
         };
@@ -1111,8 +1115,12 @@ mod tests {
             };
             let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
 
-            assert_eq!(capabilities["pageLoadStrategy"], "eager");
             assert_eq!(capabilities["timeouts"]["pageLoad"], PAGE_LOAD_TIMEOUT_MILLIS);
+            if backend == BackendKind::FirefoxBidi {
+                assert_eq!(capabilities["pageLoadStrategy"], "eager");
+            } else {
+                assert!(capabilities.get("pageLoadStrategy").is_none());
+            }
         }
     }
 }

@@ -204,7 +204,7 @@ impl Driver {
             self.reset_safari_input();
         }
         if !self.retain_frame_during_navigation {
-            self.scroll_state_refresh_at = Instant::now();
+            self.scrollbar.refresh_at = Instant::now();
             self.frames.demand();
         }
         Some(result)
@@ -230,7 +230,7 @@ impl Driver {
             tracing::warn!("WebDriver input failed: {error}");
             self.reset_safari_input();
         } else if !self.retain_frame_during_navigation {
-            self.scroll_state_refresh_at = Instant::now();
+            self.scrollbar.refresh_at = Instant::now();
             self.frames.demand();
         }
         result

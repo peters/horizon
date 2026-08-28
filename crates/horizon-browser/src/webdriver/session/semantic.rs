@@ -116,7 +116,7 @@ impl Driver {
             tracing::warn!("WebDriver input failed: {error}");
         }
         if !self.retain_frame_during_navigation {
-            self.scroll_state_refresh_at = std::time::Instant::now();
+            self.scrollbar.refresh_at = std::time::Instant::now();
             self.frames.demand();
         }
         result

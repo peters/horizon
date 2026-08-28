@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Horizon Browser Smoke - Upload</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; background: #f8fafc; color: #172033; }
+    input { font: inherit; margin-bottom: 20px; }
+    #drop-target { width: 420px; height: 180px; display: grid; place-items: center; border: 3px dashed #2563eb; background: #dbeafe; }
+    #status { white-space: pre-wrap; padding: 12px; border: 1px solid #94a3b8; background: white; }
+  </style>
+</head>
+<body>
+  <h1>Upload and drop oracle</h1>
+  <label>Choose files <input id="file-input" type="file" multiple></label>
+  <div id="drop-target">Drop files here</div>
+  <pre id="status">collecting</pre>
+  <script>
+    const state = { selected: [], dropped: [], dragEnter: 0, dropTrusted: false };
+    window.__uploadState = state;
+    const status = document.querySelector('#status');
+    const describe = (files) => Array.from(files, ({ name, size, type }) => ({ name, size, type }));
+    const publish = () => { status.textContent = JSON.stringify(state, null, 2); };
+
+    document.querySelector('#file-input').addEventListener('change', (event) => {
+      state.selected = describe(event.target.files);
+      publish();
+    });
+    const target = document.querySelector('#drop-target');
+    target.addEventListener('dragenter', (event) => {
+      event.preventDefault();
+      state.dragEnter += 1;
+      publish();
+    });
+    target.addEventListener('dragover', (event) => event.preventDefault());
+    target.addEventListener('drop', (event) => {
+      event.preventDefault();
+      state.dropped = describe(event.dataTransfer.files);
+      state.dropTrusted = event.isTrusted;
+      publish();
+    });
+    publish();
+  </script>
+</body>
+</html>
