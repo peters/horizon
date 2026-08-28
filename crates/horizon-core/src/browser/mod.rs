@@ -17,7 +17,7 @@ pub use horizon_browser::{
     ActiveBackendCapabilities, AutomationDisclosurePolicy, AutomationDisclosureStatus, BackendAvailability,
     BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEditCommand, BrowserEvent,
     BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession, BrowserShutdownSignal,
-    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState,
+    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -137,6 +137,7 @@ impl BrowserPanelState {
     ) -> crate::error::Result<Self> {
         let panel_local_id = panel_local_id.into();
         let config = config.resolved_for_launch()?;
+        let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
         let mut state = Self {
             status: BrowserStatus::Starting,
             url: None,
@@ -348,9 +349,10 @@ impl BrowserPanelState {
     /// target until a reachable page commits. Returns `true` when the driver
     /// accepted it; a missing driver is surfaced via `navigation_error`.
     pub fn submit_navigation(&mut self, url: &str) -> bool {
-        self.pending_user_navigation = Some(url.to_string());
+        let url = normalize_navigation_target(url);
+        self.pending_user_navigation = Some(url.clone());
         self.navigation_error = None;
-        if self.try_send(BrowserCommand::Navigate(url.to_string())) {
+        if self.try_send(BrowserCommand::Navigate(url)) {
             return true;
         }
         self.navigation_error = Some("Browser is not running; press Retry to open the typed URL".to_string());
@@ -694,7 +696,7 @@ mod tests {
             config: BrowserConfig::default(),
         };
 
-        assert!(!state.submit_navigation("https://typed.example/page"));
+        assert!(!state.submit_navigation("typed.example/page"));
         assert!(state.navigation_error.is_some());
         // The typed URL stays visible in the URL bar even though the last
         // committed URL is known, and becomes the relaunch target.

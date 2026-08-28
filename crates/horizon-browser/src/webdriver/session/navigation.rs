@@ -4,27 +4,28 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use crate::BackendKind;
 use crate::session::{BrowserEvent, BrowserEventSender};
+use crate::{BackendKind, normalize_navigation_target};
 
 use super::{Driver, NAVIGATION_HTTP_TIMEOUT, PendingHistoryStart, classic_navigation_committed};
 
 impl Driver {
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
+        let url = normalize_navigation_target(url);
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
             self.call_bidi(
                 "browsingContext.navigate",
-                &json!({ "context": self.context_id, "url": url, "wait": "none" }),
+                &json!({ "context": self.context_id, "url": &url, "wait": "none" }),
                 event_tx,
             )
             .map(|_| ())
         } else {
-            self.classic_navigation_post("url", &json!({ "url": url }))
+            self.classic_navigation_post("url", &json!({ "url": &url }))
                 .and_then(|_| self.classic_get("url"))
                 .and_then(|response| {
-                    classic_navigation_committed(&response, url, &self.url)
+                    classic_navigation_committed(&response, &url, &self.url)
                         .then_some(())
                         .ok_or_else(|| "browser did not commit a reachable URL".to_string())
                 })

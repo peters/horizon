@@ -35,6 +35,12 @@ const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
 const STATIC_CONFIRMATIONS: u8 = 3;
 const MAX_EVENT_BURST: usize = 32;
+// WebDriver input is synchronous. Taking a large batch out of the shared
+// queue prevents newer hover/wheel events from coalescing while each protocol
+// roundtrip runs, and delays frame capture until the whole batch completes.
+// Four keeps a complete physical double-click together while bounding the
+// time before Firefox can publish another frame.
+const MAX_COMMAND_BURST: usize = 4;
 const SCROLL_STATE_INTERVAL: Duration = Duration::from_millis(100);
 const PAGE_SCROLL_STATE_SCRIPT: &str = "const root = document.scrollingElement || document.documentElement; return { scroll_x: window.scrollX, scroll_y: window.scrollY, viewport_width: window.innerWidth, viewport_height: window.innerHeight, client_width: document.documentElement.clientWidth, client_height: document.documentElement.clientHeight, content_width: root.scrollWidth, content_height: root.scrollHeight };";
 
@@ -210,7 +216,7 @@ pub(crate) fn run_webdriver(
 
     while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
-        let batch = command_rx.drain(256);
+        let batch = command_rx.drain(MAX_COMMAND_BURST);
         for command in batch.commands {
             driver.audit_user_command(&command);
             if driver.run_command(command, event_tx, true).is_ok_and(|stop| stop) {

@@ -54,7 +54,7 @@ use crate::cdp::{CdpError, CdpLink};
 use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
-use crate::{ActiveBackendCapabilities, BackendKind};
+use crate::{ActiveBackendCapabilities, BackendKind, normalize_navigation_target};
 use crate::{BrowserConfig, BrowserControlFailure, BrowserInput};
 
 /// What the driver reports to the panel.
@@ -645,6 +645,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         url: &str,
     ) -> Result<(), BrowserControlFailure> {
+        let url = normalize_navigation_target(url);
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
         let result = self.send_page_command(
@@ -652,7 +653,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Page.navigate",
-            &serde_json::json!({ "url": url }),
+            &serde_json::json!({ "url": &url }),
         );
         match result {
             Ok(result) => {

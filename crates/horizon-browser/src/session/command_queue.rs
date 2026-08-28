@@ -87,7 +87,7 @@ impl CommandReceiver {
         let commands = state.commands.drain(..take).collect();
         CommandBatch {
             commands,
-            disconnected: !state.sender_open,
+            disconnected: !state.sender_open && state.commands.is_empty(),
         }
     }
 }
@@ -103,8 +103,96 @@ fn coalesce_tail(commands: &mut VecDeque<BrowserCommand>, incoming: &BrowserComm
         *last = incoming.clone();
         true
     } else {
-        false
+        coalesce_hover_across_wheels(commands, incoming) || coalesce_wheel_burst(commands, incoming)
     }
+}
+
+fn coalesce_hover_across_wheels(commands: &mut VecDeque<BrowserCommand>, incoming: &BrowserCommand) -> bool {
+    let BrowserCommand::Input(crate::BrowserInput::MouseMove { buttons: 0, .. }) = incoming else {
+        return false;
+    };
+    let Some(index) = commands.iter().rposition(|command| {
+        matches!(
+            command,
+            BrowserCommand::Input(crate::BrowserInput::MouseMove { buttons: 0, .. })
+        )
+    }) else {
+        return false;
+    };
+    if !commands
+        .iter()
+        .skip(index + 1)
+        .all(|command| matches!(command, BrowserCommand::Input(crate::BrowserInput::Wheel { .. })))
+    {
+        return false;
+    }
+    commands.remove(index);
+    commands.push_back(incoming.clone());
+    true
+}
+
+fn coalesce_wheel_burst(commands: &mut VecDeque<BrowserCommand>, incoming: &BrowserCommand) -> bool {
+    let BrowserCommand::Input(crate::BrowserInput::Wheel {
+        x,
+        y,
+        delta_x,
+        delta_y,
+        modifiers,
+    }) = incoming
+    else {
+        return false;
+    };
+    let Some(index) = commands.iter().rposition(|command| {
+        if matches!(
+            command,
+            BrowserCommand::Input(crate::BrowserInput::MouseMove { buttons: 0, .. })
+        ) {
+            return false;
+        }
+        matches!(
+            command,
+            BrowserCommand::Input(crate::BrowserInput::Wheel {
+                delta_x: queued_x,
+                delta_y: queued_y,
+                modifiers: queued_modifiers,
+                ..
+            }) if queued_modifiers == modifiers
+                && same_direction(*queued_x, *delta_x)
+                && same_direction(*queued_y, *delta_y)
+                && (*queued_x + *delta_x).is_finite()
+                && (*queued_y + *delta_y).is_finite()
+        )
+    }) else {
+        return false;
+    };
+    if !commands.iter().skip(index + 1).all(|command| {
+        matches!(
+            command,
+            BrowserCommand::Input(crate::BrowserInput::MouseMove { buttons: 0, .. })
+        )
+    }) {
+        return false;
+    }
+    let Some(BrowserCommand::Input(crate::BrowserInput::Wheel {
+        delta_x: queued_x,
+        delta_y: queued_y,
+        ..
+    })) = commands.remove(index)
+    else {
+        return false;
+    };
+    commands.push_back(BrowserCommand::Input(crate::BrowserInput::Wheel {
+        x: *x,
+        y: *y,
+        delta_x: queued_x + delta_x,
+        delta_y: queued_y + delta_y,
+        modifiers: *modifiers,
+    }));
+    true
+}
+
+fn same_direction(left: f64, right: f64) -> bool {
+    left == 0.0 || right == 0.0 || left.is_sign_positive() == right.is_sign_positive()
 }
 
 fn is_discardable(command: &BrowserCommand) -> bool {
@@ -171,6 +259,67 @@ mod tests {
             BrowserCommand::Input(BrowserInput::MouseMove { x: 3.0, .. })
         ));
         assert_eq!(frame_slot.metrics().commands_coalesced, 2);
+    }
+
+    #[test]
+    fn hover_and_same_direction_wheel_bursts_stay_bounded() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, receiver) = channel(Arc::clone(&frame_slot));
+        let modifiers = BrowserModifiers::none();
+        for index in 0..20 {
+            assert!(sender.send(BrowserCommand::Input(BrowserInput::MouseMove {
+                x: f64::from(index),
+                y: 2.0,
+                buttons: 0,
+                modifiers,
+            })));
+            assert!(sender.send(BrowserCommand::Input(BrowserInput::Wheel {
+                x: f64::from(index),
+                y: 2.0,
+                delta_x: 0.0,
+                delta_y: 16.0,
+                modifiers,
+            })));
+        }
+        assert!(sender.send(BrowserCommand::Input(BrowserInput::Wheel {
+            x: 20.0,
+            y: 2.0,
+            delta_x: 0.0,
+            delta_y: -16.0,
+            modifiers,
+        })));
+
+        let batch = receiver.drain(10);
+        assert_eq!(batch.commands.len(), 3);
+        assert!(matches!(
+            batch.commands[0],
+            BrowserCommand::Input(BrowserInput::MouseMove { x: 19.0, .. })
+        ));
+        assert!(matches!(
+            batch.commands[1],
+            BrowserCommand::Input(BrowserInput::Wheel { delta_y: 320.0, .. })
+        ));
+        assert!(matches!(
+            batch.commands[2],
+            BrowserCommand::Input(BrowserInput::Wheel { delta_y: -16.0, .. })
+        ));
+        assert_eq!(frame_slot.metrics().commands_coalesced, 38);
+    }
+
+    #[test]
+    fn closed_sender_drains_queued_commands_before_disconnect() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, receiver) = channel(frame_slot);
+        assert!(sender.send(BrowserCommand::Back));
+        assert!(sender.send(BrowserCommand::Forward));
+        drop(sender);
+
+        let first = receiver.drain(1);
+        assert_eq!(first.commands.len(), 1);
+        assert!(!first.disconnected);
+        let second = receiver.drain(1);
+        assert_eq!(second.commands.len(), 1);
+        assert!(second.disconnected);
     }
 
     #[test]

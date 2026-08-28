@@ -16,6 +16,46 @@ pub const MAX_QUERY_RESULTS: u32 = 250;
 pub const DEFAULT_CLICK_COUNT: u32 = 1;
 pub const MAX_CLICK_COUNT: u32 = 3;
 
+/// Resolve an omnibox-style navigation target without overriding an explicit
+/// scheme. Hostnames default to HTTPS; callers can still request HTTP.
+#[must_use]
+pub fn normalize_navigation_target(input: &str) -> String {
+    let input = input.trim();
+    if input.is_empty() || has_explicit_browser_scheme(input) {
+        return input.to_string();
+    }
+    if input.starts_with("//") {
+        format!("https:{input}")
+    } else {
+        format!("https://{input}")
+    }
+}
+
+fn has_explicit_browser_scheme(input: &str) -> bool {
+    input.split_once("://").is_some_and(|(scheme, _)| {
+        !scheme.is_empty()
+            && scheme.chars().enumerate().all(|(index, character)| {
+                character.is_ascii_alphabetic()
+                    || index > 0 && (character.is_ascii_digit() || "+-.".contains(character))
+            })
+    }) || [
+        "about:",
+        "blob:",
+        "data:",
+        "file:",
+        "ftp:",
+        "javascript:",
+        "mailto:",
+        "view-source:",
+    ]
+    .iter()
+    .any(|scheme| {
+        input
+            .get(..scheme.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+    })
+}
+
 /// One action an external controller can ask a live browser session to take.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -120,7 +160,7 @@ impl BrowserControlAction {
     #[must_use]
     pub fn to_command(&self) -> Option<BrowserCommand> {
         match self {
-            Self::Navigate { url } => Some(BrowserCommand::Navigate(url.clone())),
+            Self::Navigate { url } => Some(BrowserCommand::Navigate(normalize_navigation_target(url))),
             Self::Reload => Some(BrowserCommand::Reload),
             Self::Back => Some(BrowserCommand::Back),
             Self::Forward => Some(BrowserCommand::Forward),
@@ -356,6 +396,28 @@ mod tests {
 
         assert!(invalid_point.validate().is_err());
         assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn navigation_defaults_to_https_without_overriding_explicit_schemes() {
+        assert_eq!(normalize_navigation_target("e24.no/bors"), "https://e24.no/bors");
+        assert_eq!(normalize_navigation_target("//e24.no/bors"), "https://e24.no/bors");
+        assert_eq!(
+            normalize_navigation_target("http://127.0.0.1:3000"),
+            "http://127.0.0.1:3000"
+        );
+        assert_eq!(normalize_navigation_target("about:blank"), "about:blank");
+        assert_eq!(
+            normalize_navigation_target("file:/tmp/page.html"),
+            "file:/tmp/page.html"
+        );
+        assert!(matches!(
+            BrowserControlAction::Navigate {
+                url: "example.test/path".to_string()
+            }
+            .to_command(),
+            Some(BrowserCommand::Navigate(url)) if url == "https://example.test/path"
+        ));
     }
 
     #[test]
