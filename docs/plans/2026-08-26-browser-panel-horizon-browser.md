@@ -374,8 +374,11 @@ The standalone binary and Horizon's private `--browser-mcp` bootstrap mode run
 the same server. The latter lets bundled agent integrations start MCP from the
 exact Horizon executable without shipping a second release artifact. This
 bootstrap switch is transport plumbing, not a browser-control CLI. Codex gets
-an in-memory launch override; Claude gets a generated entry in Horizon's
-existing plugin. Neither path edits the user's persistent MCP configuration.
+an in-memory launch override that pre-approves only the transient
+`horizon-browser` server's tools; Claude gets a generated entry in Horizon's
+existing plugin and already launches in its automatic permission mode. Neither
+path edits the user's persistent MCP configuration or weakens approval policy
+for unrelated tools.
 
 ## Chromium CDP backend
 

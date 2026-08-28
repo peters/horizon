@@ -412,11 +412,15 @@ Run once per host OS after the semantic gate:
    permanent MCP registration to the operator's configuration.
 2. Create a default supported agent panel beside a Browser panel. The default
    launch receives the transient `horizon-browser` stdio MCP registration and
-   stable `HORIZON_BROWSER_ACTOR`; a custom agent command remains unchanged.
+   stable `HORIZON_BROWSER_ACTOR`. The default Codex registration sets only
+   this MCP server's tool approval mode to `approve`, so browser calls proceed
+   without repeated operator prompts while unrelated tool approvals keep their
+   normal policy; a custom agent command remains unchanged.
 3. From the agent, start with `browser_list`, take a snapshot/query, interact by
    fresh ref, verify the result, request handoff, wait for hand-back, and inspect
-   `browser_audit`. It must not know a manifest path or raw endpoint and must not
-   invoke a browser-control CLI.
+   `browser_audit`. The default Codex panel must complete this sequence without
+   per-call MCP approval prompts. It must not know a manifest path or raw
+   endpoint and must not invoke a browser-control CLI.
 4. Confirm user click, key, URL submission, and navigation preempt agent
    actions for the bounded user-active interval. Handoff visibly blocks further
    agent actions until the exact request is acknowledged.

@@ -936,6 +936,8 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         format!("mcp_servers.horizon-browser.command={command}"),
         "-c".to_string(),
         "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
+        "-c".to_string(),
+        "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
     ]
 }
 
@@ -998,6 +1000,7 @@ mod tests {
         let command = args.join(" ");
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
+        assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("--browser-mcp"));
         assert!(!command.contains("browser-cli"));
     }

@@ -11,11 +11,14 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
+default_tools_approval_mode = "approve"
 ```
 
 Released Horizon builds start the same server through private transport
-bootstrap plumbing, so bundled integrations do not need a second installed
-binary.
+bootstrap plumbing and apply that server-scoped approval mode automatically,
+so bundled integrations neither need a second installed binary nor interrupt
+each browser action with an approval prompt. This does not change approvals for
+shell commands, files, or other MCP servers.
 
 ## Tool contract
 
