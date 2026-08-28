@@ -291,17 +291,13 @@ impl HorizonApp {
             // With the accordion the panel rows are collapsed, so selecting a
             // workspace reveals its selected panel instead of panning to the
             // whole workspace. Single-panel workspaces behave the same in
-            // both modes.
-            let reveal = if accordion || workspace.panels.len() <= 1 {
-                self.workspace_reveal_panel(workspace.id, &workspace.panels)
-            } else {
-                None
-            };
-            if let Some(panel_id) = reveal {
-                actions.focus_panel = Some(panel_id);
-                actions.pan_to_panel = Some(panel_id);
-            } else {
-                actions.pan_to_workspace = Some(workspace.id);
+            // both modes; flat multi-panel rows keep panning to bounds.
+            match self.workspace_row_reveal(accordion, workspace.id, &workspace.panels) {
+                Some(panel_id) => {
+                    actions.focus_panel = Some(panel_id);
+                    actions.pan_to_panel = Some(panel_id);
+                }
+                None => actions.pan_to_workspace = Some(workspace.id),
             }
         }
         Self::show_workspace_context_menu(&row_response, workspace, actions);
@@ -313,6 +309,22 @@ impl HorizonApp {
             }
         }
         ui.add_space(8.0);
+    }
+
+    /// The panel a workspace-row click reveals. Accordion rows (where panel
+    /// rows are collapsed) and single-panel workspaces reveal a panel;
+    /// flat multi-panel rows return `None` so the click keeps its original
+    /// pan-to-workspace-bounds behavior.
+    fn workspace_row_reveal(
+        &self,
+        accordion: bool,
+        workspace_id: WorkspaceId,
+        panels: &[SidebarPanelEntry],
+    ) -> Option<PanelId> {
+        if !accordion && panels.len() > 1 {
+            return None;
+        }
+        self.workspace_reveal_panel(workspace_id, panels)
     }
 
     /// The panel a workspace-row click reveals: the focused panel when it
@@ -935,6 +947,8 @@ mod tests {
         assert!((width - 43.0).abs() <= f32::EPSILON);
     }
 
+    // `is_focused` is decorative in these tests: the reveal helpers read the
+    // board's own focus state, not the sidebar entry flag.
     fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
         SidebarPanelEntry {
             id,
@@ -999,5 +1013,42 @@ mod tests {
         app.board.focused = None;
         assert_eq!(app.workspace_reveal_panel(workspace, &panels), Some(first));
         assert_eq!(app.workspace_reveal_panel(other, &[]), None);
+    }
+
+    #[test]
+    fn workspace_row_reveal_gate_covers_accordion_and_panel_count() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("a");
+        let first = app
+            .board
+            .create_panel(editor_panel_options("first"), workspace)
+            .expect("panel");
+        let second = app
+            .board
+            .create_panel(editor_panel_options("second"), workspace)
+            .expect("panel");
+        let solo = app.board.create_workspace("solo");
+        let only = app
+            .board
+            .create_panel(editor_panel_options("only"), solo)
+            .expect("panel");
+        let empty = app.board.create_workspace("empty");
+
+        // Creation leaves focus on the last created panel (`only`), so put
+        // it back in `workspace` for the focused-in-workspace case.
+        app.board.focus(second);
+        let two = [sidebar_entry(first, false), sidebar_entry(second, true)];
+        let one = [sidebar_entry(only, false)];
+
+        // Accordion rows always reveal a panel: focused-in-workspace for
+        // multi-panel, the only panel for single-panel, nothing for empty.
+        assert_eq!(app.workspace_row_reveal(true, workspace, &two), Some(second));
+        assert_eq!(app.workspace_row_reveal(true, solo, &one), Some(only));
+        assert_eq!(app.workspace_row_reveal(true, empty, &[]), None);
+
+        // Flat rows only reveal single-panel workspaces; multi-panel rows
+        // keep panning to the workspace bounds (None).
+        assert_eq!(app.workspace_row_reveal(false, solo, &one), Some(only));
+        assert_eq!(app.workspace_row_reveal(false, workspace, &two), None);
     }
 }

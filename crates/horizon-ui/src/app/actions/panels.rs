@@ -36,8 +36,9 @@ impl HorizonApp {
     }
 
     /// Reveal a newly created panel the same way the sidebar reveals a
-    /// selected panel: detached workspaces get their OS window focused,
-    /// attached canvases pan/zoom to the panel.
+    /// selected panel: detached workspaces get their OS window focused, the
+    /// panel re-focused so the helper stays self-contained, and attached
+    /// canvases pan/zoom to the panel.
     pub(in crate::app) fn reveal_new_panel(
         &mut self,
         ctx: &egui::Context,
