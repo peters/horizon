@@ -89,10 +89,14 @@ The reusable runner:
   disclosure, redacted audit, failures, and optional handoff;
 - proves an immediate backend navigation rejection returns a typed MCP failure,
   retains the last valid page, and is audited as failed rather than completed;
+- disconnects the MCP stdio client, starts a fresh client with the same actor,
+  rediscovers the exact live panel, and proves resumed snapshot plus complete
+  audit states without restarting the browser;
 - starts a filtered capture before navigation to the high-rate WebSocket
   fixture, verifies a native bounded HTTP response body plus
-  sent/received/open/close records and a zero-drop 4,096-frame tail, then stops
-  and parses only the path returned by MCP;
+  sent/received/open/close records, a zero-drop 4,096-frame burst, and a
+  separate 17-frame reconnect before stopping and parsing only the path
+  returned by MCP;
 - waits for the tester to close the exact Horizon window normally; and
 - fails if the candidate exits badly or a task-owned browser process or live
   manifest remains.
@@ -154,6 +158,26 @@ only when a tester is present to close the exact window. Because this gate uses
 a public site, report external markup/feed drift separately from a browser
 regression and keep G1 as the deterministic pass/fail oracle.
 
+Use the periodic mode to prove sustained, low-overhead consumption and produce
+an agent-readable summary every 30 seconds for five minutes:
+
+```bash
+python3 scripts/browser-smoke/e24_smoke.py --backend firefox --horizon target/debug/horizon \
+  --observation-seconds 300 --summary-interval-seconds 30
+python3 scripts/browser-smoke/e24_smoke.py --backend chromium --horizon target/debug/horizon \
+  --observation-seconds 300 --summary-interval-seconds 30
+```
+
+The runner incrementally tails the private NDJSON file returned by MCP, so each
+interval processes only newly appended records. E24 currently populates this
+view with browser-originated HTTP/JSONP snapshots rather than a WebSocket and
+does not refresh the table autonomously, so the runner reloads through MCP at
+each boundary. Every `e24_market_summary` line includes price changes, daily
+gainers and losers, fresh-body counts, capture health, timing, and an exact
+DOM/feed comparison. A typed reload timeout gets one audited
+`browser_navigate` fallback and remains visible in `reload_retry`; any failed
+fallback, missing interval, capture loss, or weak DOM match fails the gate.
+
 ### G2 — backend UI and lifecycle lane
 
 Run these checks on each selected backend while G1 is open:
@@ -183,6 +207,9 @@ Run these checks on each selected backend while G1 is open:
 6. Navigate among `index.html`, `next.html`, and `alternate.html`; exercise
    back, forward, reload, URL submission, and an unreachable loopback URL. An
    error retains the last valid frame and committed URL and offers Retry.
+   Submit a hostname without a scheme and require the bar plus committed page
+   to use `https://`; submit the fixture's explicit `http://` URL and require
+   that override to remain HTTP.
 7. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
    off-screen placement, detach, native-window move/resize, and reattach.
    Capture launch and post-interaction screenshots. Record a native position
@@ -192,9 +219,11 @@ Run these checks on each selected backend while G1 is open:
    backend, committed URL/title, profile, geometry, and focus. Permanently
    closing a separate panel removes only its profile after the browser exits.
 9. Break only a task-owned disposable browser or driver. Verify cleared stale
-   pixels, actionable error, bounded teardown, Retry after cleanup, and no PID
-   reuse assumptions. Close during active navigation/capture/resize as a
-   separate focused pass.
+   pixels, actionable error, bounded teardown, Retry after cleanup, recovery of
+   the last committed HTTPS URL, fresh input after reconnect, and no PID reuse
+   assumptions. Close during active navigation/capture/resize as a separate
+   focused pass. A protocol disconnect must either rebind transparently or
+   surface this bounded Retry path; it must never leave a frozen stale frame.
 10. After every normal close, verify the exact browser/driver tree, driver
    thread, loopback listeners, live manifest, and disposable profile state.
    Never use a broad process-name kill or inspect/reuse an existing session.
@@ -215,9 +244,13 @@ and interaction script for comparisons.
    build on the same host instead of hiding the miss or inferring a regression.
 3. Run `animation.html` for at least three seconds. Adaptive capture stays
    active at no more than 30 fps and decays after returning to the static page.
-4. Stress rapid input, scroll, and resize. At most one adaptive capture is in
-   flight, newest demand wins, queues remain bounded, and stale-size/navigation
-   frames are not published.
+4. Stress rapid input, scroll, and resize. Include a paced trace that moves the
+   pointer while sending same-direction wheel bursts, reverses direction, and
+   captures the exact window during and after the gesture. The page must keep
+   visibly advancing, settle promptly after input stops, and retain the exact
+   committed URL throughout. At most one adaptive capture is in flight, newest
+   demand wins, queues remain bounded, direction changes remain ordered, and
+   stale-size/navigation frames are not published.
 5. Compare one, three, and five panels for process, thread, CPU, and RSS growth.
    Report exact measurements; do not generalize beyond the measured host.
 6. For Chromium, record renderer/GPU diagnostics. Removing `--disable-gpu`
@@ -418,7 +451,7 @@ Run once per host OS after the semantic gate:
 | `next.html` | Blue committed navigation/history target |
 | `alternate.html` | Red alternating navigation-latency target |
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
-| `websocket.html` | Native HTTP response body plus high-rate deterministic WebSocket lifecycle, sent frame, 4,096 received frames, URL redaction, bounded NDJSON export |
+| `websocket.html` | Native HTTP response body plus deterministic WebSocket disconnect/reconnect lifecycle, sent frames, a 4,096-frame burst plus 17-frame reconnect, URL redaction, bounded NDJSON export |
 | `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
 
 Keep selectors stable. When a browser behavior needs a new deterministic

@@ -14,28 +14,47 @@
   <p id="stream-status" data-state="connecting">connecting</p>
   <script>
     const status = document.querySelector('#stream-status');
-    let received = 0;
-    const socket = new WebSocket(`ws://${location.host}/market-stream?token=MCP_NETWORK_URL_SECRET`);
-    socket.addEventListener('open', () => {
-      status.dataset.state = 'open';
-      status.textContent = 'open';
-      socket.send(JSON.stringify({ action: 'subscribe', symbols: ['TEST'] }));
-    });
-    socket.addEventListener('message', (event) => {
-      received += 1;
-      if (received === 1 || received % 256 === 0) {
-        const value = JSON.parse(event.data);
-        status.textContent = `open received=${received} last=${value.sequence}`;
-      }
-    });
-    socket.addEventListener('close', () => {
-      status.dataset.state = 'closed';
-      status.textContent = `closed received=${received}`;
-    });
-    socket.addEventListener('error', () => {
-      status.dataset.state = 'error';
-      status.textContent = `error received=${received}`;
-    });
+    const frameTargets = [4096, 17];
+    let attempt = 0;
+    let totalReceived = 0;
+
+    function connect() {
+      attempt += 1;
+      let received = 0;
+      const frames = frameTargets[attempt - 1];
+      const socket = new WebSocket(
+        `ws://${location.host}/market-stream?token=MCP_NETWORK_URL_SECRET&attempt=${attempt}&frames=${frames}`
+      );
+      status.dataset.state = attempt === 1 ? 'connecting' : 'reconnecting';
+      status.textContent = `${status.dataset.state} attempt=${attempt}`;
+      socket.addEventListener('open', () => {
+        status.dataset.state = 'open';
+        status.textContent = `open attempt=${attempt}`;
+        socket.send(JSON.stringify({ action: 'subscribe', attempt, symbols: ['TEST'] }));
+      });
+      socket.addEventListener('message', (event) => {
+        received += 1;
+        totalReceived += 1;
+        if (received === 1 || received % 256 === 0) {
+          const value = JSON.parse(event.data);
+          status.textContent = `open attempt=${attempt} received=${received} last=${value.sequence}`;
+        }
+      });
+      socket.addEventListener('close', () => {
+        if (attempt < frameTargets.length) {
+          connect();
+          return;
+        }
+        status.dataset.state = 'closed';
+        status.textContent = `closed attempts=${attempt} received=${totalReceived}`;
+      });
+      socket.addEventListener('error', () => {
+        status.dataset.state = 'error';
+        status.textContent = `error attempt=${attempt} received=${received}`;
+      });
+    }
+
+    connect();
   </script>
 </body>
 </html>

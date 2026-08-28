@@ -374,7 +374,12 @@ def exercise_network_capture(
             action_ids,
         )
         connections = status["known_connections"]
-        if connections and connections[0]["state"] == "closed" and connections[0]["received_frames"] >= 4096:
+        closed_frame_counts = sorted(
+            connection["received_frames"]
+            for connection in connections
+            if connection["state"] == "closed"
+        )
+        if closed_frame_counts == [17, 4096]:
             break
         time.sleep(0.1)
     else:
@@ -410,10 +415,18 @@ def exercise_network_capture(
     if not required.issubset(kinds):
         raise AssertionError({"missing": sorted(required - kinds), "kinds": sorted(kinds)})
     received = [record for record in records if record["kind"] == "websocket_frame_received"]
-    if len(received) != 4096:
-        raise AssertionError(f"expected 4096 received frames, got {len(received)}")
-    if json.loads(received[-1]["payload"])["sequence"] != 4095:
-        raise AssertionError("network capture omitted the final high-rate frame")
+    received_by_connection: dict[str, list[dict[str, Any]]] = {}
+    for record in received:
+        received_by_connection.setdefault(record["connection_id"], []).append(record)
+    frame_counts = sorted(len(connection_records) for connection_records in received_by_connection.values())
+    if frame_counts != [17, 4096]:
+        raise AssertionError(f"expected 4096 initial and 17 reconnect frames, got {frame_counts}")
+    terminal_sequences = sorted(
+        json.loads(connection_records[-1]["payload"])["sequence"]
+        for connection_records in received_by_connection.values()
+    )
+    if terminal_sequences != [16, 4095]:
+        raise AssertionError(f"network capture omitted a final frame: {terminal_sequences}")
     bodies = [record for record in records if record["kind"] == "http_response_body"]
     if not bodies:
         raise AssertionError("network capture omitted the fixture HTTP response body")
@@ -435,6 +448,7 @@ def exercise_network_capture(
         "capture_id": stopped["capture_id"],
         "path": str(capture_path),
         "records": len(records),
+        "connection_frame_counts": frame_counts,
         "response_bodies": len(bodies),
         "received_frames": len(received),
         "supported": True,
@@ -644,6 +658,8 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     fingerprint = wait_for_fingerprint(client, panel_id, action_ids)
     verify_disclosure(fingerprint, args.backend, args.automation_disclosure)
+    before_scroll, _ = client.call("browser_panel", {"panel_id": panel_id})
+    assert before_scroll is not None
     record_action(
         client,
         "browser_act",
@@ -658,6 +674,9 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     )["value"]
     if not isinstance(scroll_y, (int, float)) or scroll_y <= 0:
         raise AssertionError(scroll_y)
+    after_scroll, _ = client.call("browser_panel", {"panel_id": panel_id})
+    if after_scroll is None or after_scroll["url"] != before_scroll["url"]:
+        raise AssertionError("scroll changed the browser panel's committed URL")
 
     record_action(
         client,
@@ -837,6 +856,47 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         "panel_id": panel_id,
         "protocol": panel["protocol"],
         "scroll_y": scroll_y,
+        "scroll_url_stable": True,
+    }
+
+
+def exercise_reconnect(
+    client: McpClient,
+    backend: str,
+    panel_id: str,
+) -> dict[str, Any]:
+    """Prove a fresh MCP stdio session can rediscover and resume the panel."""
+    initialize(client)
+    listed, _ = client.call("browser_list", {})
+    assert listed is not None
+    rediscovered = next(
+        (
+            panel
+            for panel in listed["panels"]
+            if panel["panel_id"] == panel_id and panel["backend"] == backend
+        ),
+        None,
+    )
+    if rediscovered is None:
+        raise AssertionError("reconnected MCP client did not rediscover the live browser panel")
+    detail, _ = client.call("browser_panel", {"panel_id": panel_id})
+    assert detail is not None
+    action_ids: list[str] = []
+    snapshot = record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
+    audit, _ = client.call("browser_audit", {"panel_id": panel_id, "limit": 100})
+    assert audit is not None
+    statuses = {
+        entry["status"]
+        for entry in audit["entries"]
+        if entry["action_id"] == action_ids[0]
+    }
+    if not {"queued", "dispatched", "completed"}.issubset(statuses):
+        raise AssertionError("reconnected MCP action did not retain complete audit states")
+    return {
+        "audit_states": sorted(statuses),
+        "panel_id": panel_id,
+        "title": snapshot["title"],
+        "url": detail["url"],
     }
 
 
@@ -865,12 +925,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"Horizon binary does not exist: {command}")
     args.log.parent.mkdir(parents=True, exist_ok=True)
     actor = f"browser-smoke:{args.backend}:{os.getpid()}"
-    client = McpClient(command, args.log, args.timeout, actor)
+    client: McpClient | None = McpClient(command, args.log, args.timeout, actor)
     try:
+        assert client is not None
         result = exercise(client, args)
+        first_client = client
+        client = None
+        first_client.close()
+        reconnect_log = args.log.with_name(f"{args.log.stem}-reconnect{args.log.suffix}")
+        client = McpClient(command, reconnect_log, args.timeout, actor)
+        result["mcp_reconnect"] = exercise_reconnect(
+            client,
+            args.backend,
+            result["panel_id"],
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
     finally:
-        client.close()
+        if client is not None:
+            client.close()
     return 0
 
 

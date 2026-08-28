@@ -13,7 +13,7 @@ import struct
 import time
 from pathlib import Path
 from typing import Sequence
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
@@ -67,10 +67,21 @@ class SmokeHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
         self.close_connection = True
+        query = parse_qs(urlsplit(self.path).query)
         try:
-            for sequence in range(4096):
+            frame_count = int(query.get("frames", ["4096"])[0])
+        except ValueError:
+            frame_count = 0
+        if not 1 <= frame_count <= 4096:
+            return
+        attempt = query.get("attempt", ["1"])[0]
+        try:
+            if frame_count < 128:
+                time.sleep(0.025)
+            for sequence in range(frame_count):
                 payload = json.dumps(
                     {
+                        "attempt": attempt,
                         "price": round(100 + (sequence % 97) * 0.01, 2),
                         "sequence": sequence,
                         "symbol": "TEST",
@@ -79,8 +90,12 @@ class SmokeHandler(http.server.SimpleHTTPRequestHandler):
                     separators=(",", ":"),
                 ).encode("utf-8")
                 self.connection.sendall(websocket_frame(0x1, payload))
-                if sequence % 128 == 127:
+                if frame_count < 128:
+                    time.sleep(0.002)
+                elif sequence % 128 == 127:
                     time.sleep(0.001)
+            if frame_count < 128:
+                time.sleep(0.025)
             self.connection.sendall(websocket_frame(0x8, struct.pack("!H", 1000) + b"fixture-complete"))
         except (BrokenPipeError, ConnectionResetError):
             return

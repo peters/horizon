@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import platform
 import re
@@ -13,9 +14,10 @@ import subprocess
 import sys
 import time
 import traceback
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, TextIO
 from zoneinfo import ZoneInfo
 
 sys.dont_write_bytecode = True
@@ -47,6 +49,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--url", default=E24_URL)
     parser.add_argument("--observation-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--summary-interval-seconds",
+        type=float,
+        help="emit and verify incremental market summaries at this interval",
+    )
     parser.add_argument("--feed-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--minimum-matches", type=int, default=3)
     parser.add_argument("--allow-closed-market", action="store_true")
@@ -187,6 +194,233 @@ def feed_items(record: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(quote, dict) and "lastprice" in quote
     ]
 
+
+class NdjsonTail:
+    """Incrementally read complete records without repeatedly parsing the capture file."""
+
+    def __init__(self, path: Path) -> None:
+        self.stream: TextIO = path.open("r", encoding="utf-8")
+
+    def drain(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        while True:
+            position = self.stream.tell()
+            line = self.stream.readline()
+            if not line:
+                break
+            if not line.endswith("\n"):
+                self.stream.seek(position)
+                break
+            records.append(json.loads(line))
+        return records
+
+    def close(self) -> None:
+        self.stream.close()
+
+
+@dataclass
+class MarketState:
+    latest: dict[str, tuple[int, dict[str, Any]]] = field(default_factory=dict)
+    previous_prices: dict[str, Decimal] = field(default_factory=dict)
+    records: int = 0
+    response_bodies: int = 0
+    response_body_bytes: int = 0
+    response_body_errors: int = 0
+    response_body_truncations: int = 0
+    stock_updates: int = 0
+    first_kind: str | None = None
+    last_kind: str | None = None
+
+    def ingest(self, records: list[dict[str, Any]]) -> tuple[dict[str, int], set[str]]:
+        counts = {"new_response_bodies": 0, "new_stock_updates": 0}
+        instruments: set[str] = set()
+        for record in records:
+            self.records += 1
+            kind = str(record.get("kind", ""))
+            self.first_kind = self.first_kind or kind
+            self.last_kind = kind
+            if kind != "http_response_body":
+                continue
+            counts["new_response_bodies"] += 1
+            self.response_bodies += 1
+            self.response_body_bytes += int(record.get("payload_bytes", 0) or 0)
+            self.response_body_errors += int(bool(record.get("error")))
+            self.response_body_truncations += int(bool(record.get("truncated")))
+            timestamp = int(record.get("timestamp_millis", 0) or 0)
+            for item in feed_items(record):
+                price = json_decimal(item.get("lastprice"))
+                instrument = str(item.get("insref", ""))
+                if not instrument or price is None or item.get("instrumenttype") != 4:
+                    continue
+                self.latest[instrument] = (timestamp, item)
+                instruments.add(instrument)
+                self.stock_updates += 1
+                counts["new_stock_updates"] += 1
+        return counts, instruments
+
+    @staticmethod
+    def compact(entry: tuple[int, dict[str, Any]]) -> dict[str, Any]:
+        _, item = entry
+        return {
+            "symbol": item.get("symbol", ""),
+            "name": item.get("name", ""),
+            "price": str(json_decimal(item.get("lastprice"))),
+            "day_change_percent": str(json_decimal(item.get("diff1dprc"))),
+        }
+
+    def interval_summary(
+        self,
+        interval: int,
+        elapsed_seconds: float,
+        new_counts: dict[str, int],
+    ) -> dict[str, Any]:
+        current_prices = {
+            instrument: price
+            for instrument, (_, item) in self.latest.items()
+            if (price := json_decimal(item.get("lastprice"))) is not None
+        }
+        changed = []
+        for instrument in current_prices.keys() & self.previous_prices.keys():
+            before = self.previous_prices[instrument]
+            after = current_prices[instrument]
+            if before == after:
+                continue
+            _, item = self.latest[instrument]
+            delta = after - before
+            changed.append(
+                {
+                    "symbol": item.get("symbol", ""),
+                    "name": item.get("name", ""),
+                    "from": str(before),
+                    "to": str(after),
+                    "delta": str(delta),
+                    "delta_percent": (
+                        str((delta / before * 100).quantize(Decimal("0.0001"))) if before else None
+                    ),
+                }
+            )
+        self.previous_prices = current_prices
+        movers = sorted(
+            (entry for entry in self.latest.values() if json_decimal(entry[1].get("diff1dprc")) is not None),
+            key=lambda entry: json_decimal(entry[1].get("diff1dprc")) or Decimal(0),
+        )
+        latest_timestamp = max((entry[0] for entry in self.latest.values()), default=0)
+        return {
+            "interval": interval,
+            "elapsed_seconds": round(elapsed_seconds, 3),
+            **new_counts,
+            "captured_response_bodies": self.response_bodies,
+            "captured_stock_updates": self.stock_updates,
+            "current_stocks": len(self.latest),
+            "latest_feed_age_ms": (
+                max(0, int(time.time() * 1000) - latest_timestamp) if latest_timestamp else None
+            ),
+            "changed_since_previous": sorted(
+                changed,
+                key=lambda item: abs(Decimal(item["delta_percent"] or "0")),
+                reverse=True,
+            )[:5],
+            "top_gainers": [self.compact(entry) for entry in reversed(movers[-3:])],
+            "top_losers": [self.compact(entry) for entry in movers[:3]],
+        }
+
+
+def compare_latest_quotes(
+    dom: dict[str, Any],
+    state: MarketState,
+    fresh_instruments: set[str],
+) -> dict[str, Any]:
+    matches = []
+    mismatches = []
+    for quote in dom["quotes"]:
+        href = quote.get("href", "")
+        instrument_match = re.search(r"/aksjer/(\d+)/", href) if isinstance(href, str) else None
+        if instrument_match is None:
+            continue
+        instrument = instrument_match.group(1)
+        if instrument not in fresh_instruments:
+            continue
+        latest = state.latest.get(instrument)
+        if latest is None:
+            continue
+        _, item = latest
+        dom_price = decimal_value(str(quote.get("price", "")))
+        dom_change = decimal_value(str(quote.get("change", "")))
+        feed_price = json_decimal(item.get("lastprice"))
+        feed_change = json_decimal(item.get("diff1dprc"))
+        evidence = {
+            "insref": instrument,
+            "symbol": item.get("symbol") or quote.get("symbol", ""),
+            "dom_price": str(dom_price),
+            "feed_price": str(feed_price),
+            "dom_change": str(dom_change),
+            "feed_change": str(feed_change),
+        }
+        (matches if dom_price == feed_price and dom_change == feed_change else mismatches).append(evidence)
+    return {
+        "dom_rows": len(dom["quotes"]),
+        "exact_matches": len(matches),
+        "fresh_feed_instruments": len(fresh_instruments),
+        "compared": len(matches) + len(mismatches),
+        "sample_matches": matches[:3],
+        "sample_mismatches": mismatches[:3],
+    }
+
+
+def wait_for_market_batch(
+    tail: NdjsonTail,
+    state: MarketState,
+    timeout_seconds: float,
+) -> tuple[dict[str, int], set[str]]:
+    deadline = time.monotonic() + timeout_seconds
+    totals = {"new_response_bodies": 0, "new_stock_updates": 0}
+    instruments: set[str] = set()
+    while time.monotonic() < deadline:
+        counts, updated = state.ingest(tail.drain())
+        instruments.update(updated)
+        for key, value in counts.items():
+            totals[key] += value
+        if totals["new_stock_updates"] > 0:
+            time.sleep(0.25)
+            counts, updated = state.ingest(tail.drain())
+            instruments.update(updated)
+            for key, value in counts.items():
+                totals[key] += value
+            return totals, instruments
+        time.sleep(0.05)
+    raise AssertionError("fresh E24 market response did not arrive through the browser capture")
+
+
+def reload_with_fallback(
+    client: mcp_gate.McpClient,
+    panel_id: str,
+    url: str,
+    action_ids: list[str],
+    failed_action_ids: list[str],
+) -> dict[str, str] | None:
+    try:
+        mcp_gate.record_action(
+            client,
+            "browser_act",
+            {"panel_id": panel_id, "action": "reload", "timeout_millis": 60_000},
+            action_ids,
+        )
+        return None
+    except AssertionError as error:
+        failed_action_id = mcp_gate.failed_action_id(str(error))
+        failed_action_ids.append(failed_action_id)
+        mcp_gate.record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": url, "timeout_millis": 60_000},
+            action_ids,
+        )
+        return {
+            "failed_action_id": failed_action_id,
+            "fallback": "browser_navigate",
+            "reason": str(error),
+        }
+
 def match_quotes(dom: dict[str, Any], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     observed_at = int(dom["observedAtMillis"])
     payloads: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -284,7 +518,12 @@ def verify_jq(path: Path) -> None:
         raise AssertionError(f"jq could not validate the returned NDJSON path: {result.stderr.strip()}")
 
 
-def verify_audit(client: mcp_gate.McpClient, panel_id: str, action_ids: list[str]) -> dict[str, Any]:
+def verify_audit(
+    client: mcp_gate.McpClient,
+    panel_id: str,
+    action_ids: list[str],
+    failed_action_ids: Sequence[str] = (),
+) -> dict[str, Any]:
     audit, _ = client.call("browser_audit", {"panel_id": panel_id, "limit": 500})
     assert audit is not None
     encoded = json.dumps(audit, ensure_ascii=False, sort_keys=True)
@@ -297,7 +536,14 @@ def verify_audit(client: mcp_gate.McpClient, panel_id: str, action_ids: list[str
         for action_id in action_ids
         if not {"queued", "dispatched", "completed"}.issubset(statuses.get(action_id, set()))
     }
-    return {"entries": len(audit["entries"]), "missing_terminal_states": missing}
+    missing_failed = [
+        action_id for action_id in failed_action_ids if "failed" not in statuses.get(action_id, set())
+    ]
+    return {
+        "entries": len(audit["entries"]),
+        "missing_failed_states": missing_failed,
+        "missing_terminal_states": missing,
+    }
 
 def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: float) -> dict[str, Any]:
     mcp_gate.initialize(client)
@@ -506,6 +752,224 @@ def exercise(client: mcp_gate.McpClient, args: argparse.Namespace, run_started: 
     }
 
 
+def exercise_periodic(
+    client: mcp_gate.McpClient,
+    args: argparse.Namespace,
+    run_started: float,
+) -> dict[str, Any]:
+    mcp_gate.initialize(client)
+    action_ids: list[str] = []
+    failed_action_ids: list[str] = []
+    panel = mcp_gate.wait_for_panel(client, args.backend, 90)
+    panel_id = panel["panel_id"]
+    detail, _ = client.call("browser_panel", {"panel_id": panel_id})
+    assert detail is not None
+    expected_transport = "cdp" if args.backend == "chromium" else "webdriver_bidi"
+    actual_transport = detail["network_capture"].get("http_response_body_transport")
+    if actual_transport != expected_transport:
+        raise AssertionError(f"unexpected HTTP body transport: {detail['network_capture']}")
+
+    started = mcp_gate.record_action(
+        client,
+        "browser_network",
+        {
+            "panel_id": panel_id,
+            "operation": "start",
+            "include_http": True,
+            "include_http_bodies": True,
+            "include_websocket": False,
+            "url_patterns": ["mws.fcgi"],
+            "max_payload_bytes": 1024 * 1024,
+            "max_file_bytes": 256 * 1024 * 1024,
+        },
+        action_ids,
+    )
+    capture_path = Path(started["path"])
+    stopped: dict[str, Any] | None = None
+    tail = NdjsonTail(capture_path)
+    state = MarketState()
+    summaries: list[dict[str, Any]] = []
+    reload_retries: list[dict[str, Any]] = []
+    try:
+        mcp_gate.record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": args.url, "timeout_millis": 60_000},
+            action_ids,
+        )
+        mcp_gate.record_action(
+            client,
+            "browser_wait",
+            {
+                "panel_id": panel_id,
+                "selector": "table.millistream-list-table",
+                "state": "present",
+                "timeout_millis": 60_000,
+            },
+            action_ids,
+        )
+        wait_for_market_batch(tail, state, args.feed_timeout_seconds)
+        state.previous_prices = {
+            instrument: price
+            for instrument, (_, item) in state.latest.items()
+            if (price := json_decimal(item.get("lastprice"))) is not None
+        }
+        monitor_started = time.monotonic()
+        interval_seconds = float(args.summary_interval_seconds)
+        expected_intervals = math.ceil(args.observation_seconds / interval_seconds)
+        for interval in range(1, expected_intervals + 1):
+            deadline = monitor_started + min(args.observation_seconds, interval * interval_seconds)
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                time.sleep(min(0.25, max(0.01, remaining)))
+
+            state.ingest(tail.drain())
+            reload_started = time.monotonic()
+            boundary_delay_ms = max(0.0, (reload_started - deadline) * 1000)
+            retry = reload_with_fallback(
+                client,
+                panel_id,
+                args.url,
+                action_ids,
+                failed_action_ids,
+            )
+            if retry is not None:
+                reload_retries.append({"interval": interval, **retry})
+            mcp_gate.record_action(
+                client,
+                "browser_wait",
+                {
+                    "panel_id": panel_id,
+                    "selector": "table.millistream-list-table",
+                    "state": "present",
+                    "timeout_millis": 60_000,
+                },
+                action_ids,
+            )
+            reload_finished = time.monotonic()
+            new_counts, fresh_instruments = wait_for_market_batch(
+                tail,
+                state,
+                args.feed_timeout_seconds,
+            )
+            feed_seen = time.monotonic()
+            dom = evaluate_quotes(client, panel_id, action_ids)
+            comparison = compare_latest_quotes(dom, state, fresh_instruments)
+            status = mcp_gate.record_action(
+                client,
+                "browser_network",
+                {"panel_id": panel_id, "operation": "status", "timeout_millis": 30_000},
+                action_ids,
+            )
+            summary = {
+                "kind": "e24_market_summary",
+                "backend": args.backend,
+                **state.interval_summary(interval, time.monotonic() - monitor_started, new_counts),
+                "schedule_timing_ms": {
+                    "boundary_delay": round(boundary_delay_ms, 3),
+                    "published_after_boundary": round((time.monotonic() - deadline) * 1000, 3),
+                },
+                "refresh_timing_ms": {
+                    "reload_and_table": round((reload_finished - reload_started) * 1000, 3),
+                    "fresh_feed_after_table": round((feed_seen - reload_finished) * 1000, 3),
+                },
+                "dom_verification": comparison,
+                "capture_health": {
+                    "records_written": status["records_written"],
+                    "bytes_written": status["bytes_written"],
+                    "records_dropped": status["records_dropped"],
+                    "payloads_truncated": status["payloads_truncated"],
+                    "file_limit_reached": status["file_limit_reached"],
+                    "writer_failed": status["writer_failed"],
+                },
+                "reload_retry": retry,
+            }
+            summaries.append(summary)
+            print(json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
+
+        stopped = mcp_gate.record_action(
+            client,
+            "browser_network",
+            {"panel_id": panel_id, "operation": "stop", "timeout_millis": 60_000},
+            action_ids,
+        )
+    finally:
+        try:
+            if stopped is None:
+                stopped, _ = client.call(
+                    "browser_network",
+                    {"panel_id": panel_id, "operation": "stop", "timeout_millis": 60_000},
+                )
+        finally:
+            try:
+                state.ingest(tail.drain())
+            finally:
+                tail.close()
+    assert stopped is not None
+    verify_jq(capture_path)
+    audit = verify_audit(client, panel_id, action_ids, failed_action_ids)
+    expected_intervals = math.ceil(args.observation_seconds / float(args.summary_interval_seconds))
+    failures = []
+    if len(summaries) != expected_intervals:
+        failures.append(f"emitted {len(summaries)} summaries instead of {expected_intervals}")
+    weak_intervals = [
+        summary["interval"]
+        for summary in summaries
+        if summary["dom_verification"]["exact_matches"] < args.minimum_matches
+    ]
+    if weak_intervals:
+        failures.append(f"DOM/feed exact-match threshold missed in intervals {weak_intervals}")
+    late_intervals = [
+        summary["interval"]
+        for summary in summaries
+        if max(summary["schedule_timing_ms"].values()) >= float(args.summary_interval_seconds) * 1000
+    ]
+    if late_intervals:
+        failures.append(f"summary publication fell at least one full interval behind in {late_intervals}")
+    active_intervals = sum(summary["new_response_bodies"] > 0 for summary in summaries)
+    if active_intervals != expected_intervals:
+        failures.append(
+            f"market feed produced new response bodies in {active_intervals} intervals; "
+            f"need {expected_intervals}"
+        )
+    if state.response_body_errors:
+        failures.append(f"{state.response_body_errors} response bodies could not be retrieved")
+    if state.response_body_truncations:
+        failures.append(f"{state.response_body_truncations} response bodies were truncated")
+    health_failures = [
+        key
+        for key in ["records_dropped", "payloads_truncated", "file_limit_reached", "writer_failed"]
+        if stopped.get(key) not in (0, False)
+    ]
+    if health_failures:
+        failures.append(f"capture health failed: {', '.join(health_failures)}")
+    if state.first_kind != "capture_started" or state.last_kind != "capture_stopped":
+        failures.append(f"capture lifecycle was incomplete: {state.first_kind} -> {state.last_kind}")
+    if audit["missing_terminal_states"] or audit["missing_failed_states"]:
+        failures.append("one or more MCP actions lack complete audit states")
+    return {
+        "audit": audit,
+        "backend": args.backend,
+        "capture": {
+            "active_summary_intervals": active_intervals,
+            "bytes_written": stopped["bytes_written"],
+            "path": str(capture_path),
+            "records": state.records,
+            "response_bodies": state.response_bodies,
+            "response_body_bytes": state.response_body_bytes,
+            "stock_updates": state.stock_updates,
+            "stocks": len(state.latest),
+            "transport": stopped["transport"],
+        },
+        "failures": failures,
+        "git_head": browser_smoke.git_head(Path(__file__).resolve().parents[2]),
+        "passed": not failures,
+        "reload_retries": reload_retries,
+        "summaries": summaries,
+        "total_seconds": round(time.monotonic() - run_started, 3),
+    }
+
+
 def close_candidate(candidate: subprocess.Popen[Any]) -> str:
     if candidate.poll() is not None:
         return "already_exited"
@@ -540,6 +1004,13 @@ def close_candidate(candidate: subprocess.Popen[Any]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     browser_smoke.validate_platform(args.backend)
+    if args.observation_seconds < 0:
+        raise SystemExit("--observation-seconds cannot be negative")
+    if args.summary_interval_seconds is not None:
+        if args.summary_interval_seconds <= 0:
+            raise SystemExit("--summary-interval-seconds must be positive")
+        if args.observation_seconds <= 0:
+            raise SystemExit("periodic summaries require a positive --observation-seconds")
     if not args.allow_closed_market and not market_is_open():
         raise SystemExit("E24 live market-data smoke requires Oslo market hours (weekdays 09:00-16:20)")
     repo_root = Path(__file__).resolve().parents[2]
@@ -571,7 +1042,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"candidate_pid": candidate.pid, "root": str(root)}), flush=True)
         client = mcp_client(command, root / "logs" / f"e24-{args.backend}-mcp.log", environment, args.backend)
         try:
-            result = exercise(client, args, run_started)
+            if args.summary_interval_seconds is None:
+                result = exercise(client, args, run_started)
+            else:
+                result = exercise_periodic(client, args, run_started)
         except Exception as error:  # preserve a machine-readable failure artifact
             result = {
                 "backend": args.backend,
