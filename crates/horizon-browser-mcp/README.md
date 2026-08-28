@@ -30,7 +30,9 @@ binary.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,
   frame/byte counts, drops, truncation, and writer health. Start it before
-  navigation for a complete socket lifecycle; while active, agents may use
+  navigation for a complete request or socket lifecycle. Set
+  `include_http_bodies: true` together with `include_http: true` to add native,
+  size-bounded `http_response_body` records. While active, agents may use
   ordinary read-only tools such as `tail -f`, `jq`, or `rg` on that exact path.
 - `browser_handoff` pauses automation so the user can steer.
 - `browser_audit` returns redacted ordered action records.
@@ -40,11 +42,14 @@ The server automatically claims and heartbeats a panel using
 WebDriver, manifest, audit-file, or result-file locations. Horizon's locked
 manifest queue remains private implementation plumbing, not a second API.
 
-Chromium WebSocket frames come directly from CDP. Standard WebDriver BiDi
-currently exposes HTTP lifecycle events but not WebSocket frames, so Firefox
-uses an explicitly advertised, pre-document page bridge that batches frames
-before crossing BiDi. This bridge is observable by page code and is not an
-undetectability feature. Safari network capture is reported as unsupported.
+Chromium HTTP metadata, response bodies, and WebSocket frames come directly
+from CDP. Firefox HTTP metadata and response bodies use native WebDriver BiDi;
+standard BiDi does not currently expose WebSocket frames, so Firefox uses an
+explicitly advertised, pre-document page bridge that batches only socket
+frames before crossing BiDi. This bridge is observable by page code and is not
+an undetectability feature. Safari network capture is reported as unsupported.
+Response bodies are opt-in because they may contain sensitive page data; the
+export is private, bounded, filtered, and excluded from the action audit.
 
 ## Dependency boundary
 

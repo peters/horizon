@@ -217,6 +217,50 @@ impl NetworkCaptureState {
         }
     }
 
+    pub(crate) fn http_body_url(&self, connection_id: &str) -> Option<String> {
+        let active = self.active.as_ref()?;
+        if !active.options.include_http_bodies || !connection_id_is_bounded(connection_id) {
+            return None;
+        }
+        active.http_requests.get(connection_id).cloned()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_http_body(
+        &mut self,
+        connection_id: &str,
+        url: &str,
+        payload: Option<&str>,
+        encoding: Option<BrowserNetworkPayloadEncoding>,
+        payload_bytes: Option<u64>,
+        source_truncated: bool,
+        error: Option<&str>,
+    ) {
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        if !active.options.include_http_bodies || !connection_id_is_bounded(connection_id) {
+            return;
+        }
+        let mut record = active.next_record(BrowserNetworkEventKind::HttpResponseBody);
+        record.connection_id = Some(connection_id.to_string());
+        record.url = Some(bounded_string(url, MAX_PUBLIC_URL_BYTES).0);
+        record.direction = Some(BrowserNetworkDirection::Received);
+        record.payload_encoding = encoding;
+        record.payload_bytes = payload_bytes;
+        record.error = error.map(|value| bounded_string(value, MAX_ERROR_BYTES).0);
+        if let (Some(payload), Some(encoding)) = (payload, encoding) {
+            let limit = payload_string_limit(active.options.max_payload_bytes, encoding);
+            let (payload, bounded) = bounded_string(payload, limit);
+            record.payload = Some(payload);
+            record.truncated = bounded || source_truncated;
+            if record.truncated {
+                active.writer.note_truncated();
+            }
+        }
+        active.writer.try_record(record);
+    }
+
     pub(crate) fn record_websocket_created(&mut self, connection_id: &str, url: &str) {
         let Some(active) = self.active.as_mut() else {
             return;
@@ -588,6 +632,27 @@ fn payload_string_limit(max_payload_bytes: u32, encoding: BrowserNetworkPayloadE
     }
 }
 
+pub(crate) fn decoded_base64_len(value: &str) -> u64 {
+    let complete = value.len() / 4;
+    let remainder = value.len() % 4;
+    let padding = value
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count()
+        .min(2);
+    let bytes = complete
+        .saturating_mul(3)
+        .saturating_add(match remainder {
+            2 => 1,
+            3 => 2,
+            _ => 0,
+        })
+        .saturating_sub(padding);
+    u64::try_from(bytes).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +665,10 @@ mod tests {
         assert!(options.validate().is_err());
         options.include_http = true;
         assert!(options.validate().is_ok());
+        options.include_http = false;
+        options.include_http_bodies = true;
+        assert!(options.validate().is_err());
+        options.include_http = true;
         options.url_patterns = vec!["x".repeat(MAX_NETWORK_PATTERN_BYTES + 1)];
         assert!(options.validate().is_err());
     }
@@ -693,6 +762,71 @@ mod tests {
                 .iter()
                 .any(|record| record.kind == BrowserNetworkEventKind::HttpCompleted)
         );
+    }
+
+    #[test]
+    fn http_response_bodies_are_filtered_redacted_and_bounded() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let mut capture = NetworkCaptureState::default();
+        capture
+            .start(
+                NetworkCaptureHost::new(Some(root.path()), None, ""),
+                "http-body",
+                BackendKind::ChromiumCdp,
+                "cdp",
+                BrowserNetworkCaptureOptions {
+                    include_http: true,
+                    include_http_bodies: true,
+                    include_websocket: false,
+                    url_patterns: vec!["market".to_string()],
+                    max_payload_bytes: 4,
+                    ..BrowserNetworkCaptureOptions::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("capture start failed: {}", error.message));
+        capture.record_http(
+            BrowserNetworkEventKind::HttpRequest,
+            Some("request-1"),
+            Some("https://example.test/market?token=private"),
+            Some("GET"),
+            None,
+            Some("Fetch"),
+            None,
+            None,
+        );
+        let url = capture
+            .http_body_url("request-1")
+            .unwrap_or_else(|| panic!("matching response body was not tracked"));
+        capture.record_http_body(
+            "request-1",
+            &url,
+            Some("abcdef"),
+            Some(BrowserNetworkPayloadEncoding::Text),
+            Some(6),
+            false,
+            None,
+        );
+        let summary = capture
+            .stop()
+            .unwrap_or_else(|error| panic!("capture stop failed: {}", error.message));
+        let records = std::fs::read_to_string(summary.path)
+            .unwrap_or_else(|error| panic!("capture read failed: {error}"))
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<BrowserNetworkRecord>(line)
+                    .unwrap_or_else(|error| panic!("capture record decode failed: {error}"))
+            })
+            .collect::<Vec<_>>();
+        let body = records
+            .iter()
+            .find(|record| record.kind == BrowserNetworkEventKind::HttpResponseBody)
+            .unwrap_or_else(|| panic!("HTTP response body record missing"));
+
+        assert_eq!(body.url.as_deref(), Some("https://example.test/market?<redacted>"));
+        assert_eq!(body.payload.as_deref(), Some("abcd"));
+        assert_eq!(body.payload_bytes, Some(6));
+        assert!(body.truncated);
+        assert_eq!(summary.payloads_truncated, 1);
     }
 
     #[test]

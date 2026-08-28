@@ -4,13 +4,17 @@ use std::sync::Arc;
 
 use crate::cdp::{CdpEvent, CdpLink};
 use crate::frames::FrameSlot;
-use crate::network::NetworkCaptureHost;
+use crate::network::{NetworkCaptureHost, decoded_base64_len};
 use crate::{
     AgentAction, BrowserControlFailure, BrowserControlValue, BrowserNetworkCaptureOptions, BrowserNetworkDirection,
     BrowserNetworkEventKind, BrowserNetworkOperation, BrowserNetworkPayloadEncoding,
 };
 
 use super::{BrowserEvent, BrowserEventSender, DriverState};
+
+const MAX_HTTP_BODY_FETCHES_PER_TICK: usize = 4;
+const MAX_HTTP_BODY_FLUSH_BATCHES: usize = 16;
+const MAX_PENDING_HTTP_BODIES: usize = 4_096;
 
 impl DriverState {
     pub(super) fn network_action(
@@ -24,6 +28,7 @@ impl DriverState {
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let capture = match operation {
             BrowserNetworkOperation::Start => {
+                self.pending_http_bodies.clear();
                 let session = self.session_id.clone().ok_or_else(|| {
                     BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
                 })?;
@@ -56,6 +61,7 @@ impl DriverState {
             }
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
+                self.flush_http_response_bodies(link, event_tx, frame_slot);
                 if self.network.is_active()
                     && let Some(session) = self.session_id.clone()
                     && let Err(error) = self.call_and_ack(
@@ -87,6 +93,7 @@ impl DriverState {
         if !self.network.is_active() {
             return;
         }
+        self.abandon_http_response_bodies("Chromium target reattached before response-body retrieval");
         if let Err(error) = self.call_and_ack(
             link,
             event_tx,
@@ -106,55 +113,10 @@ impl DriverState {
         if !self.network.is_active() {
             return;
         }
+        if self.handle_http_network_event(event) {
+            return;
+        }
         match event.method {
-            "Network.requestWillBeSent" => {
-                self.network.record_http(
-                    BrowserNetworkEventKind::HttpRequest,
-                    string_at(event.params, "/requestId"),
-                    string_at(event.params, "/request/url"),
-                    string_at(event.params, "/request/method"),
-                    None,
-                    string_at(event.params, "/type"),
-                    None,
-                    None,
-                );
-            }
-            "Network.responseReceived" => {
-                self.network.record_http(
-                    BrowserNetworkEventKind::HttpResponse,
-                    string_at(event.params, "/requestId"),
-                    string_at(event.params, "/response/url"),
-                    None,
-                    u16_at(event.params, "/response/status"),
-                    string_at(event.params, "/type"),
-                    None,
-                    None,
-                );
-            }
-            "Network.loadingFinished" => {
-                self.network.record_http(
-                    BrowserNetworkEventKind::HttpCompleted,
-                    string_at(event.params, "/requestId"),
-                    None,
-                    None,
-                    None,
-                    None,
-                    u64_at(event.params, "/encodedDataLength"),
-                    None,
-                );
-            }
-            "Network.loadingFailed" => {
-                self.network.record_http(
-                    BrowserNetworkEventKind::HttpFailed,
-                    string_at(event.params, "/requestId"),
-                    None,
-                    None,
-                    None,
-                    string_at(event.params, "/type"),
-                    None,
-                    string_at(event.params, "/errorText"),
-                );
-            }
             "Network.webSocketCreated" => {
                 if let (Some(connection_id), Some(url)) =
                     (string_at(event.params, "/requestId"), string_at(event.params, "/url"))
@@ -193,6 +155,183 @@ impl DriverState {
             }
             _ => {}
         }
+    }
+
+    fn handle_http_network_event(&mut self, event: &CdpEvent<'_>) -> bool {
+        match event.method {
+            "Network.requestWillBeSent" => {
+                self.network.record_http(
+                    BrowserNetworkEventKind::HttpRequest,
+                    string_at(event.params, "/requestId"),
+                    string_at(event.params, "/request/url"),
+                    string_at(event.params, "/request/method"),
+                    None,
+                    string_at(event.params, "/type"),
+                    None,
+                    None,
+                );
+                true
+            }
+            "Network.responseReceived" => {
+                self.network.record_http(
+                    BrowserNetworkEventKind::HttpResponse,
+                    string_at(event.params, "/requestId"),
+                    string_at(event.params, "/response/url"),
+                    None,
+                    u16_at(event.params, "/response/status"),
+                    string_at(event.params, "/type"),
+                    None,
+                    None,
+                );
+                true
+            }
+            "Network.loadingFinished" => {
+                let request_id = string_at(event.params, "/requestId");
+                let body = request_id.and_then(|request_id| {
+                    self.network
+                        .http_body_url(request_id)
+                        .map(|url| (request_id.to_string(), url))
+                });
+                self.network.record_http(
+                    BrowserNetworkEventKind::HttpCompleted,
+                    request_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    u64_at(event.params, "/encodedDataLength"),
+                    None,
+                );
+                if let Some(body) = body {
+                    if self.pending_http_bodies.len() < MAX_PENDING_HTTP_BODIES {
+                        self.pending_http_bodies.push_back(body);
+                    } else {
+                        self.network.record_http_body(
+                            &body.0,
+                            &body.1,
+                            None,
+                            None,
+                            None,
+                            false,
+                            Some("Chromium response-body queue limit reached"),
+                        );
+                    }
+                }
+                true
+            }
+            "Network.loadingFailed" => {
+                self.network.record_http(
+                    BrowserNetworkEventKind::HttpFailed,
+                    string_at(event.params, "/requestId"),
+                    None,
+                    None,
+                    None,
+                    string_at(event.params, "/type"),
+                    None,
+                    string_at(event.params, "/errorText"),
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn tick_http_response_bodies(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        for _ in 0..MAX_HTTP_BODY_FETCHES_PER_TICK {
+            let Some((request_id, url)) = self.pending_http_bodies.pop_front() else {
+                break;
+            };
+            let Some(session) = self.session_id.clone() else {
+                self.network.record_http_body(
+                    &request_id,
+                    &url,
+                    None,
+                    None,
+                    None,
+                    false,
+                    Some("Chromium page session detached before response-body retrieval"),
+                );
+                continue;
+            };
+            match self.call_and_ack(
+                link,
+                event_tx,
+                frame_slot,
+                "Network.getResponseBody",
+                &serde_json::json!({ "requestId": request_id }),
+                Some(session.as_str()),
+            ) {
+                Ok(result) => self.record_cdp_http_body(&request_id, &url, &result),
+                Err(error) => {
+                    self.network
+                        .record_http_body(&request_id, &url, None, None, None, false, Some(&error.to_string()));
+                }
+            }
+        }
+    }
+
+    pub(super) fn flush_http_response_bodies(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        for _ in 0..MAX_HTTP_BODY_FLUSH_BATCHES {
+            if self.pending_http_bodies.is_empty() {
+                return;
+            }
+            self.tick_http_response_bodies(link, event_tx, frame_slot);
+        }
+        self.abandon_http_response_bodies("Chromium capture stopped before response-body retrieval");
+    }
+
+    fn abandon_http_response_bodies(&mut self, reason: &str) {
+        while let Some((request_id, url)) = self.pending_http_bodies.pop_front() {
+            self.network
+                .record_http_body(&request_id, &url, None, None, None, false, Some(reason));
+        }
+    }
+
+    fn record_cdp_http_body(&mut self, request_id: &str, url: &str, result: &serde_json::Value) {
+        let Some(payload) = result.get("body").and_then(serde_json::Value::as_str) else {
+            self.network.record_http_body(
+                request_id,
+                url,
+                None,
+                None,
+                None,
+                false,
+                Some("Chromium omitted the response body"),
+            );
+            return;
+        };
+        let encoding = if result
+            .get("base64Encoded")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            BrowserNetworkPayloadEncoding::Base64
+        } else {
+            BrowserNetworkPayloadEncoding::Text
+        };
+        let payload_bytes = match encoding {
+            BrowserNetworkPayloadEncoding::Text => u64::try_from(payload.len()).unwrap_or(u64::MAX),
+            BrowserNetworkPayloadEncoding::Base64 => decoded_base64_len(payload),
+        };
+        self.network.record_http_body(
+            request_id,
+            url,
+            Some(payload),
+            Some(encoding),
+            Some(payload_bytes),
+            false,
+            None,
+        );
     }
 
     fn record_cdp_websocket_frame(&mut self, params: &serde_json::Value, direction: BrowserNetworkDirection) {
@@ -240,27 +379,6 @@ fn u8_at(value: &serde_json::Value, pointer: &str) -> Option<u8> {
         .pointer(pointer)
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| u8::try_from(value).ok())
-}
-
-fn decoded_base64_len(value: &str) -> u64 {
-    let complete = value.len() / 4;
-    let remainder = value.len() % 4;
-    let padding = value
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|byte| **byte == b'=')
-        .count()
-        .min(2);
-    let bytes = complete
-        .saturating_mul(3)
-        .saturating_add(match remainder {
-            2 => 1,
-            3 => 2,
-            _ => 0,
-        })
-        .saturating_sub(padding);
-    u64::try_from(bytes).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

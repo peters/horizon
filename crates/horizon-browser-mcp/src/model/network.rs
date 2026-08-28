@@ -31,6 +31,8 @@ pub(crate) struct NetworkInput {
     operation: NetworkOperation,
     /// Include bounded HTTP lifecycle metadata (default false). Start only.
     include_http: Option<bool>,
+    /// Include bounded HTTP response bodies through native browser protocol support (default false). Start only.
+    include_http_bodies: Option<bool>,
     /// Include WebSocket lifecycle and frames (default true). Start only.
     include_websocket: Option<bool>,
     /// Capture outbound WebSocket frames (default true). Start only.
@@ -50,6 +52,7 @@ pub(crate) struct NetworkInput {
 impl NetworkInput {
     pub(crate) fn build_action(&self) -> Result<BrowserControlAction, String> {
         let has_options = self.include_http.is_some()
+            || self.include_http_bodies.is_some()
             || self.include_websocket.is_some()
             || self.include_sent.is_some()
             || self.include_received.is_some()
@@ -63,6 +66,9 @@ impl NetworkInput {
             let mut options = BrowserNetworkCaptureOptions::default();
             if let Some(value) = self.include_http {
                 options.include_http = value;
+            }
+            if let Some(value) = self.include_http_bodies {
+                options.include_http_bodies = value;
             }
             if let Some(value) = self.include_websocket {
                 options.include_websocket = value;
@@ -187,5 +193,33 @@ impl NetworkOutput {
                     .to_string()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_body_option_is_part_of_the_single_network_contract() {
+        let input = serde_json::from_value::<NetworkInput>(serde_json::json!({
+            "panel_id": "panel-1",
+            "operation": "start",
+            "include_http": true,
+            "include_http_bodies": true,
+            "include_websocket": false
+        }))
+        .unwrap_or_else(|error| panic!("network input failed to decode: {error}"));
+        let action = input
+            .build_action()
+            .unwrap_or_else(|error| panic!("network action failed to build: {error}"));
+        let BrowserControlAction::Network { options, .. } = action else {
+            panic!("network input built the wrong action");
+        };
+        let options = options.unwrap_or_else(|| panic!("start action omitted capture options"));
+
+        assert!(options.include_http);
+        assert!(options.include_http_bodies);
+        assert!(!options.include_websocket);
     }
 }

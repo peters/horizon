@@ -44,6 +44,7 @@ pub use handle::{BrowserEventWaker, CommittedUrl};
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -292,6 +293,7 @@ fn run_loop(
     loop {
         // 1. Commands from the UI.
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
+            state.flush_http_response_bodies(link, event_tx, frame_slot);
             state.capture_final_url(link, event_tx, frame_slot);
             // Ask Chrome to exit cleanly so it marks its profile session
             // complete (kill alone leaves a "crashed" state that makes the
@@ -334,6 +336,11 @@ fn run_loop(
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
         }
+
+        // Response bodies are opt-in and fetched only after the matching
+        // loading-finished event. Keep each pass bounded so network traffic
+        // cannot starve input, frames, or coordination.
+        state.tick_http_response_bodies(link, event_tx, frame_slot);
 
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).
@@ -484,6 +491,7 @@ struct DriverState {
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
     network: crate::network::NetworkCaptureState,
+    pending_http_bodies: VecDeque<(String, String)>,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -537,6 +545,7 @@ impl DriverState {
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
             network: crate::network::NetworkCaptureState::default(),
+            pending_http_bodies: VecDeque::new(),
             stop_requested,
         }
     }

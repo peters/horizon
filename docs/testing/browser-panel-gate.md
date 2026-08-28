@@ -36,7 +36,7 @@ cumulative.
 | Automation disclosure or browser launch arguments | Both disclosure policies on Chromium and Firefox; Safari capability/status check; startup/history consistency |
 | Browser config schema, defaults, migration, discovery paths | Auto-discovery plus explicit-path launch, persistence/migration, and update this runner's generated config |
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
-| Network events, WebSocket capture, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; age/count/aggregate-byte retention probe; normal close during capture; permanent profile cleanup |
+| Network events, HTTP response bodies, WebSocket capture, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; E24 live-data correctness probe on both when body capture changes and the market is open; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; age/count/aggregate-byte retention probe; normal close during capture; permanent profile cleanup |
 | Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
 | Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
 
@@ -90,8 +90,9 @@ The reusable runner:
 - proves an immediate backend navigation rejection returns a typed MCP failure,
   retains the last valid page, and is audited as failed rather than completed;
 - starts a filtered capture before navigation to the high-rate WebSocket
-  fixture, verifies HTTP plus sent/received/open/close records and a zero-drop
-  4,096-frame tail, then stops and parses only the path returned by MCP;
+  fixture, verifies a native bounded HTTP response body plus
+  sent/received/open/close records and a zero-drop 4,096-frame tail, then stops
+  and parses only the path returned by MCP;
 - waits for the tester to close the exact Horizon window normally; and
 - fails if the candidate exits badly or a task-owned browser process or live
   manifest remains.
@@ -126,6 +127,32 @@ python3 scripts/browser-smoke/run.py \
 The second run reuses the deterministic port and isolated state. Confirm the
 saved backend, committed URL, title, profile identity, geometry, and focus
 before changing anything.
+
+### G1b — live E24 market-data correctness probe
+
+Run this targeted online gate when HTTP response-body capture, native network
+transport, or high-rate processing changes. It controls the panel only through
+MCP: E24 is loaded by the browser, and the runner parses only the private NDJSON
+path returned by `browser_network`. It never fetches market data independently
+with Python, curl, or another HTTP client.
+
+During Oslo market hours (weekdays 09:00–16:20), run both supported network
+backends from a clean exact-head checkout:
+
+```bash
+python3 scripts/browser-smoke/e24_smoke.py --backend firefox --horizon target/debug/horizon
+python3 scripts/browser-smoke/e24_smoke.py --backend chromium --horizon target/debug/horizon
+```
+
+Each run captures native, filtered `mws.fcgi` response bodies, waits one minute,
+reloads, and requires visible DOM prices and daily changes to match the captured
+feed both before and after the interval. It also checks audit completeness,
+capture bounds, drops, truncation, normal window close, manifests, and exact
+task-owned browser cleanup. The report records timings and a compact market
+summary. Use `--allow-dirty` only for provisional diagnosis and `--keep-open`
+only when a tester is present to close the exact window. Because this gate uses
+a public site, report external markup/feed drift separately from a browser
+regression and keep G1 as the deterministic pass/fail oracle.
 
 ### G2 — backend UI and lifecycle lane
 
@@ -364,9 +391,11 @@ Run once per host OS after the semantic gate:
    mode `0600` on Unix; URL credentials/query/fragment, selectors, scripts, and
    filled text redaction; and no runtime path or raw endpoint in MCP results.
 6. Inspect the `network_capture` discovery object. On Chromium it must report
-   protocol-native frames; on Firefox it must disclose page instrumentation;
+   protocol-native frames and CDP response bodies; on Firefox it must disclose
+   page instrumentation for frames and native WebDriver BiDi response bodies;
    on Safari it must report unsupported. Follow the advertised
-   `browser_network start` before navigation, status/tail, and stop workflow.
+   `browser_network start` before navigation, opt-in body, status/tail, and stop
+   workflow.
    The returned capture file must be private, monotonic NDJSON; URL query data
    must be redacted; `records_dropped`, `writer_failed`, and
    `file_limit_reached` must remain false for the deterministic 4,096-frame
@@ -389,7 +418,7 @@ Run once per host OS after the semantic gate:
 | `next.html` | Blue committed navigation/history target |
 | `alternate.html` | Red alternating navigation-latency target |
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
-| `websocket.html` | High-rate deterministic WebSocket lifecycle, sent frame, 4,096 received frames, URL redaction, bounded NDJSON export |
+| `websocket.html` | Native HTTP response body plus high-rate deterministic WebSocket lifecycle, sent frame, 4,096 received frames, URL redaction, bounded NDJSON export |
 | `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
 
 Keep selectors stable. When a browser behavior needs a new deterministic

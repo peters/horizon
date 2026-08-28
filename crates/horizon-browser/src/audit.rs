@@ -150,6 +150,8 @@ pub enum BrowserAuditAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         include_http: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_http_bodies: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         include_websocket: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         include_sent: Option<bool>,
@@ -209,6 +211,7 @@ impl BrowserAuditAction {
                 Self::Network {
                     operation: *operation,
                     include_http: options.as_ref().map(|options| options.include_http),
+                    include_http_bodies: options.as_ref().map(|options| options.include_http_bodies),
                     include_websocket: options.as_ref().map(|options| options.include_websocket),
                     include_sent: options.as_ref().map(|options| options.frames.include_sent),
                     include_received: options.as_ref().map(|options| options.frames.include_received),

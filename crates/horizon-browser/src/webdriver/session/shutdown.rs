@@ -11,6 +11,7 @@ impl Driver {
         if self.network.is_active() {
             // Flush the explicit export before the page and its BiDi channel
             // disappear. Shutdown still proceeds if optional cleanup fails.
+            self.flush_firefox_http_response_bodies(event_tx);
             self.remove_firefox_network_bridge(event_tx);
             let _ = self.network.stop();
         }

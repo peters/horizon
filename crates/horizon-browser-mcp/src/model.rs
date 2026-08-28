@@ -59,6 +59,7 @@ pub(crate) struct NetworkCaptureCapability {
     pub(crate) supported: bool,
     pub(crate) transport: Option<String>,
     pub(crate) websocket_frames: bool,
+    pub(crate) http_response_body_transport: Option<String>,
     pub(crate) page_instrumentation: bool,
     pub(crate) workflow: String,
 }
@@ -68,13 +69,14 @@ impl NetworkCaptureCapability {
         let workflow = if backend == BackendKind::SafariWebDriver {
             "Network capture is unavailable for this backend.".to_string()
         } else {
-            "Call browser_network start before navigation, inspect status or tail the returned private NDJSON path, then call stop to flush.".to_string()
+            "Call browser_network start before navigation; opt into native bounded HTTP bodies with include_http_bodies, inspect status or tail the returned private NDJSON path, then call stop to flush.".to_string()
         };
         match backend {
             BackendKind::ChromiumCdp => Self {
                 supported: true,
                 transport: Some("cdp".to_string()),
                 websocket_frames: true,
+                http_response_body_transport: Some("cdp".to_string()),
                 page_instrumentation: false,
                 workflow,
             },
@@ -82,6 +84,7 @@ impl NetworkCaptureCapability {
                 supported: true,
                 transport: Some("webdriver_bidi_page_instrumentation".to_string()),
                 websocket_frames: true,
+                http_response_body_transport: Some("webdriver_bidi".to_string()),
                 page_instrumentation: true,
                 workflow,
             },
@@ -89,6 +92,7 @@ impl NetworkCaptureCapability {
                 supported: false,
                 transport: None,
                 websocket_frames: false,
+                http_response_body_transport: None,
                 page_instrumentation: false,
                 workflow,
             },
@@ -387,7 +391,15 @@ fn semantic_capabilities(backend: BackendKind) -> Vec<String> {
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver {
-        capabilities.extend(["network_capture", "websocket_capture", "ndjson_export"].map(str::to_string));
+        capabilities.extend(
+            [
+                "network_capture",
+                "http_response_body_capture",
+                "websocket_capture",
+                "ndjson_export",
+            ]
+            .map(str::to_string),
+        );
     }
     capabilities
 }

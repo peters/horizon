@@ -108,12 +108,16 @@ ground an action in fresh page state instead of reusing stale handles.
 network export without coupling the engine to the host's filesystem layout.
 The embedder opts in with `BrowserSessionConfig::capture_directory`; successful
 start/status/stop results contain an explicit NDJSON path, aggregate writer
-health, and known WebSocket lifecycle/counters. Chromium consumes native CDP
-events. Firefox batches WebSocket records through disclosed pre-document page
-instrumentation because standard WebDriver BiDi does not currently provide
-frame events. Safari returns a typed unsupported-backend failure. Payload and
-file limits, URL filters, a bounded channel, and a dedicated buffered writer
-keep busy streams off the render and protocol paths.
+health, and known WebSocket lifecycle/counters. HTTP response bodies are an
+explicit opt-in and become size-bounded `HttpResponseBody` records. Chromium
+uses native CDP for HTTP and WebSocket observation. Firefox uses native
+WebDriver BiDi for HTTP metadata and response bodies, and disclosed
+pre-document page instrumentation only for WebSocket frames because standard
+BiDi does not currently provide them. Safari returns a typed
+unsupported-backend failure. Payload and file limits, URL filters, bounded
+queues, and a dedicated buffered writer keep busy streams off the render path.
+Body data is intentionally absent from audit records and should be treated as
+sensitive by embedders even though the export itself is private.
 
 Persistent embedders should implement
 `BrowserCoordination::prepare_network_capture` to apply their own age, count,

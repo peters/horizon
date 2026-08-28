@@ -197,7 +197,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_network",
-        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation for complete WebSocket lifecycle, then inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium frames are protocol-native; Firefox frames use disclosed page instrumentation; Safari is unsupported."
+        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation; set include_http_bodies for native bounded response bodies. Inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium WebSocket frames are protocol-native; Firefox WebSocket frames use disclosed page instrumentation; HTTP lifecycle and bodies are native on both. Safari is unsupported."
     )]
     async fn browser_network(
         &self,
@@ -287,7 +287,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list: each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate, inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list: each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 

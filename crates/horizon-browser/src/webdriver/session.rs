@@ -1,4 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -156,6 +156,7 @@ struct Driver {
     semantic: SemanticState,
     network: crate::network::NetworkCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
+    pending_http_bodies: VecDeque<(String, Option<String>)>,
 }
 
 struct PendingHistoryStart {
@@ -243,6 +244,7 @@ pub(crate) fn run_webdriver(
             }
             driver.disable_optional_bidi(frame_slot, event_tx);
         }
+        driver.tick_firefox_http_response_bodies(event_tx);
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
@@ -326,15 +328,7 @@ impl Driver {
             context_id = None;
         }
         let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
-        let safari = if config.browser.backend == BackendKind::SafariWebDriver {
-            let response = service
-                .http
-                .get(&format!("/session/{session_id}/window"))
-                .map_err(|error| format!("failed to read Safari window handle: {error}"))?;
-            Some(safari::InputState::from_window_response(&response)?)
-        } else {
-            None
-        };
+        let safari = initial_safari_input(&service, &session_id, config.browser.backend)?;
         Ok(Self {
             config: config.clone(),
             service,
@@ -363,6 +357,7 @@ impl Driver {
             semantic: SemanticState::default(),
             network: crate::network::NetworkCaptureState::default(),
             firefox_network: None,
+            pending_http_bodies: VecDeque::new(),
         })
     }
 
@@ -716,6 +711,21 @@ impl Driver {
     fn session_path(&self, suffix: &str) -> String {
         format!("/session/{}/{}", self.session_id, suffix.trim_start_matches('/'))
     }
+}
+
+fn initial_safari_input(
+    service: &WebDriverService,
+    session_id: &str,
+    backend: BackendKind,
+) -> Result<Option<safari::InputState>, String> {
+    if backend != BackendKind::SafariWebDriver {
+        return Ok(None);
+    }
+    let response = service
+        .http
+        .get(&format!("/session/{session_id}/window"))
+        .map_err(|error| format!("failed to read Safari window handle: {error}"))?;
+    safari::InputState::from_window_response(&response).map(Some)
 }
 
 fn create_webdriver_session(

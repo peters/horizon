@@ -16,6 +16,9 @@ use crate::{
 
 use super::{BrowserEventSender, Driver};
 
+const MAX_HTTP_BODY_FETCHES_PER_TICK: usize = 16;
+const MAX_HTTP_BODY_FLUSH_BATCHES: usize = 4;
+const MAX_PENDING_HTTP_BODIES: usize = 4_096;
 const PAGE_BRIDGE_TEMPLATE: &str = r#"(emit) => {
     const controlKey = __CONTROL_KEY__;
     if (globalThis[controlKey]) return;
@@ -187,6 +190,7 @@ const PAGE_BRIDGE_TEMPLATE: &str = r#"(emit) => {
 pub(super) struct FirefoxNetworkBridge {
     page: Option<FirefoxPageNetworkBridge>,
     subscription: String,
+    data_collector: Option<String>,
 }
 
 #[derive(Debug)]
@@ -234,6 +238,7 @@ impl Driver {
         }
         let capture = match operation {
             BrowserNetworkOperation::Start => {
+                self.pending_http_bodies.clear();
                 let options = options.unwrap_or_default();
                 self.network.start(
                     crate::network::NetworkCaptureHost::new(
@@ -255,6 +260,7 @@ impl Driver {
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
                 if self.network.is_active() {
+                    self.flush_firefox_http_response_bodies(event_tx);
                     self.remove_firefox_network_bridge(event_tx);
                 }
                 self.network.stop()?
@@ -307,16 +313,40 @@ impl Driver {
                 None,
                 None,
             ),
-            "network.responseCompleted" => self.network.record_http(
-                BrowserNetworkEventKind::HttpCompleted,
-                string_at(params, "/request/request"),
-                string_at(params, "/response/url"),
-                None,
-                u16_at(params, "/response/status"),
-                None,
-                u64_at(params, "/response/bodySize"),
-                None,
-            ),
+            "network.responseCompleted" => {
+                let request_id = string_at(params, "/request/request");
+                let body_url = request_id.and_then(|request_id| self.network.http_body_url(request_id));
+                let collects_bodies = self
+                    .firefox_network
+                    .as_ref()
+                    .and_then(|bridge| bridge.data_collector.as_ref())
+                    .is_some();
+                self.network.record_http(
+                    BrowserNetworkEventKind::HttpCompleted,
+                    request_id,
+                    string_at(params, "/response/url"),
+                    None,
+                    u16_at(params, "/response/status"),
+                    None,
+                    u64_at(params, "/response/bodySize"),
+                    None,
+                );
+                if collects_bodies && let Some(request_id) = request_id {
+                    if self.pending_http_bodies.len() < MAX_PENDING_HTTP_BODIES {
+                        self.pending_http_bodies.push_back((request_id.to_string(), body_url));
+                    } else if let Some(url) = body_url {
+                        self.network.record_http_body(
+                            request_id,
+                            &url,
+                            None,
+                            None,
+                            None,
+                            false,
+                            Some("Firefox response-body queue limit reached"),
+                        );
+                    }
+                }
+            }
             "network.fetchError" => self.network.record_http(
                 BrowserNetworkEventKind::HttpFailed,
                 string_at(params, "/request/request"),
@@ -330,6 +360,116 @@ impl Driver {
             _ => {}
         }
         false
+    }
+
+    pub(super) fn tick_firefox_http_response_bodies(&mut self, event_tx: &BrowserEventSender) {
+        let Some(collector) = self
+            .firefox_network
+            .as_ref()
+            .and_then(|bridge| bridge.data_collector.clone())
+        else {
+            self.pending_http_bodies.clear();
+            return;
+        };
+        for _ in 0..MAX_HTTP_BODY_FETCHES_PER_TICK {
+            let Some((request_id, url)) = self.pending_http_bodies.pop_front() else {
+                break;
+            };
+            let params = json!({
+                "dataType": "response",
+                "collector": collector,
+                "request": request_id,
+            });
+            let Some(url) = url else {
+                let _ = self.call_bidi("network.disownData", &params, event_tx);
+                continue;
+            };
+            let mut get_params = params;
+            if let Some(object) = get_params.as_object_mut() {
+                object.insert("disown".to_string(), Value::Bool(true));
+            }
+            match self.call_bidi("network.getData", &get_params, event_tx) {
+                Ok(result) => self.record_firefox_http_body(&request_id, &url, &result),
+                Err(error) => self
+                    .network
+                    .record_http_body(&request_id, &url, None, None, None, false, Some(&error)),
+            }
+        }
+    }
+
+    pub(super) fn flush_firefox_http_response_bodies(&mut self, event_tx: &BrowserEventSender) {
+        for _ in 0..MAX_HTTP_BODY_FLUSH_BATCHES {
+            if self.pending_http_bodies.is_empty() {
+                return;
+            }
+            self.tick_firefox_http_response_bodies(event_tx);
+        }
+        self.abandon_firefox_http_response_bodies("Firefox capture stopped before response-body retrieval");
+    }
+
+    fn abandon_firefox_http_response_bodies(&mut self, reason: &str) {
+        while let Some((request_id, url)) = self.pending_http_bodies.pop_front() {
+            if let Some(url) = url {
+                self.network
+                    .record_http_body(&request_id, &url, None, None, None, false, Some(reason));
+            }
+        }
+    }
+
+    fn record_firefox_http_body(&mut self, request_id: &str, url: &str, result: &Value) {
+        let Some(kind) = string_at(result, "/bytes/type") else {
+            self.network.record_http_body(
+                request_id,
+                url,
+                None,
+                None,
+                None,
+                false,
+                Some("Firefox omitted the response-body encoding"),
+            );
+            return;
+        };
+        let Some(payload) = string_at(result, "/bytes/value") else {
+            self.network.record_http_body(
+                request_id,
+                url,
+                None,
+                None,
+                None,
+                false,
+                Some("Firefox omitted the response body"),
+            );
+            return;
+        };
+        let encoding = match kind {
+            "string" => BrowserNetworkPayloadEncoding::Text,
+            "base64" => BrowserNetworkPayloadEncoding::Base64,
+            _ => {
+                self.network.record_http_body(
+                    request_id,
+                    url,
+                    None,
+                    None,
+                    None,
+                    false,
+                    Some("Firefox returned an unknown response-body encoding"),
+                );
+                return;
+            }
+        };
+        let payload_bytes = match encoding {
+            BrowserNetworkPayloadEncoding::Text => u64::try_from(payload.len()).unwrap_or(u64::MAX),
+            BrowserNetworkPayloadEncoding::Base64 => crate::network::decoded_base64_len(payload),
+        };
+        self.network.record_http_body(
+            request_id,
+            url,
+            Some(payload),
+            Some(encoding),
+            Some(payload_bytes),
+            false,
+            None,
+        );
     }
 
     fn install_firefox_network_bridge(
@@ -350,16 +490,49 @@ impl Driver {
                 "Firefox WebDriver BiDi is unavailable",
             ));
         }
-        let subscription = self.subscribe_firefox_network(&context, options, event_tx)?;
+        let data_collector = self.add_firefox_data_collector(&context, options, event_tx)?;
+        let subscription = match self.subscribe_firefox_network(&context, options, event_tx) {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                if let Some(collector) = data_collector.as_deref() {
+                    self.remove_firefox_data_collector(collector, event_tx);
+                }
+                return Err(error);
+            }
+        };
+        self.firefox_network = Some(FirefoxNetworkBridge {
+            page: None,
+            subscription,
+            data_collector,
+        });
         if options.include_websocket {
-            self.install_firefox_page_bridge(capture_id, &context, options, subscription, event_tx)
-        } else {
-            self.firefox_network = Some(FirefoxNetworkBridge {
-                page: None,
-                subscription,
-            });
-            Ok(())
+            self.install_firefox_page_bridge(capture_id, &context, options, event_tx)?;
         }
+        Ok(())
+    }
+
+    fn add_firefox_data_collector(
+        &mut self,
+        context: &str,
+        options: &BrowserNetworkCaptureOptions,
+        event_tx: &BrowserEventSender,
+    ) -> Result<Option<String>, BrowserControlFailure> {
+        if !options.include_http_bodies {
+            return Ok(None);
+        }
+        let result = self
+            .call_bidi(
+                "network.addDataCollector",
+                &json!({
+                    "dataTypes": ["response"],
+                    "maxEncodedDataSize": options.max_payload_bytes,
+                    "collectorType": "blob",
+                    "contexts": [context],
+                }),
+                event_tx,
+            )
+            .map_err(|error| BrowserControlFailure::new("capture_protocol", error))?;
+        required_string(&result, "/collector", "network data collector").map(Some)
     }
 
     fn subscribe_firefox_network(
@@ -384,7 +557,6 @@ impl Driver {
         capture_id: &str,
         context: &str,
         options: &BrowserNetworkCaptureOptions,
-        subscription: String,
         event_tx: &BrowserEventSender,
     ) -> Result<(), BrowserControlFailure> {
         let channel = format!("horizon-network-{capture_id}");
@@ -405,24 +577,27 @@ impl Driver {
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.unsubscribe_network(&subscription, event_tx);
+                self.remove_firefox_network_bridge(event_tx);
                 return Err(BrowserControlFailure::new("capture_protocol", error));
             }
         };
         let preload_script = match required_string(&preload_result, "/script", "preload script") {
             Ok(value) => value,
             Err(error) => {
-                self.unsubscribe_network(&subscription, event_tx);
+                self.remove_firefox_network_bridge(event_tx);
                 return Err(error);
             }
         };
-        self.firefox_network = Some(FirefoxNetworkBridge {
-            page: Some(FirefoxPageNetworkBridge {
-                channel,
-                control_key,
-                preload_script,
-            }),
-            subscription,
+        let Some(bridge) = self.firefox_network.as_mut() else {
+            return Err(BrowserControlFailure::new(
+                "capture_protocol",
+                "Firefox network registration disappeared before page instrumentation",
+            ));
+        };
+        bridge.page = Some(FirefoxPageNetworkBridge {
+            channel,
+            control_key,
+            preload_script,
         });
         let current_result = self.call_bidi(
             "script.callFunction",
@@ -457,6 +632,7 @@ impl Driver {
             return;
         };
         let subscription = bridge.subscription.clone();
+        let data_collector = bridge.data_collector.clone();
         if let Some(page) = bridge.page.as_ref() {
             let control_key = page.control_key.clone();
             let preload_script = page.preload_script.clone();
@@ -482,7 +658,18 @@ impl Driver {
             );
         }
         self.unsubscribe_network(&subscription, event_tx);
+        if let Some(collector) = data_collector.as_deref() {
+            self.remove_firefox_data_collector(collector, event_tx);
+        }
         self.firefox_network = None;
+    }
+
+    fn remove_firefox_data_collector(&mut self, collector: &str, event_tx: &BrowserEventSender) {
+        let _ = self.call_bidi(
+            "network.removeDataCollector",
+            &json!({ "collector": collector }),
+            event_tx,
+        );
     }
 
     fn unsubscribe_network(&mut self, subscription: &str, event_tx: &BrowserEventSender) {

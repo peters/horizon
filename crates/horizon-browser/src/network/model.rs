@@ -23,6 +23,7 @@ pub enum BrowserNetworkOperation {
 #[serde(default)]
 pub struct BrowserNetworkCaptureOptions {
     pub include_http: bool,
+    pub include_http_bodies: bool,
     pub include_websocket: bool,
     pub frames: BrowserNetworkFrameOptions,
     pub url_patterns: Vec<String>,
@@ -50,6 +51,7 @@ impl Default for BrowserNetworkCaptureOptions {
     fn default() -> Self {
         Self {
             include_http: false,
+            include_http_bodies: false,
             include_websocket: true,
             frames: BrowserNetworkFrameOptions::default(),
             url_patterns: Vec::new(),
@@ -63,6 +65,12 @@ impl BrowserNetworkCaptureOptions {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if !self.include_http && !self.include_websocket {
             return Err("network capture must include HTTP, WebSocket, or both");
+        }
+        if self.include_http_bodies && !self.include_http {
+            return Err("HTTP response bodies require HTTP capture");
+        }
+        if self.include_http_bodies && self.max_payload_bytes == 0 {
+            return Err("HTTP response bodies require a positive payload limit");
         }
         if self.include_websocket && !self.frames.include_sent && !self.frames.include_received {
             return Err("WebSocket capture must include sent frames, received frames, or both");
@@ -97,6 +105,7 @@ pub enum BrowserNetworkEventKind {
     CaptureStarted,
     HttpRequest,
     HttpResponse,
+    HttpResponseBody,
     HttpCompleted,
     HttpFailed,
     WebsocketCreated,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -54,7 +55,12 @@ CAPABILITIES = [
     "handoff",
     "audit",
 ]
-NETWORK_CAPABILITIES = ["network_capture", "websocket_capture", "ndjson_export"]
+NETWORK_CAPABILITIES = [
+    "network_capture",
+    "http_response_body_capture",
+    "websocket_capture",
+    "ndjson_export",
+]
 
 
 class McpClient:
@@ -192,7 +198,7 @@ def wait_for_panel(client: McpClient, backend: str, timeout: float) -> dict[str,
         assert listed is not None
         last_panels = listed["panels"]
         for panel in last_panels:
-            if panel["backend"] == backend and panel["title"]:
+            if panel["backend"] == backend and panel["panel_id"]:
                 return panel
         time.sleep(0.2)
     raise AssertionError(f"no ready {backend} panel appeared: {last_panels}")
@@ -328,6 +334,7 @@ def exercise_network_capture(
             "panel_id": panel_id,
             "operation": "start",
             "include_http": True,
+            "include_http_bodies": True,
             "url_patterns": ["/websocket.html", "/market-stream"],
             "max_payload_bytes": 4096,
             "max_file_bytes": 16 * 1024 * 1024,
@@ -407,13 +414,28 @@ def exercise_network_capture(
         raise AssertionError(f"expected 4096 received frames, got {len(received)}")
     if json.loads(received[-1]["payload"])["sequence"] != 4095:
         raise AssertionError("network capture omitted the final high-rate frame")
-    encoded = json.dumps(records, sort_keys=True)
-    if "MCP_NETWORK_URL_SECRET" in encoded:
+    bodies = [record for record in records if record["kind"] == "http_response_body"]
+    if not bodies:
+        raise AssertionError("network capture omitted the fixture HTTP response body")
+    fixture_bodies = [record for record in bodies if "/websocket.html" in record.get("url", "")]
+    if not fixture_bodies:
+        raise AssertionError("network capture did not associate the fixture body with its URL")
+    fixture_body = fixture_bodies[-1]
+    if fixture_body.get("error") or fixture_body.get("truncated"):
+        raise AssertionError(f"fixture HTTP response body was incomplete: {fixture_body}")
+    payload = fixture_body.get("payload", "")
+    if fixture_body.get("payload_encoding") == "base64":
+        payload = base64.b64decode(payload, validate=True).decode("utf-8")
+    if "WebSocket capture fixture" not in payload:
+        raise AssertionError("fixture HTTP response body payload was incorrect")
+    urls = [record.get("url", "") for record in records]
+    if any("MCP_NETWORK_URL_SECRET" in url for url in urls):
         raise AssertionError("network capture leaked URL query data")
     return {
         "capture_id": stopped["capture_id"],
         "path": str(capture_path),
         "records": len(records),
+        "response_bodies": len(bodies),
         "received_frames": len(received),
         "supported": True,
         "transport": stopped["transport"],
@@ -500,6 +522,13 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(detail)
     network_capability = detail["network_capture"]
     if network_capability["supported"] != (args.backend != "safari"):
+        raise AssertionError(network_capability)
+    expected_body_transport = {
+        "chromium": "cdp",
+        "firefox": "webdriver_bidi",
+        "safari": None,
+    }
+    if network_capability["http_response_body_transport"] != expected_body_transport[args.backend]:
         raise AssertionError(network_capability)
     if args.backend == "firefox" and not network_capability["page_instrumentation"]:
         raise AssertionError(network_capability)
