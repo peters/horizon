@@ -71,6 +71,11 @@ pub enum BrowserAuditStatus {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserAuditAction {
+    SessionCreated {
+        backend: crate::BackendKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination: Option<String>,
+    },
     Navigate {
         destination: String,
     },
@@ -170,6 +175,15 @@ pub enum BrowserAuditAction {
 }
 
 impl BrowserAuditAction {
+    /// Summarize a host-created browser session without retaining URL secrets.
+    #[must_use]
+    pub fn session_created(backend: crate::BackendKind, destination: Option<&str>) -> Self {
+        Self::SessionCreated {
+            backend,
+            destination: destination.map(redact_url),
+        }
+    }
+
     #[must_use]
     pub fn from_control(action: &BrowserControlAction) -> Self {
         match action {
@@ -432,6 +446,10 @@ mod tests {
                 text: "correct horse battery staple".to_string(),
             },
         });
+        let created = BrowserAuditAction::session_created(
+            crate::BackendKind::FirefoxBidi,
+            Some("https://user:secret@example.test/start?token=secret#private"),
+        );
 
         assert_eq!(
             navigation,
@@ -440,6 +458,13 @@ mod tests {
             }
         );
         assert_eq!(text, BrowserAuditAction::InsertText { characters: 28 });
+        assert_eq!(
+            created,
+            BrowserAuditAction::SessionCreated {
+                backend: crate::BackendKind::FirefoxBidi,
+                destination: Some("https://<redacted>@example.test/start?<redacted>#<redacted>".to_string()),
+            }
+        );
     }
 
     #[test]

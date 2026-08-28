@@ -82,9 +82,11 @@ The reusable runner:
 - rejects a dirty checkout so recorded final evidence identifies one exact
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
-- launches the exact Horizon binary and one configured Browser panel;
-- invokes only the eleven public `browser_*` MCP tools;
-- checks discovery, schemas, navigation, snapshot/query/ref lifetime, trusted
+- launches the exact Horizon binary with an agent panel and no Browser panel;
+- invokes only the twelve public `browser_*` MCP tools;
+- proves empty discovery followed by an audited `browser_create` in the
+  requesting agent's workspace, then checks schemas, navigation,
+  snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
 - proves an immediate backend navigation rejection returns a typed MCP failure,
@@ -410,17 +412,20 @@ Run once per host OS after the semantic gate:
 1. Launch Horizon with an isolated home. Verify boot synchronizes the bundled
    `horizon-browser` skill and Claude plugin descriptor without adding a
    permanent MCP registration to the operator's configuration.
-2. Create a default supported agent panel beside a Browser panel. The default
+2. Create a default supported agent panel with no Browser panel. The default
    launch receives the transient `horizon-browser` stdio MCP registration and
    stable `HORIZON_BROWSER_ACTOR`. The default Codex registration sets only
    this MCP server's tool approval mode to `approve`, so browser calls proceed
    without repeated operator prompts while unrelated tool approvals keep their
    normal policy; a custom agent command remains unchanged.
-3. From the agent, start with `browser_list`, take a snapshot/query, interact by
-   fresh ref, verify the result, request handoff, wait for hand-back, and inspect
-   `browser_audit`. The default Codex panel must complete this sequence without
-   per-call MCP approval prompts. It must not know a manifest path or raw
-   endpoint and must not invoke a browser-control CLI.
+3. From the agent, start with `browser_list`, observe the empty result, and call
+   `browser_create` to open a visible panel in the same workspace. Verify its
+   queued/dispatched/completed `session_created` audit records, then take a
+   snapshot/query, interact by fresh ref, verify the result, request handoff,
+   wait for hand-back, and inspect `browser_audit`. The default Codex panel must
+   complete this sequence without per-call MCP approval prompts. It must not
+   know a manifest path or raw endpoint and must not invoke a browser-control
+   CLI.
 4. Confirm user click, key, URL submission, and navigation preempt agent
    actions for the bounded user-active interval. Handoff visibly blocks further
    agent actions until the exact request is acknowledged.

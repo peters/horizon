@@ -58,6 +58,7 @@ impl HorizonApp {
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
         let had_panel_output = self.drain_panel_output();
+        let browser_create_activity = self.poll_browser_create_requests();
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -69,7 +70,7 @@ impl HorizonApp {
         self.poll_update_check();
         self.maybe_start_update_check();
 
-        had_panel_output
+        had_panel_output || browser_create_activity
     }
 
     /// Drain terminal and browser events, promoting persistence-relevant

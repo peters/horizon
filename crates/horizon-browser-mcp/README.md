@@ -23,6 +23,9 @@ shell commands, files, or other MCP servers.
 ## Tool contract
 
 - `browser_list` and `browser_panel` discover safe live-panel state.
+- `browser_create` opens a normal visible panel in the calling agent's Horizon
+  workspace and returns only after it is ready and owned by that agent. It uses
+  the configured backend unless explicitly overridden.
 - `browser_navigate` changes the top-level page.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs.
@@ -41,9 +44,12 @@ shell commands, files, or other MCP servers.
 - `browser_audit` returns redacted ordered action records.
 
 The server automatically claims and heartbeats a panel using
-`HORIZON_BROWSER_ACTOR`. Tool schemas and results never expose raw CDP, BiDi,
-WebDriver, manifest, audit-file, or result-file locations. Horizon's locked
-manifest queue remains private implementation plumbing, not a second API.
+`HORIZON_BROWSER_ACTOR`. Creation requests are accepted only from an identity
+injected into a live Horizon agent panel and are routed to that panel's
+workspace. Panel creation and later actions share the redacted audit identity.
+Tool schemas and results never expose raw CDP, BiDi, WebDriver, manifest,
+audit-file, or result-file locations. Horizon's locked manifest queue remains
+private implementation plumbing, not a second API.
 
 Chromium HTTP metadata, response bodies, and WebSocket frames come directly
 from CDP. Firefox HTTP metadata and response bodies use native WebDriver BiDi;

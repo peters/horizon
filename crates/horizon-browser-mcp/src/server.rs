@@ -18,9 +18,9 @@ use rmcp::{
 
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
-    ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, EvaluateInput, EvaluateOutput,
-    HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput, NodeOutput, NodesOutput, PanelInput,
-    QueryInput, SnapshotInput, SnapshotOutput, WaitInput, WaitOutput, WaitState,
+    ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
+    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput, NodeOutput,
+    NodesOutput, PanelInput, QueryInput, SnapshotInput, SnapshotOutput, WaitInput, WaitOutput, WaitState,
 };
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
@@ -60,6 +60,22 @@ impl HorizonBrowserMcp {
         Json(BrowserListOutput {
             panels: self.controller.list_panels(),
         })
+    }
+
+    #[tool(
+        name = "browser_create",
+        description = "Create a visible browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty or a separate session is needed. Omit backend to use Horizon's configured browser; bare hostnames default to HTTPS and explicit HTTP is preserved."
+    )]
+    async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
+        let receipt = self
+            .controller
+            .create(input.url, input.backend.map(Into::into), input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Json(CreateOutput {
+            action_id: receipt.action_id,
+            panel: receipt.panel,
+        }))
     }
 
     #[tool(
@@ -287,7 +303,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list: each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create to open a visible panel in your current Horizon workspace. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Inspect browser_network status or tail the exact returned private NDJSON path with ordinary read-only Unix tools, then call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -411,6 +427,7 @@ mod tests {
             [
                 "browser_act",
                 "browser_audit",
+                "browser_create",
                 "browser_evaluate",
                 "browser_handoff",
                 "browser_list",

@@ -17,13 +17,13 @@ use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
-pub use self::spawn::current_unix_millis;
 #[cfg(test)]
 use self::spawn::platform_default_shell;
 use self::spawn::{
     AgentLaunchContext, agent_env, kitty_keyboard_for_kind, resolve_launch_command, scrollback_limit_for_kind,
     spawn_panel,
 };
+pub use self::spawn::{browser_actor, current_unix_millis};
 
 const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;

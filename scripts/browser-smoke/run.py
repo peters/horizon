@@ -115,7 +115,13 @@ def browser_config(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     return config
 
 
-def write_config(args: argparse.Namespace, root: Path, base_url: str) -> Path:
+def write_config(args: argparse.Namespace, root: Path) -> Path:
+    actor_path = root / "agent-actor"
+    actor_probe = (
+        "import os,pathlib,time;"
+        f"pathlib.Path({str(actor_path)!r}).write_text(os.environ['HORIZON_BROWSER_ACTOR'],encoding='utf-8');"
+        "time.sleep(3600)"
+    )
     config = {
         "version": 10,
         "window": {"width": 1400, "height": 900},
@@ -126,11 +132,12 @@ def write_config(args: argparse.Namespace, root: Path, base_url: str) -> Path:
                 "position": [30, 30],
                 "terminals": [
                     {
-                        "name": f"{args.backend.title()} Full Smoke",
-                        "kind": "browser",
-                        "command": f"{base_url}/index.html",
+                        "name": "Browser MCP Smoke Agent",
+                        "kind": "codex",
+                        "command": sys.executable,
+                        "args": ["-c", actor_probe],
                         "position": [30, 30],
-                        "size": [1080, 720],
+                        "size": [620, 360],
                     }
                 ],
             }
@@ -188,6 +195,20 @@ def run_mcp_gate(
     base_url: str,
     environment: dict[str, str],
 ) -> int:
+    actor_path = root / "agent-actor"
+    deadline = time.monotonic() + 30
+    actor = ""
+    while time.monotonic() < deadline:
+        try:
+            actor = actor_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            actor = ""
+        if actor.startswith("horizon:"):
+            break
+        time.sleep(0.1)
+    else:
+        print("agent panel did not publish its Horizon browser actor", file=sys.stderr, flush=True)
+        return 1
     script = Path(__file__).resolve().parent / "mcp_gate.py"
     invocation = [
         sys.executable,
@@ -202,6 +223,8 @@ def run_mcp_gate(
         args.automation_disclosure,
         "--log",
         str(root / "logs" / f"{args.backend}-mcp.log"),
+        "--actor",
+        actor,
     ]
     if not args.skip_handoff:
         invocation.append("--handoff")
@@ -366,7 +389,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for child in ["logs", "profiles", "proof"]:
         (root / child).mkdir(parents=True, exist_ok=True)
     server, server_thread, base_url = start_fixture_server(root)
-    config_path = write_config(args, root, base_url)
+    config_path = write_config(args, root)
     environment = smoke_environment(root)
     started_at = time.time()
     metadata = {

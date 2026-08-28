@@ -913,7 +913,9 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
     env
 }
 
-fn browser_actor(local_id: &str) -> String {
+/// Stable private control identity injected into one Horizon agent panel.
+#[must_use]
+pub fn browser_actor(local_id: &str) -> String {
     if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
         return format!("horizon:{local_id}");
     }

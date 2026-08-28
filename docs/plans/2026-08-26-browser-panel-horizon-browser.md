@@ -36,7 +36,8 @@ slice rather than integrating the old stack:
 - backend-neutral agent actions on every backend, fresh-owner leases, user
   steering priority, explicit user handoff, and private append-only redacted
   audit journals;
-- one stdio MCP agent contract for discovery, navigation, semantic snapshots
+- one stdio MCP agent contract for discovery, audited creation of a visible
+  panel in the requesting agent's workspace, navigation, semantic snapshots
   and queries, ref-based actions, waits, handoff, and audit; there is no
   browser-control CLI and raw protocol/runtime endpoints stay private;
 - an explicit automation-disclosure policy: Chromium and Firefox establish a
@@ -365,10 +366,14 @@ compliance-grade storage.
 
 `horizon-browser-mcp` is a stdio-only adapter over Horizon's private host
 coordination. Its public surface is the `browser_*` MCP tool set: list or read
-a panel, navigate, snapshot, query, act, evaluate, wait, request user handoff,
-and read the redacted audit. It automatically claims and heartbeats a panel for
-the stable identity injected into a Horizon agent panel. No MCP result or tool
-schema exposes raw browser endpoints, manifest paths, or result paths.
+a panel, create a normal visible panel in the requesting agent's workspace,
+navigate, snapshot, query, act, evaluate, wait, request user handoff, and read
+the redacted audit. It automatically claims and heartbeats a panel for the
+stable identity injected into a Horizon agent panel. Creation is routed only
+to a Horizon host containing that exact agent identity, is bounded, and writes
+the same queued/dispatched/terminal audit lifecycle as later browser actions.
+No MCP result or tool schema exposes raw browser endpoints, manifest paths, or
+result paths.
 
 The standalone binary and Horizon's private `--browser-mcp` bootstrap mode run
 the same server. The latter lets bundled agent integrations start MCP from the

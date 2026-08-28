@@ -5,6 +5,7 @@ use horizon_browser::{
     AgentActionResult, BackendKind, BrowserActionOutcome, BrowserControlAction, BrowserControlValue,
 };
 use horizon_core::browser::manifest;
+use horizon_core::browser::manifest::BrowserCreateOutcome;
 use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
@@ -13,6 +14,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) const DEFAULT_ACTION_TIMEOUT_MILLIS: u64 = 15_000;
 pub(crate) const MAX_ACTION_TIMEOUT_MILLIS: u64 = 60_000;
+const DEFAULT_CREATE_TIMEOUT_MILLIS: u64 = 60_000;
+const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
@@ -23,6 +26,12 @@ pub(crate) struct BrowserController {
 pub(crate) struct ActionReceipt {
     pub(crate) action_id: String,
     pub(crate) value: BrowserControlValue,
+}
+
+#[derive(Debug)]
+pub(crate) struct CreateReceipt {
+    pub(crate) action_id: String,
+    pub(crate) panel: BrowserPanel,
 }
 
 #[derive(Debug, Error)]
@@ -36,6 +45,12 @@ pub(crate) enum ControlError {
     },
     #[error("browser action {action_id} timed out after {timeout_millis} ms; inspect browser_audit before retrying")]
     Timeout { action_id: String, timeout_millis: u64 },
+    #[error(
+        "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
+    )]
+    CreateTimeout { action_id: String, timeout_millis: u64 },
+    #[error("browser_create is available only to an agent panel launched inside Horizon")]
+    CreateUnavailable,
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -68,6 +83,54 @@ impl BrowserController {
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
         panels
+    }
+
+    pub(crate) async fn create(
+        &self,
+        url: Option<String>,
+        backend: Option<BackendKind>,
+        timeout_millis: Option<u64>,
+    ) -> Result<CreateReceipt, ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Err(ControlError::CreateUnavailable);
+        }
+        let timeout_millis = bounded_create_timeout(timeout_millis);
+        let action_id = manifest::enqueue_create(&self.actor, url, backend, Duration::from_millis(timeout_millis))
+            .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
+        let started = Instant::now();
+        loop {
+            if let Some(result) = manifest::take_create_result(&action_id, &self.actor)
+                .map_err(|source| ControlError::internal_io("could not read browser create result", source))?
+            {
+                return match result.outcome {
+                    BrowserCreateOutcome::Ready { panel_local_id } => {
+                        self.ensure_claim(&panel_local_id)?;
+                        let manifest = manifest::read(&panel_local_id).ok_or_else(|| {
+                            ControlError::internal_io(
+                                "could not read created browser panel",
+                                io::Error::new(io::ErrorKind::NotFound, "created browser manifest disappeared"),
+                            )
+                        })?;
+                        Ok(CreateReceipt {
+                            action_id,
+                            panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                        })
+                    }
+                    BrowserCreateOutcome::Failed { code, message } => Err(ControlError::Browser {
+                        action_id,
+                        code,
+                        message,
+                    }),
+                };
+            }
+            if started.elapsed() >= Duration::from_millis(timeout_millis) {
+                return Err(ControlError::CreateTimeout {
+                    action_id,
+                    timeout_millis,
+                });
+            }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
     }
 
     pub(crate) async fn execute(
@@ -163,6 +226,12 @@ fn bounded_timeout(timeout_millis: Option<u64>) -> u64 {
         .clamp(1, MAX_ACTION_TIMEOUT_MILLIS)
 }
 
+fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {
+    timeout_millis
+        .unwrap_or(DEFAULT_CREATE_TIMEOUT_MILLIS)
+        .clamp(MIN_CREATE_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
 fn outcome(result: AgentActionResult) -> Result<ActionReceipt, ControlError> {
     match result.outcome {
         BrowserActionOutcome::Completed { value } => Ok(ActionReceipt {
@@ -199,6 +268,12 @@ fn valid_actor(actor: &str) -> bool {
     !actor.trim().is_empty() && actor.len() <= 128 && !actor.chars().any(char::is_control)
 }
 
+fn is_horizon_actor(actor: &str) -> bool {
+    actor
+        .strip_prefix("horizon:")
+        .is_some_and(|identity| !identity.is_empty())
+}
+
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
     match backend {
         BackendKind::ChromiumCdp => ProtocolKind::Cdp,
@@ -216,6 +291,9 @@ mod tests {
         assert_eq!(bounded_timeout(None), DEFAULT_ACTION_TIMEOUT_MILLIS);
         assert_eq!(bounded_timeout(Some(0)), 1);
         assert_eq!(bounded_timeout(Some(u64::MAX)), MAX_ACTION_TIMEOUT_MILLIS);
+        assert_eq!(bounded_create_timeout(None), DEFAULT_CREATE_TIMEOUT_MILLIS);
+        assert_eq!(bounded_create_timeout(Some(0)), MIN_CREATE_TIMEOUT_MILLIS);
+        assert_eq!(bounded_create_timeout(Some(u64::MAX)), MAX_ACTION_TIMEOUT_MILLIS);
     }
 
     #[test]
@@ -223,6 +301,9 @@ mod tests {
         assert!(!valid_actor(""));
         assert!(!valid_actor("bad\nactor"));
         assert!(valid_actor("horizon:panel-1"));
+        assert!(is_horizon_actor("horizon:panel-1"));
+        assert!(!is_horizon_actor("horizon:"));
+        assert!(!is_horizon_actor("agent"));
         assert_eq!(BrowserController::with_actor("agent").actor, "agent");
     }
 

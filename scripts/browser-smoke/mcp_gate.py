@@ -19,6 +19,7 @@ from typing import Any, Sequence
 TOOL_NAMES = [
     "browser_act",
     "browser_audit",
+    "browser_create",
     "browser_evaluate",
     "browser_handoff",
     "browser_list",
@@ -171,6 +172,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError(result)
     if "sole agent control contract" not in result["instructions"]:
         raise AssertionError(result["instructions"])
+    if "browser_create" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach empty-workspace browser creation")
     if "browser_network start before browser_navigate" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach the network capture workflow")
     client.notify("notifications/initialized")
@@ -187,21 +190,46 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     network = next(tool for tool in tools if tool["name"] == "browser_network")
     if "tail -f" not in network["description"] or "Start only" not in json.dumps(network["inputSchema"]):
         raise AssertionError("browser_network is not self-discovering")
+    create = next(tool for tool in tools if tool["name"] == "browser_create")
+    if "browser_list is empty" not in create["description"]:
+        raise AssertionError("browser_create is not self-discovering")
     return tools
 
 
-def wait_for_panel(client: McpClient, backend: str, timeout: float) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout
-    last_panels: list[dict[str, Any]] = []
-    while time.monotonic() < deadline:
-        listed, _ = client.call("browser_list", {})
-        assert listed is not None
-        last_panels = listed["panels"]
-        for panel in last_panels:
-            if panel["backend"] == backend and panel["panel_id"]:
-                return panel
-        time.sleep(0.2)
-    raise AssertionError(f"no ready {backend} panel appeared: {last_panels}")
+def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str, Any], str]:
+    listed, _ = client.call("browser_list", {})
+    assert listed is not None
+    if listed["panels"]:
+        raise AssertionError(f"create smoke did not start without browser panels: {listed}")
+    created, _ = client.call(
+        "browser_create",
+        {
+            "url": f"{args.base_url}/index.html",
+            "backend": args.backend,
+            "timeout_millis": 45_000,
+        },
+    )
+    assert created is not None
+    panel = created["panel"]
+    action_id = created["action_id"]
+    if panel["backend"] != args.backend or not panel["panel_id"] or not panel["owned_by_caller"]:
+        raise AssertionError(created)
+    audit, _ = client.call(
+        "browser_audit",
+        {"panel_id": panel["panel_id"], "action_id": action_id, "limit": 10},
+    )
+    assert audit is not None
+    statuses = {entry["status"] for entry in audit["entries"]}
+    expected_action = {
+        "type": "session_created",
+        "backend": args.backend,
+        "destination": f"{args.base_url}/index.html",
+    }
+    if statuses != {"queued", "dispatched", "completed"}:
+        raise AssertionError((action_id, statuses))
+    if any(entry["action"] != expected_action for entry in audit["entries"]):
+        raise AssertionError(audit)
+    return panel, action_id
 
 
 def record_action(
@@ -520,7 +548,7 @@ def exercise_capture_retention(
 
 def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     initialize(client)
-    panel = wait_for_panel(client, args.backend, args.panel_timeout)
+    panel, create_action_id = create_panel(client, args)
     panel_id = panel["panel_id"]
     expected_protocols = {
         "chromium": {"cdp"},
@@ -549,7 +577,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if args.backend == "chromium" and network_capability["page_instrumentation"]:
         raise AssertionError(network_capability)
 
-    action_ids: list[str] = []
+    action_ids: list[str] = [create_action_id]
     failed_ids: list[str] = []
     network_capture = exercise_network_capture(client, args, panel_id, action_ids, failed_ids)
     secret_origin = args.base_url.replace(
@@ -911,8 +939,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="minimize_common_signals",
     )
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("--actor", required=True, help="exact HORIZON_BROWSER_ACTOR from the owning agent panel")
     parser.add_argument("--timeout", type=float, default=60, help="individual MCP request timeout")
-    parser.add_argument("--panel-timeout", type=float, default=90)
     parser.add_argument("--handoff", action="store_true", help="request handoff and wait for visible user hand-back")
     parser.add_argument("--handoff-timeout", type=float, default=300)
     return parser.parse_args(argv)
@@ -924,8 +952,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not command.is_file():
         raise SystemExit(f"Horizon binary does not exist: {command}")
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    actor = f"browser-smoke:{args.backend}:{os.getpid()}"
-    client: McpClient | None = McpClient(command, args.log, args.timeout, actor)
+    client: McpClient | None = McpClient(command, args.log, args.timeout, args.actor)
     try:
         assert client is not None
         result = exercise(client, args)
@@ -933,7 +960,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client = None
         first_client.close()
         reconnect_log = args.log.with_name(f"{args.log.stem}-reconnect{args.log.suffix}")
-        client = McpClient(command, reconnect_log, args.timeout, actor)
+        client = McpClient(command, reconnect_log, args.timeout, args.actor)
         result["mcp_reconnect"] = exercise_reconnect(
             client,
             args.backend,

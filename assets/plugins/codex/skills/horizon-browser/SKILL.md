@@ -10,11 +10,16 @@ not inspect Horizon runtime files, connect to raw CDP/BiDi/WebDriver endpoints,
 or invoke a browser-control CLI. If the MCP tools are unavailable, report that
 the Horizon browser MCP server is not connected.
 
-Start with `browser_list` when the panel id is unknown. Use `browser_panel` for
-a known panel. Before interacting, call `browser_snapshot` or `browser_query`
-and prefer its short-lived `ref` in `browser_act`. Navigation, another snapshot
-or query, and `browser_wait` can invalidate earlier refs, so reacquire a ref
-immediately before an action when the page may have changed.
+Start with `browser_list` when the panel id is unknown. If it returns no panels,
+call `browser_create`; this opens a normal visible panel in the current agent's
+Horizon workspace and returns its ready panel id. Omit `backend` to use
+Horizon's configured browser, or select `chromium`, `firefox`, or `safari` when
+the platform supports it. An optional bare-host `url` defaults to HTTPS while
+explicit HTTP remains available. Use `browser_panel` for a known panel. Before
+interacting, call `browser_snapshot` or `browser_query` and prefer its
+short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
+`browser_wait` can invalidate earlier refs, so reacquire a ref immediately
+before an action when the page may have changed.
 
 After navigation or interaction, verify the visible outcome with
 `browser_wait`, `browser_query`, or a new snapshot. Use `browser_evaluate` only

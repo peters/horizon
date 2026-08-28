@@ -370,8 +370,10 @@ Chromium is the only push-frame backend. Firefox and Safari deliberately use new
 
 MCP is the only agent-facing browser contract. Horizon-launched Codex and
 Claude agents receive the bundled `horizon-browser` MCP server and discovery
-skill automatically. Agents use `browser_list`, semantic snapshots and
-queries, ref-based actions, waits, handoff, and audit tools; they never receive
+skill automatically. Agents start with `browser_list` and use `browser_create`
+to open a visible browser in their own workspace when none exists, followed by
+semantic snapshots and queries, ref-based actions, waits, handoff, and audit
+tools; they never receive
 raw CDP, BiDi, WebDriver, manifest, or result-file endpoints. The validated
 action model is shared by Chromium, Firefox, and Safari. A fresh user page
 action or browser-control action pauses the agent queue for five seconds. An

@@ -1,5 +1,6 @@
 mod actions;
 mod attention_feed;
+mod browser_requests;
 mod canvas;
 mod detached_viewports;
 mod file_drop;
@@ -42,6 +43,7 @@ use horizon_core::{
     ShortcutBinding, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
+use self::browser_requests::BrowserCreateHostState;
 use self::canvas::CanvasGridCache;
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
@@ -269,6 +271,7 @@ pub struct HorizonApp {
     remote_hosts_last_refresh: Option<Instant>,
     last_session_catalog_refresh: Option<Instant>,
     last_panel_output_at: Option<Instant>,
+    browser_create_host: BrowserCreateHostState,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     session_manager: Option<RuntimeSessionManagerState>,
@@ -449,7 +452,7 @@ impl HorizonApp {
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
-            last_panel_output_at: Some(Instant::now()),
+            last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None,
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,

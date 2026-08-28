@@ -89,8 +89,9 @@ fn exercise_protocol(protocol_version: &str) {
     assert!(
         initialize["result"]["instructions"]
             .as_str()
-            .is_some_and(|instructions| instructions.contains("browser_network start before browser_navigate")),
-        "server instructions must teach the network capture workflow"
+            .is_some_and(|instructions| instructions.contains("browser_create")
+                && instructions.contains("browser_network start before browser_navigate")),
+        "server instructions must teach creation and network capture workflows"
     );
     process.notify(&json!({
         "jsonrpc": "2.0",
@@ -104,7 +105,16 @@ fn exercise_protocol(protocol_version: &str) {
         "params": {}
     }));
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(11));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(12));
+    let create = tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_create"))
+        .expect("browser_create tool");
+    assert!(
+        create["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("browser_list is empty"))
+    );
     let network = tools["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network"))

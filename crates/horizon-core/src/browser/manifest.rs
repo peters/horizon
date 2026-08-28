@@ -41,10 +41,15 @@ use crate::horizon_home::{HorizonHome, safe_local_id};
 mod agent;
 mod audit;
 mod capture;
+mod create;
 mod result;
 
 pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
+pub use create::{
+    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, claim_create_request,
+    complete_create_request, enqueue_create, list_create_requests, record_create_status, take_create_result,
+};
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 
 /// How long an agent owner heartbeat stays fresh.

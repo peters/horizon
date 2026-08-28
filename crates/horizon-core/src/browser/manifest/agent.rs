@@ -252,7 +252,7 @@ fn validate_tty(tty: &str) -> std::io::Result<()> {
     }
 }
 
-fn validate_actor(actor: &str) -> std::io::Result<()> {
+pub(super) fn validate_actor(actor: &str) -> std::io::Result<()> {
     if actor.trim().is_empty() || actor.len() > MAX_ACTOR_BYTES || actor.chars().any(char::is_control) {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

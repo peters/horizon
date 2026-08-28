@@ -105,6 +105,42 @@ pub(crate) struct BrowserListOutput {
     pub(crate) panels: Vec<BrowserPanel>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CreateBackend {
+    Chromium,
+    Firefox,
+    Safari,
+}
+
+impl From<CreateBackend> for BackendKind {
+    fn from(value: CreateBackend) -> Self {
+        match value {
+            CreateBackend::Chromium => Self::ChromiumCdp,
+            CreateBackend::Firefox => Self::FirefoxBidi,
+            CreateBackend::Safari => Self::SafariWebDriver,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct CreateInput {
+    /// Optional first page. Bare hostnames default to HTTPS; explicit HTTP is preserved.
+    pub(crate) url: Option<String>,
+    /// Browser override. Omit this to use Horizon's configured browser backend.
+    pub(crate) backend: Option<CreateBackend>,
+    /// Total host-and-browser startup timeout in milliseconds (5000-60000, default 60000).
+    pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct CreateOutput {
+    /// Auditable identity for the panel creation lifecycle.
+    pub(crate) action_id: String,
+    /// Ready panel state. Use `panel.panel_id` with all other browser tools.
+    pub(crate) panel: BrowserPanel,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct PanelInput {
     /// Stable panel id returned by `browser_list`.
