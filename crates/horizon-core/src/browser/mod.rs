@@ -265,13 +265,11 @@ impl BrowserPanelState {
 
     fn start_session(&mut self, initial_url: Option<String>) {
         let mut browser = self.config.clone();
+        let home = crate::horizon_home::HorizonHome::resolve();
         if browser.profile_root.is_none() {
-            browser.profile_root = Some(
-                crate::horizon_home::HorizonHome::resolve()
-                    .root()
-                    .join("browser-profiles"),
-            );
+            browser.profile_root = Some(home.root().join("browser-profiles"));
         }
+        let capture_directory = profile_dir_for_home(&browser, &home, &self.panel_local_id).join("captures");
         let session_config = session::BrowserSessionConfig {
             browser,
             panel_local_id: self.panel_local_id.clone(),
@@ -285,9 +283,7 @@ impl BrowserPanelState {
             // never mistaken for an unchanged one by the UI's seq check.
             frame_slot: Arc::clone(&self.frame_slot),
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
-            capture_directory: Some(
-                crate::horizon_home::HorizonHome::resolve().browser_capture_dir(&self.panel_local_id),
-            ),
+            capture_directory: Some(capture_directory),
         };
         match session::start_session(session_config) {
             Ok(handle) => {

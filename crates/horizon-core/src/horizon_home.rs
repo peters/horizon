@@ -106,15 +106,10 @@ impl HorizonHome {
         self.root.join("audit").join("browsers")
     }
 
-    /// Private agent-requested browser network exports.
-    #[must_use]
-    pub fn browser_captures_dir(&self) -> PathBuf {
-        self.root.join("browser-captures")
-    }
-
+    /// Private agent-requested network exports removed with the panel profile.
     #[must_use]
     pub fn browser_capture_dir(&self, local_id: &str) -> PathBuf {
-        self.browser_captures_dir().join(safe_local_id(local_id))
+        self.browser_profile_dir(local_id).join("captures")
     }
 
     #[must_use]
@@ -183,12 +178,8 @@ mod tests {
             PathBuf::from("/tmp/horizon-home/audit/browsers")
         );
         assert_eq!(
-            home.browser_captures_dir(),
-            PathBuf::from("/tmp/horizon-home/browser-captures")
-        );
-        assert_eq!(
             home.browser_capture_dir("panel-1"),
-            PathBuf::from("/tmp/horizon-home/browser-captures/%70616e656c2d31")
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%70616e656c2d31/captures")
         );
         assert_eq!(
             home.browser_profile_dir("panel-1"),

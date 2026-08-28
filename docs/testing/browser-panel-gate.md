@@ -36,7 +36,7 @@ cumulative.
 | Automation disclosure or browser launch arguments | Both disclosure policies on Chromium and Firefox; Safari capability/status check; startup/history consistency |
 | Browser config schema, defaults, migration, discovery paths | Auto-discovery plus explicit-path launch, persistence/migration, and update this runner's generated config |
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
-| Network events, WebSocket capture, NDJSON writer, or capture directory | High-rate network fixture through MCP on Chromium and Firefox; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; normal close during capture |
+| Network events, WebSocket capture, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; Safari unsupported response; lifecycle/status/file/drop/truncation/audit checks; age/count/aggregate-byte retention probe; normal close during capture; permanent profile cleanup |
 | Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
 | Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
 
@@ -292,8 +292,15 @@ Run once per host OS after the semantic gate:
    The returned capture file must be private, monotonic NDJSON; URL query data
    must be redacted; `records_dropped`, `writer_failed`, and
    `file_limit_reached` must remain false for the deterministic 4,096-frame
-   stream. Repeat normal close while a capture is active and prove it flushes
-   and leaves no writer thread or live manifest.
+   stream. The automated MCP lane seeds an expired export, 65 fresh exports,
+   and a sparse aggregate-byte pressure file before another start. Prove the
+   expired and oversized files are pruned, at most 64 exports remain, the
+   newest completed export survives, and the next capture's full requested
+   budget fits inside the 1 GiB aggregate limit. Repeat normal close while a
+   capture is active and prove it flushes and leaves no writer thread or live
+   manifest. Permanently close a disposable panel (or delete its saved
+   session) and prove its profile-root `captures/` directory is removed with
+   the browser profile.
 
 ## Fixture inventory
 

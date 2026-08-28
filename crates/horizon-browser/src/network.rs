@@ -6,7 +6,7 @@ mod writer;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::{BackendKind, BrowserControlFailure};
+use crate::{BackendKind, BrowserControlFailure, BrowserCoordination};
 #[cfg(test)]
 use model::MAX_NETWORK_PATTERN_BYTES;
 pub use model::{
@@ -25,6 +25,27 @@ const MAX_CONNECTION_ID_BYTES: usize = 4 * 1024;
 const MAX_PUBLIC_URL_BYTES: usize = 16 * 1024;
 const MAX_METHOD_BYTES: usize = 256;
 const MAX_RESOURCE_TYPE_BYTES: usize = 256;
+
+#[derive(Clone, Copy)]
+pub(crate) struct NetworkCaptureHost<'a> {
+    directory: Option<&'a Path>,
+    coordination: Option<&'a dyn BrowserCoordination>,
+    panel_local_id: &'a str,
+}
+
+impl<'a> NetworkCaptureHost<'a> {
+    pub(crate) fn new(
+        directory: Option<&'a Path>,
+        coordination: Option<&'a dyn BrowserCoordination>,
+        panel_local_id: &'a str,
+    ) -> Self {
+        Self {
+            directory,
+            coordination,
+            panel_local_id,
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct NetworkCaptureState {
@@ -52,7 +73,7 @@ struct TrackedConnection {
 impl NetworkCaptureState {
     pub(crate) fn start(
         &mut self,
-        directory: Option<&Path>,
+        host: NetworkCaptureHost<'_>,
         capture_id: &str,
         backend: BackendKind,
         transport: &str,
@@ -76,12 +97,22 @@ impl NetworkCaptureState {
         options
             .validate()
             .map_err(|message| BrowserControlFailure::new("invalid_input", message))?;
-        let directory = directory.ok_or_else(|| {
+        let directory = host.directory.ok_or_else(|| {
             BrowserControlFailure::new(
                 "capture_unavailable",
                 "the browser host did not configure a capture directory",
             )
         })?;
+        if let Some(coordination) = host.coordination {
+            coordination
+                .prepare_network_capture(host.panel_local_id, directory, options.max_file_bytes)
+                .map_err(|error| {
+                    BrowserControlFailure::new(
+                        "capture_retention",
+                        format!("browser network capture retention failed: {error}"),
+                    )
+                })?;
+        }
         let writer = CaptureWriter::start(directory, capture_id, options.max_file_bytes)
             .map_err(|error| BrowserControlFailure::new("capture_io", error.to_string()))?;
         self.active = Some(ActiveCapture {
@@ -580,7 +611,7 @@ mod tests {
 
         let error = capture
             .start(
-                Some(root.path()),
+                NetworkCaptureHost::new(Some(root.path()), None, ""),
                 &"x".repeat(MAX_CAPTURE_ID_BYTES + 1),
                 BackendKind::ChromiumCdp,
                 "cdp",
@@ -598,7 +629,7 @@ mod tests {
         let mut capture = NetworkCaptureState::default();
         capture
             .start(
-                Some(root.path()),
+                NetworkCaptureHost::new(Some(root.path()), None, ""),
                 "http-bounds",
                 BackendKind::FirefoxBidi,
                 "webdriver_bidi",
@@ -670,7 +701,7 @@ mod tests {
         let mut capture = NetworkCaptureState::default();
         capture
             .start(
-                Some(root.path()),
+                NetworkCaptureHost::new(Some(root.path()), None, ""),
                 "capture",
                 BackendKind::ChromiumCdp,
                 "cdp",
@@ -716,7 +747,7 @@ mod tests {
             let mut capture = NetworkCaptureState::default();
             capture
                 .start(
-                    Some(root.path()),
+                    NetworkCaptureHost::new(Some(root.path()), None, ""),
                     "active-close",
                     BackendKind::ChromiumCdp,
                     "cdp",
@@ -738,7 +769,7 @@ mod tests {
         let mut capture = NetworkCaptureState::default();
         capture
             .start(
-                Some(root.path()),
+                NetworkCaptureHost::new(Some(root.path()), None, ""),
                 "full-table",
                 BackendKind::ChromiumCdp,
                 "cdp",

@@ -420,6 +420,68 @@ def exercise_network_capture(
     }
 
 
+def exercise_capture_retention(
+    client: McpClient,
+    panel_id: str,
+    capture_path: Path,
+    action_ids: list[str],
+) -> dict[str, Any]:
+    directory = capture_path.parent
+    seeds = [directory / f"retention-seed-{index:02d}.ndjson" for index in range(65)]
+    for seed in seeds:
+        seed.write_bytes(b"x")
+    oversized = directory / "retention-oversized.ndjson"
+    with oversized.open("wb") as output:
+        output.truncate(1024 * 1024 * 1024)
+    expired = directory / "retention-expired.ndjson"
+    expired.write_bytes(b"x")
+    os.utime(expired, (1, 1))
+    # Keep the real completed export newer than the synthetic pressure files
+    # so the oldest-first policy must preserve useful recent agent output.
+    future = time.time() + 60
+    os.utime(capture_path, (future, future))
+
+    started = record_action(
+        client,
+        "browser_network",
+        {
+            "panel_id": panel_id,
+            "operation": "start",
+            "url_patterns": ["/retention-probe"],
+            "max_payload_bytes": 1024,
+            "max_file_bytes": 1024 * 1024,
+        },
+        action_ids,
+    )
+    retained = sorted(directory.glob("*.ndjson"))
+    if expired.exists():
+        raise AssertionError("capture retention kept an expired export")
+    if oversized.exists():
+        raise AssertionError("capture retention did not reserve the aggregate byte budget")
+    if len(retained) > 64:
+        raise AssertionError(f"capture retention kept {len(retained)} files, expected at most 64")
+    if sum(path.stat().st_size for path in retained) > 1024 * 1024 * 1024:
+        raise AssertionError("capture retention exceeded the aggregate byte limit")
+    if not capture_path.exists():
+        raise AssertionError("capture retention removed the newest completed export")
+
+    stopped = record_action(
+        client,
+        "browser_network",
+        {"panel_id": panel_id, "operation": "stop"},
+        action_ids,
+    )
+    for seed in [*seeds, oversized, expired]:
+        seed.unlink(missing_ok=True)
+    return {
+        "max_files": 64,
+        "max_total_bytes": 1024 * 1024 * 1024,
+        "path": started["path"],
+        "retained_during_probe": len(retained),
+        "stopped": not stopped["active"],
+    }
+
+
 def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     initialize(client)
     panel = wait_for_panel(client, args.backend, args.panel_timeout)
@@ -642,6 +704,12 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(retained_snapshot)
 
     if network_capture["supported"]:
+        network_capture["retention"] = exercise_capture_retention(
+            client,
+            panel_id,
+            Path(network_capture["path"]),
+            action_ids,
+        )
         active_close = record_action(
             client,
             "browser_network",

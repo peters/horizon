@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::cdp::{CdpEvent, CdpLink};
 use crate::frames::FrameSlot;
+use crate::network::NetworkCaptureHost;
 use crate::{
     AgentAction, BrowserControlFailure, BrowserControlValue, BrowserNetworkCaptureOptions, BrowserNetworkDirection,
     BrowserNetworkEventKind, BrowserNetworkOperation, BrowserNetworkPayloadEncoding,
@@ -27,7 +28,11 @@ impl DriverState {
                     BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
                 })?;
                 self.network.start(
-                    self.config.capture_directory.as_deref(),
+                    NetworkCaptureHost::new(
+                        self.config.capture_directory.as_deref(),
+                        self.config.coordination.as_deref(),
+                        &self.config.panel_local_id,
+                    ),
                     &request.action_id,
                     crate::BackendKind::ChromiumCdp,
                     "cdp",

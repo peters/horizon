@@ -318,8 +318,10 @@ def audit_journals(root: Path) -> tuple[list[str], list[str]]:
 
 
 def network_capture_findings(root: Path, backend: str, expect_exports: bool) -> tuple[list[str], list[str]]:
-    capture_root = root / "home" / ".horizon" / "browser-captures"
-    paths = sorted(capture_root.rglob("*.ndjson")) if capture_root.is_dir() else []
+    # Captures live beneath each persistent panel profile so permanent panel
+    # and saved-session deletion removes them together. The isolated smoke
+    # root may use either Horizon's default profile root or a configured one.
+    paths = sorted(root.rglob("*.ndjson"))
     findings: list[str] = []
     if expect_exports and backend != "safari" and len(paths) < 2:
         findings.append("MCP lane did not produce both stopped and active-close network exports")

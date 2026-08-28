@@ -236,7 +236,11 @@ impl Driver {
             BrowserNetworkOperation::Start => {
                 let options = options.unwrap_or_default();
                 self.network.start(
-                    self.config.capture_directory.as_deref(),
+                    crate::network::NetworkCaptureHost::new(
+                        self.config.capture_directory.as_deref(),
+                        self.config.coordination.as_deref(),
+                        &self.config.panel_local_id,
+                    ),
                     &request.action_id,
                     BackendKind::FirefoxBidi,
                     firefox_network_transport(&options),

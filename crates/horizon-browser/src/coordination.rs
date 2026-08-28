@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -65,6 +66,21 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     /// # Errors
     /// Returns an I/O error when the host cannot publish the result.
     fn complete_action(&self, _panel_local_id: &str, _result: &crate::AgentActionResult) -> std::io::Result<()> {
+        Ok(())
+    }
+    /// Apply the host's retention policy before the engine creates an
+    /// explicit network export. The default leaves storage policy with
+    /// standalone embedders that do not need persistent capture directories.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the host cannot make enough bounded storage
+    /// available for the requested capture.
+    fn prepare_network_capture(
+        &self,
+        _panel_local_id: &str,
+        _directory: &Path,
+        _requested_max_file_bytes: u64,
+    ) -> std::io::Result<()> {
         Ok(())
     }
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool;

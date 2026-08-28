@@ -40,6 +40,7 @@ use crate::horizon_home::{HorizonHome, safe_local_id};
 
 mod agent;
 mod audit;
+mod capture;
 mod result;
 
 pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
@@ -530,6 +531,15 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         result: &horizon_browser::AgentActionResult,
     ) -> std::io::Result<()> {
         result::write(panel_local_id, result)
+    }
+
+    fn prepare_network_capture(
+        &self,
+        panel_local_id: &str,
+        directory: &Path,
+        requested_max_file_bytes: u64,
+    ) -> std::io::Result<()> {
+        capture::prepare(panel_local_id, directory, requested_max_file_bytes)
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {

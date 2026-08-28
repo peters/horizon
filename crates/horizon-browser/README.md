@@ -115,6 +115,13 @@ frame events. Safari returns a typed unsupported-backend failure. Payload and
 file limits, URL filters, a bounded channel, and a dedicated buffered writer
 keep busy streams off the render and protocol paths.
 
+Persistent embedders should implement
+`BrowserCoordination::prepare_network_capture` to apply their own age, count,
+and aggregate-byte policy before each file is created. Horizon keeps exports
+inside the persistent panel profile, reserves the requested file budget, and
+removes the exports with that profile. The reusable crate deliberately does
+not impose those product storage choices on another application.
+
 Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
 terminal `Completed` audit record means the engine finished handling the
 request; navigation and other asynchronous page behavior still need an
