@@ -1,7 +1,8 @@
-# horizon-browserctl
+# Horizon Browser CLI
 
-`horizon-browserctl` makes the existing Horizon browser MCP contract usable
-from scripts without creating a second action API. It has two modes:
+The `horizon-browser` executable makes the existing Horizon browser MCP
+contract usable from scripts without creating a second action API. It has two
+modes:
 
 - `run` executes a bounded, fail-fast JSON plan and writes a structured report
   to stdout or a private file;
@@ -17,9 +18,9 @@ engine.
 Build the binary, then pass it a plan path or `-` for stdin:
 
 ```bash
-cargo build -p horizon-browserctl
-target/debug/horizon-browserctl run plan.json
-target/debug/horizon-browserctl run plan.json --output report.json
+cargo build -p horizon-browser-cli
+target/debug/horizon-browser run plan.json
+target/debug/horizon-browser run plan.json --output report.json
 ```
 
 A plan is a sequence of literal MCP tool names and arguments:
@@ -83,7 +84,7 @@ same plan can also call the actor-scoped `browser_create` and
 Configure any MCP client to launch:
 
 ```text
-/path/to/horizon-browserctl mcp
+/path/to/horizon-browser mcp
 ```
 
 This is a standalone local process using MCP over stdin/stdout, not a TCP or

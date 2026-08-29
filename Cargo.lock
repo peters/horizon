@@ -1588,13 +1588,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-browser-mcp"
+name = "horizon-browser-cli"
 version = "0.2.7"
 dependencies = [
- "horizon-browser",
- "horizon-core",
+ "horizon-browser-mcp",
  "rmcp",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -1605,11 +1603,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-browserctl"
+name = "horizon-browser-mcp"
 version = "0.2.7"
 dependencies = [
- "horizon-browser-mcp",
+ "horizon-browser",
+ "horizon-core",
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

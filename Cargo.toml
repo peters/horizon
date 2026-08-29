@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/horizon-browser",
-    "crates/horizon-browserctl",
+    "crates/horizon-browser-cli",
     "crates/horizon-browser-mcp",
     "crates/horizon-core",
     "crates/horizon-cursor",

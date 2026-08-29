@@ -6,14 +6,14 @@ use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use horizon_browserctl::{ExecutionReport, Plan};
+use horizon_browser_cli::{ExecutionReport, Plan};
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
-const HELP: &str = r"horizon-browserctl — run Horizon browser MCP plans
+const HELP: &str = r"horizon-browser — run Horizon browser MCP plans
 
 USAGE:
-    horizon-browserctl run <PLAN.json|-> [--output <REPORT.json|->]
-    horizon-browserctl mcp
+    horizon-browser run <PLAN.json|-> [--output <REPORT.json|->]
+    horizon-browser mcp
 
 COMMANDS:
     run    Execute a fail-fast JSON plan through the existing MCP tools.
@@ -42,7 +42,7 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Command::Version) => {
-            println!("horizon-browserctl {}", env!("CARGO_PKG_VERSION"));
+            println!("horizon-browser {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Ok(Command::Mcp) => serve_mcp().await,
@@ -87,7 +87,7 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = match horizon_browserctl::execute_plan(&plan).await {
+    let report = match horizon_browser_cli::execute_plan(&plan).await {
         Ok(report) => report,
         Err(error) => {
             eprintln!("error: {error}");

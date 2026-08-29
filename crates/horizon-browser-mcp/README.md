@@ -15,8 +15,8 @@ env_vars = ["HORIZON_BROWSER_ACTOR"]
 default_tools_approval_mode = "approve"
 ```
 
-The workspace's [`horizon-browserctl`](../horizon-browserctl) crate provides a
-second launcher for this exact server (`horizon-browserctl mcp`) plus a JSON
+The workspace's [`horizon-browser-cli`](../horizon-browser-cli) crate provides a
+second launcher for this exact server (`horizon-browser mcp`) plus a JSON
 plan runner that calls these MCP tools without defining another action API.
 
 Released Horizon builds start the same server through private transport

@@ -76,7 +76,7 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "params": {
             "protocolVersion": "2026-07-28",
             "capabilities": {},
-            "clientInfo": { "name": "browserctl-test", "version": "1" }
+            "clientInfo": { "name": "browser-cli-test", "version": "1" }
         }
     }));
     assert_eq!(initialize["result"]["serverInfo"]["name"], "horizon-browser");
@@ -94,13 +94,13 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
 }
 
 fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_horizon-browserctl"))
+    Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
         .args(arguments)
         .env("HOME", home)
-        .env("HORIZON_BROWSER_ACTOR", "browserctl-test")
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
         .output()
-        .expect("run browserctl")
+        .expect("run horizon-browser")
 }
 
 struct McpProcess {
@@ -111,16 +111,16 @@ struct McpProcess {
 
 impl McpProcess {
     fn start(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browserctl"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
             .arg("mcp")
             .env("HOME", home)
-            .env("HORIZON_BROWSER_ACTOR", "browserctl-test")
+            .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
             .env("RUST_LOG", "off")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn browserctl MCP server");
+            .expect("spawn Horizon Browser MCP server");
         let stdin = child.stdin.take().expect("MCP stdin");
         let stdout = BufReader::new(child.stdout.take().expect("MCP stdout"));
         Self {

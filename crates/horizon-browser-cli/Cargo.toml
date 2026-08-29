@@ -1,5 +1,5 @@
 [package]
-name = "horizon-browserctl"
+name = "horizon-browser-cli"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 readme = "README.md"
 
 [[bin]]
-name = "horizon-browserctl"
+name = "horizon-browser"
 path = "src/main.rs"
 
 [lints]

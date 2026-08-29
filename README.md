@@ -401,10 +401,10 @@ local journal is application-append-only, not tamper-evident compliance
 storage.
 
 For scripts and service hosting, the workspace also builds
-[`horizon-browserctl`](crates/horizon-browserctl). Its `run` command consumes a
+[`horizon-browser-cli`](crates/horizon-browser-cli). Its `run` command consumes a
 versioned JSON plan made of those same MCP tool calls and emits one structured
 report to stdout or an owner-only file; typed `$ref` values can pass a prior
-step's result to a later call. `horizon-browserctl mcp` launches the unchanged
+step's result to a later call. `horizon-browser mcp` launches the unchanged
 local stdio MCP service as a standalone process. The runner deliberately adds
 no alternate browser action API and accepts no actor-impersonation flag.
 

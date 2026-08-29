@@ -132,7 +132,7 @@ impl ClientHandler for PlanClient {
     fn get_info(&self) -> ClientInfo {
         ClientInfo::new(
             ClientCapabilities::default(),
-            Implementation::new("horizon-browserctl", env!("CARGO_PKG_VERSION")),
+            Implementation::new("horizon-browser-cli", env!("CARGO_PKG_VERSION")),
         )
     }
 }
