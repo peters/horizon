@@ -1,5 +1,6 @@
+use std::collections::BTreeSet;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
@@ -21,24 +22,38 @@ const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
     actor: String,
-    _process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
+    process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
 }
 
 #[derive(Debug)]
 struct ProcessLocalOwnership {
     actor: String,
+    panel_ids: Mutex<BTreeSet<String>>,
+}
+
+impl ProcessLocalOwnership {
+    fn new(actor: String) -> Self {
+        Self {
+            actor,
+            panel_ids: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    fn remember(&self, panel_id: &str) {
+        let mut panel_ids = self.panel_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !panel_ids.contains(panel_id) {
+            panel_ids.insert(panel_id.to_string());
+        }
+    }
 }
 
 impl Drop for ProcessLocalOwnership {
     fn drop(&mut self) {
-        let directory = manifest::default_manifest_dir();
-        for panel_id in manifest::list_panels_in(&directory) {
-            let still_owned = manifest::read(&panel_id)
-                .and_then(|panel| panel.owner)
-                .is_some_and(|owner| owner.name == self.actor);
-            if !still_owned {
-                continue;
-            }
+        let panel_ids = self
+            .panel_ids
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for panel_id in std::mem::take(panel_ids) {
             match manifest::release(&panel_id, &self.actor) {
                 Ok(true) => tracing::debug!(actor = %self.actor, panel_id, "released process-local browser ownership"),
                 Ok(false) => {}
@@ -113,11 +128,11 @@ impl BrowserController {
         actor.map_or_else(
             || Self {
                 actor: fallback.clone(),
-                _process_local_ownership: Some(Arc::new(ProcessLocalOwnership { actor: fallback })),
+                process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(fallback))),
             },
             |actor| Self {
                 actor,
-                _process_local_ownership: None,
+                process_local_ownership: None,
             },
         )
     }
@@ -126,7 +141,7 @@ impl BrowserController {
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
         Self {
             actor: actor.into(),
-            _process_local_ownership: None,
+            process_local_ownership: None,
         }
     }
 
@@ -295,14 +310,20 @@ impl BrowserController {
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
-        match manifest::heartbeat(panel_id, &self.actor) {
+        let result = match manifest::heartbeat(panel_id, &self.actor) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
                 manifest::claim(panel_id, &self.actor, None)
                     .map_err(|source| ControlError::internal_io("could not claim browser panel", source))
             }
             Err(source) => Err(ControlError::internal_io("could not refresh browser ownership", source)),
+        };
+        if result.is_ok()
+            && let Some(ownership) = self.process_local_ownership.as_deref()
+        {
+            ownership.remember(panel_id);
         }
+        result
     }
 
     pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
