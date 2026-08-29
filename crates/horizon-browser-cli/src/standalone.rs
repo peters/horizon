@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
@@ -20,6 +20,9 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
+const HOST_INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+"#;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StandaloneOptions {
@@ -78,6 +81,26 @@ pub struct OwnedHostProcess {
     stdin: Option<ChildStdin>,
 }
 
+trait HostChild {
+    fn try_wait_success(&mut self) -> io::Result<Option<bool>>;
+    fn kill(&mut self) -> io::Result<()>;
+    fn wait(&mut self) -> io::Result<()>;
+}
+
+impl HostChild for Child {
+    fn try_wait_success(&mut self) -> io::Result<Option<bool>> {
+        self.try_wait().map(|status| status.map(|status| status.success()))
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> io::Result<()> {
+        Child::wait(self).map(|_| ())
+    }
+}
+
 impl OwnedHostProcess {
     /// Start an owned standalone MCP subprocess with private host state.
     ///
@@ -113,22 +136,12 @@ impl OwnedHostProcess {
                 "browser host stdin was unavailable".to_string(),
             ));
         };
-        let initialize = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-"#;
         let child_id = child.id();
         let mut host = Self {
             child,
             stdin: Some(stdin),
-        };
-        if let Some(stdin) = host.stdin.as_mut()
-            && let Err(error) = stdin.write_all(initialize).and_then(|()| stdin.flush())
-        {
-            let _ = host.stop();
-            return Err(StandaloneError::Startup(format!(
-                "could not initialize browser host: {error}"
-            )));
         }
+        .initialize()?;
         let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
         while std::time::Instant::now() < deadline {
             if host_manifest_available(&manifests, &existing_manifests, child_id) {
@@ -157,20 +170,48 @@ impl OwnedHostProcess {
         self.stop()
     }
 
-    fn stop(&mut self) -> bool {
-        self.stdin.take();
-        let deadline = std::time::Instant::now() + HOST_EXIT_TIMEOUT;
-        while std::time::Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(status)) => return status.success(),
-                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
+    fn initialize(mut self) -> Result<Self, StandaloneError> {
+        let initialized = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "browser host stdin was unavailable"))
+            .and_then(|stdin| stdin.write_all(HOST_INITIALIZE).and_then(|()| stdin.flush()));
+        if let Err(error) = initialized {
+            self.force_stop();
+            return Err(StandaloneError::Startup(format!(
+                "could not initialize browser host: {error}"
+            )));
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        false
+        Ok(self)
     }
+
+    fn stop(&mut self) -> bool {
+        stop_host(&mut self.child, &mut self.stdin, HOST_EXIT_TIMEOUT)
+    }
+
+    fn force_stop(&mut self) {
+        self.stdin.take();
+        force_host_cleanup(&mut self.child);
+    }
+}
+
+fn stop_host(child: &mut impl HostChild, stdin: &mut Option<ChildStdin>, timeout: Duration) -> bool {
+    stdin.take();
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        match child.try_wait_success() {
+            Ok(Some(success)) => return success,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => break,
+        }
+    }
+    force_host_cleanup(child);
+    false
+}
+
+fn force_host_cleanup(child: &mut impl HostChild) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn host_manifest_available(manifests: &Path, existing: &HashSet<String>, child_id: u32) -> bool {
@@ -326,7 +367,78 @@ const fn backend_name(backend: BackendKind) -> &'static str {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::io::Read as _;
+
     use super::*;
+
+    struct TryWaitFailure {
+        tries: usize,
+        kills: usize,
+        waits: usize,
+    }
+
+    impl HostChild for TryWaitFailure {
+        fn try_wait_success(&mut self) -> io::Result<Option<bool>> {
+            self.tries += 1;
+            Err(io::Error::other("forced try_wait failure"))
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            self.kills += 1;
+            Ok(())
+        }
+
+        fn wait(&mut self) -> io::Result<()> {
+            self.waits += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn initialization_write_failure_reaps_the_child() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exec 0<&-; printf ready; exec sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("start closed-stdin fixture: {error}"));
+        let child_id = child.id();
+        let mut ready = [0; 5];
+        child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("fixture stdout unavailable"))
+            .read_exact(&mut ready)
+            .unwrap_or_else(|error| panic!("wait for fixture readiness: {error}"));
+        assert_eq!(&ready, b"ready");
+        let stdin = child.stdin.take();
+
+        let result = OwnedHostProcess { child, stdin }.initialize();
+        assert!(matches!(result, Err(StandaloneError::Startup(_))));
+
+        let alive = Command::new("kill")
+            .args(["-0", &child_id.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!alive, "failed initialization left child {child_id} alive or unreaped");
+    }
+
+    #[test]
+    fn try_wait_error_forces_kill_and_reap() {
+        let mut child = TryWaitFailure {
+            tries: 0,
+            kills: 0,
+            waits: 0,
+        };
+        let mut stdin = None;
+
+        assert!(!stop_host(&mut child, &mut stdin, Duration::from_secs(1)));
+        assert_eq!(child.tries, 1);
+        assert_eq!(child.kills, 1);
+        assert_eq!(child.waits, 1);
+    }
 
     #[test]
     fn host_readiness_ignores_stale_and_unrelated_manifests() {
