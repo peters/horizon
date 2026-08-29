@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HorizonHome {
     root: PathBuf,
@@ -83,6 +85,53 @@ impl HorizonHome {
     pub fn codex_skill_dir(&self) -> PathBuf {
         self.codex_integrations_dir().join("horizon-notify")
     }
+
+    #[must_use]
+    pub fn codex_browser_skill_dir(&self) -> PathBuf {
+        self.codex_integrations_dir().join("horizon-browser")
+    }
+
+    #[must_use]
+    pub fn browsers_manifest_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("browsers")
+    }
+
+    #[must_use]
+    pub fn browser_results_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("browser-results")
+    }
+
+    #[must_use]
+    pub fn browser_audit_dir(&self) -> PathBuf {
+        self.root.join("audit").join("browsers")
+    }
+
+    /// Private agent-requested network exports removed with the panel profile.
+    #[must_use]
+    pub fn browser_capture_dir(&self, local_id: &str) -> PathBuf {
+        self.browser_profile_dir(local_id).join("captures")
+    }
+
+    #[must_use]
+    pub fn browser_profile_dir(&self, local_id: &str) -> PathBuf {
+        self.root.join("browser-profiles").join(safe_local_id(local_id))
+    }
+}
+
+#[must_use]
+pub(crate) fn safe_local_id(local_id: &str) -> String {
+    // Always encode the exact UTF-8 bytes. Keeping an apparently safe ID
+    // verbatim would make identifiers that differ only by case collide on
+    // default macOS and Windows filesystems. The lowercase hexadecimal
+    // alphabet itself has no case variants, and the '%' prefix keeps the
+    // empty identifier distinct.
+    let mut encoded = String::with_capacity(1 + local_id.len() * 2);
+    encoded.push('%');
+    for byte in local_id.bytes() {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -112,5 +161,61 @@ mod tests {
             home.claude_plugin_dir(),
             PathBuf::from("/tmp/horizon-home/plugins/claude-code")
         );
+        assert_eq!(
+            home.codex_browser_skill_dir(),
+            PathBuf::from("/tmp/horizon-home/integrations/codex/horizon-browser")
+        );
+        assert_eq!(
+            home.browsers_manifest_dir(),
+            PathBuf::from("/tmp/horizon-home/runtime/browsers")
+        );
+        assert_eq!(
+            home.browser_results_dir(),
+            PathBuf::from("/tmp/horizon-home/runtime/browser-results")
+        );
+        assert_eq!(
+            home.browser_audit_dir(),
+            PathBuf::from("/tmp/horizon-home/audit/browsers")
+        );
+        assert_eq!(
+            home.browser_capture_dir("panel-1"),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%70616e656c2d31/captures")
+        );
+        assert_eq!(
+            home.browser_profile_dir("panel-1"),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%70616e656c2d31")
+        );
+        assert_eq!(
+            home.browser_profile_dir("../outside"),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%2e2e2f6f757473696465")
+        );
+        assert_eq!(
+            home.browser_profile_dir(""),
+            PathBuf::from("/tmp/horizon-home/browser-profiles/%")
+        );
+    }
+
+    #[test]
+    fn unsafe_local_ids_have_distinct_paths() {
+        let home = HorizonHome::from_root("/tmp/horizon-home".into());
+
+        assert_ne!(home.browser_profile_dir("a/b"), home.browser_profile_dir("a_b"));
+        assert_ne!(home.browser_profile_dir(""), home.browser_profile_dir("_"));
+        assert_ne!(home.browser_profile_dir("%"), home.browser_profile_dir("%25"));
+        assert_ne!(home.browser_profile_dir("Panel-A"), home.browser_profile_dir("panel-a"));
+    }
+
+    #[test]
+    fn every_local_id_uses_the_canonical_encoding() {
+        let home = HorizonHome::from_root("/tmp/horizon-home".into());
+
+        for local_id in ["panel-1", "CON", "nul", "Aux", "PRN", "COM1", "com9", "LPT1", "lpt9"] {
+            assert!(
+                home.browser_profile_dir(local_id)
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('%')),
+                "{local_id} must use the canonical path encoding"
+            );
+        }
     }
 }

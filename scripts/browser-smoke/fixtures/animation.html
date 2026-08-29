@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Horizon Browser Smoke - Animation</title>
+  <style>
+    body { margin: 0; background: #111827; color: white; font: 20px system-ui, sans-serif; }
+    main { padding: 30px; }
+    #box { width: 80px; height: 80px; background: #22d3ee; animation: move 1s linear infinite alternate; }
+    @keyframes move { from { transform: translateX(0) rotate(0); } to { transform: translateX(600px) rotate(360deg); } }
+    canvas { display: block; margin-top: 30px; border: 1px solid white; }
+  </style>
+</head>
+<body>
+  <main><h1 id="animation-marker">CSS and canvas animation</h1><div id="box"></div><canvas id="canvas" width="800" height="300"></canvas></main>
+  <script>
+    const canvas = document.querySelector('#canvas');
+    const context = canvas.getContext('2d');
+    let frame = 0;
+    function draw() {
+      frame += 1;
+      context.fillStyle = '#111827';
+      context.fillRect(0, 0, 800, 300);
+      context.fillStyle = '#f472b6';
+      context.beginPath();
+      context.arc((frame * 7) % 800, 150, 35, 0, Math.PI * 2);
+      context.fill();
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>

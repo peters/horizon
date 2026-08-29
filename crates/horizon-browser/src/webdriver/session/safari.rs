@@ -1,0 +1,409 @@
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::BrowserInput;
+use crate::session::{BrowserEvent, BrowserEventSender};
+
+use super::super::actions::ActionState;
+use super::Driver;
+
+pub(super) const WINDOW_CHROME_SCRIPT: &str = "return { width: Math.max(0, window.outerWidth - window.innerWidth), height: Math.max(0, window.outerHeight - window.innerHeight) };";
+const WINDOW_FOCUS_SETTLE: Duration = Duration::from_millis(20);
+// Keep one native click-and-type burst ahead of Safari's temporary focus steal.
+const INPUT_SETTLE: Duration = Duration::from_millis(500);
+
+pub(super) struct InputState {
+    pub(super) window_handle: String,
+    actions: ActionState,
+    pending: Vec<BrowserInput>,
+    buttons: u32,
+    keys_down: HashSet<crate::BrowserKey>,
+    ready_at: Option<Instant>,
+}
+
+pub(super) enum InputDispatch {
+    Pending,
+    Background(Value),
+    Foreground(Vec<Value>),
+}
+
+impl InputState {
+    pub(super) fn from_window_response(response: &Value) -> Result<Self, String> {
+        let window_handle = response
+            .get("value")
+            .unwrap_or(response)
+            .as_str()
+            .ok_or_else(|| "Safari returned no window handle".to_string())?;
+        Ok(Self {
+            window_handle: window_handle.to_string(),
+            actions: ActionState::default(),
+            pending: Vec::new(),
+            buttons: 0,
+            keys_down: HashSet::new(),
+            ready_at: None,
+        })
+    }
+
+    pub(super) fn dispatch(&mut self, input: BrowserInput) -> InputDispatch {
+        if self.pending.is_empty() && matches!(&input, BrowserInput::MouseMove { buttons: 0, .. }) {
+            return InputDispatch::Background(self.actions.payload(input));
+        }
+
+        let completes_gesture = match &input {
+            BrowserInput::MousePress { buttons, .. } | BrowserInput::MouseMove { buttons, .. } => {
+                self.buttons = *buttons;
+                false
+            }
+            BrowserInput::MouseRelease { buttons, .. } => {
+                self.buttons = *buttons;
+                true
+            }
+            BrowserInput::KeyDown {
+                physical_key,
+                key,
+                repeat,
+                ..
+            } => {
+                if !repeat {
+                    self.keys_down.insert(physical_key.unwrap_or(*key));
+                }
+                false
+            }
+            BrowserInput::KeyUp { physical_key, key, .. } => {
+                self.keys_down.remove(&physical_key.unwrap_or(*key));
+                true
+            }
+            BrowserInput::Wheel { .. } | BrowserInput::InsertText { .. } => true,
+        };
+        if matches!(&input, BrowserInput::MousePress { .. } | BrowserInput::KeyDown { .. }) {
+            self.ready_at = None;
+        }
+        if matches!(&input, BrowserInput::MouseMove { .. })
+            && let Some(last @ BrowserInput::MouseMove { .. }) = self.pending.last_mut()
+        {
+            *last = input;
+        } else {
+            self.pending.push(input);
+        }
+        if completes_gesture && self.buttons == 0 && self.keys_down.is_empty() {
+            self.ready_at = Some(Instant::now() + INPUT_SETTLE);
+        }
+        InputDispatch::Pending
+    }
+
+    fn click_dispatch(&mut self, x: f64, y: f64, count: u32) -> Result<InputDispatch, String> {
+        if !self.pending.is_empty() || self.buttons != 0 || !self.keys_down.is_empty() {
+            return Err("Safari input is still settling".to_string());
+        }
+        let payload =
+            self.actions
+                .click_payload(x, y, crate::BrowserButton::Left, count, crate::BrowserModifiers::none());
+        Ok(InputDispatch::Foreground(vec![payload]))
+    }
+
+    fn take_ready(&mut self, now: Instant) -> Option<InputDispatch> {
+        if self.ready_at.is_none_or(|ready_at| now < ready_at) {
+            return None;
+        }
+        self.ready_at = None;
+        let pending = std::mem::take(&mut self.pending);
+        if let [
+            BrowserInput::MousePress { click_count: 1, .. },
+            BrowserInput::MouseRelease { click_count: 1, .. },
+            BrowserInput::MousePress {
+                x,
+                y,
+                button,
+                click_count: 2,
+                modifiers,
+                ..
+            },
+            BrowserInput::MouseRelease { click_count: 2, .. },
+        ] = pending.as_slice()
+        {
+            let payload = self.actions.click_payload(*x, *y, *button, 2, *modifiers);
+            return Some(InputDispatch::Foreground(vec![payload]));
+        }
+        let mut payloads = Vec::new();
+        let mut text = String::new();
+        for input in pending {
+            match input {
+                BrowserInput::KeyDown { text: Some(value), .. } => text.push_str(&value),
+                BrowserInput::KeyUp { text: Some(_), .. } => {}
+                input => {
+                    flush_text_payload(&mut self.actions, &mut payloads, &mut text);
+                    payloads.push(self.actions.payload(input));
+                }
+            }
+        }
+        flush_text_payload(&mut self.actions, &mut payloads, &mut text);
+        Some(InputDispatch::Foreground(payloads))
+    }
+
+    pub(super) fn reset_actions(&mut self) {
+        *self = Self {
+            window_handle: self.window_handle.clone(),
+            actions: ActionState::default(),
+            pending: Vec::new(),
+            buttons: 0,
+            keys_down: HashSet::new(),
+            ready_at: None,
+        };
+    }
+}
+
+fn flush_text_payload(actions: &mut ActionState, payloads: &mut Vec<Value>, text: &mut String) {
+    if text.is_empty() {
+        return;
+    }
+    let mut payload = actions.payload(BrowserInput::InsertText {
+        text: std::mem::take(text),
+    });
+    if let Some(events) = payload["actions"][0]["actions"].as_array_mut() {
+        events.push(json!({ "type": "keyUp", "value": "\u{e008}" }));
+    }
+    payloads.push(payload);
+}
+
+impl Driver {
+    pub(super) fn queue_safari_input(&mut self, input: BrowserInput) -> Result<(), String> {
+        let Some(state) = &mut self.safari else {
+            return Err("Safari input state unavailable".to_string());
+        };
+        let dispatch = state.dispatch(input);
+        let result = execute(dispatch, "", |suffix, payload| self.classic_post(suffix, payload));
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+            self.reset_safari_input();
+        }
+        result
+    }
+
+    pub(super) fn tick_safari_input(&mut self, event_tx: &BrowserEventSender) {
+        let _ = self.dispatch_safari_input(Instant::now(), event_tx);
+    }
+
+    pub(super) fn flush_safari_input(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
+        self.dispatch_safari_input(Instant::now() + INPUT_SETTLE, event_tx)
+            .unwrap_or(Ok(()))
+    }
+
+    fn dispatch_safari_input(&mut self, now: Instant, event_tx: &BrowserEventSender) -> Option<Result<(), String>> {
+        let (dispatch, handle) = self.safari.as_mut().and_then(|state| {
+            state
+                .take_ready(now)
+                .map(|dispatch| (dispatch, state.window_handle.clone()))
+        })?;
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: false });
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: true });
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+            self.reset_safari_input();
+        }
+        if !self.retain_frame_during_navigation {
+            self.scrollbar.refresh_at = Instant::now();
+            self.frames.demand();
+        }
+        Some(result)
+    }
+
+    pub(super) fn perform_safari_click(
+        &mut self,
+        x: f64,
+        y: f64,
+        count: u32,
+        event_tx: &BrowserEventSender,
+    ) -> Result<(), String> {
+        let (dispatch, handle) = {
+            let Some(state) = &mut self.safari else {
+                return Err("Safari input state unavailable".to_string());
+            };
+            (state.click_dispatch(x, y, count)?, state.window_handle.clone())
+        };
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: false });
+        let result = execute(dispatch, &handle, |suffix, payload| self.classic_post(suffix, payload));
+        let _ = event_tx.send(BrowserEvent::HostFocusRequested { ready: true });
+        if let Err(error) = &result {
+            tracing::warn!("WebDriver input failed: {error}");
+            self.reset_safari_input();
+        } else if !self.retain_frame_during_navigation {
+            self.scrollbar.refresh_at = Instant::now();
+            self.frames.demand();
+        }
+        result
+    }
+
+    fn reset_safari_input(&mut self) {
+        let _ = self.classic_delete("actions");
+        if let Some(state) = &mut self.safari {
+            state.reset_actions();
+        }
+    }
+}
+
+pub(super) fn execute(
+    dispatch: InputDispatch,
+    window_handle: &str,
+    mut post: impl FnMut(&str, &Value) -> Result<Value, String>,
+) -> Result<(), String> {
+    match dispatch {
+        InputDispatch::Pending => Ok(()),
+        InputDispatch::Background(payload) => post("actions", &payload).map(|_| ()),
+        InputDispatch::Foreground(payloads) => {
+            post("window", &json!({ "handle": window_handle }))
+                .map_err(|error| format!("Safari window focus failed: {error}"))?;
+            std::thread::sleep(WINDOW_FOCUS_SETTLE);
+            for payload in payloads {
+                post("actions", &payload).map_err(|error| format!("Safari focused input failed: {error}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) fn window_rect(response: &Value, width: u32, height: u32) -> (u32, u32) {
+    let chrome = response.get("value").unwrap_or(response);
+    let dimension = |name| {
+        chrome
+            .get(name)
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or_default()
+    };
+    (
+        width.saturating_add(dimension("width")),
+        height.saturating_add(dimension("height")),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InputDispatch, InputState, window_rect};
+    use crate::{BrowserButton, BrowserInput, BrowserKey, BrowserModifiers};
+
+    #[test]
+    fn pointer_gesture_is_replayed_only_after_release() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let modifiers = BrowserModifiers::none();
+        assert!(matches!(
+            state.dispatch(BrowserInput::MousePress {
+                x: 10.0,
+                y: 20.0,
+                button: BrowserButton::Left,
+                click_count: 1,
+                buttons: 1,
+                modifiers,
+            }),
+            InputDispatch::Pending
+        ));
+        assert!(matches!(
+            state.dispatch(BrowserInput::MouseMove {
+                x: 30.0,
+                y: 40.0,
+                buttons: 1,
+                modifiers,
+            }),
+            InputDispatch::Pending
+        ));
+        assert!(matches!(
+            state.dispatch(BrowserInput::MouseRelease {
+                x: 50.0,
+                y: 60.0,
+                button: BrowserButton::Left,
+                click_count: 1,
+                buttons: 0,
+                modifiers,
+            }),
+            InputDispatch::Pending
+        ));
+        for character in ['a', 'b'] {
+            let text = character.to_string();
+            assert!(matches!(
+                state.dispatch(BrowserInput::KeyDown {
+                    physical_key: Some(BrowserKey::Char(character)),
+                    key: BrowserKey::Char(character),
+                    text: Some(text.clone()),
+                    modifiers,
+                    repeat: false,
+                    edit_command: None,
+                }),
+                InputDispatch::Pending
+            ));
+            assert!(matches!(
+                state.dispatch(BrowserInput::KeyUp {
+                    physical_key: Some(BrowserKey::Char(character)),
+                    key: BrowserKey::Char(character),
+                    text: Some(text),
+                    modifiers,
+                }),
+                InputDispatch::Pending
+            ));
+        }
+        assert!(state.take_ready(std::time::Instant::now()).is_none());
+        let dispatch = state
+            .take_ready(std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap_or_else(|| panic!("released gesture should become ready"));
+        let InputDispatch::Foreground(payloads) = dispatch else {
+            panic!("released gesture should dispatch foreground input");
+        };
+        assert_eq!(payloads.len(), 4);
+        assert_eq!(payloads[3]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
+    }
+
+    #[test]
+    fn window_rect_includes_browser_chrome() {
+        let response = serde_json::json!({ "value": { "width": 0, "height": 52 } });
+        assert_eq!(window_rect(&response, 1104, 668), (1104, 720));
+        assert_eq!(window_rect(&serde_json::Value::Null, 1104, 668), (1104, 668));
+    }
+
+    #[test]
+    fn semantic_double_click_is_one_foreground_action_chain() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let dispatch = state
+            .click_dispatch(10.0, 20.0, 2)
+            .unwrap_or_else(|error| panic!("double-click dispatch failed: {error}"));
+        let InputDispatch::Foreground(payloads) = dispatch else {
+            panic!("semantic click should require foreground dispatch");
+        };
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
+    }
+
+    #[test]
+    fn physical_double_click_is_one_foreground_action_chain() {
+        let mut state = InputState::from_window_response(&serde_json::json!({ "value": "window" }))
+            .unwrap_or_else(|error| panic!("test window handle failed: {error}"));
+        let modifiers = BrowserModifiers::none();
+        macro_rules! input {
+            ($kind:ident, $click_count:literal, $buttons:literal) => {
+                BrowserInput::$kind {
+                    x: 10.0,
+                    y: 20.0,
+                    button: BrowserButton::Left,
+                    click_count: $click_count,
+                    buttons: $buttons,
+                    modifiers,
+                }
+            };
+        }
+        state.pending = vec![
+            input!(MousePress, 1, 1),
+            input!(MouseRelease, 1, 0),
+            input!(MousePress, 2, 1),
+            input!(MouseRelease, 2, 0),
+        ];
+        state.ready_at = Some(std::time::Instant::now());
+        let Some(InputDispatch::Foreground(payloads)) = state.take_ready(std::time::Instant::now()) else {
+            panic!("double-click should dispatch foreground input");
+        };
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["actions"][0]["actions"].as_array().map(Vec::len), Some(5));
+    }
+}

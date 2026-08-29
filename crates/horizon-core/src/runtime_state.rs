@@ -2,7 +2,8 @@ mod agent_sessions;
 mod binding_bootstrap;
 mod claude_live_sessions;
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
@@ -45,6 +46,11 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
+    /// Browser config injected by the app before restore. Core-only board
+    /// snapshots store a default placeholder because a [`Board`] does not
+    /// own the config that created it.
+    #[serde(default)]
+    pub browser: crate::browser::BrowserConfig,
 }
 
 impl RuntimeState {
@@ -71,6 +77,7 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
+            browser: config.browser.clone(),
         }
     }
 
@@ -124,13 +131,47 @@ impl RuntimeState {
             self.version = RUNTIME_STATE_VERSION;
         }
 
+        let mut reserved_panel_local_ids = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| !panel.local_id.is_empty())
+            .map(|panel| panel.local_id.clone())
+            .collect::<HashSet<_>>();
+        let mut seen_panel_local_ids = HashSet::new();
+
         for workspace in &mut self.workspaces {
             if workspace.local_id.is_empty() {
                 workspace.local_id = new_local_id();
             }
             for panel in &mut workspace.panels {
                 if panel.local_id.is_empty() {
-                    panel.local_id = new_local_id();
+                    panel.local_id = reserve_new_local_id(&mut reserved_panel_local_ids);
+                    seen_panel_local_ids.insert(panel.local_id.clone());
+                } else if !seen_panel_local_ids.insert(panel.local_id.clone()) {
+                    // Focus restoration resolves the first matching panel.
+                    // Keep that identity stable and repair later duplicates.
+                    panel.local_id = reserve_new_local_id(&mut reserved_panel_local_ids);
+                    seen_panel_local_ids.insert(panel.local_id.clone());
+                }
+            }
+        }
+    }
+
+    /// Give browser panels fresh process-artifact identities when a persisted
+    /// session is copied. Browser profiles and live manifests are keyed by
+    /// panel local id, while duplicated sessions can run alongside their
+    /// source; retaining those ids would make both Chrome drivers share and
+    /// remove each other's files.
+    pub(crate) fn regenerate_browser_local_ids(&mut self) {
+        for workspace in &mut self.workspaces {
+            for panel in &mut workspace.panels {
+                if panel.kind != PanelKind::Browser {
+                    continue;
+                }
+                let old_local_id = std::mem::replace(&mut panel.local_id, new_local_id());
+                if self.focused_panel_local_id.as_deref() == Some(old_local_id.as_str()) {
+                    self.focused_panel_local_id.clone_from(&Some(panel.local_id.clone()));
                 }
             }
         }
@@ -169,6 +210,7 @@ impl RuntimeState {
                     .map(|panel| {
                         let terminal = panel.terminal();
                         let editor = panel.editor();
+                        let browser = panel.browser();
 
                         PanelState {
                             local_id: panel.local_id.clone(),
@@ -195,6 +237,16 @@ impl RuntimeState {
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
+                            browser_profile: browser.map(|browser| BrowserProfileState {
+                                root: browser.profile_root_for_persistence().map(Path::to_path_buf),
+                                backend: Some(browser.backend()),
+                                hidden: !panel.visible,
+                            }),
+                            // `Some("")` is meaningful: Chrome committed its
+                            // blank startup target, so restore must not fall
+                            // back to the requested/configured URL.
+                            browser_url: browser
+                                .and_then(|browser| browser.committed_url_for_persistence().map(str::to_string)),
                         }
                     })
                     .collect();
@@ -226,6 +278,9 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
+            // Save-path placeholder: the app refreshes this field with the
+            // current config before any restore uses it.
+            browser: crate::browser::BrowserConfig::default(),
         }
     }
 }
@@ -241,6 +296,7 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
+            browser: crate::browser::BrowserConfig::default(),
         }
     }
 }
@@ -356,6 +412,14 @@ pub struct PanelState {
     /// Scratch editor buffer content (persisted for file-less editors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_content: Option<String>,
+    /// Profile root used when this Browser panel was launched. The outer
+    /// option distinguishes a legacy snapshot from a panel launched with the
+    /// default root, represented by `Some(BrowserProfileState { root: None })`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_profile: Option<BrowserProfileState>,
+    /// Current URL of browser panels, restored as the navigation target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
 }
 
 impl PanelState {
@@ -445,18 +509,39 @@ impl PanelState {
                 ssh_connection,
             }),
             editor_content: None,
+            browser_profile: None,
+            browser_url: None,
         }
     }
 
+    pub(crate) fn browser_config_for_restore(
+        &self,
+        fallback: &crate::browser::BrowserConfig,
+    ) -> crate::browser::BrowserConfig {
+        let mut config = fallback.clone();
+        if let Some(profile) = &self.browser_profile {
+            config.profile_root.clone_from(&profile.root);
+            if let Some(backend) = profile.backend {
+                config.backend = backend;
+            }
+        }
+        config
+    }
+
     #[must_use]
-    pub fn to_panel_options(&self) -> PanelOptions {
+    pub fn to_panel_options(&self, browser_config: &crate::browser::BrowserConfig) -> PanelOptions {
+        let command = if self.kind == PanelKind::Browser {
+            self.browser_url.clone().or_else(|| self.command.clone())
+        } else {
+            self.command.clone()
+        };
         PanelOptions {
             name: if self.name.is_empty() {
                 None
             } else {
                 Some(self.name.clone())
             },
-            command: self.command.clone(),
+            command,
             args: self.args.clone(),
             cwd: self.cwd.as_deref().map(Config::expand_tilde),
             ssh_connection: self.ssh_connection.clone(),
@@ -466,9 +551,11 @@ impl PanelState {
             resume: self.resume.clone(),
             position: self.position,
             size: self.size,
+            visible: self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
             local_id: Some(self.local_id.clone()),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
+            browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
@@ -494,8 +581,22 @@ impl Default for PanelState {
             session_binding: None,
             template: None,
             editor_content: None,
+            browser_profile: None,
+            browser_url: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BrowserProfileState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<crate::browser::BackendKind>,
+    /// Hidden browser panels stay live and controllable but do not render.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -564,6 +665,15 @@ impl AgentSessionBinding {
 #[must_use]
 pub fn new_local_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+fn reserve_new_local_id(reserved: &mut HashSet<String>) -> String {
+    loop {
+        let local_id = new_local_id();
+        if reserved.insert(local_id.clone()) {
+            return local_id;
+        }
+    }
 }
 
 fn normalize_cwd(cwd: Option<&str>) -> Option<String> {
@@ -651,6 +761,45 @@ mod tests {
     }
 
     #[test]
+    fn from_board_records_each_browser_launch_profile_root() {
+        let temp = tempfile::tempdir().expect("temporary profile root");
+        let launched_root = temp.path().join("launched-profiles");
+        let mut board = Board::new();
+        let workspace = board.create_workspace("browser");
+        board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Browser,
+                    local_id: Some("saved-browser".to_string()),
+                    visible: false,
+                    browser_config: Some(crate::browser::BrowserConfig {
+                        command: Some(temp.path().join("missing-chrome").display().to_string()),
+                        profile_root: Some(launched_root.clone()),
+                        ..crate::browser::BrowserConfig::default()
+                    }),
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("Browser panel state should start");
+
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let saved = &state.workspaces[0].panels[0];
+
+        assert_eq!(
+            saved.browser_profile.as_ref().and_then(|profile| profile.root.as_ref()),
+            Some(&launched_root)
+        );
+        assert!(saved.browser_profile.as_ref().is_some_and(|profile| profile.hidden));
+        assert!(
+            !saved
+                .to_panel_options(&crate::browser::BrowserConfig::default())
+                .visible
+        );
+        board.shutdown_terminal_panels();
+    }
+
+    #[test]
     fn from_board_persists_workspace_layout_selection() {
         let mut board = Board::new();
         let workspace_id = board.create_workspace_at("grid", [860.0, 64.0]);
@@ -670,6 +819,7 @@ mod tests {
             .expect("workspace state");
 
         assert_eq!(saved_workspace.layout, Some(WorkspaceLayout::Grid));
+        board.shutdown_terminal_panels();
     }
 
     #[test]
@@ -688,6 +838,133 @@ mod tests {
         let state = WorkspaceState::from_config(0, &workspace, [120.0, 64.0]);
 
         assert_eq!(state.layout, Some(WorkspaceLayout::Grid));
+    }
+
+    #[test]
+    fn empty_committed_browser_url_overrides_the_requested_command() {
+        let panel = PanelState {
+            kind: PanelKind::Browser,
+            command: Some("https://requested.example".to_string()),
+            browser_url: Some(String::new()),
+            ..PanelState::default()
+        };
+
+        let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+
+        assert_eq!(options.command.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn persisted_browser_profile_root_survives_other_config_changes() {
+        let panel = PanelState {
+            kind: PanelKind::Browser,
+            browser_profile: Some(BrowserProfileState {
+                root: Some(PathBuf::from("/profiles/used-at-launch")),
+                backend: None,
+                hidden: false,
+            }),
+            ..PanelState::default()
+        };
+        let current_config = crate::browser::BrowserConfig {
+            quality: 73,
+            profile_root: Some(PathBuf::from("/profiles/new-config")),
+            ..crate::browser::BrowserConfig::default()
+        };
+
+        let restored = panel
+            .to_panel_options(&current_config)
+            .browser_config
+            .expect("Browser restore config");
+
+        assert_eq!(restored.profile_root, Some(PathBuf::from("/profiles/used-at-launch")));
+        assert_eq!(restored.quality, 73);
+    }
+
+    #[test]
+    fn persisted_default_browser_profile_root_overrides_a_later_custom_root() {
+        let panel = PanelState {
+            kind: PanelKind::Browser,
+            browser_profile: Some(BrowserProfileState::default()),
+            ..PanelState::default()
+        };
+        let current_config = crate::browser::BrowserConfig {
+            profile_root: Some(PathBuf::from("/profiles/new-config")),
+            ..crate::browser::BrowserConfig::default()
+        };
+
+        let restored = panel
+            .to_panel_options(&current_config)
+            .browser_config
+            .expect("Browser restore config");
+
+        assert!(restored.profile_root.is_none());
+    }
+
+    #[test]
+    fn persisted_default_browser_profile_root_survives_yaml_roundtrip() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                panels: vec![PanelState {
+                    kind: PanelKind::Browser,
+                    browser_profile: Some(BrowserProfileState::default()),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        let yaml = state.to_yaml().expect("serialize runtime state");
+        let restored: RuntimeState = serde_yaml::from_str(&yaml).expect("deserialize runtime state");
+
+        assert!(restored.workspaces[0].panels[0].browser_profile.is_some());
+        assert!(
+            restored.workspaces[0].panels[0]
+                .browser_profile
+                .as_ref()
+                .is_some_and(|profile| profile.root.is_none())
+        );
+    }
+
+    #[test]
+    fn ensure_local_ids_repairs_duplicates_without_moving_focus() {
+        let mut state = RuntimeState {
+            focused_panel_local_id: Some("shared-browser".to_string()),
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_string(),
+                panels: vec![
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        kind: PanelKind::Browser,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        kind: PanelKind::Browser,
+                        ..PanelState::default()
+                    },
+                    PanelState {
+                        local_id: "shared-browser".to_string(),
+                        ..PanelState::default()
+                    },
+                ],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        state.ensure_local_ids();
+
+        let local_ids = state.workspaces[0]
+            .panels
+            .iter()
+            .map(|panel| panel.local_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(local_ids[0], "shared-browser");
+        assert_ne!(local_ids[1], "shared-browser");
+        assert_ne!(local_ids[2], "shared-browser");
+        assert_eq!(local_ids.iter().copied().collect::<HashSet<_>>().len(), 3);
+        assert_eq!(state.focused_panel_local_id.as_deref(), Some("shared-browser"));
     }
 
     #[test]

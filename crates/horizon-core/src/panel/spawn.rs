@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -123,6 +124,7 @@ impl StaticPanelSeed {
                 position: self.position.unwrap_or_default(),
                 size: self.size.unwrap_or(DEFAULT_PANEL_SIZE),
             },
+            visible: true,
             workspace_id: self.workspace_id,
             content,
             session_binding: None,
@@ -179,6 +181,19 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOpt
             } = opts;
             let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
             Ok(spawn_usage(seed))
+        }
+        PanelKind::Browser => {
+            let PanelOptions {
+                name,
+                command,
+                position,
+                size,
+                template,
+                browser_config,
+                ..
+            } = opts;
+            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            spawn_browser(seed, command, browser_config)
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
     }
@@ -294,6 +309,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
     } else {
         None
     };
+    let env = agent_env(kind, &local_id);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
@@ -325,7 +341,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         scrollback_limit: scrollback_limit_for_kind(kind),
         window_id: id.0,
         replay_bytes,
-        env: agent_env(kind),
+        env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
@@ -509,6 +525,7 @@ fn build_terminal_panel(
             position: position.unwrap_or_default(),
             size: size.unwrap_or(DEFAULT_PANEL_SIZE),
         },
+        visible: true,
         workspace_id,
         content: PanelContent::Terminal(terminal),
         session_binding,
@@ -616,6 +633,37 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     )
 }
 
+/// Spawn a browser panel. The generic `command` field carries the optional
+/// initial URL (same convention as the editor's file path); `browser_config`
+/// is the active `browser` config section (honors `--config`).
+fn spawn_browser(
+    mut seed: StaticPanelSeed,
+    initial_url: Option<String>,
+    browser_config: Option<crate::browser::BrowserConfig>,
+) -> Result<Panel> {
+    let initial_url = initial_url.filter(|url| !url.trim().is_empty());
+    let (title, has_custom_name) = seed.take_title(|| {
+        initial_url
+            .as_deref()
+            .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
+    });
+    let browser = crate::browser::BrowserPanelState::start(
+        seed.local_id.clone(),
+        &browser_config.unwrap_or_default(),
+        initial_url.clone(),
+    )?;
+    tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
+
+    Ok(seed.into_panel(
+        title,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(browser)),
+        initial_url,
+        None,
+        has_custom_name,
+    ))
+}
+
 pub(super) fn resolve_launch_command(
     command: Option<String>,
     args: Vec<String>,
@@ -624,7 +672,9 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => (String::new(), Vec::new()),
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => {
+            (String::new(), Vec::new())
+        }
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -660,9 +710,11 @@ fn resolve_agent_launch_command(
     let Some(definition) = agent_definition(kind) else {
         unreachable!("agent launch requested for non-agent panel: {kind:?}");
     };
+    let uses_default_command = command.is_none();
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
-        AgentIntegrationKind::None => Vec::new(),
+        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
+        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
     match definition.resume_mode {
@@ -854,10 +906,11 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
-pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
+pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, String> {
     let mut env = HashMap::new();
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
+        env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
     }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
@@ -865,6 +918,38 @@ pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
         env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
     }
     env
+}
+
+/// Stable private control identity injected into one Horizon agent panel.
+#[must_use]
+pub fn browser_actor(local_id: &str) -> String {
+    if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
+        return format!("horizon:{local_id}");
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    local_id.hash(&mut hasher);
+    format!("horizon:{:016x}", hasher.finish())
+}
+
+fn horizon_codex_mcp_args() -> Vec<String> {
+    let Some(command) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .and_then(|path| serde_json::to_string(&path).ok())
+    else {
+        tracing::warn!("could not resolve Horizon executable for browser MCP integration");
+        return Vec::new();
+    };
+    vec![
+        "-c".to_string(),
+        format!("mcp_servers.horizon-browser.command={command}"),
+        "-c".to_string(),
+        "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
+        "-c".to_string(),
+        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]".to_string(),
+        "-c".to_string(),
+        "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
+    ]
 }
 
 fn horizon_claude_plugin_args() -> Vec<String> {
@@ -882,7 +967,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage => 0,
+            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode
@@ -903,8 +988,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_environment_exposes_a_stable_browser_actor() {
+        let env = agent_env(PanelKind::Codex, "panel-42");
+        assert_eq!(env.get("HORIZON").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get("HORIZON_BROWSER_ACTOR").map(String::as_str),
+            Some("horizon:panel-42")
+        );
+        assert!(agent_env(PanelKind::Shell, "panel-42").is_empty());
+        assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
+    }
+
+    #[test]
+    fn default_codex_launch_registers_only_the_mcp_browser_contract() {
+        let (_, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Codex,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        let command = args.join(" ");
+        assert!(command.contains("mcp_servers.horizon-browser.command="));
+        assert!(command.contains("mcp_servers.horizon-browser.args="));
+        assert!(command.contains("mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]"));
+        assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
+        assert!(command.contains("--browser-mcp"));
+        assert!(!command.contains("browser-cli"));
+    }
+
+    #[test]
+    fn custom_codex_launch_does_not_inject_the_horizon_mcp_registration() {
+        let (_, args) = resolve_launch_command(
+            Some("/opt/custom-codex".to_string()),
+            vec!["--custom-flag".to_string()],
+            None,
+            PanelKind::Codex,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        let command = args.join(" ");
+        assert!(command.contains("/opt/custom-codex --custom-flag"));
+        assert!(!command.contains("mcp_servers.horizon-browser"));
+        assert!(!command.contains("--browser-mcp"));
+    }
+
+    #[test]
     fn claude_uses_horizon_native_scrollback() {
-        let claude_env = agent_env(PanelKind::Claude);
+        let claude_env = agent_env(PanelKind::Claude, "claude-panel");
 
         assert_eq!(
             claude_env
@@ -912,8 +1042,8 @@ mod tests {
                 .map(String::as_str),
             Some("1")
         );
-        assert!(!agent_env(PanelKind::Codex).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
-        assert!(!agent_env(PanelKind::Shell).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Codex, "codex-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Shell, "shell-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
     }
 
     #[test]

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Horizon Browser Smoke - Input</title>
+  <script>window.__earlyWebdriver = navigator.webdriver;</script>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 3200px; background: #f8fafc; color: #172033; }
+    header { position: sticky; top: 0; z-index: 4; padding: 12px 18px; background: #dbeafe; border-bottom: 2px solid #2563eb; }
+    main { padding: 18px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
+    button, input, textarea { font: inherit; padding: 8px 10px; }
+    button { background: #2563eb; color: white; border: 0; border-radius: 5px; }
+    input, textarea { border: 2px solid #94a3b8; border-radius: 5px; }
+    input:focus, textarea:focus, button:focus { outline: 4px solid #f59e0b; outline-offset: 2px; }
+    #status, #key-status, #fingerprint { white-space: pre-wrap; padding: 10px; background: white; border: 1px solid #94a3b8; }
+    #drag-zone { width: 360px; height: 100px; background: #fef3c7; border: 2px dashed #d97706; display: grid; place-items: center; }
+    #horizontal { width: 360px; overflow: auto; border: 1px solid #64748b; }
+    #horizontal > div { width: 1000px; padding: 10px; background: linear-gradient(90deg, #fee2e2, #dcfce7); }
+    #right-edge { position: fixed; right: 8px; top: 250px; z-index: 3; background: #7c3aed; }
+    #consent-frame { position: absolute; left: 18px; top: 900px; width: 420px; height: 180px; border: 2px solid #0f766e; }
+    .spacer { height: 2200px; background: linear-gradient(#f8fafc, #e2e8f0); }
+    #bottom { padding: 30px; background: #dcfce7; }
+  </style>
+</head>
+<body>
+  <header><strong id="marker">Horizon deterministic browser smoke</strong></header>
+  <main>
+    <div class="row">
+      <button id="click-target" type="button">Click target</button>
+      <button id="double-target" type="button">Double-click target</button>
+      <button id="next" type="button" onclick="location.href='/next.html'">Navigate next</button>
+      <button id="animation" type="button" onclick="location.href='/animation.html'">Animation</button>
+    </div>
+    <div class="row">
+      <label>Smoke input <input id="smoke-input" placeholder="type here" autocomplete="off"></label>
+      <label>Second input <input id="second-input" placeholder="tab target" autocomplete="off"></label>
+      <label>Multiline <textarea id="smoke-textarea" rows="2"></textarea></label>
+    </div>
+    <div id="drag-zone" tabindex="0">Drag inside and release outside</div>
+    <div id="horizontal"><div>Horizontal wheel target — scroll this surface</div></div>
+    <button id="right-edge" type="button">Right-edge content</button>
+    <p id="status">collecting</p>
+    <p id="key-status">keys=</p>
+    <pre id="fingerprint">collecting</pre>
+    <iframe id="probe-frame" title="automation disclosure probe" hidden></iframe>
+    <iframe id="consent-frame" title="Cookie settings"></iframe>
+    <div class="spacer"></div>
+    <div id="bottom"><h2>Bottom marker</h2><button id="bottom-button" type="button">Bottom button</button></div>
+  </main>
+  <script>
+    const state = {
+      clicks: 0,
+      trusted: false,
+      double: 0,
+      right: 0,
+      drag: 'idle',
+      globalUp: 0,
+      lastButtons: 0,
+      wheelX: 0,
+      wheelY: 0,
+      keys: []
+    };
+    window.__smokeState = state;
+
+    function publishStatus() {
+      document.querySelector('#status').textContent =
+        `clicks=${state.clicks} trusted=${state.trusted} double=${state.double} right=${state.right} ` +
+        `drag=${state.drag} globalUp=${state.globalUp} lastButtons=${state.lastButtons} ` +
+        `wheelX=${Math.round(state.wheelX)} wheelY=${Math.round(state.wheelY)}`;
+      document.querySelector('#key-status').textContent = `keys=${state.keys.join(',')}`;
+    }
+
+    document.querySelector('#click-target').addEventListener('click', (event) => {
+      state.clicks += 1;
+      state.trusted = event.isTrusted;
+      publishStatus();
+    });
+    document.querySelector('#double-target').addEventListener('dblclick', (event) => {
+      state.double += 1;
+      state.trusted = event.isTrusted;
+      publishStatus();
+    });
+    document.querySelector('#right-edge').addEventListener('click', (event) => {
+      state.right += 1;
+      state.trusted = event.isTrusted;
+      publishStatus();
+    });
+
+    const drag = document.querySelector('#drag-zone');
+    drag.addEventListener('pointerdown', (event) => {
+      state.drag = `down:${event.buttons}`;
+      drag.setPointerCapture?.(event.pointerId);
+      publishStatus();
+    });
+    drag.addEventListener('pointermove', (event) => {
+      if (event.buttons) {
+        state.drag = `move:${event.buttons}`;
+        publishStatus();
+      }
+    });
+    drag.addEventListener('pointerup', (event) => {
+      state.drag = `up:${event.buttons}`;
+      publishStatus();
+    });
+    addEventListener('pointermove', (event) => {
+      state.lastButtons = event.buttons;
+      publishStatus();
+    });
+    addEventListener('pointerup', (event) => {
+      state.globalUp += 1;
+      state.lastButtons = event.buttons;
+      publishStatus();
+    });
+    addEventListener('wheel', (event) => {
+      state.wheelX += event.deltaX;
+      state.wheelY += event.deltaY;
+      publishStatus();
+    }, { passive: true });
+    addEventListener('keydown', (event) => {
+      state.keys.push(`${event.shiftKey ? 'Shift+' : ''}${event.key}`);
+      if (state.keys.length > 20) state.keys.shift();
+      publishStatus();
+    });
+
+    const frame = document.querySelector('#probe-frame');
+    frame.srcdoc = '<!doctype html><script>parent.__iframeWebdriver = navigator.webdriver; parent.postMessage({kind:"probe-ready"}, "*");<\/script>';
+    const consentFrame = document.querySelector('#consent-frame');
+    const consentUrl = new URL('/next.html', location.href);
+    consentUrl.hostname = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+    consentFrame.src = consentUrl.href;
+
+    async function collectFingerprint() {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl');
+      const extension = gl?.getExtension('WEBGL_debug_renderer_info');
+      const renderer = extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : 'unavailable';
+      const uaData = navigator.userAgentData;
+      const high = await Promise.resolve(
+        uaData?.getHighEntropyValues?.(['architecture', 'bitness', 'platformVersion', 'fullVersionList']) || {}
+      );
+      window.__fingerprint = {
+        earlyWebdriver: window.__earlyWebdriver,
+        currentWebdriver: navigator.webdriver,
+        iframeWebdriver: window.__iframeWebdriver,
+        userAgent: navigator.userAgent,
+        brands: uaData?.brands || [],
+        high,
+        languages: Array.from(navigator.languages || []),
+        plugins: navigator.plugins?.length ?? null,
+        viewport: [innerWidth, innerHeight],
+        screen: [screen.width, screen.height],
+        dpr: devicePixelRatio,
+        renderer
+      };
+      document.querySelector('#fingerprint').textContent = JSON.stringify(window.__fingerprint, null, 2);
+    }
+
+    addEventListener('message', (event) => {
+      if (event.data?.kind === 'probe-ready') collectFingerprint();
+    });
+    collectFingerprint();
+    publishStatus();
+  </script>
+</body>
+</html>

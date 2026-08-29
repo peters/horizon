@@ -12,7 +12,11 @@ impl Board {
     #[must_use]
     pub fn workspace_bounds(&self, id: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
         let workspace = self.workspace(id)?;
-        let mut panels = self.panels.iter().filter(|panel| panel.workspace_id == id).peekable();
+        let mut panels = self
+            .panels
+            .iter()
+            .filter(|panel| panel.workspace_id == id && panel.visible)
+            .peekable();
         panels.peek()?;
 
         // Anchor min to the workspace origin so the frame doesn't chase
@@ -43,6 +47,9 @@ impl Board {
         let mut bounds = HashMap::with_capacity(workspace_origins.len());
 
         for panel in &self.panels {
+            if !panel.visible {
+                continue;
+            }
             let Some(origin) = workspace_origins.get(&panel.workspace_id).copied() else {
                 continue;
             };

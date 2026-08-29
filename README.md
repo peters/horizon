@@ -105,6 +105,20 @@ Drop a `.md` file onto the canvas or create one from the command palette. **Spli
 
 </td>
 </tr>
+<tr>
+<td>
+
+### Browser Panels
+Run Chromium, Firefox, or supported Safari automation directly on the canvas. Navigate, inspect the DOM, interact, capture network traffic, and hand the same live page between an agent and the user.
+
+</td>
+<td>
+
+### Audited Browser Automation
+Agents discover one MCP browser contract automatically. Every action is correlated in a redacted audit trail, while the `horizon-browser` CLI runs repeatable plans and writes structured results to stdout or a private file.
+
+</td>
+</tr>
 </table>
 
 ---
@@ -324,9 +338,129 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 ---
 
+## Browser Panels
+
+Browser panels render a real browser inside the Horizon canvas through the first-party `horizon-browser` engine. Add one from the built-in **Browser** (`web`) preset, or declare one in a workspace and use `command` as its initial URL:
+
+```yaml
+workspaces:
+  - name: Web
+    panels:
+      - name: App
+        kind: browser
+        command: http://127.0.0.1:3000
+```
+
+The panel is a shared human-and-agent browser session. Today it can:
+
+- navigate, reload, traverse history, wait for page state, and query or snapshot semantic DOM nodes;
+- click (including trusted double-click), fill, scroll, evaluate bounded JavaScript, and preserve the URL while the page scrolls;
+- start visible or hidden, switch visibility without losing the session, and pause automation for user steering before handing the same panel back;
+- capture bounded HTTP metadata and response bodies plus high-rate WebSocket lifecycle and frames on Chromium and Firefox, with cursor-based MCP watching or a private NDJSON export;
+- reconnect an MCP client without restarting the browser and retain a redacted action audit after the panel closes.
+
+Safari shares the semantic action and audit surface but currently reports network capture as unsupported.
+
+The backend picker in each panel switches among the protocols supported on the current host:
+
+| Backend | Automation and pixels | Prerequisites | Important limits |
+|:--|:--|:--|:--|
+| **Chromium** | CDP with change-driven JPEG screencast frames | Chrome, Chromium, Edge, or Brave | Push frames; separate persistent profile per panel |
+| **Firefox** | WebDriver BiDi plus adaptive lossless WebDriver screenshots | Firefox and `geckodriver` | Screenshots, not a live BiDi video stream; capture decays to zero on a static page and is capped at 30 fps while active |
+| **Safari** | Classic WebDriver screenshots, with BiDi events when `webSocketUrl` is negotiated | macOS, Safari, and an explicitly enabled `safaridriver` | One automation session at a time; isolated Safari automation state; exact-head macOS validation is required before release support is claimed |
+
+Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself before a Safari smoke test. Safari remains disabled in the picker on Linux and Windows.
+
+The browser settings select the default backend and allow explicit executable paths:
+
+```yaml
+browser:
+  backend: chromium              # chromium, firefox, or safari
+  command: /path/to/chrome       # Chromium-family binary; omit to discover
+  firefox_command: /path/to/firefox
+  geckodriver_command: /path/to/geckodriver
+  safaridriver_command: /usr/bin/safaridriver
+  extra_args: []                 # managed browser switches are rejected
+  quality: 60                    # Chromium JPEG screencast quality, 1–100
+  every_nth_frame: 1             # Chromium screencast sampling
+  profile_root: ~/.horizon/browser-profiles
+```
+
+All executable fields are optional. Chromium and Firefox receive separate directories beneath `profile_root`, so cookies and page storage persist for a saved panel without sharing a browser profile lock. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not expose or reuse the user's normal history, AutoFill data, cookies, or preferences.
+
+Chromium is the only push-frame backend. Firefox and Safari deliberately use newest-frame adaptive screenshots because the standardized BiDi recording command writes a remote media file; it is not an interactive client-frame stream. Firefox still uses BiDi for contexts, navigation, lifecycle events, and input, while its measured-faster classic WebDriver PNG endpoint supplies pixels. Horizon permits one capture in flight, discards a result superseded by navigation/context/viewport generation changes, coalesces input and resize demand, and keeps the prior valid frame after a decode failure.
+
+### Agent steering and audit
+
+MCP is the only agent-facing browser contract. Horizon-launched Codex and
+Claude agents receive the bundled `horizon-browser` MCP server and discovery
+skill automatically. Agents start with `browser_list` and use `browser_create`
+to open a visible browser in their own workspace when none exists. An agent
+reuses that panel for iframe, popup, dialog, and consent flows; creating another
+panel requires the user's explicit request for an independent session and
+`allow_additional: true`. Semantic snapshots expose iframe boundaries, and
+embedded content that cannot be reached through the current top-level semantic
+tools is handled by handing the original panel to the user. Agents then use semantic snapshots and queries,
+ref-based actions, waits, handoff, and audit tools; they never receive
+raw CDP, BiDi, WebDriver, manifest, or result-file endpoints. The validated
+action model is shared by Chromium, Firefox, and Safari. A fresh user page
+action or browser-control action pauses the agent queue for five seconds. An
+explicit handoff keeps it paused until the user selects **Done — hand back to
+agent**.
+
+The MCP adapter claims and refreshes ownership automatically. Live discovery,
+action queues, and one-shot results are private implementation files beneath
+`~/.horizon/runtime/browsers/`. Ordered action records remain in private JSONL
+journals beneath `~/.horizon/audit/browsers/` after the panel closes. Audit
+entries identify the user, agent, or system and correlate queue/dispatch state
+with an action id. They exclude printable text content, redact URL credentials,
+query values, fragments, and script/data payloads, and store pasted or typed
+text only as a character count. `dispatched` means the backend adapter received
+the command; use a later MCP snapshot, query, wait, or action result as
+execution evidence. Raw CDP/BiDi/WebDriver clients and direct manifest access
+are outside the supported agent contract.
+Queued agent actions are claimed at most once; after a crash, a queued record
+without a matching dispatched record requires an explicit retry decision. The
+local journal is application-append-only, not tamper-evident compliance
+storage.
+
+For scripts and service hosting, the workspace also builds
+[`horizon-browser-cli`](crates/horizon-browser-cli). Its `run` command consumes a
+versioned JSON plan made of those same MCP tool calls and emits one structured
+report to stdout or an owner-only file; typed `$ref` values can pass a prior
+step's result to a later call. `horizon-browser mcp` launches the unchanged
+local stdio MCP service as a standalone process. The runner deliberately adds
+no alternate browser action API and accepts no actor-impersonation flag.
+
+For an interactive task, users normally describe the goal to an agent panel
+instead of writing JSON. Horizon advertises the MCP tools automatically, the
+agent drives a visible or hidden browser, and the user can reveal or steer the
+same page when needed. JSON plans are the deterministic interface for repeatable
+jobs and CI:
+
+```bash
+cargo build -p horizon-browser-cli
+target/debug/horizon-browser run browser-job.json --output browser-report.json
+```
+
+Any MCP-capable agent host can launch `horizon-browser mcp` to provide the same
+tool contract. The CLI does not yet contain its own model-backed agent loop, so
+passing a natural-language goal directly to `run` is not currently supported.
+See the [CLI README](crates/horizon-browser-cli/README.md) for the plan format,
+typed result references, output behavior, and lifecycle boundaries.
+
+The engine is isolated in [`crates/horizon-browser`](crates/horizon-browser)
+for reuse by non-Horizon applications. It has no Horizon, egui, winit, Tokio,
+or async-runtime dependency, and hosts provide rendering, persistence,
+coordination, authentication, and audit retention. Its package metadata and
+crate README make a future crates.io release straightforward, but this project
+does not publish the crate as part of the browser-panel rollout.
+
+---
+
 ## Speech Input (opt-in)
 
-Dictate straight into a terminal: every terminal-backed panel's title bar gets a mic button (Editor, Git Changes, and Usage panels have no PTY, so they get none), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed.
+Dictate straight into a terminal or a browser page: terminal-backed and Browser panels get a mic button in their title bar (Editor, Git Changes, and Usage panels do not), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
 
 It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
 
@@ -412,7 +546,7 @@ features:
 
 Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
 
-**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal panel title bars.
+**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal and Browser panel title bars.
 
 ---
 

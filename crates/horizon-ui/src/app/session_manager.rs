@@ -1,15 +1,37 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Margin, RichText, Stroke, Vec2};
-use horizon_core::{ResolvedSession, SessionSummary};
+use horizon_core::{Board, ResolvedSession, SessionSummary};
 
-use crate::theme;
+use crate::{loading_spinner, theme};
 
-use super::HorizonApp;
 use super::util::{chrome_button, danger_button, format_relative_time, primary_button, viewport_local_rect};
+use super::{HorizonApp, PanelRenderCaches, PendingSessionSwitch};
 
 const SESSION_MANAGER_WIDTH: f32 = 780.0;
 const SESSION_MANAGER_MAX_HEIGHT: f32 = 520.0;
+const SESSION_SWITCH_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionSwitchShutdownState {
+    Waiting,
+    Complete,
+    AbortForBrowser,
+}
+
+const fn session_switch_shutdown_state(
+    complete: bool,
+    browser_shutdown_complete: bool,
+    timed_out: bool,
+) -> SessionSwitchShutdownState {
+    if complete || (timed_out && browser_shutdown_complete) {
+        SessionSwitchShutdownState::Complete
+    } else if timed_out {
+        SessionSwitchShutdownState::AbortForBrowser
+    } else {
+        SessionSwitchShutdownState::Waiting
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeSessionManagerState {
@@ -207,13 +229,26 @@ impl HorizonApp {
             tracing::debug!("session switch ignored while the root viewport is stabilizing");
             return;
         }
-        self.prepare_session_switch();
-        self.activate_persistent_session(session);
-        self.restore_window_viewport(ctx);
-        self.session_manager = None;
+        if self
+            .pending_session_switch
+            .as_ref()
+            .is_some_and(|pending| pending.target.is_some())
+        {
+            tracing::debug!("session switch ignored while another switch is in progress");
+            return;
+        }
+        if !self.retired_browser_shutdown_ready() {
+            self.set_session_manager_error(
+                "The previous browser is still releasing its profile; retry the session switch in a moment."
+                    .to_string(),
+            );
+            return;
+        }
+        self.begin_session_switch(session);
+        let _ = self.poll_session_switch(ctx);
     }
 
-    fn prepare_session_switch(&mut self) {
+    fn begin_session_switch(&mut self, session: &ResolvedSession) {
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
         // after the switch must not inject into an unrelated same-id panel,
@@ -231,12 +266,136 @@ impl HorizonApp {
         // terminal filter, so a key-up after the switch cannot leak into a
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
-        let _ = self.board.begin_async_shutdown();
+        self.pending_session_switch = Some(PendingSessionSwitch {
+            shutdown_progress: self.board.begin_async_shutdown(),
+            target: Some(session.clone()),
+        });
+    }
+
+    /// Polls an in-flight switch without blocking egui's event thread.
+    ///
+    /// Returns `true` while the old board is still releasing its resources.
+    pub(super) fn poll_session_switch(&mut self, ctx: &Context) -> bool {
+        let Some(pending) = self.pending_session_switch.as_ref() else {
+            return false;
+        };
+        if pending.target.is_none() {
+            if pending.shutdown_progress.browser_shutdown_is_complete() {
+                let preferred_selection = self.session_manager_selected_id();
+                let error = self.session_manager.as_ref().and_then(|state| state.error.clone());
+                self.finish_aborted_session_switch();
+                self.reload_session_manager(preferred_selection, error);
+                return false;
+            }
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return true;
+        }
+        let timed_out = pending.shutdown_progress.started_at().elapsed() > SESSION_SWITCH_SHUTDOWN_WAIT;
+        match session_switch_shutdown_state(
+            pending.shutdown_progress.is_complete(),
+            pending.shutdown_progress.browser_shutdown_is_complete(),
+            timed_out,
+        ) {
+            SessionSwitchShutdownState::Waiting => {
+                ctx.request_repaint_after(Duration::from_millis(32));
+                return true;
+            }
+            SessionSwitchShutdownState::Complete => {}
+            SessionSwitchShutdownState::AbortForBrowser => {
+                let Some(mut pending) = self.pending_session_switch.take() else {
+                    return false;
+                };
+                let target_session_id = pending.target.take().map(|target| target.session_id);
+                let completed = pending.shutdown_progress.panels_completed();
+                let total = pending.shutdown_progress.panel_count();
+                tracing::warn!(
+                    completed,
+                    total,
+                    "aborting session switch because browser teardown exceeded its deadline"
+                );
+                // Keep the source board and active session until the delayed
+                // driver resolves. Its final committed URL is published just
+                // before that signal and must still be drained and persisted.
+                self.pending_session_switch = Some(pending);
+                self.reload_session_manager(
+                    target_session_id,
+                    Some(
+                        "Session switch stopped because a browser did not release its profile in time. Retry after cleanup completes."
+                            .to_string(),
+                    ),
+                );
+                return true;
+            }
+        }
+
+        let Some(pending) = self.pending_session_switch.take() else {
+            return false;
+        };
+        if !pending.shutdown_progress.is_complete() {
+            tracing::warn!(
+                completed = pending.shutdown_progress.panels_completed(),
+                total = pending.shutdown_progress.panel_count(),
+                "continuing session switch after detached terminal teardown exceeded its deadline"
+            );
+        }
+        let Some(target) = pending.target else {
+            return false;
+        };
+        // Browser teardown publishes its final committed URL before the
+        // shutdown signal resolves. Fold that state into the old board and
+        // persist it while the source session is still active, before the
+        // replacement board/session takes ownership.
+        let _ = self.drain_panel_output();
+        let _ = self.auto_save_runtime_state();
+        self.finish_session_switch();
+        self.activate_persistent_session(&target);
+        self.restore_window_viewport(ctx);
+        self.session_manager = None;
+        false
+    }
+
+    fn finish_aborted_session_switch(&mut self) {
+        let Some(pending) = self.pending_session_switch.take() else {
+            return;
+        };
+        debug_assert!(pending.target.is_none());
+        debug_assert!(pending.shutdown_progress.browser_shutdown_is_complete());
+        // The source board remained alive specifically so this final event
+        // drain can fold the browser's last committed URL into persistence.
+        let _ = self.drain_panel_output();
+        let _ = self.auto_save_runtime_state();
+        self.finish_session_switch();
+        self.board = Board::new();
+        self.board.attention_enabled = self.template_config.features.attention_feed;
+    }
+
+    fn retired_browser_shutdown_ready(&mut self) -> bool {
+        let ready = self
+            .pending_session_switch
+            .as_ref()
+            .is_none_or(|pending| pending.target.is_some() || pending.shutdown_progress.browser_shutdown_is_complete());
+        if ready
+            && self
+                .pending_session_switch
+                .as_ref()
+                .is_some_and(|pending| pending.target.is_none())
+        {
+            self.finish_aborted_session_switch();
+        }
+        ready
+    }
+
+    fn finish_session_switch(&mut self) {
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
-        self.last_terminal_output_at = None;
+        self.transcript_root = None;
+        self.last_panel_output_at = None;
         self.fullscreen_panel = None;
+        // Numeric panel ids restart in the replacement board. Drop every
+        // per-panel cache so a same-id panel cannot inherit stale textures or
+        // sequence numbers from the previous session.
+        self.panel_render_caches = PanelRenderCaches::default();
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;
@@ -255,6 +414,25 @@ impl HorizonApp {
         self.workspace_screen_rects.clear();
         self.file_drop_highlight = None;
         self.file_hover_positions.clear();
+    }
+
+    pub(super) fn render_session_switch_overlay(&self, ui: &mut egui::Ui) {
+        let Some(pending) = self.pending_session_switch.as_ref() else {
+            return;
+        };
+        let progress = &pending.shutdown_progress;
+        let completed = progress.panels_completed();
+        let total = progress.panel_count();
+        let detail = format!("{completed} / {total} panels shut down");
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            loading_spinner::show_with_detail(
+                ui,
+                Id::new("session_switch_spinner"),
+                "Closing current session safely\u{2026}",
+                &detail,
+            );
+        });
     }
 }
 

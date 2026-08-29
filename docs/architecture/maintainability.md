@@ -5,6 +5,23 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-browser`
+
+- Owns browser processes, CDP/WebDriver/BiDi transports, backend-neutral
+  commands and input, frame delivery, capability reporting, and deterministic
+  shutdown. It must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
+  or an async runtime.
+- `control.rs` defines validated external actions and `audit.rs` defines
+  privacy-aware records. Host-specific IPC, authentication, persistence, and
+  retention stay outside the crate behind `BrowserCoordination`.
+- `session.rs` orchestrates the Chromium driver; command dispatch, event
+  transitions, host coordination, lifecycle, startup, and shutdown belong in
+  focused `session/` leaves.
+- `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
+  belongs in `webdriver/session/coordination.rs`, synchronous navigation
+  outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,
+  and service/process responsibilities stay in their existing WebDriver leaves.
+
 ### `horizon-core`
 
 - Owns board state, workspace metadata, panel lifecycle, persistence
@@ -18,6 +35,14 @@ back into large multi-purpose modules.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
+- `browser/mod.rs` maps engine sessions/events into Horizon panel state and
+  retry/teardown behavior. Locked live coordination stays in
+  `browser/manifest.rs`, with agent-side lease/action helpers in
+  `browser/manifest/agent.rs`, bounded host-routed panel creation in
+  `browser/manifest/create.rs`, visibility requests in
+  `browser/manifest/visibility.rs`, their shared private queue primitives in
+  `browser/manifest/request_queue.rs`, and append-only audit storage in
+  `browser/manifest/audit.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in
@@ -38,8 +63,11 @@ back into large multi-purpose modules.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
+  - `browser_requests`: transient host polling, panel creation, and visibility
+    changes for authenticated requests routed from a live agent panel
   - `canvas`: canvas rendering and HUD
-  - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
+  - `lifecycle`: frame orchestration and repaint pacing, with application-exit
+    ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
@@ -55,12 +83,20 @@ back into large multi-purpose modules.
     paint/render/toolbar helpers split into `workspace/`
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
-  instead of extending a single file.
+  instead of extending a single file. Browser-widget input keeps frame-level
+  coordination in `browser_widget/input.rs`, with independent keyboard/IME and
+  pointer-capture state machines in `browser_widget/input/keyboard.rs` and
+  `browser_widget/input/pointer.rs`.
 
 ## File Size Policy
 
+The automated line-limit and `too_many_lines` suppression checks cover
+`horizon-browser`, `horizon-core`, and `horizon-ui`; extracting a new crate is
+not an escape hatch for oversized modules.
+
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
+  - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
   - `crates/horizon-ui/src`
 - Inline `#[cfg(test)]` modules should stay at the end of the file; the line

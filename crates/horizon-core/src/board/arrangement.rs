@@ -303,7 +303,13 @@ impl Board {
     }
 
     pub(super) fn apply_workspace_layout(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
-        let Some(count) = self.workspace(id).map(|workspace| workspace.panels.len()) else {
+        let Some(count) = self.workspace(id).map(|workspace| {
+            workspace
+                .panels
+                .iter()
+                .filter(|panel_id| self.panel(**panel_id).is_some_and(|panel| panel.visible))
+                .count()
+        }) else {
             return;
         };
         if count == 0 {
@@ -334,7 +340,7 @@ impl Board {
         let mut max = [f32::MIN, f32::MIN];
         let mut any = false;
         for panel_id in &workspace.panels {
-            if let Some(panel) = self.panel(*panel_id) {
+            if let Some(panel) = self.panel(*panel_id).filter(|panel| panel.visible) {
                 any = true;
                 max[0] = max[0].max(panel.layout.position[0] + panel.layout.size[0]);
                 max[1] = max[1].max(panel.layout.position[1] + panel.layout.size[1]);
@@ -350,10 +356,11 @@ impl Board {
 
     fn workspace_layout_panel_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
         let workspace = self.workspace(id)?;
-        workspace
-            .panels
-            .iter()
-            .find_map(|panel_id| self.panel(*panel_id).map(|panel| panel.layout.size))
+        workspace.panels.iter().find_map(|panel_id| {
+            self.panel(*panel_id)
+                .filter(|panel| panel.visible)
+                .map(|panel| panel.layout.size)
+        })
     }
 
     fn apply_workspace_layout_with_panel_size(
@@ -362,10 +369,17 @@ impl Board {
         layout: WorkspaceLayout,
         panel_size: [f32; 2],
     ) {
-        let Some((panel_ids, origin)) = self
-            .workspace(id)
-            .map(|workspace| (workspace.panels.clone(), workspace.position))
-        else {
+        let Some((panel_ids, origin)) = self.workspace(id).map(|workspace| {
+            (
+                workspace
+                    .panels
+                    .iter()
+                    .copied()
+                    .filter(|panel_id| self.panel(*panel_id).is_some_and(|panel| panel.visible))
+                    .collect::<Vec<_>>(),
+                workspace.position,
+            )
+        }) else {
             return;
         };
         let count = panel_ids.len();
@@ -391,6 +405,7 @@ impl Board {
             .panels
             .iter()
             .filter_map(|id| self.panel(*id))
+            .filter(|panel| panel.visible)
             .map(|p| p.layout.position)
             .collect();
 

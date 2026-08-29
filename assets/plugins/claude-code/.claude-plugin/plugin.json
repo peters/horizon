@@ -1,7 +1,8 @@
 {
     "name": "horizon",
     "version": "0.1.0",
-    "description": "Horizon terminal workspace integration — enables agents to send structured notifications to the Horizon attention system.",
+    "description": "Horizon workspace integration for notifications and audited MCP control of live browser panels.",
+    "mcpServers": "./.mcp.json",
     "author": {
         "name": "Horizon"
     }

@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/horizon-core", "crates/horizon-cursor", "crates/horizon-ui"]
+members = [
+    "crates/horizon-browser",
+    "crates/horizon-browser-cli",
+    "crates/horizon-browser-mcp",
+    "crates/horizon-core",
+    "crates/horizon-cursor",
+    "crates/horizon-ui",
+]
 
 [workspace.package]
 version = "0.2.7"
@@ -19,15 +26,26 @@ pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
+horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
+horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
 thiserror = "2.0.20"
 tracing = "0.1.44"
+# Chrome DevTools Protocol transport for browser panels. Plain ws:// to
+# 127.0.0.1, so no TLS features are needed.
+tungstenite = "0.30.0"
+# JPEG decoder for CDP screencast frames (change-driven video stream).
+zune-jpeg = "0.5.15"
+png = "0.18.1"
+base64 = "0.23.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
+rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }
+schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.36.1"
@@ -37,13 +55,21 @@ wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulka
 egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 tempfile = "3.27.0"
+# Windows-only process-tree ownership for browser and WebDriver service
+# descendants. The wrapper creates the child suspended, assigns it to a Job
+# Object, then resumes it, avoiding PID-based teardown and assignment races.
+process-wrap = { version = "10.0.0", default-features = false, features = ["std", "job-object"] }
+# `std::fs::rename` cannot atomically replace an existing file on Windows.
+# Browser manifests need replace-existing semantics without exposing a gap to
+# lock-free readers.
+atomicwrites = "0.4.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.53", package = "surge-core" }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.54", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.

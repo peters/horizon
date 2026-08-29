@@ -5,11 +5,12 @@ use egui::Context;
 use horizon_core::{Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
-use crate::{loading_spinner, theme};
+use crate::theme;
 
 use super::canvas::CanvasGridCache;
 use super::{HorizonApp, attention_feed};
 
+mod shutdown;
 mod startup_workspace;
 
 impl HorizonApp {
@@ -24,80 +25,16 @@ impl HorizonApp {
         self.begin_shutdown();
     }
 
-    /// Starts asynchronous terminal shutdown. State is saved immediately,
-    /// and background threads join each terminal event loop. The UI shows a
-    /// progress overlay until all terminals are done or the budget expires.
-    #[profiling::function]
-    fn begin_shutdown(&mut self) {
-        if self.shutdown_progress.is_some() {
-            return;
-        }
-
-        let _ = self.auto_save_runtime_state();
-        self.git_watchers.clear();
-        self.shutdown_progress = Some(self.board.begin_async_shutdown());
-    }
-
-    #[profiling::function]
-    pub(super) fn poll_shutdown_progress(&mut self) {
-        const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
-
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-
-        if progress.is_complete() || progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT {
-            self.exit_cleanup_complete = true;
-            self.release_active_session_lease();
-            std::process::exit(0);
-        }
-    }
-
-    #[profiling::function]
-    pub(super) fn render_shutdown_overlay(&self, ui: &mut egui::Ui) {
-        let Some(progress) = &self.shutdown_progress else {
-            return;
-        };
-        let completed = progress.terminals_completed();
-        let total = progress.terminal_count();
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            if total > 0 {
-                loading_spinner::show_with_detail(
-                    ui,
-                    egui::Id::new("shutdown_spinner"),
-                    "Closing Horizon\u{2026}",
-                    &format!("{completed} / {total} terminals shut down"),
-                );
-            } else {
-                loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
-            }
-        });
-    }
-
-    /// Synchronous fallback for the `on_exit` eframe callback.
-    #[profiling::function]
-    pub(super) fn run_exit_cleanup(&mut self) {
-        if self.exit_cleanup_complete {
-            return;
-        }
-
-        self.exit_cleanup_complete = true;
-        let _ = self.auto_save_runtime_state();
-        self.board.shutdown_terminal_panels();
-        self.git_watchers.clear();
-        self.release_active_session_lease();
-    }
-
     #[profiling::function]
     pub(super) fn prepare_frame(&mut self, ui: &mut egui::Ui) -> bool {
         let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ui, self.appearance_theme);
             self.theme_applied = true;
-            self.terminal_grid_cache.clear();
+            self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
-            self.editor_preview_cache.clear();
+            self.panel_render_caches.editor_preview_cache.clear();
+            self.panel_render_caches.browser_ui_state.clear();
         }
 
         if !self.prepare_startup_bootstrap(ui) {
@@ -120,11 +57,8 @@ impl HorizonApp {
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
-        let panel_output = self.board.process_output();
-        if panel_output.cwd_changed {
-            self.mark_runtime_dirty();
-        }
-        let had_terminal_output = panel_output.had_terminal_output;
+        let had_panel_output = self.drain_panel_output();
+        let browser_create_activity = self.poll_browser_create_requests();
 
         self.animate_pan(ctx);
         self.poll_primary_selection_paste();
@@ -136,7 +70,17 @@ impl HorizonApp {
         self.poll_update_check();
         self.maybe_start_update_check();
 
-        had_terminal_output
+        had_panel_output || browser_create_activity
+    }
+
+    /// Drain terminal and browser events, promoting persistence-relevant
+    /// changes into the app's runtime dirty state.
+    pub(super) fn drain_panel_output(&mut self) -> bool {
+        let panel_output = self.board.process_output();
+        if panel_output.cwd_changed || panel_output.persisted_state_changed {
+            self.mark_runtime_dirty();
+        }
+        panel_output.activity.terminal || panel_output.activity.browser
     }
 
     fn poll_primary_selection_paste(&mut self) {
@@ -248,8 +192,9 @@ impl HorizonApp {
             self.close_panel(panel_id);
             self.panel_screen_rects.remove(&panel_id);
             self.terminal_body_screen_rects.remove(&panel_id);
-            self.terminal_grid_cache.remove(&panel_id);
-            self.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+            self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+            self.panel_render_caches.browser_ui_state.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -259,8 +204,9 @@ impl HorizonApp {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
             } else {
-                self.terminal_grid_cache.remove(&panel_id);
-                self.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+                self.panel_render_caches.editor_preview_cache.remove(&panel_id);
+                self.panel_render_caches.browser_ui_state.remove(&panel_id);
             }
         }
     }
@@ -363,7 +309,7 @@ impl HorizonApp {
     pub(super) fn finalize_frame(
         &mut self,
         ctx: &Context,
-        had_terminal_output: bool,
+        had_panel_output: bool,
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
@@ -389,20 +335,20 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
-        let has_live_terminals = !self.board.panels.is_empty();
+        let has_live_panels = !self.board.panels.is_empty() || self.board.has_pending_browser_cleanup();
         let animating = self.pan_target.is_some();
         if animating {
             ctx.request_repaint();
-        } else if has_live_terminals {
-            // Keep streaming terminals responsive, but progressively back off
+        } else if has_live_panels {
+            // Keep live panels responsive, but progressively back off
             // once the board has been quiet for a while to reduce idle CPU.
             let now = Instant::now();
-            let poll = if had_terminal_output {
-                self.last_terminal_output_at = Some(now);
+            let poll = if had_panel_output {
+                self.last_panel_output_at = Some(now);
                 Duration::from_millis(16)
             } else {
                 let idle_for = self
-                    .last_terminal_output_at
+                    .last_panel_output_at
                     .map_or(Duration::MAX, |last_output| now.saturating_duration_since(last_output));
 
                 if idle_for < Duration::from_secs(1) {

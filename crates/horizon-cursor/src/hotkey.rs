@@ -11,6 +11,7 @@ type WakeFn = Arc<dyn Fn() + Send + Sync>;
 
 /// One binding the listener should grab, tagged with the caller's profile index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // modifier keys are independent flags
 pub struct Hotkey {
     pub ctrl: bool,
     pub shift: bool,

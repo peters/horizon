@@ -3,6 +3,7 @@
 mod agents;
 mod attention;
 mod board;
+pub mod browser;
 mod config;
 mod config_migration;
 pub mod dir_search;
@@ -40,7 +41,9 @@ pub use agents::{
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
-pub use board::{Board, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout};
+pub use board::{
+    Board, ForcedBrowserShutdownStatus, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
+};
 pub use config::{
     AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig,
     SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig, WindowConfig,
@@ -53,15 +56,15 @@ pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, Fil
 pub use git_watcher::GitWatcher;
 pub use horizon_home::HorizonHome;
 pub use managed_install::ManagedInstall;
-pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume};
+pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, browser_actor};
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
 };
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionKey, AgentSessionRecord,
-    DetachedWorkspaceState, PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef,
-    live_claude_session_ids, new_local_id,
+    BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef, RuntimeState, WorkspaceState,
+    WorkspaceTemplateRef, live_claude_session_ids, new_local_id,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use session_store::{

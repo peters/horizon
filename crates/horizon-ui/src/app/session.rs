@@ -418,13 +418,18 @@ impl HorizonApp {
     }
 
     fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
-        self.board = Board::from_runtime_state_with_transcripts(runtime_state, self.transcript_root.as_deref())
+        // Restore browser panels with the *current* browser config: a
+        // persisted state predating the `browser` field carries none, and
+        // `--config <path>` users' settings must always win.
+        let mut runtime_state = (*runtime_state).clone();
+        runtime_state.browser = self.template_config.browser.clone();
+        self.board = Board::from_runtime_state_with_transcripts(&runtime_state, self.transcript_root.as_deref())
             .unwrap_or_else(|error| {
                 tracing::error!("failed to restore runtime state: {error}");
                 Board::new()
             });
         self.board.attention_enabled = self.template_config.features.attention_feed;
-        self.startup_selection_restored = runtime_state_selection_was_restored(&self.board, runtime_state);
+        self.startup_selection_restored = runtime_state_selection_was_restored(&self.board, &runtime_state);
     }
 
     pub(super) fn refresh_active_session_lease(&mut self) {

@@ -509,3 +509,38 @@ fn switching_between_presets_still_rearranges() {
         ]
     ));
 }
+
+#[test]
+fn hidden_panels_leave_layout_and_focus_and_showing_focuses_them() {
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("visibility");
+    let first = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("first panel should spawn");
+    let second = board
+        .create_panel(editor_panel_options(), workspace_id)
+        .expect("second panel should spawn");
+    board.arrange_workspace(workspace_id, WorkspaceLayout::Rows);
+    assert_eq!(board.focused, Some(second));
+
+    assert!(board.set_panel_visible(second, false));
+    assert!(!board.panel(second).expect("second panel").visible);
+    assert_eq!(board.focused, Some(first));
+    assert!(vec2_eq(
+        board.panel(first).expect("first panel").layout.position,
+        [
+            board.workspace(workspace_id).expect("workspace").position[0] + WS_INNER_PAD,
+            board.workspace(workspace_id).expect("workspace").position[1] + WS_INNER_PAD,
+        ],
+    ));
+
+    assert!(board.set_panel_visible(second, true));
+    assert!(board.panel(second).expect("second panel").visible);
+    assert_eq!(board.focused, Some(second));
+    assert!(board.workspace_bounds(workspace_id).is_some());
+
+    assert!(board.set_panel_visible(second, false));
+    board.focus(second);
+    assert!(board.panel(second).expect("second panel").visible);
+    assert_eq!(board.focused, Some(second));
+}
