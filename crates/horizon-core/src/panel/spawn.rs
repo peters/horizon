@@ -859,6 +859,11 @@ pub(super) fn agent_env(kind: PanelKind) -> HashMap<String, String> {
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
     }
+    if kind == PanelKind::Claude {
+        // Keep the conversation in Horizon's terminal history so its scrollbar
+        // and history meter remain usable instead of hiding it in a fullscreen buffer.
+        env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
+    }
     env
 }
 
@@ -896,6 +901,20 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_uses_horizon_native_scrollback() {
+        let claude_env = agent_env(PanelKind::Claude);
+
+        assert_eq!(
+            claude_env
+                .get("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert!(!agent_env(PanelKind::Codex).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Shell).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+    }
 
     #[test]
     fn shell_launch_args_adds_login_flag_when_requested() {
