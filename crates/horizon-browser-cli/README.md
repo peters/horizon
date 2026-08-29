@@ -1,9 +1,11 @@
 # Horizon Browser CLI
 
 The `horizon-browser` executable makes the existing Horizon browser MCP
-contract usable from scripts without creating a second action API. It has two
+contract usable from scripts without creating a second action API. It has three
 modes:
 
+- a quoted goal (or explicit `do`) lets an optional local agent observe and
+  adapt through the MCP tools;
 - `run` executes a bounded, fail-fast JSON plan and writes a structured report
   to stdout or a private file;
 - `mcp` runs the same local stdio MCP server that Horizon registers for agents.
@@ -16,22 +18,53 @@ engine.
 
 ## Choose the interface
 
-- **Describe an interactive goal:** ask an agent panel inside Horizon, or
-  configure `horizon-browser mcp` in another MCP-capable agent host. The agent
-  translates the goal into browser tools, observes results, and can adapt; the
-  user does not write JSON.
+- **Describe an adaptive goal:** pass one quoted prompt directly to
+  `horizon-browser`. The optional local agent translates it into MCP calls,
+  observes results, and adapts; the user does not write JSON.
 - **Run a repeatable job:** use `horizon-browser run` with a checked JSON plan.
   This path is deterministic, model-free, fail-fast, and suitable for scripts
   and CI.
 
 Both paths use the same MCP action schemas, ownership rules, steering, and
-redacted audit trail. The CLI does not currently embed a model-backed agent
-loop, so `run "browse this site"` is not a supported command.
+redacted audit trail. The agent adapter is outside the engine and deterministic
+`run` remains model-free.
 
 Through that contract an agent or plan can navigate; snapshot or query the DOM;
 click, fill, scroll, wait, and evaluate; show or hide an actor-owned panel; read
 the audit trail; and capture or cursor-watch bounded HTTP/WebSocket traffic on
 supported backends.
+
+## Prompt-first jobs
+
+The default command is a quoted goal. It starts an isolated hidden browser,
+selects Chromium or Firefox automatically, and prints only concise completed
+tool names followed by the final summary:
+
+```bash
+horizon-browser "Go to amazon.com, extract 100 products with price and reviews, save to products.csv"
+```
+
+Use `do` as an explicit alias, choose a backend, show the native window, or
+emit stable JSONL progress:
+
+```bash
+horizon-browser do "Summarize example.com" --backend firefox --visible
+horizon-browser "Summarize example.com" --json
+```
+
+When the prompt ends with `save to`, `write to`, or `output to` followed by a
+relative path, that exact user-supplied path becomes a constrained text
+artifact sink. Absolute paths and lexical parent traversal are rejected before
+the agent starts; the page and agent cannot choose or expand the authorized
+path. Without an authorized path, returned artifact content is rejected.
+Diagnostics and structured agent results stay in
+an owner-only job directory under `~/.horizon/browser-jobs/`; MCP runtime
+profiles use a separate temporary home and are removed after each job.
+
+The normal workspace build contains no model SDK. Job mode invokes an optional
+local agent executable and expects its structured `exec` event interface; set
+`HORIZON_BROWSER_AGENT_COMMAND` to a compatible adapter. A missing adapter is a
+clear runtime error and does not affect `run` or `mcp`.
 
 ## Plan runner
 

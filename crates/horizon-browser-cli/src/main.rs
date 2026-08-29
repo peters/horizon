@@ -7,34 +7,40 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use horizon_browser::BackendKind;
-use horizon_browser_cli::{ExecutionReport, Plan, standalone::StandaloneOptions};
+use horizon_browser_cli::{ExecutionReport, Plan, job::JobOptions, standalone::StandaloneOptions};
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
-const HELP: &str = r"horizon-browser — run browser jobs through one MCP contract
+const HELP: &str = r#"horizon-browser — run browser jobs through one MCP contract
 
 USAGE:
+    horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
+    horizon-browser do "<GOAL>" [OPTIONS]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->]
     horizon-browser mcp [--standalone|--connect] [--backend <BACKEND>] [--visible]
 
 COMMANDS:
+    do     Ask an optional local agent to complete a goal through Horizon MCP.
+           This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
            Reads stdin when PLAN is '-' and writes JSON to stdout by default.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
 
 OPTIONS:
-    --backend <BACKEND>   Select a standalone backend; defaults to auto.
-    --visible             Show the standalone native browser window.
+    --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
+    --visible             Show a native browser window; jobs default headless.
+    --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
     -h, --help             Print this help.
     -V, --version          Print the version.
-";
+"#;
 
 enum Command {
     Run {
         plan: PathBuf,
         output: Option<PathBuf>,
     },
+    Do(JobOptions),
     Mcp {
         standalone: bool,
         options: StandaloneOptions,
@@ -55,11 +61,23 @@ async fn main() -> ExitCode {
             println!("horizon-browser {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
         Ok(Command::Run { plan, output }) => run(plan, output.as_deref()).await,
         Err(error) => {
             eprintln!("error: {error}\n\n{HELP}");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn run_job(options: &JobOptions) -> ExitCode {
+    match horizon_browser_cli::job::run(options) {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -133,10 +151,46 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("-h" | "--help") => no_more(args, Command::Help),
         Some("-V" | "--version") => no_more(args, Command::Version),
         Some("mcp") => parse_mcp(args),
+        Some("do") => parse_do(args),
         Some("run") => parse_run(args),
-        Some(command) => Err(format!("unknown command `{command}`")),
+        Some(prompt) if !prompt.starts_with('-') => parse_job(prompt.to_string(), args),
+        Some(command) => Err(format!("unknown command or option `{command}`")),
         None => Err("command is not valid UTF-8".to_string()),
     }
+}
+
+fn parse_do(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let prompt = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "do requires one quoted goal".to_string())?;
+    parse_job(prompt, args)
+}
+
+fn parse_job(prompt: String, mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut backend = None;
+    let mut backend_seen = false;
+    let mut visible = false;
+    let mut json = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--backend") if !backend_seen => {
+                backend_seen = true;
+                backend = parse_backend(args.next().as_ref())?;
+            }
+            Some("--backend") => return Err("--backend may be specified only once".to_string()),
+            Some("--visible") if !visible => visible = true,
+            Some("--json") if !json => json = true,
+            Some(argument) => return Err(format!("unexpected job argument `{argument}`")),
+            None => return Err("job argument is not valid UTF-8".to_string()),
+        }
+    }
+    Ok(Command::Do(JobOptions {
+        prompt,
+        backend,
+        visible,
+        json,
+    }))
 }
 
 fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
@@ -312,5 +366,14 @@ mod tests {
         assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
         assert!(options.visible);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn quoted_goal_is_the_default_and_hidden_auto_is_the_default() {
+        let Command::Do(options) = parse_args(["visit example.com"].map(OsString::from)).expect("default job") else {
+            panic!("expected job command");
+        };
+        assert_eq!(options.prompt, "visit example.com");
+        assert_eq!((options.backend, options.visible, options.json), (None, false, false));
     }
 }
