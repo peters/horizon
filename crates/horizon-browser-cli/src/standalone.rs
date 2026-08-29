@@ -312,3 +312,21 @@ const fn backend_name(backend: BackendKind) -> &'static str {
         BackendKind::SafariWebDriver => "safari",
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_host_closes_stdin_before_waiting_for_exit() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat >/dev/null"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("start stdin waiter: {error}"));
+        let stdin = child.stdin.take();
+        let host = OwnedHostProcess { child, stdin };
+
+        assert!(host.shutdown());
+    }
+}
