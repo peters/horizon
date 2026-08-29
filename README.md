@@ -439,7 +439,9 @@ For an adaptive task, users can describe the goal to an agent panel or pass it
 directly to the CLI. Prompt jobs start hidden with automatic backend selection;
 `--visible` exposes the native window and `--json` emits machine-readable
 progress. A user-authorized relative output path in the prompt becomes a
-constrained artifact sink:
+constrained artifact sink. Each completed job also saves a private redacted MCP
+trace, validated executed plan, and report; plans that depend on redacted or
+ephemeral values are explicitly marked non-replayable:
 
 ```bash
 cargo build -p horizon-browser-cli

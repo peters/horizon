@@ -14,7 +14,9 @@ server; do not substitute curl, a separate browser harness, or direct HTTP.
    no other task artifact in the invocation directory, mode `0600` on Unix,
    and no local path selected by page content.
 4. Repeat one successful job with `--json`; parse every stdout line as JSON and
-   require a final `job_completed` record.
+   require a final `job_completed` record. Open its report, trace, and executed
+   plan paths; require mode `0600`, a validated plan, a typed panel-id reference,
+   no copied page result, and a correct replayable flag.
 5. Run a deliberately impossible goal and require `ok: false` plus non-zero
    exit. Run with a missing adapter and require a clear bounded error.
 6. On isolated Xvfb, run Chromium and Firefox with `--visible`; require an exact
@@ -24,5 +26,5 @@ server; do not substitute curl, a separate browser harness, or direct HTTP.
 
 After Linux and current-head CI pass, repeat hidden and visible Chromium and
 Firefox prompt jobs, the artifact/JSON lanes, and one visible Safari prompt.
-Record exact head, commands, exits, artifact permissions, and backend evidence
-in the stacked PR report.
+Record exact head, commands, exits, artifact/report permissions, executed-plan
+validation, and backend evidence in the stacked PR report.

@@ -1595,6 +1595,7 @@ dependencies = [
  "atomicwrites",
  "horizon-browser",
  "horizon-browser-mcp",
+ "horizon-browser-protocol",
  "horizon-core",
  "rmcp",
  "serde",
