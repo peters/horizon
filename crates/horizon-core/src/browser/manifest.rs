@@ -46,7 +46,7 @@ mod request_queue;
 mod result;
 mod visibility;
 
-pub use agent::{claim, enqueue_action, heartbeat, request_handoff};
+pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
 pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, claim_create_request,

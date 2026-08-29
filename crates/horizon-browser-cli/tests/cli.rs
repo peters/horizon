@@ -1,6 +1,7 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
 #[test]
@@ -93,6 +94,48 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
     process.close();
 }
 
+#[test]
+fn successive_process_local_runs_release_ownership_immediately() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let panel_id = "process-local-panel";
+    let manifest_path = manifest::manifest_path_for_root(&home.path().join(".horizon"), panel_id);
+    manifest::write_at(
+        &manifest_path,
+        &BrowserManifest {
+            panel_local_id: panel_id.to_string(),
+            ..BrowserManifest::default()
+        },
+    )
+    .expect("write browser manifest");
+    let plan = home.path().join("handoff-plan.json");
+    std::fs::write(
+        &plan,
+        format!(
+            r#"{{"version":1,"steps":[{{"id":"handoff","tool":"browser_handoff","arguments":{{"panel_id":"{panel_id}","reason":"release regression"}}}}]}}"#
+        ),
+    )
+    .expect("write handoff plan");
+
+    for invocation in 1..=2 {
+        let output = run_process_local_command(home.path(), ["run", plan.to_str().expect("UTF-8 path")]);
+        assert!(
+            output.status.success(),
+            "invocation {invocation} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).expect("decode execution report");
+        assert_eq!(report["ok"], true);
+        let manifest: BrowserManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).expect("read released browser manifest"))
+                .expect("decode released browser manifest");
+        assert!(manifest.owner.is_none(), "invocation {invocation} retained its owner");
+        assert!(
+            manifest.handoff.is_none(),
+            "invocation {invocation} retained its handoff"
+        );
+    }
+}
+
 fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
         .args(arguments)
@@ -101,6 +144,16 @@ fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> 
         .env("RUST_LOG", "off")
         .output()
         .expect("run horizon-browser")
+}
+
+fn run_process_local_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(arguments)
+        .env("HOME", home)
+        .env_remove("HORIZON_BROWSER_ACTOR")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("run process-local horizon-browser")
 }
 
 struct McpProcess {

@@ -78,6 +78,9 @@ Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the
 same plan can also call the actor-scoped `browser_create` and
 `browser_visibility` tools. The CLI does not accept an actor override flag.
+An outside-Horizon invocation releases its process-local panel ownership on
+clean exit, so another plan can control the same panel immediately. A crashed
+process still falls back to the bounded ownership TTL.
 
 ## Standalone stdio MCP server
 

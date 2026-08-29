@@ -160,7 +160,10 @@ becoming a parallel browser API.
    proof screenshot scoped to the exact Horizon PID.
 6. Repeat the visible plan with a file report. Verify step order, structured
    results, audit correlation, non-zero failure behavior, and that no tool
-   arguments appear in the report envelope.
+   arguments appear in the report envelope. Start it immediately after the
+   stdout invocation, without waiting for the ownership TTL; both runs must
+   succeed, and the first process-local owner must be absent before the second
+   invocation claims the panel.
 7. Resize the exact window while it remains controlled, then close it normally.
    Require clean candidate/browser exit and no task-owned live manifest.
 

@@ -66,6 +66,10 @@ and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
 visibility requests are accepted only from an identity belonging to a live
 Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
+When no valid actor is injected, the server uses a process-local identity and
+releases only that identity's claims on clean shutdown. A crash retains the
+heartbeat TTL fallback, while a normal reconnect can claim the panel
+immediately.
 When embedded frame content cannot be controlled by the current top-level
 semantic tools, the supported fallback is a user handoff on the original panel,
 not a separate helper panel.

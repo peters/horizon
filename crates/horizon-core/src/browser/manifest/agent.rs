@@ -1,6 +1,5 @@
 //! Safe agent-side ownership, steering, and action-queue helpers.
 
-#[cfg(test)]
 use std::path::Path;
 
 use horizon_browser::{
@@ -8,9 +7,7 @@ use horizon_browser::{
     new_action_id,
 };
 
-#[cfg(test)]
-use super::update_at;
-use super::{BrowserManifest, ManifestHandoff, ManifestOwner, new_handoff_request_id, now_millis, update};
+use super::{BrowserManifest, ManifestHandoff, ManifestOwner, new_handoff_request_id, now_millis, update, update_at};
 
 const MAX_PENDING_ACTIONS: usize = 128;
 const MAX_ACTOR_BYTES: usize = 128;
@@ -66,6 +63,37 @@ pub fn heartbeat(panel_local_id: &str, agent_name: &str) -> std::io::Result<()> 
             "agent does not own this browser panel",
         ))
     }
+}
+
+/// Release a panel only when `agent_name` is still its recorded owner.
+///
+/// This is the clean-shutdown counterpart to the heartbeat TTL. A mismatched
+/// owner is left untouched and returns `false`, so a stale process cannot
+/// release a claim that another agent has since acquired.
+///
+/// # Errors
+/// Returns an error for invalid identity, a missing live manifest, or a
+/// filesystem failure.
+pub fn release(panel_local_id: &str, agent_name: &str) -> std::io::Result<bool> {
+    release_at(
+        &super::default_manifest_path(panel_local_id),
+        panel_local_id,
+        agent_name,
+    )
+}
+
+fn release_at(path: &Path, panel_local_id: &str, agent_name: &str) -> std::io::Result<bool> {
+    validate_actor(agent_name)?;
+    let mut released = false;
+    update_at(path, panel_local_id, |manifest| {
+        if manifest.owner.as_ref().is_some_and(|owner| owner.name == agent_name) {
+            manifest.owner = None;
+            manifest.handoff = None;
+            manifest.updated_at = now_millis();
+            released = true;
+        }
+    })?;
+    Ok(released)
 }
 
 /// Ask the user to steer the panel, pausing queued agent actions until the
@@ -389,5 +417,44 @@ mod tests {
             manifest.owner.as_ref().map(|owner| owner.name.as_str()),
             Some("agent-b")
         );
+    }
+
+    #[test]
+    fn release_clears_only_the_matching_owner_and_its_handoff() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("panel.json");
+        write_at(
+            &path,
+            &BrowserManifest {
+                panel_local_id: "panel".to_string(),
+                owner: Some(ManifestOwner {
+                    name: "agent-a".to_string(),
+                    tty: None,
+                    updated_at: now_millis(),
+                }),
+                handoff: Some(ManifestHandoff {
+                    request_id: "request".to_string(),
+                    reason: "user steering".to_string(),
+                    requested_at: now_millis(),
+                    done: false,
+                }),
+                ..BrowserManifest::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!release_at(&path, "panel", "agent-b").unwrap());
+        let unchanged = super::super::read_at(&path).unwrap();
+        assert_eq!(
+            unchanged.owner.as_ref().map(|owner| owner.name.as_str()),
+            Some("agent-a")
+        );
+        assert!(unchanged.handoff.is_some());
+
+        assert!(release_at(&path, "panel", "agent-a").unwrap());
+        let released = super::super::read_at(&path).unwrap();
+        assert!(released.owner.is_none());
+        assert!(released.handoff.is_none());
+        assert!(!release_at(&path, "panel", "agent-a").unwrap());
     }
 }

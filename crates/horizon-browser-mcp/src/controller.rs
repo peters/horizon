@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
@@ -20,6 +21,34 @@ const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
     actor: String,
+    _process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
+}
+
+#[derive(Debug)]
+struct ProcessLocalOwnership {
+    actor: String,
+}
+
+impl Drop for ProcessLocalOwnership {
+    fn drop(&mut self) {
+        let directory = manifest::default_manifest_dir();
+        for panel_id in manifest::list_panels_in(&directory) {
+            let still_owned = manifest::read(&panel_id)
+                .and_then(|panel| panel.owner)
+                .is_some_and(|owner| owner.name == self.actor);
+            if !still_owned {
+                continue;
+            }
+            match manifest::release(&panel_id, &self.actor) {
+                Ok(true) => tracing::debug!(actor = %self.actor, panel_id, "released process-local browser ownership"),
+                Ok(false) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::warn!(actor = %self.actor, panel_id, %error, "could not release process-local browser ownership");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,14 +109,25 @@ impl BrowserController {
         let fallback = format!("horizon-mcp:{}", std::process::id());
         let actor = std::env::var("HORIZON_BROWSER_ACTOR")
             .ok()
-            .filter(|value| valid_actor(value))
-            .unwrap_or(fallback);
-        Self { actor }
+            .filter(|value| valid_actor(value));
+        actor.map_or_else(
+            || Self {
+                actor: fallback.clone(),
+                _process_local_ownership: Some(Arc::new(ProcessLocalOwnership { actor: fallback })),
+            },
+            |actor| Self {
+                actor,
+                _process_local_ownership: None,
+            },
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
-        Self { actor: actor.into() }
+        Self {
+            actor: actor.into(),
+            _process_local_ownership: None,
+        }
     }
 
     pub(crate) fn list_panels(&self) -> Vec<BrowserPanel> {
@@ -407,7 +447,8 @@ mod tests {
         assert!(is_horizon_actor("horizon:panel-1"));
         assert!(!is_horizon_actor("horizon:"));
         assert!(!is_horizon_actor("agent"));
-        assert_eq!(BrowserController::with_actor("agent").actor, "agent");
+        let controller = BrowserController::with_actor("agent");
+        assert_eq!(controller.actor, "agent");
     }
 
     #[test]

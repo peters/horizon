@@ -27,4 +27,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+horizon-core.workspace = true
 tempfile.workspace = true
