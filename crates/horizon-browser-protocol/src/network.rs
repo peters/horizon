@@ -62,7 +62,8 @@ impl Default for BrowserNetworkCaptureOptions {
 }
 
 impl BrowserNetworkCaptureOptions {
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+    #[doc(hidden)]
+    pub fn validate(&self) -> Result<(), &'static str> {
         if !self.include_http && !self.include_websocket {
             return Err("network capture must include HTTP, WebSocket, or both");
         }
@@ -94,7 +95,9 @@ impl BrowserNetworkCaptureOptions {
         Ok(())
     }
 
-    pub(crate) fn matches_url(&self, url: &str) -> bool {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn matches_url(&self, url: &str) -> bool {
         self.url_patterns.is_empty() || self.url_patterns.iter().any(|pattern| url.contains(pattern))
     }
 }
@@ -213,7 +216,9 @@ pub struct BrowserNetworkRecord {
 }
 
 impl BrowserNetworkRecord {
-    pub(crate) fn empty(capture_id: &str, sequence: u64, backend: BackendKind, kind: BrowserNetworkEventKind) -> Self {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn empty(capture_id: &str, sequence: u64, backend: BackendKind, kind: BrowserNetworkEventKind) -> Self {
         Self {
             schema_version: 1,
             capture_id: capture_id.to_string(),

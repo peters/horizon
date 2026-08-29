@@ -19,6 +19,7 @@ test-support = []
 workspace = true
 
 [dependencies]
+horizon-browser-protocol.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tungstenite.workspace = true

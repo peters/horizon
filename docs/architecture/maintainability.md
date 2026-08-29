@@ -5,15 +5,27 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `horizon-browser-protocol`
+
+- Owns the small serialized contract shared by browser engines and clients:
+  backend identifiers/capabilities, input and command values, validated agent
+  actions, semantic results, bounded network records, and redacted audit
+  entries.
+- Depends only on serialization support. It must not acquire process, socket,
+  async-runtime, image-decoder, filesystem-coordination, MCP, `horizon-core`,
+  or UI dependencies.
+- Contains no host policy. Browser launch, persistence, authentication,
+  retention, steering ownership, and presentation remain in their owning
+  crates.
+
 ### `horizon-browser`
 
-- Owns browser processes, CDP/WebDriver/BiDi transports, backend-neutral
-  commands and input, frame delivery, capability reporting, and deterministic
-  shutdown. It must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
+- Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery, and
+  deterministic shutdown. It consumes and re-exports the lightweight protocol
+  values, and must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
   or an async runtime.
-- `control.rs` defines validated external actions and `audit.rs` defines
-  privacy-aware records. Host-specific IPC, authentication, persistence, and
-  retention stay outside the crate behind `BrowserCoordination`.
+- Host-specific IPC, authentication, persistence, and retention stay outside
+  the crate behind `BrowserCoordination`.
 - `session.rs` orchestrates the Chromium driver; command dispatch, event
   transitions, host coordination, lifecycle, startup, and shutdown belong in
   focused `session/` leaves.
@@ -91,11 +103,13 @@ back into large multi-purpose modules.
 ## File Size Policy
 
 The automated line-limit and `too_many_lines` suppression checks cover
-`horizon-browser`, `horizon-core`, and `horizon-ui`; extracting a new crate is
-not an escape hatch for oversized modules.
+`horizon-browser-protocol`, `horizon-browser`, `horizon-core`, and
+`horizon-ui`; extracting a new crate is not an escape hatch for oversized
+modules.
 
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
+  - `crates/horizon-browser-protocol/src`
   - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
   - `crates/horizon-ui/src`

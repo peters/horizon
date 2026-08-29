@@ -41,6 +41,7 @@ pub(crate) use command_queue::CommandReceiver;
 use command_queue::CommandSender;
 pub(crate) use handle::{BrowserEventSender, BrowserEventWake, publish_frame};
 pub use handle::{BrowserEventWaker, CommittedUrl};
+pub use horizon_browser_protocol::BrowserCommand;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
@@ -55,7 +56,7 @@ use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
 use crate::{ActiveBackendCapabilities, BackendKind, normalize_navigation_target};
-use crate::{BrowserConfig, BrowserControlFailure, BrowserInput};
+use crate::{BrowserConfig, BrowserControlFailure};
 
 /// What the driver reports to the panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,36 +98,6 @@ pub enum BrowserEvent {
     },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
-}
-
-/// What the panel/UI asks the driver to do.
-#[derive(Clone, Debug)]
-pub enum BrowserCommand {
-    Navigate(String),
-    Reload,
-    Back,
-    Forward,
-    SetViewport {
-        width: u32,
-        height: u32,
-    },
-    Input(BrowserInput),
-    /// The user clicked "hand back to agent" in the panel.
-    HandoffDone,
-    Stop,
-}
-
-impl BrowserCommand {
-    /// Whether a user-originated command means the user is actively steering
-    /// the page and should temporarily pause external agent actions.
-    #[must_use]
-    pub fn is_user_activity(&self) -> bool {
-        match self {
-            Self::Navigate(_) | Self::Reload | Self::Back | Self::Forward => true,
-            Self::Input(input) => input.is_activity(),
-            Self::SetViewport { .. } | Self::HandoffDone | Self::Stop => false,
-        }
-    }
 }
 
 /// Everything the driver needs to start.

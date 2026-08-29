@@ -4,8 +4,9 @@
 //! Horizon uses its locked local manifest queue; the browser engine itself
 //! stays independent of that filesystem and of Horizon's panel model.
 
-use crate::session::BrowserCommand;
-use crate::{BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget};
+use crate::{
+    BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
+};
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
