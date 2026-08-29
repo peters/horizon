@@ -1,3 +1,7 @@
+use std::fs::File;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -14,6 +18,7 @@ use thiserror::Error;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const HOST_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StandaloneOptions {
@@ -33,6 +38,143 @@ pub enum StandaloneError {
     Shutdown,
 }
 
+pub(crate) struct OwnedSession {
+    session: Option<BrowserSession>,
+    profile_root: PathBuf,
+}
+
+impl OwnedSession {
+    pub(crate) fn start(options: StandaloneOptions, home: &HorizonHome) -> Result<Self, StandaloneError> {
+        let (session, profile_root) = start(options, home)?;
+        Ok(Self {
+            session: Some(session),
+            profile_root,
+        })
+    }
+
+    pub(crate) fn shutdown(mut self) -> bool {
+        self.stop()
+    }
+
+    fn stop(&mut self) -> bool {
+        self.session.take().is_none_or(|session| {
+            let profile_root = std::mem::take(&mut self.profile_root);
+            let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
+            shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT)
+        })
+    }
+}
+
+impl Drop for OwnedSession {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+#[doc(hidden)]
+pub struct OwnedHostProcess {
+    child: Child,
+    stdin: Option<ChildStdin>,
+}
+
+impl OwnedHostProcess {
+    /// Start an owned standalone MCP subprocess with private host state.
+    ///
+    /// # Errors
+    /// Returns when the subprocess cannot start, initialize, or publish its
+    /// first browser manifest before the startup deadline.
+    pub fn start(options: StandaloneOptions, home: &Path, stderr: File) -> Result<Self, StandaloneError> {
+        let executable = std::env::current_exe()
+            .map_err(|error| StandaloneError::Startup(format!("could not resolve horizon-browser: {error}")))?;
+        let mut command = Command::new(executable);
+        command.args(["mcp", "--standalone"]);
+        if let Some(backend) = options.backend {
+            command.args(["--backend", backend_name(backend)]);
+        }
+        if options.visible {
+            command.arg("--visible");
+        }
+        let mut child = command
+            .env("HOME", home)
+            .env("RUST_LOG", "off")
+            .env_remove("HORIZON_BROWSER_ACTOR")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .map_err(|error| StandaloneError::Startup(format!("could not start browser host: {error}")))?;
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(StandaloneError::Startup(
+                "browser host stdin was unavailable".to_string(),
+            ));
+        };
+        let initialize = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+"#;
+        if let Err(error) = stdin.write_all(initialize).and_then(|()| stdin.flush()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(StandaloneError::Startup(format!(
+                "could not initialize browser host: {error}"
+            )));
+        }
+        let mut host = Self {
+            child,
+            stdin: Some(stdin),
+        };
+        let manifests = home.join(".horizon").join("runtime").join("browsers");
+        let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            if !manifest::list_panels_in(&manifests).is_empty() {
+                return Ok(host);
+            }
+            if let Some(status) = host
+                .child
+                .try_wait()
+                .map_err(|error| StandaloneError::Startup(format!("could not inspect browser host: {error}")))?
+            {
+                return Err(StandaloneError::Startup(format!(
+                    "browser host exited during startup ({status})"
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = host.stop();
+        Err(StandaloneError::Startup(
+            "browser host did not publish a session within 30 seconds".to_string(),
+        ))
+    }
+
+    /// Close MCP stdin and wait for bounded browser/profile cleanup.
+    #[must_use]
+    pub fn shutdown(mut self) -> bool {
+        self.stop()
+    }
+
+    fn stop(&mut self) -> bool {
+        self.stdin.take();
+        let deadline = std::time::Instant::now() + HOST_EXIT_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => return false,
+            }
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        false
+    }
+}
+
+impl Drop for OwnedHostProcess {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 /// Start one browser session and serve the Horizon browser MCP contract until
 /// stdin closes.
 ///
@@ -41,10 +183,9 @@ pub enum StandaloneError {
 /// Returns when no requested backend can start, MCP transport fails, or the
 /// owned browser cannot be stopped within its bounded cleanup deadline.
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
-    let (session, profile_root) = start(options)?;
+    let session = OwnedSession::start(options, &HorizonHome::resolve())?;
     let mcp_result = horizon_browser_mcp::serve_stdio().await;
-    let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
-    let stopped = shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT);
+    let stopped = session.shutdown();
     mcp_result?;
     if stopped {
         Ok(())
@@ -53,7 +194,10 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     }
 }
 
-fn start(options: StandaloneOptions) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
+fn start(
+    options: StandaloneOptions,
+    home: &HorizonHome,
+) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
     if options.backend == Some(BackendKind::SafariWebDriver) && !options.visible {
         return Err(StandaloneError::Startup(
             "Safari has no headless mode; pass --visible or choose another backend".to_string(),
@@ -71,7 +215,7 @@ fn start(options: StandaloneOptions) -> Result<(BrowserSession, std::path::PathB
     );
     let mut last_error = None;
     for backend in candidates {
-        match start_backend(backend, options.visible) {
+        match start_backend(home, backend, options.visible) {
             Ok(session) => return Ok(session),
             Err(error) => last_error = Some(error),
         }
@@ -79,8 +223,11 @@ fn start(options: StandaloneOptions) -> Result<(BrowserSession, std::path::PathB
     Err(last_error.unwrap_or_else(|| StandaloneError::Startup("no compatible browser backend found".to_string())))
 }
 
-fn start_backend(backend: BackendKind, visible: bool) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
-    let home = HorizonHome::resolve();
+fn start_backend(
+    home: &HorizonHome,
+    backend: BackendKind,
+    visible: bool,
+) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
     let panel_id = standalone_panel_id();
     let profile_root = home.browser_profile_dir(&panel_id);
     let coordination = Arc::new(ManifestCoordination::default());
@@ -156,4 +303,12 @@ fn standalone_panel_id() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     format!("standalone-{}-{nanos:x}", std::process::id())
+}
+
+const fn backend_name(backend: BackendKind) -> &'static str {
+    match backend {
+        BackendKind::ChromiumCdp => "chromium",
+        BackendKind::FirefoxBidi => "firefox",
+        BackendKind::SafariWebDriver => "safari",
+    }
 }
