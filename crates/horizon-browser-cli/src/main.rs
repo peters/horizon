@@ -6,29 +6,39 @@ use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use horizon_browser_cli::{ExecutionReport, Plan};
+use horizon_browser::BackendKind;
+use horizon_browser_cli::{ExecutionReport, Plan, standalone::StandaloneOptions};
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
-const HELP: &str = r"horizon-browser — run Horizon browser MCP plans
+const HELP: &str = r"horizon-browser — run browser jobs through one MCP contract
 
 USAGE:
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->]
-    horizon-browser mcp
+    horizon-browser mcp [--standalone|--connect] [--backend <BACKEND>] [--visible]
 
 COMMANDS:
     run    Execute a fail-fast JSON plan through the existing MCP tools.
            Reads stdin when PLAN is '-' and writes JSON to stdout by default.
-    mcp    Serve the Horizon browser MCP contract over stdio.
+    mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
+           a standalone browser; --connect uses existing Horizon panels only.
 
 OPTIONS:
+    --backend <BACKEND>   Select a standalone backend; defaults to auto.
+    --visible             Show the standalone native browser window.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
     -h, --help             Print this help.
     -V, --version          Print the version.
 ";
 
 enum Command {
-    Run { plan: PathBuf, output: Option<PathBuf> },
-    Mcp,
+    Run {
+        plan: PathBuf,
+        output: Option<PathBuf>,
+    },
+    Mcp {
+        standalone: bool,
+        options: StandaloneOptions,
+    },
     Help,
     Version,
 }
@@ -45,7 +55,7 @@ async fn main() -> ExitCode {
             println!("horizon-browser {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Ok(Command::Mcp) => serve_mcp().await,
+        Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
         Ok(Command::Run { plan, output }) => run(plan, output.as_deref()).await,
         Err(error) => {
             eprintln!("error: {error}\n\n{HELP}");
@@ -62,8 +72,17 @@ fn initialize_tracing() {
         .try_init();
 }
 
-async fn serve_mcp() -> ExitCode {
-    match horizon_browser_mcp::serve_stdio().await {
+async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
+    let result = if standalone {
+        horizon_browser_cli::standalone::serve(options)
+            .await
+            .map_err(|error| error.to_string())
+    } else {
+        horizon_browser_mcp::serve_stdio()
+            .await
+            .map_err(|error| error.to_string())
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "Horizon browser MCP server stopped with an error");
@@ -113,10 +132,59 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
     match command.to_str() {
         Some("-h" | "--help") => no_more(args, Command::Help),
         Some("-V" | "--version") => no_more(args, Command::Version),
-        Some("mcp") => no_more(args, Command::Mcp),
+        Some("mcp") => parse_mcp(args),
         Some("run") => parse_run(args),
         Some(command) => Err(format!("unknown command `{command}`")),
         None => Err("command is not valid UTF-8".to_string()),
+    }
+}
+
+fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut standalone = std::env::var_os("HORIZON_BROWSER_ACTOR").is_none();
+    let mut mode_seen = false;
+    let mut backend = None;
+    let mut backend_seen = false;
+    let mut visible = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--standalone") if !mode_seen => {
+                standalone = true;
+                mode_seen = true;
+            }
+            Some("--connect") if !mode_seen => {
+                standalone = false;
+                mode_seen = true;
+            }
+            Some("--standalone" | "--connect") => {
+                return Err("choose only one of --standalone or --connect".to_string());
+            }
+            Some("--backend") if !backend_seen => {
+                backend_seen = true;
+                backend = parse_backend(args.next().as_ref())?;
+            }
+            Some("--backend") => return Err("--backend may be specified only once".to_string()),
+            Some("--visible") if !visible => visible = true,
+            Some(argument) => return Err(format!("unexpected mcp argument `{argument}`")),
+            None => return Err("mcp argument is not valid UTF-8".to_string()),
+        }
+    }
+    if !standalone && (backend_seen || visible) {
+        return Err("--backend and --visible require standalone MCP mode".to_string());
+    }
+    Ok(Command::Mcp {
+        standalone,
+        options: StandaloneOptions { backend, visible },
+    })
+}
+
+fn parse_backend(value: Option<&OsString>) -> Result<Option<BackendKind>, String> {
+    match value.and_then(|value| value.to_str()) {
+        Some("auto") => Ok(None),
+        Some("chromium") => Ok(Some(BackendKind::ChromiumCdp)),
+        Some("firefox" | "firefox-bidi") => Ok(Some(BackendKind::FirefoxBidi)),
+        Some("safari") => Ok(Some(BackendKind::SafariWebDriver)),
+        Some(value) => Err(format!("unknown backend `{value}`")),
+        None => Err("--backend requires auto, chromium, firefox, or safari".to_string()),
     }
 }
 
@@ -233,5 +301,16 @@ mod tests {
         assert_eq!(output.as_deref(), Some(Path::new("report.json")));
         assert!(parse_args(["run", "plan.json", "--actor", "spoof"].map(OsString::from)).is_err());
         assert!(parse_args(["mcp", "extra"].map(OsString::from)).is_err());
+
+        let Command::Mcp { standalone, options } =
+            parse_args(["mcp", "--standalone", "--backend", "firefox", "--visible"].map(OsString::from))
+                .expect("standalone MCP")
+        else {
+            panic!("expected MCP command");
+        };
+        assert!(standalone);
+        assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
+        assert!(options.visible);
+        assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
     }
 }

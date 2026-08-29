@@ -404,6 +404,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
         profile_dir,
         width: config.width,
         height: config.height,
+        headless: config.browser.headless,
         extra_args: config.browser.extra_args.clone(),
         automation_disclosure: config.browser.automation_disclosure,
     })

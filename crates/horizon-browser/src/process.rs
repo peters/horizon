@@ -56,7 +56,7 @@ pub const BINARY_CANDIDATES: &[&str] = &[
 #[cfg(windows)]
 pub const WINDOWS_BINARY_CANDIDATES: &[&str] = &["chrome.exe", "msedge.exe", "chromium.exe"];
 
-/// Parameters for launching one headless Chrome instance.
+/// Parameters for launching one Chrome instance.
 pub struct ChromeLaunch {
     /// Executable to run (absolute path or bare name resolved on PATH).
     pub command: String,
@@ -64,13 +64,14 @@ pub struct ChromeLaunch {
     pub profile_dir: PathBuf,
     pub width: u32,
     pub height: u32,
+    pub headless: bool,
     /// Extra CLI arguments appended verbatim (config `browser.extra_args`).
     /// Engine-managed profile, `DevTools`, and disclosure switches are rejected.
     pub extra_args: Vec<String>,
     pub automation_disclosure: AutomationDisclosurePolicy,
 }
 
-/// A running headless `Chrome` process plus its captured `DevTools` endpoint.
+/// A running `Chrome` process plus its captured `DevTools` endpoint.
 pub struct ChromeProcess {
     child: Arc<Mutex<ProcessChild>>,
     control: ChromeProcessControl,
@@ -245,7 +246,6 @@ fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
 fn launch_args(launch: &ChromeLaunch) -> Result<Vec<String>> {
     validate_extra_args(&launch.extra_args, launch.automation_disclosure)?;
     let mut args = vec![
-        "--headless=new".to_string(),
         // Port 0: the OS picks a free port; we learn it from stderr.
         "--remote-debugging-port=0".to_string(),
         "--remote-debugging-address=127.0.0.1".to_string(),
@@ -255,6 +255,9 @@ fn launch_args(launch: &ChromeLaunch) -> Result<Vec<String>> {
         format!("--window-size={},{}", launch.width, launch.height),
         "--disable-features=TranslateUI".to_string(),
     ];
+    if launch.headless {
+        args.insert(0, "--headless=new".to_string());
+    }
     if launch.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals {
         args.push("--disable-blink-features=AutomationControlled".to_string());
     }
@@ -834,11 +837,13 @@ mod tests {
             profile_dir: PathBuf::from("profile"),
             width: 1280,
             height: 800,
+            headless: true,
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::MinimizeCommonSignals,
         };
         let args = launch_args(&launch).unwrap_or_default();
 
+        assert!(args.iter().any(|argument| argument == "--headless=new"));
         assert!(!args.iter().any(|argument| argument == "--disable-gpu"));
         assert!(
             args.iter()
@@ -848,12 +853,33 @@ mod tests {
     }
 
     #[test]
+    fn visible_launch_omits_the_headless_switch() {
+        let launch = ChromeLaunch {
+            command: "chrome".to_string(),
+            profile_dir: PathBuf::from("profile"),
+            width: 1280,
+            height: 800,
+            headless: false,
+            extra_args: Vec::new(),
+            automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+        };
+
+        assert!(
+            !launch_args(&launch)
+                .unwrap_or_default()
+                .iter()
+                .any(|argument| argument == "--headless=new")
+        );
+    }
+
+    #[test]
     fn browser_default_disclosure_allows_caller_owned_blink_switches() {
         let launch = ChromeLaunch {
             command: "chrome".to_string(),
             profile_dir: PathBuf::from("profile"),
             width: 1280,
             height: 800,
+            headless: true,
             extra_args: vec!["--enable-blink-features=ExperimentalFoo".to_string()],
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };

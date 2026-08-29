@@ -57,6 +57,9 @@ pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
 #[serde(default)]
 pub struct BrowserConfig {
     pub backend: BackendKind,
+    /// Launch Chromium or Firefox without a native browser window. Safari
+    /// ignores this because its `WebDriver` implementation is always visible.
+    pub headless: bool,
     /// Treatment of common script-visible browser-automation signals.
     pub automation_disclosure: AutomationDisclosurePolicy,
     /// Explicit Chromium executable (absolute path or PATH name).
@@ -80,6 +83,7 @@ impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
             backend: BackendKind::ChromiumCdp,
+            headless: true,
             automation_disclosure: AutomationDisclosurePolicy::default(),
             command: None,
             firefox_command: None,
@@ -171,6 +175,7 @@ mod tests {
         let config = serde_json::from_str::<BrowserConfig>(r#"{"backend":"firefox"}"#).unwrap_or_default();
 
         assert_eq!(config.backend, BackendKind::FirefoxBidi);
+        assert!(config.headless);
         assert_eq!(
             config.automation_disclosure,
             AutomationDisclosurePolicy::MinimizeCommonSignals

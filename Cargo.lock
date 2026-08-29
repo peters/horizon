@@ -1592,6 +1592,7 @@ dependencies = [
 name = "horizon-browser-cli"
 version = "0.2.7"
 dependencies = [
+ "horizon-browser",
  "horizon-browser-mcp",
  "horizon-core",
  "rmcp",

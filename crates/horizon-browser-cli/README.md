@@ -7,6 +7,7 @@ modes:
 - `run` executes a bounded, fail-fast JSON plan and writes a structured report
   to stdout or a private file;
 - `mcp` runs the same local stdio MCP server that Horizon registers for agents.
+  Outside Horizon it starts and owns an isolated browser automatically.
 
 The crate is intentionally thin and is not published. Browser actions, schemas,
 ownership, redacted audit, and backend behavior remain in
@@ -103,14 +104,30 @@ process still falls back to the bounded ownership TTL.
 
 ## Standalone stdio MCP server
 
-Configure any MCP client to launch:
+Configure any MCP client to launch a hidden browser with automatic backend
+selection:
 
 ```text
 /path/to/horizon-browser mcp
 ```
 
-This is a standalone local process using MCP over stdin/stdout, not a TCP or
-public network listener. It shares the same live-panel discovery and private
-Horizon coordination state as the bundled server. Actor-scoped lifecycle tools
-work when Horizon supplies `HORIZON_BROWSER_ACTOR`; other local launches can
-control a discovered panel but cannot create or toggle panel visibility.
+Choose a backend or show the native window when needed:
+
+```text
+/path/to/horizon-browser mcp --backend firefox
+/path/to/horizon-browser mcp --backend chromium --visible
+```
+
+The default is headless Chromium, falling back to headless Firefox when
+Chromium is unavailable. Safari requires macOS and `--visible`. The process
+owns one isolated browser session for the lifetime of MCP stdin and removes its
+temporary profile during bounded shutdown. `--connect` instead discovers
+existing Horizon panels without starting a browser. When Horizon supplies
+`HORIZON_BROWSER_ACTOR`, connect mode remains the default so actor-scoped panel
+creation, visibility changes, steering, and audit continue to use Horizon's
+host lifecycle.
+
+This is a local process using MCP over stdin/stdout, not a TCP or public network
+listener. Both modes share the same private Horizon coordination state and MCP
+tool schemas; the standalone host does not introduce another browser action
+API.

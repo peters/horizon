@@ -754,12 +754,15 @@ fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, reques
             let profile = config.profile_dir(panel_local_id);
             prepare_profile(&profile)?;
             let mut options = Map::new();
-            let mut args = vec![
-                "-headless".to_string(),
+            let mut args = Vec::with_capacity(4 + config.extra_args.len());
+            if config.headless {
+                args.push("-headless".to_string());
+            }
+            args.extend([
                 "-no-remote".to_string(),
                 "-profile".to_string(),
                 profile.to_string_lossy().to_string(),
-            ];
+            ]);
             args.extend(config.extra_args.iter().cloned());
             options.insert("args".to_string(), json!(args));
             // Headless Firefox otherwise inherits GTK overlay scrollbars,
@@ -1106,8 +1109,24 @@ mod tests {
         let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
+        assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
+
+        let visible = new_session_capabilities(
+            &BrowserConfig {
+                headless: false,
+                ..config
+            },
+            "panel",
+            true,
+        )
+        .unwrap_or_default();
+        assert!(
+            visible["moz:firefoxOptions"]["args"]
+                .as_array()
+                .is_some_and(|args| args.iter().all(|argument| argument != "-headless"))
+        );
     }
 
     #[test]
