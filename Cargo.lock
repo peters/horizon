@@ -4043,7 +4043,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -4373,9 +4373,9 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "080e8b7074acf1a8e281f1fbbe1f82e09cf542135560aef8a3d26ab1ffa1a8b3"
+checksum = "ecd41195b6132c83911a05344fdc0fd58807a86ccd796176828d4bdaf9943128"
 dependencies = [
  "log",
  "thiserror 2.0.20",
@@ -4384,9 +4384,9 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp-sys"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24147ff169598dfed12f536e01cde29f6b6b8611e3eedd3bac9bbbf5037328a1"
+checksum = "67f209e316800d400b02f6a07e0dc5d96e52dae8ad849d4df080d6c2ce5e9516"
 dependencies = [
  "cmake",
  "serde_json",

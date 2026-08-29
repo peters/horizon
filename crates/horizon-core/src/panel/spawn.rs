@@ -912,6 +912,11 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
         env.insert("HORIZON".to_string(), "1".to_string());
         env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
     }
+    if kind == PanelKind::Claude {
+        // Keep the conversation in Horizon's terminal history so its scrollbar
+        // and history meter remain usable instead of hiding it in a fullscreen buffer.
+        env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
+    }
     env
 }
 
@@ -1025,6 +1030,20 @@ mod tests {
         assert!(command.contains("/opt/custom-codex --custom-flag"));
         assert!(!command.contains("mcp_servers.horizon-browser"));
         assert!(!command.contains("--browser-mcp"));
+    }
+
+    #[test]
+    fn claude_uses_horizon_native_scrollback() {
+        let claude_env = agent_env(PanelKind::Claude, "claude-panel");
+
+        assert_eq!(
+            claude_env
+                .get("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert!(!agent_env(PanelKind::Codex, "codex-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Shell, "shell-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
     }
 
     #[test]

@@ -150,7 +150,7 @@ impl HorizonApp {
 
         match self.create_panel_with_options(options, workspace_id) {
             Ok(panel_id) => {
-                self.reveal_panel_visible(ctx, panel_id);
+                self.reveal_new_panel(ctx, workspace_id, panel_id);
                 self.mark_runtime_dirty();
             }
             Err(error) => {
