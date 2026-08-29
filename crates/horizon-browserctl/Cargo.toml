@@ -1,0 +1,30 @@
+[package]
+name = "horizon-browserctl"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Plan runner and standalone MCP launcher for Horizon browser panels"
+repository.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "horizon-browserctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+horizon-browser-mcp.workspace = true
+rmcp = { workspace = true, features = ["client"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -24,6 +24,7 @@ cumulative.
 | --- | --- |
 | Documentation or fixture text only | Fixture self-check; validate every command or selector changed |
 | `crates/horizon-browser-mcp/**`, agent registration, bundled skills, coordination manifests, audit | MCP contract on one available backend; real bundled-agent discovery and actor forwarding; audit/redaction; handoff/hand-back |
+| `crates/horizon-browserctl/**` or CLI plan/report behavior | CLI unit/integration tests; stdout and private-file reports; standalone stdio negotiation; visible CLI-driven panel lane |
 | Semantic snapshot/query/ref or action model | MCP contract on Chromium and Firefox; Safari on macOS if shared WebDriver code changed |
 | Click, pointer, keyboard, IME, wheel, scrollbar, focus, or viewport input | Physical input + MCP input on every affected backend; no-manual-resize regression; resize/fit |
 | `cdp.rs`, `websocket.rs`, Chromium process/frames/input | Chromium protocol, visual, navigation, input, failure, cleanup; performance if frame delivery changed |
@@ -137,6 +138,35 @@ python3 scripts/browser-smoke/run.py \
 The second run reuses the deterministic port and isolated state. Confirm the
 saved backend, committed URL, title, profile identity, geometry, and focus
 before changing anything.
+
+### G1a — command-line plan and standalone MCP lane
+
+Run this lane for `horizon-browserctl`, MCP launch plumbing, or plan/report
+changes. It proves the CLI remains a client of the one MCP contract rather than
+becoming a parallel browser API.
+
+1. Run `cargo test -p horizon-browserctl`.
+2. Pipe a one-step `browser_list` plan through stdin. Require parseable JSON on
+   stdout, no diagnostics on stdout, and a zero exit code.
+3. Run the same plan with `--output`. Require empty stdout, equivalent JSON in
+   the file, and mode `0600` on Unix.
+4. Launch `horizon-browserctl mcp`, complete MCP initialization, list tools,
+   and require the same tool names, schemas, instructions, and endpoint
+   redaction as `horizon-browser-mcp`.
+5. Launch an exact, isolated Horizon candidate with a visible browser panel.
+   Drive that panel only with a CLI plan containing `browser_list`, navigation,
+   query or snapshot, a visible action, verification, and `browser_audit`.
+   Use `$ref` for the panel id. Verify the visible URL/page/action and inspect a
+   proof screenshot scoped to the exact Horizon PID.
+6. Repeat the visible plan with a file report. Verify step order, structured
+   results, audit correlation, non-zero failure behavior, and that no tool
+   arguments appear in the report envelope.
+7. Resize the exact window while it remains controlled, then close it normally.
+   Require clean candidate/browser exit and no task-owned live manifest.
+
+Run the visible lane on one available backend for CLI-only changes. Run both
+Chromium and Firefox when the MCP action contract or shared browser behavior
+also changed; add Safari on macOS when shared WebDriver code changed.
 
 ### G1b — live E24 market-data correctness probe
 
