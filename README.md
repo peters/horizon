@@ -105,6 +105,20 @@ Drop a `.md` file onto the canvas or create one from the command palette. **Spli
 
 </td>
 </tr>
+<tr>
+<td>
+
+### Browser Panels
+Run Chromium, Firefox, or supported Safari automation directly on the canvas. Navigate, inspect the DOM, interact, capture network traffic, and hand the same live page between an agent and the user.
+
+</td>
+<td>
+
+### Audited Browser Automation
+Agents discover one MCP browser contract automatically. Every action is correlated in a redacted audit trail, while the `horizon-browser` CLI runs repeatable plans and writes structured results to stdout or a private file.
+
+</td>
+</tr>
 </table>
 
 ---
@@ -337,6 +351,16 @@ workspaces:
         command: http://127.0.0.1:3000
 ```
 
+The panel is a shared human-and-agent browser session. Today it can:
+
+- navigate, reload, traverse history, wait for page state, and query or snapshot semantic DOM nodes;
+- click (including trusted double-click), fill, scroll, evaluate bounded JavaScript, and preserve the URL while the page scrolls;
+- start visible or hidden, switch visibility without losing the session, and pause automation for user steering before handing the same panel back;
+- capture bounded HTTP metadata and response bodies plus high-rate WebSocket lifecycle and frames on Chromium and Firefox, with cursor-based MCP watching or a private NDJSON export;
+- reconnect an MCP client without restarting the browser and retain a redacted action audit after the panel closes.
+
+Safari shares the semantic action and audit surface but currently reports network capture as unsupported.
+
 The backend picker in each panel switches among the protocols supported on the current host:
 
 | Backend | Automation and pixels | Prerequisites | Important limits |
@@ -407,6 +431,23 @@ report to stdout or an owner-only file; typed `$ref` values can pass a prior
 step's result to a later call. `horizon-browser mcp` launches the unchanged
 local stdio MCP service as a standalone process. The runner deliberately adds
 no alternate browser action API and accepts no actor-impersonation flag.
+
+For an interactive task, users normally describe the goal to an agent panel
+instead of writing JSON. Horizon advertises the MCP tools automatically, the
+agent drives a visible or hidden browser, and the user can reveal or steer the
+same page when needed. JSON plans are the deterministic interface for repeatable
+jobs and CI:
+
+```bash
+cargo build -p horizon-browser-cli
+target/debug/horizon-browser run browser-job.json --output browser-report.json
+```
+
+Any MCP-capable agent host can launch `horizon-browser mcp` to provide the same
+tool contract. The CLI does not yet contain its own model-backed agent loop, so
+passing a natural-language goal directly to `run` is not currently supported.
+See the [CLI README](crates/horizon-browser-cli/README.md) for the plan format,
+typed result references, output behavior, and lifecycle boundaries.
 
 The engine is isolated in [`crates/horizon-browser`](crates/horizon-browser)
 for reuse by non-Horizon applications. It has no Horizon, egui, winit, Tokio,

@@ -13,6 +13,25 @@ ownership, redacted audit, and backend behavior remain in
 `horizon-browser-mcp`, `horizon-core`, and the publishable `horizon-browser`
 engine.
 
+## Choose the interface
+
+- **Describe an interactive goal:** ask an agent panel inside Horizon, or
+  configure `horizon-browser mcp` in another MCP-capable agent host. The agent
+  translates the goal into browser tools, observes results, and can adapt; the
+  user does not write JSON.
+- **Run a repeatable job:** use `horizon-browser run` with a checked JSON plan.
+  This path is deterministic, model-free, fail-fast, and suitable for scripts
+  and CI.
+
+Both paths use the same MCP action schemas, ownership rules, steering, and
+redacted audit trail. The CLI does not currently embed a model-backed agent
+loop, so `run "browse this site"` is not a supported command.
+
+Through that contract an agent or plan can navigate; snapshot or query the DOM;
+click, fill, scroll, wait, and evaluate; show or hide an actor-owned panel; read
+the audit trail; and capture or cursor-watch bounded HTTP/WebSocket traffic on
+supported backends.
+
 ## Plan runner
 
 Build the binary, then pass it a plan path or `-` for stdin:
