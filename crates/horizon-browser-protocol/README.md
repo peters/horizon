@@ -8,7 +8,8 @@ coordination, MCP, or Horizon UI dependency.
 Use this crate when an application only needs to construct or inspect browser
 actions, results, network records, and redacted audit entries. Use
 `horizon-browser` when the application must launch and own Chromium, Firefox,
-or Safari itself.
+or Safari itself. Backend adapters such as CDP input serialization and
+steering-activity policy also stay in `horizon-browser`.
 
 The crate is an internal workspace package for now and is not published.
 

@@ -684,6 +684,7 @@ fn normalized_committed_url(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::is_user_activity;
 
     #[test]
     fn blank_target_is_an_empty_committed_url() {
@@ -694,18 +695,17 @@ mod tests {
 
     #[test]
     fn page_controls_count_as_user_steering_but_system_controls_do_not() {
-        assert!(BrowserCommand::Navigate("https://example.test".to_string()).is_user_activity());
-        assert!(BrowserCommand::Reload.is_user_activity());
-        assert!(BrowserCommand::Back.is_user_activity());
-        assert!(BrowserCommand::Forward.is_user_activity());
-        assert!(
-            !BrowserCommand::SetViewport {
-                width: 800,
-                height: 600
-            }
-            .is_user_activity()
-        );
-        assert!(!BrowserCommand::HandoffDone.is_user_activity());
-        assert!(!BrowserCommand::Stop.is_user_activity());
+        assert!(is_user_activity(&BrowserCommand::Navigate(
+            "https://example.test".to_string()
+        )));
+        assert!(is_user_activity(&BrowserCommand::Reload));
+        assert!(is_user_activity(&BrowserCommand::Back));
+        assert!(is_user_activity(&BrowserCommand::Forward));
+        assert!(!is_user_activity(&BrowserCommand::SetViewport {
+            width: 800,
+            height: 600
+        }));
+        assert!(!is_user_activity(&BrowserCommand::HandoffDone));
+        assert!(!is_user_activity(&BrowserCommand::Stop));
     }
 }

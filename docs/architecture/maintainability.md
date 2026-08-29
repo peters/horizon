@@ -15,8 +15,8 @@ back into large multi-purpose modules.
   async-runtime, image-decoder, filesystem-coordination, MCP, `horizon-core`,
   or UI dependencies.
 - Contains no host policy. Browser launch, persistence, authentication,
-  retention, steering ownership, and presentation remain in their owning
-  crates.
+  retention, steering ownership, backend input serialization, and presentation
+  remain in their owning crates.
 
 ### `horizon-browser`
 

@@ -16,16 +16,3 @@ pub enum BrowserCommand {
     HandoffDone,
     Stop,
 }
-
-impl BrowserCommand {
-    /// Whether a user-originated command means the user is actively steering
-    /// the page and should temporarily pause external agent actions.
-    #[must_use]
-    pub fn is_user_activity(&self) -> bool {
-        match self {
-            Self::Navigate(_) | Self::Reload | Self::Back | Self::Forward => true,
-            Self::Input(input) => input.is_activity(),
-            Self::SetViewport { .. } | Self::HandoffDone | Self::Stop => false,
-        }
-    }
-}
