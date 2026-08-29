@@ -73,7 +73,7 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
         .tempdir()
         .map_err(|source| io_error("could not create isolated browser runtime", &source))?;
     write_private(&schema_path, RESULT_SCHEMA.as_bytes())?;
-    let browser = crate::standalone::OwnedHostProcess::start(
+    let (browser, resolved_backend) = crate::standalone::OwnedHostProcess::start(
         crate::standalone::StandaloneOptions {
             backend: options.backend,
             visible: options.visible,
@@ -140,11 +140,20 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
     } else {
         None
     };
-    finish_job(options, &result, artifact.as_deref(), browser, trace, &job_dir)
+    finish_job(
+        options,
+        resolved_backend,
+        &result,
+        artifact.as_deref(),
+        browser,
+        trace,
+        &job_dir,
+    )
 }
 
 fn finish_job(
     options: &JobOptions,
+    resolved_backend: BackendKind,
     result: &AgentResult,
     artifact: Option<&Path>,
     browser: crate::standalone::OwnedHostProcess,
@@ -156,6 +165,7 @@ fn finish_job(
         job_dir,
         &ReportInput {
             options,
+            backend: resolved_backend,
             ok: result.ok,
             summary: &result.summary,
             artifact,

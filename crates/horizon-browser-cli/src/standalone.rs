@@ -107,8 +107,13 @@ impl OwnedHostProcess {
     /// # Errors
     /// Returns when the subprocess cannot start, initialize, or publish its
     /// first browser manifest before the startup deadline.
-    pub fn start(options: StandaloneOptions, home: &Path, stderr: File) -> Result<Self, StandaloneError> {
-        let manifests = home.join(".horizon").join("runtime").join("browsers");
+    pub fn start(
+        options: StandaloneOptions,
+        home: &Path,
+        stderr: File,
+    ) -> Result<(Self, BackendKind), StandaloneError> {
+        let horizon_root = home.join(".horizon");
+        let manifests = horizon_root.join("runtime").join("browsers");
         let existing_manifests = manifest::list_panels_in(&manifests).into_iter().collect::<HashSet<_>>();
         let executable = std::env::current_exe()
             .map_err(|error| StandaloneError::Startup(format!("could not resolve horizon-browser: {error}")))?;
@@ -144,8 +149,8 @@ impl OwnedHostProcess {
         .initialize()?;
         let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
         while std::time::Instant::now() < deadline {
-            if host_manifest_available(&manifests, &existing_manifests, child_id) {
-                return Ok(host);
+            if let Some(backend) = host_manifest_backend(&horizon_root, &existing_manifests, child_id) {
+                return Ok((host, backend));
             }
             if let Some(status) = host
                 .child
@@ -214,11 +219,13 @@ fn force_host_cleanup(child: &mut impl HostChild) {
     let _ = child.wait();
 }
 
-fn host_manifest_available(manifests: &Path, existing: &HashSet<String>, child_id: u32) -> bool {
+fn host_manifest_backend(root: &Path, existing: &HashSet<String>, child_id: u32) -> Option<BackendKind> {
     let expected_prefix = format!("standalone-{child_id}-");
-    manifest::list_panels_in(manifests)
+    manifest::list_panels_in(&root.join("runtime").join("browsers"))
         .into_iter()
-        .any(|panel_id| panel_id.starts_with(&expected_prefix) && !existing.contains(&panel_id))
+        .find(|panel_id| panel_id.starts_with(&expected_prefix) && !existing.contains(panel_id))
+        .and_then(|panel_id| manifest::read_at(&manifest::manifest_path_for_root(root, &panel_id)))
+        .map(|manifest| manifest.backend)
 }
 
 impl Drop for OwnedHostProcess {
@@ -441,9 +448,8 @@ mod tests {
     }
 
     #[test]
-    fn host_readiness_ignores_stale_and_unrelated_manifests() {
+    fn host_readiness_returns_the_exact_child_backend() {
         let home = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp home: {error}"));
-        let manifests = home.path().join("runtime").join("browsers");
         let stale = "standalone-42-before";
         manifest::write_at(
             &manifest::manifest_path_for_root(home.path(), stale),
@@ -455,7 +461,7 @@ mod tests {
         .unwrap_or_else(|error| panic!("write stale manifest: {error}"));
         let existing = HashSet::from([stale.to_string()]);
 
-        assert!(!host_manifest_available(&manifests, &existing, 42));
+        assert_eq!(host_manifest_backend(home.path(), &existing, 42), None);
 
         let unrelated = "standalone-7-after";
         manifest::write_at(
@@ -466,18 +472,22 @@ mod tests {
             },
         )
         .unwrap_or_else(|error| panic!("write unrelated manifest: {error}"));
-        assert!(!host_manifest_available(&manifests, &existing, 42));
+        assert_eq!(host_manifest_backend(home.path(), &existing, 42), None);
 
         let current = "standalone-42-after";
         manifest::write_at(
             &manifest::manifest_path_for_root(home.path(), current),
             &horizon_core::browser::manifest::BrowserManifest {
                 panel_local_id: current.to_string(),
+                backend: BackendKind::FirefoxBidi,
                 ..Default::default()
             },
         )
         .unwrap_or_else(|error| panic!("write current manifest: {error}"));
-        assert!(host_manifest_available(&manifests, &existing, 42));
+        assert_eq!(
+            host_manifest_backend(home.path(), &existing, 42),
+            Some(BackendKind::FirefoxBidi)
+        );
     }
 
     #[test]

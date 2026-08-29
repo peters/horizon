@@ -15,12 +15,14 @@ const TRACE_NAME: &str = "trace.jsonl";
 const PLAN_NAME: &str = "executed-plan.json";
 const REPORT_NAME: &str = "report.json";
 const MAX_TRACE_CALLS: usize = 256;
+const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
 pub(super) struct JobTrace {
     writer: File,
     trace_path: PathBuf,
     calls: Vec<RecordedCall>,
     replayable: bool,
+    trace_bytes: usize,
 }
 
 struct RecordedCall {
@@ -61,6 +63,7 @@ pub(super) struct ReportArtifacts {
 
 pub(super) struct ReportInput<'a> {
     pub(super) options: &'a JobOptions,
+    pub(super) backend: BackendKind,
     pub(super) ok: bool,
     pub(super) summary: &'a str,
     pub(super) artifact: Option<&'a Path>,
@@ -75,6 +78,7 @@ impl JobTrace {
             trace_path,
             calls: Vec::new(),
             replayable: true,
+            trace_bytes: 0,
         })
     }
 
@@ -96,9 +100,19 @@ impl JobTrace {
             arguments: &call.arguments,
             ok: call.ok,
         };
-        serde_json::to_writer(&mut self.writer, &record)
-            .and_then(|()| self.writer.write_all(b"\n").map_err(serde_json::Error::io))
-            .map_err(|error| JobError::Result(format!("could not write MCP trace: {error}")))?;
+        let mut record_bytes = serde_json::to_vec(&record)
+            .map_err(|error| JobError::Result(format!("could not encode MCP trace: {error}")))?;
+        record_bytes.push(b'\n');
+        let Some(trace_bytes) = self.trace_bytes.checked_add(record_bytes.len()) else {
+            return Err(trace_limit_error());
+        };
+        if trace_bytes > MAX_TRACE_BYTES {
+            return Err(trace_limit_error());
+        }
+        self.writer
+            .write_all(&record_bytes)
+            .map_err(|source| io_error("could not write MCP trace", &source))?;
+        self.trace_bytes = trace_bytes;
         let tool = call.tool.clone();
         self.calls.push(call);
         Ok(Some(tool))
@@ -125,7 +139,7 @@ impl JobTrace {
         let report = JobReport {
             version: 1,
             ok: input.ok && input.browser_cleanup_ok,
-            backend: backend_name(input.options.backend),
+            backend: backend_name(input.backend),
             visibility: if input.options.visible { "visible" } else { "hidden" },
             summary: input.summary,
             artifact: input.artifact.map(|path| path.display().to_string()),
@@ -218,7 +232,7 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
                     *value = Value::String(redacted);
                 }
             }
-            "url_patterns" => redact_urls(value, replayable),
+            "url_patterns" => redact_url_patterns(value, replayable),
             "body" | "data" | "expression" | "headers" | "password" | "reason" | "script" | "selector" | "text"
             | "token" | "value" => {
                 if !value.is_null() {
@@ -231,15 +245,17 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
     }
 }
 
-fn redact_urls(value: &mut Value, replayable: &mut bool) {
+fn redact_url_patterns(value: &mut Value, replayable: &mut bool) {
     if let Value::Array(patterns) = value {
         for pattern in patterns {
-            if let Some(url) = pattern.as_str() {
-                let redacted = redact_url(url);
-                *replayable &= redacted == url;
-                *pattern = Value::String(redacted);
+            if !pattern.is_null() {
+                *pattern = Value::String("<redacted>".to_string());
+                *replayable = false;
             }
         }
+    } else if !value.is_null() {
+        *value = Value::String("<redacted>".to_string());
+        *replayable = false;
     }
 }
 
@@ -276,12 +292,15 @@ fn step_id(index: usize) -> String {
     format!("step-{:03}", index + 1)
 }
 
-const fn backend_name(backend: Option<BackendKind>) -> &'static str {
+fn trace_limit_error() -> JobError {
+    JobError::Result("agent exceeded the 1 MiB redacted MCP trace limit".to_string())
+}
+
+const fn backend_name(backend: BackendKind) -> &'static str {
     match backend {
-        None => "auto",
-        Some(BackendKind::ChromiumCdp) => "chromium",
-        Some(BackendKind::FirefoxBidi) => "firefox",
-        Some(BackendKind::SafariWebDriver) => "safari",
+        BackendKind::ChromiumCdp => "chromium",
+        BackendKind::FirefoxBidi => "firefox",
+        BackendKind::SafariWebDriver => "safari",
     }
 }
 
@@ -304,7 +323,7 @@ mod tests {
             .expect("navigate event");
         let options = JobOptions {
             prompt: "visit example.com".to_string(),
-            backend: Some(BackendKind::ChromiumCdp),
+            backend: None,
             visible: false,
             json: true,
         };
@@ -313,6 +332,7 @@ mod tests {
                 directory.path(),
                 &ReportInput {
                     options: &options,
+                    backend: BackendKind::FirefoxBidi,
                     ok: true,
                     summary: "done",
                     artifact: None,
@@ -322,17 +342,21 @@ mod tests {
             .expect("report artifacts");
 
         assert!(artifacts.replayable);
-        let plan = Plan::from_slice(&std::fs::read(artifacts.plan).expect("plan bytes")).expect("validated plan");
+        let plan = Plan::from_slice(&std::fs::read(&artifacts.plan).expect("plan bytes")).expect("validated plan");
         assert_eq!(
             plan.steps[1].arguments["panel_id"],
             json!({"$ref":"step-001#/panels/0/panel_id"})
         );
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(&artifacts.report).expect("report bytes")).expect("validated report");
+        assert_eq!(report["backend"], "firefox");
     }
 
     #[test]
     fn sensitive_arguments_are_redacted_and_not_replayable() {
         let mut arguments = json!({
             "url":"https://example.com/path?token=secret#fragment",
+            "url_patterns":["token=secret", "https://example.com/public", null],
             "value":"private text"
         })
         .as_object()
@@ -341,7 +365,26 @@ mod tests {
 
         assert!(!redact_arguments(&mut arguments));
         assert_eq!(arguments["url"], "https://example.com/path?<redacted>#<redacted>");
+        assert_eq!(arguments["url_patterns"], json!(["<redacted>", "<redacted>", null]));
         assert_eq!(arguments["value"], "<redacted>");
+    }
+
+    #[test]
+    fn aggregate_trace_size_is_bounded_before_retaining_another_call() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        let payload = "x".repeat(MAX_TRACE_BYTES / 2);
+        trace
+            .record_line(&event("browser_query", &json!({"custom": &payload})))
+            .expect("first bounded event");
+
+        let error = trace
+            .record_line(&event("browser_query", &json!({"custom": &payload})))
+            .expect_err("second event must exceed aggregate trace limit");
+
+        assert!(matches!(error, JobError::Result(message) if message.contains("1 MiB")));
+        assert_eq!(trace.calls.len(), 1);
+        assert!(trace.trace_bytes <= MAX_TRACE_BYTES);
     }
 
     fn event(tool: &str, arguments: &Value) -> String {
