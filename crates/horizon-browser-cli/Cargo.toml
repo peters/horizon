@@ -17,6 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+atomicwrites.workspace = true
 horizon-browser.workspace = true
 horizon-browser-mcp.workspace = true
 horizon-core.workspace = true

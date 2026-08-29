@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
+use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::BackendKind;
 use horizon_core::HorizonHome;
 use serde::Deserialize;
@@ -56,7 +57,6 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
     let invocation_dir =
         std::env::current_dir().map_err(|source| io_error("could not read working directory", &source))?;
     let artifact_name = authorized_artifact(&options.prompt)?;
-    let artifact = artifact_name.as_ref().map(|path| invocation_dir.join(path));
     let job_dir = create_job_dir()?;
     let schema_path = job_dir.join("result-schema.json");
     let result_path = job_dir.join("result.json");
@@ -129,7 +129,7 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
     let result: AgentResult =
         serde_json::from_slice(&read_bounded(&result_path)?).map_err(|error| JobError::Result(error.to_string()))?;
     let artifact = if result.ok {
-        write_artifact(artifact, result.artifact_content)?
+        write_artifact(&invocation_dir, artifact_name, result.artifact_content)?
     } else {
         None
     };
@@ -238,66 +238,141 @@ fn parse_tool_call(line: &str) -> Option<String> {
 
 fn authorized_artifact(prompt: &str) -> Result<Option<PathBuf>, JobError> {
     let lower = prompt.to_ascii_lowercase();
-    let direct = ["save to ", "write to ", "output to "]
-        .iter()
-        .filter_map(|marker| lower.rfind(marker).map(|offset| (offset, *marker)))
-        .max_by_key(|(offset, _)| *offset);
-    let rest = if let Some((offset, marker)) = direct {
-        prompt[offset + marker.len()..].trim_start()
-    } else {
-        let Some(offset) = ["save ", "write ", "output ", "export "]
-            .iter()
-            .filter_map(|marker| lower.rfind(marker))
-            .max()
-        else {
-            return Ok(None);
+    let mut clauses = ["save", "write", "output", "export"]
+        .into_iter()
+        .flat_map(|verb| bounded_matches(&lower, verb).map(move |offset| (offset, offset + verb.len())))
+        .collect::<Vec<_>>();
+    clauses.sort_unstable_by_key(|clause| std::cmp::Reverse(clause.0));
+    for (_, end) in clauses {
+        let tail = &prompt[end..];
+        let Some(candidate) = output_candidate(tail) else {
+            continue;
         };
-        prompt[offset..].trim_start()
-    };
-    let candidate = if let Some(quote) = rest.chars().next().filter(|character| matches!(character, '\'' | '"')) {
-        rest[quote.len_utf8()..].split(quote).next().unwrap_or_default()
-    } else if direct.is_none() {
-        rest.split_whitespace()
-            .rev()
-            .map(|value| value.trim_matches([',', ';', '.', '\'', '"']))
-            .find(|value| {
-                matches!(
-                    Path::new(value).extension().and_then(std::ffi::OsStr::to_str),
-                    Some("csv" | "tsv" | "json" | "jsonl" | "ndjson" | "txt" | "md" | "html" | "xml" | "yaml" | "yml")
-                )
-            })
-            .unwrap_or_default()
-    } else {
-        rest.split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches([',', ';', '.'])
-    };
-    let path = PathBuf::from(candidate);
-    let valid = !candidate.is_empty()
-        && !path.is_absolute()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
-    valid
-        .then_some(path)
-        .map(Some)
-        .ok_or_else(|| JobError::Artifact(candidate.to_string()))
+        if !supported_artifact(&candidate) {
+            return Err(JobError::Artifact(candidate));
+        }
+        let path = PathBuf::from(&candidate);
+        let confined = !path.is_absolute()
+            && path
+                .components()
+                .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
+        return confined.then_some(Some(path)).ok_or(JobError::Artifact(candidate));
+    }
+    Ok(None)
 }
 
-fn write_artifact(path: Option<PathBuf>, content: Option<String>) -> Result<Option<PathBuf>, JobError> {
+fn bounded_matches<'a>(value: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    value.match_indices(word).filter_map(move |(offset, _)| {
+        let before = offset.checked_sub(1).and_then(|index| value.as_bytes().get(index));
+        let after = value.as_bytes().get(offset + word.len());
+        (!before.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            && !after.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
+        .then_some(offset)
+    })
+}
+
+fn output_candidate(tail: &str) -> Option<String> {
+    let direct = first_file_shaped_token(tail);
+    if direct.is_some() {
+        return direct;
+    }
+    let lower = tail.to_ascii_lowercase();
+    ["to", "as"]
+        .into_iter()
+        .flat_map(|connector| bounded_matches(&lower, connector).map(move |offset| (offset, connector.len())))
+        .find_map(|(offset, length)| first_file_shaped_token(&tail[offset + length..]))
+}
+
+fn first_file_shaped_token(value: &str) -> Option<String> {
+    let value = value.trim_start();
+    let candidate = if let Some(quote) = value.chars().next().filter(|character| matches!(character, '\'' | '"')) {
+        let quoted = &value[quote.len_utf8()..];
+        let end = quoted.find(quote)?;
+        &quoted[..end]
+    } else {
+        value
+            .split_whitespace()
+            .next()?
+            .trim_end_matches([',', ';', '.', '!', '?'])
+    };
+    Path::new(candidate)
+        .extension()
+        .is_some()
+        .then(|| candidate.to_string())
+}
+
+fn supported_artifact(candidate: &str) -> bool {
+    Path::new(candidate)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "csv" | "tsv" | "json" | "jsonl" | "ndjson" | "txt" | "md" | "html" | "xml" | "yaml" | "yml"
+            )
+        })
+}
+
+fn write_artifact(root: &Path, path: Option<PathBuf>, content: Option<String>) -> Result<Option<PathBuf>, JobError> {
     match (path, content) {
-        (Some(path), Some(content)) => {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|source| io_error("could not create artifact directory", &source))?;
-            }
-            write_private(&path, content.as_bytes())?;
+        (Some(relative), Some(content)) => {
+            let path = prepare_artifact_path(root, &relative)?;
+            write_private_atomic(&path, content.as_bytes())?;
             Ok(Some(path))
         }
         (None, None) => Ok(None),
         (Some(_), None) | (None, Some(_)) => Err(JobError::Result(
             "agent result did not match the authorized artifact sink".to_string(),
+        )),
+    }
+}
+
+fn prepare_artifact_path(root: &Path, relative: &Path) -> Result<PathBuf, JobError> {
+    let mut parent = root.to_path_buf();
+    for component in relative.parent().into_iter().flat_map(Path::components) {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                parent.push(name);
+                ensure_real_directory(&parent)?;
+            }
+            _ => return Err(JobError::Artifact(relative.display().to_string())),
+        }
+    }
+    let destination = root.join(relative);
+    match std::fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(JobError::Artifact(format!("{} is a symbolic link", relative.display())));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(JobError::Artifact(format!(
+                "{} is not a regular file",
+                relative.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error("could not inspect artifact path", &error)),
+    }
+    Ok(destination)
+}
+
+fn ensure_real_directory(path: &Path) -> Result<(), JobError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(JobError::Artifact(format!("{} is a symbolic link", path.display())))
+        }
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(JobError::Artifact(format!("{} is not a directory", path.display()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(path).map_err(|source| {
+            io_error(
+                format!("could not create artifact directory {}", path.display()),
+                &source,
+            )
+        }),
+        Err(error) => Err(io_error(
+            format!("could not inspect artifact directory {}", path.display()),
+            &error,
         )),
     }
 }
@@ -363,6 +438,17 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), JobError> {
         .map_err(|source| io_error(format!("could not write {}", path.display()), &source))
 }
 
+fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), JobError> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    AtomicFile::new(path, AllowOverwrite)
+        .write_with_options(|file| file.write_all(bytes).and_then(|()| file.sync_all()), options)
+        .map_err(std::io::Error::from)
+        .map_err(|source| io_error(format!("could not write {}", path.display()), &source))
+}
+
 fn emit_tool_event(tool: &str, json_output: bool) -> Result<(), JobError> {
     if json_output {
         println!("{}", json!({"type":"tool_completed","tool":tool}));
@@ -416,5 +502,82 @@ mod tests {
         assert!(authorized_artifact("save to ../../outside.csv").is_err());
         assert!(authorized_artifact("save to /tmp/outside.csv").is_err());
         assert_eq!(authorized_artifact("summarize the page").expect("no artifact"), None);
+        assert_eq!(
+            authorized_artifact("Write a summary of the page").expect("ordinary prose"),
+            None
+        );
+        assert_eq!(
+            authorized_artifact("Rewrite to improve clarity").expect("rewrite is not an output verb"),
+            None
+        );
+        assert_eq!(
+            authorized_artifact("Save a CSV as \"results/market summary.csv\"").expect("quoted artifact"),
+            Some(PathBuf::from("results/market summary.csv"))
+        );
+        assert!(authorized_artifact("export report.pdf").is_err());
+    }
+
+    #[test]
+    fn artifact_writes_replace_regular_files() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp root: {error}"));
+        let destination = root.path().join("reports").join("result.csv");
+        std::fs::create_dir(
+            destination
+                .parent()
+                .unwrap_or_else(|| panic!("artifact parent missing")),
+        )
+        .unwrap_or_else(|error| panic!("create artifact parent: {error}"));
+        std::fs::write(&destination, "old").unwrap_or_else(|error| panic!("seed artifact: {error}"));
+
+        let written = write_artifact(
+            root.path(),
+            Some(PathBuf::from("reports/result.csv")),
+            Some("new".to_string()),
+        )
+        .unwrap_or_else(|error| panic!("write artifact: {error}"));
+
+        assert_eq!(written.as_deref(), Some(destination.as_path()));
+        assert_eq!(std::fs::read_to_string(&destination).ok().as_deref(), Some("new"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = std::fs::metadata(&destination)
+                .unwrap_or_else(|error| panic!("inspect artifact: {error}"))
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_writes_reject_symlink_destinations_and_parents() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp root: {error}"));
+        let outside = tempfile::tempdir().unwrap_or_else(|error| panic!("create outside root: {error}"));
+        let target = outside.path().join("target.csv");
+        std::fs::write(&target, "unchanged").unwrap_or_else(|error| panic!("seed outside target: {error}"));
+        symlink(&target, root.path().join("result.csv"))
+            .unwrap_or_else(|error| panic!("create destination symlink: {error}"));
+
+        let destination_result = write_artifact(
+            root.path(),
+            Some(PathBuf::from("result.csv")),
+            Some("replacement".to_string()),
+        );
+        assert!(matches!(destination_result, Err(JobError::Artifact(_))));
+        assert_eq!(std::fs::read_to_string(&target).ok().as_deref(), Some("unchanged"));
+
+        symlink(outside.path(), root.path().join("linked"))
+            .unwrap_or_else(|error| panic!("create parent symlink: {error}"));
+        let parent_result = write_artifact(
+            root.path(),
+            Some(PathBuf::from("linked/escaped.csv")),
+            Some("escape".to_string()),
+        );
+        assert!(matches!(parent_result, Err(JobError::Artifact(_))));
+        assert!(!outside.path().join("escaped.csv").exists());
     }
 }
