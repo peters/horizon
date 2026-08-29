@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -84,6 +85,8 @@ impl OwnedHostProcess {
     /// Returns when the subprocess cannot start, initialize, or publish its
     /// first browser manifest before the startup deadline.
     pub fn start(options: StandaloneOptions, home: &Path, stderr: File) -> Result<Self, StandaloneError> {
+        let manifests = home.join(".horizon").join("runtime").join("browsers");
+        let existing_manifests = manifest::list_panels_in(&manifests).into_iter().collect::<HashSet<_>>();
         let executable = std::env::current_exe()
             .map_err(|error| StandaloneError::Startup(format!("could not resolve horizon-browser: {error}")))?;
         let mut command = Command::new(executable);
@@ -103,7 +106,7 @@ impl OwnedHostProcess {
             .stderr(Stdio::from(stderr))
             .spawn()
             .map_err(|error| StandaloneError::Startup(format!("could not start browser host: {error}")))?;
-        let Some(mut stdin) = child.stdin.take() else {
+        let Some(stdin) = child.stdin.take() else {
             let _ = child.kill();
             let _ = child.wait();
             return Err(StandaloneError::Startup(
@@ -113,21 +116,22 @@ impl OwnedHostProcess {
         let initialize = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 "#;
-        if let Err(error) = stdin.write_all(initialize).and_then(|()| stdin.flush()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(StandaloneError::Startup(format!(
-                "could not initialize browser host: {error}"
-            )));
-        }
+        let child_id = child.id();
         let mut host = Self {
             child,
             stdin: Some(stdin),
         };
-        let manifests = home.join(".horizon").join("runtime").join("browsers");
+        if let Some(stdin) = host.stdin.as_mut()
+            && let Err(error) = stdin.write_all(initialize).and_then(|()| stdin.flush())
+        {
+            let _ = host.stop();
+            return Err(StandaloneError::Startup(format!(
+                "could not initialize browser host: {error}"
+            )));
+        }
         let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
         while std::time::Instant::now() < deadline {
-            if !manifest::list_panels_in(&manifests).is_empty() {
+            if host_manifest_available(&manifests, &existing_manifests, child_id) {
                 return Ok(host);
             }
             if let Some(status) = host
@@ -160,13 +164,20 @@ impl OwnedHostProcess {
             match self.child.try_wait() {
                 Ok(Some(status)) => return status.success(),
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => return false,
+                Err(_) => break,
             }
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
         false
     }
+}
+
+fn host_manifest_available(manifests: &Path, existing: &HashSet<String>, child_id: u32) -> bool {
+    let expected_prefix = format!("standalone-{child_id}-");
+    manifest::list_panels_in(manifests)
+        .into_iter()
+        .any(|panel_id| panel_id.starts_with(&expected_prefix) && !existing.contains(&panel_id))
 }
 
 impl Drop for OwnedHostProcess {
@@ -316,6 +327,46 @@ const fn backend_name(backend: BackendKind) -> &'static str {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_readiness_ignores_stale_and_unrelated_manifests() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp home: {error}"));
+        let manifests = home.path().join("runtime").join("browsers");
+        let stale = "standalone-42-before";
+        manifest::write_at(
+            &manifest::manifest_path_for_root(home.path(), stale),
+            &horizon_core::browser::manifest::BrowserManifest {
+                panel_local_id: stale.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("write stale manifest: {error}"));
+        let existing = HashSet::from([stale.to_string()]);
+
+        assert!(!host_manifest_available(&manifests, &existing, 42));
+
+        let unrelated = "standalone-7-after";
+        manifest::write_at(
+            &manifest::manifest_path_for_root(home.path(), unrelated),
+            &horizon_core::browser::manifest::BrowserManifest {
+                panel_local_id: unrelated.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("write unrelated manifest: {error}"));
+        assert!(!host_manifest_available(&manifests, &existing, 42));
+
+        let current = "standalone-42-after";
+        manifest::write_at(
+            &manifest::manifest_path_for_root(home.path(), current),
+            &horizon_core::browser::manifest::BrowserManifest {
+                panel_local_id: current.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("write current manifest: {error}"));
+        assert!(host_manifest_available(&manifests, &existing, 42));
+    }
 
     #[test]
     fn owned_host_closes_stdin_before_waiting_for_exit() {
