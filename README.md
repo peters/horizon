@@ -451,8 +451,9 @@ target/debug/horizon-browser run browser-job.json --output browser-report.json
 
 Any MCP-capable agent host can launch `horizon-browser mcp` to provide the same
 tool contract. Prompt adaptation stays outside the browser engine and is
-optional; deterministic `run` jobs remain model-free and persist a private job
-id, validated plan, atomic lifecycle state, and final report. See the
+optional; deterministic `run` jobs remain model-free and always persist a
+private job id, validated plan, and atomic lifecycle state. Runs that reach
+plan execution also persist a final report. See the
 [CLI README](crates/horizon-browser-cli/README.md) for prompt behavior, the plan
 format, typed result references, output behavior, and lifecycle boundaries.
 

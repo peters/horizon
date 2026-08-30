@@ -43,7 +43,7 @@ pub struct RunState {
     pub report_file: Option<String>,
     /// Number of step reports produced before the run stopped.
     pub completed_steps: usize,
-    /// Private execution error, when the job failed before producing a report.
+    /// Private initialization, plan-execution, or MCP shutdown error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -66,10 +66,10 @@ pub enum RunStatus {
 pub struct DurableExecutionReport<'a> {
     /// Stable id of the durable run.
     pub job_id: &'a str,
-    /// Private directory containing the saved plan, state, and report.
-    pub job_dir: &'a Path,
-    /// Atomic lifecycle state for the durable run.
-    pub state_path: &'a Path,
+    /// JSON-safe display path to the private job directory.
+    pub job_dir: String,
+    /// JSON-safe display path to the atomic lifecycle state.
+    pub state_path: String,
     /// Existing versioned plan-execution report.
     #[serde(flatten)]
     pub execution: &'a ExecutionReport,
@@ -155,8 +155,8 @@ impl DurableRun {
     pub fn report<'a>(&'a self, execution: &'a ExecutionReport) -> DurableExecutionReport<'a> {
         DurableExecutionReport {
             job_id: &self.state.job_id,
-            job_dir: &self.directory,
-            state_path: &self.state_path,
+            job_dir: self.directory.display().to_string(),
+            state_path: self.state_path.display().to_string(),
             execution,
         }
     }
@@ -337,5 +337,34 @@ mod tests {
         assert_eq!(failed.status, RunStatus::Failed);
         assert_eq!(failed.error.as_deref(), Some("adapter unavailable"));
         assert!(failed.report_file.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_job_root_reaches_terminal_state() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let temporary = tempfile::tempdir().expect("temporary home parent");
+        let home = temporary.path().join(OsString::from_vec(b"home-\xff".to_vec()));
+        let root = home.join(".horizon/browser-jobs");
+        let mut run = DurableRun::start_in(&root, &plan()).expect("start durable run");
+        let report = ExecutionReport {
+            version: 1,
+            ok: true,
+            completed_steps: 0,
+            steps: Vec::new(),
+            error: None,
+        };
+
+        run.finish(&report).expect("finish durable run");
+
+        let state: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
+            .expect("decode terminal state");
+        assert_eq!(state.status, RunStatus::Succeeded);
+        serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(run.directory.join(REPORT_FILE)).expect("saved report"),
+        )
+        .expect("decode saved report");
     }
 }
