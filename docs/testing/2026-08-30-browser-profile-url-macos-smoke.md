@@ -123,7 +123,9 @@ backends must agree.
    `example.com` again.
 5. Navigate to an HTTPS URL containing a path, query, and fragment. The
    unfocused form must omit only the HTTPS scheme while retaining the path,
-   query, and fragment; focus must reveal the full canonical URL.
+   query, and fragment; focus must reveal the full canonical URL. Include
+   `https://example.com?q=/` and `https://example.com#/`; their trailing slash
+   must remain part of the query or fragment.
 6. Start a task-owned loopback HTTP fixture and submit its explicit
    `http://127.0.0.1:<port>/` URL. The bar must retain the `http://` prefix both
    focused and unfocused. Do not compact an insecure URL into an ambiguous

@@ -264,7 +264,9 @@ Run these checks on each selected backend while G1 is open:
    URL. Submit the fixture's explicit `http://` URL and require that override
    to remain HTTP and fully visible. Submit `https://user@/` and
    `https://:443/`; neither hostless target may be compacted into a misleading
-   scheme-less value.
+   scheme-less value. Also submit `https://example.com?q=/` and
+   `https://example.com#/`; compaction must preserve the slash belonging to
+   the query or fragment.
 7. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
    off-screen placement, detach, native-window move/resize, and reattach.
    Capture launch and post-interaction screenshots. Record a native position

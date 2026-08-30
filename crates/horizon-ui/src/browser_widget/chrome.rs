@@ -241,10 +241,11 @@ fn address_bar_url(url: &str, focused: bool) -> &str {
     if parsed.host_str().is_none_or(str::is_empty) {
         return url;
     }
-    compact
-        .strip_suffix('/')
-        .filter(|authority| !authority.contains('/'))
-        .unwrap_or(compact)
+    if parsed.path() == "/" && parsed.query().is_none() && parsed.fragment().is_none() {
+        compact.strip_suffix('/').unwrap_or(compact)
+    } else {
+        compact
+    }
 }
 
 /// The chip's label and color, or `None` when neither an agent owner nor a
@@ -326,6 +327,9 @@ mod tests {
         );
         assert_eq!(address_bar_url("https://example.com/", false), "example.com");
         assert_eq!(address_bar_url("https://example.com/path/", false), "example.com/path/");
+        assert_eq!(address_bar_url("https://example.com?q=/", false), "example.com?q=/");
+        assert_eq!(address_bar_url("https://example.com#/", false), "example.com#/");
+        assert_eq!(address_bar_url("https://example.com/?q=1", false), "example.com/?q=1");
         assert_eq!(
             address_bar_url("http://example.com/path", false),
             "http://example.com/path"
