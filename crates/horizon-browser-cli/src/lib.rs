@@ -6,6 +6,7 @@
 //! add a second browser action API: it connects an MCP client to the same
 //! [`horizon_browser_mcp::HorizonBrowserMcp`] service used by agents.
 
+pub mod job;
 pub mod standalone;
 
 use std::collections::{BTreeMap, BTreeSet};

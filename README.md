@@ -435,22 +435,23 @@ with `--backend`, or use `--connect` to control panels already hosted by
 Horizon. The runner deliberately adds no alternate browser action API and
 accepts no actor-impersonation flag.
 
-For an interactive task, users normally describe the goal to an agent panel
-instead of writing JSON. Horizon advertises the MCP tools automatically, the
-agent drives a visible or hidden browser, and the user can reveal or steer the
-same page when needed. JSON plans are the deterministic interface for repeatable
-jobs and CI:
+For an adaptive task, users can describe the goal to an agent panel or pass it
+directly to the CLI. Prompt jobs start hidden with automatic backend selection;
+`--visible` exposes the native window and `--json` emits machine-readable
+progress. A user-authorized relative output path in the prompt becomes a
+constrained artifact sink:
 
 ```bash
 cargo build -p horizon-browser-cli
+horizon-browser "Go to amazon.com, extract 100 products with price and reviews, save to products.csv"
 target/debug/horizon-browser run browser-job.json --output browser-report.json
 ```
 
 Any MCP-capable agent host can launch `horizon-browser mcp` to provide the same
-tool contract. The CLI does not yet contain its own model-backed agent loop, so
-passing a natural-language goal directly to `run` is not currently supported.
-See the [CLI README](crates/horizon-browser-cli/README.md) for the plan format,
-typed result references, output behavior, and lifecycle boundaries.
+tool contract. Prompt adaptation stays outside the browser engine and is
+optional; deterministic `run` jobs remain model-free. See the
+[CLI README](crates/horizon-browser-cli/README.md) for prompt behavior, the plan
+format, typed result references, output behavior, and lifecycle boundaries.
 
 The engine is isolated in [`crates/horizon-browser`](crates/horizon-browser)
 for reuse by non-Horizon applications. It has no Horizon, egui, winit, Tokio,
