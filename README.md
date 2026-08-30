@@ -15,20 +15,91 @@
 
 <p align="center">
   <b>Horizon</b> is a GPU-accelerated terminal board that puts all your sessions<br/>
-  on an infinite canvas. Organize by workspace, launch from presets, quick-nav fast, and never lose a terminal again.
+  on an infinite canvas. Workspaces group related panels. Presets launch them.<br/>
+  The command palette jumps you there. Close the app — the board is still there tomorrow.
 </p>
 
 <p align="center">
   <img src="assets/demo.gif" alt="Horizon demo — panning across AI Agents, Dev, and Monitoring workspaces" width="800" />
 </p>
 
+<p align="center">
+  <a href="#the-model">The model</a> ·
+  <a href="#five-minutes-on-the-canvas">Five minutes</a> ·
+  <a href="#highlights">Highlights</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#keyboard-and-mouse">Shortcuts</a> ·
+  <a href="#configuration">Config</a> ·
+  <a href="#browser-panels">Browser</a> ·
+  <a href="#speech-input-opt-in">Speech</a>
+</p>
+
 ---
 
 ## Why Horizon?
 
-Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal lives as a panel you can place, resize, and group however you want.
+Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal, agent, browser, and editor lives as a panel you can place, resize, and group.
 
-Think of it as a whiteboard for your terminal sessions with a structured workflow on top. Start with color-coded workspaces, launch preset panels, jump with Quick Nav, and fit the active workspace whenever you want a clean overview.
+Think of it as a whiteboard for live sessions, with a structured workflow on top: color-coded workspaces, preset panels, a command palette, and fit-to-workspace whenever you want a clean overview.
+
+---
+
+## The model
+
+Horizon has five nouns. Everything else is a shortcut, a preset, or a panel kind.
+
+| Noun | What it is | How you use it |
+|:-----|:-----------|:---------------|
+| **Canvas** | The infinite 2D surface | Middle-mouse or Space+drag to pan. Ctrl+scroll to zoom. Minimap to jump. |
+| **Workspace** | A color-coded cluster with a shared working directory | Ctrl+double-click the canvas and pick a preset, or click **New** in the sidebar. Arrange with **Default** (free), **Rows**, **Cols**, or **Grid**. Detach it to its own window. |
+| **Panel** | One live surface inside a workspace | Shell, SSH, coding agent, browser, markdown, git, or usage. |
+| **Preset** | A named template for a new panel | Command palette, Ctrl+double-click, or **Ctrl+Shift+N** (first preset). |
+| **Session** | A saved board | Close Horizon and come back. **Ctrl+Shift+J** switches between saved boards. |
+
+A typical board looks like this:
+
+```
+Session
+└── Canvas
+    ├── Workspace "Backend"     cwd: ~/projects/api
+    │     ├── Shell
+    │     ├── Grok
+    │     ├── Browser  →  http://127.0.0.1:3000
+    │     └── Git Changes
+    └── Workspace "Frontend"    cwd: ~/projects/web
+          ├── Shell
+          └── Claude
+```
+
+Workspaces stay visible. There are no hidden tabs. If something is off-screen, pan, zoom, fit, or search — do not hunt through a tab strip.
+
+### Panel kinds
+
+| Kind | What you get |
+|:-----|:-------------|
+| `shell` | Login shell in the workspace directory |
+| `ssh` | Remote shell — usually from the Remote Hosts overlay |
+| `grok` · `claude` · `codex` · `open_code` · `gemini` · `kilo_code` · `pi` | First-class coding-agent TUIs, with session resume where the CLI supports it |
+| `browser` | Live Chromium, Firefox, or Safari on the canvas, shared with agents |
+| `editor` | Markdown split view (syntax + preview) |
+| `git_changes` | Changed files, diffs, and hunks for the workspace repo |
+| `usage` | Token spend across agent panels |
+| `command` | Run an arbitrary command as a panel |
+
+---
+
+## Five minutes on the canvas
+
+You do not need a config file to start. Launch Horizon, then:
+
+1. **Ctrl+double-click** empty canvas. A preset list appears. Pick **Shell** (or **Grok**, **Claude**, **Browser**, …). Shell and agent presets then ask for a working directory — that becomes the workspace cwd, and the first panel lands there.
+2. Press **Ctrl+Shift+N** for another panel of the first preset (Shell by default), or **Ctrl+Shift+K** and type a preset alias (`gb`, `cc`, `web`, `gc`).
+3. On the workspace header, click **Rows**, **Cols**, or **Grid** when you want structure, or **Default** to drag freely.
+4. Press **Ctrl+Shift+9** to fit the workspace into view. Press **Ctrl+Shift+W** to jump back to it without changing zoom.
+5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for actions only.
+6. Close Horizon. Reopen it tomorrow — the session, layout, scroll positions, and terminal history are still there.
+
+Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a Browser panel for a live page, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
 
 ---
 
@@ -39,13 +110,13 @@ Think of it as a whiteboard for your terminal sessions with a structured workflo
 <td width="50%">
 
 ### Infinite Canvas
-Pan and zoom freely across a boundless workspace surface. Place terminals anywhere. A **minimap** in the corner keeps you oriented — click it to jump.
+Pan and zoom freely. Place panels anywhere. A **minimap** in the corner keeps you oriented — click or drag it to jump.
 
 </td>
 <td width="50%">
 
 ### Workspaces
-Group related panels into **color-coded workspaces**. Auto-arrange with three layout modes — rows, columns, grid — or drag panels freely.
+Group related panels into **color-coded workspaces**. Auto-arrange with rows, columns, or grid — or drag freely. **Detach** a workspace into its own OS window.
 
 </td>
 </tr>
@@ -53,13 +124,27 @@ Group related panels into **color-coded workspaces**. Auto-arrange with three la
 <td>
 
 ### Full Terminal Emulation
-24-bit color, mouse reporting, scrollback, alt-screen, and Kitty keyboard protocol. Powered by the **Alacritty terminal engine** — the same one behind the fastest terminal on the planet.
+24-bit color, mouse reporting, scrollback, alt-screen, and Kitty keyboard protocol. Powered by the **Alacritty terminal engine**. Click a TUI (Grok, vim, less, …) and the click goes to the app; **Shift+click** still selects text.
 
 </td>
 <td>
 
+### Command Palette
+**Ctrl+Shift+K** searches workspaces, panels, presets, and actions. Prefix `>` for actions only, `@` for panels only. Selecting a panel pans the canvas to it.
+
+</td>
+</tr>
+<tr>
+<td>
+
 ### AI Agent Panels
-First-class **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, and **KiloCode** integration. Session persistence and resume work where the underlying agent CLI supports it. A live **usage dashboard** tracks token spend across agents.
+First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, **KiloCode**, and **Pi** integration. Session persistence and resume work where the CLI supports it. Title bars show a **working** indicator and, when a session is bound, its id. A live **usage dashboard** tracks token spend.
+
+</td>
+<td>
+
+### Browser Panels
+Run Chromium, Firefox, or Safari automation on the canvas. You and an agent share the same live page — navigate, inspect, click, fill, capture network traffic, then hand control back and forth.
 
 </td>
 </tr>
@@ -67,13 +152,13 @@ First-class **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, and **Kilo
 <td>
 
 ### Git Integration
-A built-in **git status panel** watches your repo in the background. See changed files, inline diffs, and hunk-level detail — no context switching.
+A built-in **git status panel** watches the workspace repo. See changed files, inline diffs, and hunk-level detail without leaving the canvas.
 
 </td>
 <td>
 
 ### Smart Detection
-**Ctrl+click** a URL to open it. Hover a file path and click to jump to it. Horizon sees what your terminal prints and makes it interactive.
+**Click** an OSC 8 hyperlink to open it. **Ctrl+click** a URL or file path under the cursor. Horizon sees what the terminal prints and makes it interactive.
 
 </td>
 </tr>
@@ -81,13 +166,13 @@ A built-in **git status panel** watches your repo in the background. See changed
 <td>
 
 ### Remote Hosts
-**Ctrl+Shift+H** opens a fast overlay that discovers hosts from SSH config and Tailscale. Search, filter, and connect instantly. Type **user@filter** to override the SSH user. Connected sessions are grouped into a **Remote Sessions** grid workspace.
+**Ctrl+Shift+H** discovers hosts from SSH config and Tailscale. Search, filter, and connect. Type **user@filter** to override the SSH user. Connected sessions land in a **Remote Sessions** grid workspace.
 
 </td>
 <td>
 
 ### Live Settings Editor
-Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highlighting** and live preview. Toggle between **light and dark themes** or follow the system; every change applies instantly to the canvas behind it.
+**Ctrl+Shift+,** opens the config as a side panel with YAML highlighting and live preview. Toggle **light / dark / auto** themes; changes apply to the canvas behind the editor.
 
 </td>
 </tr>
@@ -95,27 +180,27 @@ Open the config with **Ctrl+Shift+,** — a side panel with **YAML syntax highli
 <td>
 
 ### Session Persistence
-Close Horizon, come back tomorrow. By default, your sessions, panel layouts, scroll positions, and terminal history are restored exactly as you left them. An opt-in setting can organize attached workspaces into a horizontal row after restore.
+Close Horizon, come back tomorrow. Sessions, panel layouts, scroll positions, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row after restore.
 
 </td>
 <td>
 
 ### Markdown Editor
-Drop a `.md` file onto the canvas or create one from the command palette. **Split view** with syntax highlighting and live preview, saved with **Ctrl+Shift+S**.
+Drop a `.md` file onto the canvas or create one from the palette. **Split view** with syntax highlighting and live preview, saved with **Ctrl+Shift+S**.
 
 </td>
 </tr>
 <tr>
 <td>
 
-### Browser Panels
-Run Chromium, Firefox, or supported Safari automation directly on the canvas. Navigate, inspect the DOM, interact, capture network traffic, and hand the same live page between an agent and the user.
+### Speech Input
+Opt-in, on-device dictation into terminals and browser pages. Hold a push-to-talk key (default **F9**) or use the title-bar mic. Nothing leaves the machine.
 
 </td>
 <td>
 
 ### Audited Browser Automation
-Agents discover one MCP browser contract automatically. Every action is correlated in a redacted audit trail, while the `horizon-browser` CLI runs repeatable plans and writes structured results to stdout or a private file.
+Agents discover one MCP browser contract automatically. Every action is correlated in a redacted audit trail. The `horizon-browser` CLI runs prompt jobs and repeatable JSON plans.
 
 </td>
 </tr>
@@ -197,17 +282,14 @@ cargo run --release
 
 ---
 
-## Quick Tour
+## Keyboard and mouse
 
-### Keyboard Shortcuts
-
-Most app shortcuts use **Ctrl+Shift** to avoid conflicts with shell programs (Ctrl+C, Ctrl+K, Ctrl+B, etc.) and OS-level bindings. Canvas zoom keeps the standard **Ctrl/Cmd+0**, **Ctrl/Cmd+Plus**, and **Ctrl/Cmd+Minus** bindings. They are configurable through the `shortcuts:` block in your config file and editable from the built-in settings panel.
-Duplicate or overlapping bindings are rejected, including near-conflicts such as `Ctrl+B` and `Ctrl+Shift+B`.
+Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C, Ctrl+K, Ctrl+B, …) or OS bindings. Canvas zoom keeps **Ctrl/Cmd+0**, **Ctrl/Cmd+Plus**, and **Ctrl/Cmd+Minus**. Bindings live in the `shortcuts:` block and in Settings. Duplicate or overlapping bindings are rejected, including near-conflicts such as `Ctrl+B` and `Ctrl+Shift+B`.
 
 | Shortcut | What it does |
 |:---------|:-------------|
-| **Ctrl+Shift+K** | Quick-navigate to any workspace |
-| **Ctrl+Shift+N** | New terminal panel |
+| **Ctrl+Shift+K** | Command palette — jump to a workspace, panel, preset, or action |
+| **Ctrl+Shift+N** | New panel from the first preset |
 | **Ctrl+Shift+W** | Focus the active workspace at the current zoom |
 | **Ctrl+Shift+9** | Fit the active workspace into view |
 | **Ctrl+Shift+H** | Open Remote Hosts overlay |
@@ -229,18 +311,6 @@ Duplicate or overlapping bindings are rejected, including near-conflicts such as
 | **Ctrl+Shift+V** | Paste into the focused terminal |
 | **Ctrl+Shift+R** | Reconnect the focused disconnected SSH panel |
 
-### Structured Workflow
-
-If you do not want to start by dragging panels around the canvas, use Horizon like this:
-
-1. Create a workspace from the toolbar or with **Ctrl+double-click** on the canvas.
-2. Add a terminal from your first preset with **Ctrl+Shift+N**.
-3. Jump between workspaces with **Quick Nav** using **Ctrl+Shift+K**.
-4. Use **Ctrl+Shift+W** to refocus the current workspace or **Ctrl+Shift+9** to fit it into view.
-5. Use the workspace header controls for **Rows**, **Cols**, or **Grid** when you want a structured layout without leaving the canvas.
-
-### Mouse Actions
-
 | Interaction | What it does |
 |:------------|:-------------|
 | **Middle-mouse drag** | Pan the canvas |
@@ -251,8 +321,8 @@ If you do not want to start by dragging panels around the canvas, use Horizon li
 | **Shift+Click/drag** | Select terminal text while the app has mouse reporting |
 | **Click** an OSC 8 hyperlink | Open the link in the default handler |
 | **Ctrl+Click** | Open URL, file path, or hyperlink under cursor |
-| **Ctrl+double-click** canvas | Create a new workspace |
-| **Ctrl+double-click** inside a workspace | Add a new terminal |
+| **Ctrl+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
+| **Ctrl+double-click** inside a workspace | Open the preset picker to add a panel |
 
 <sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings, and on Windows you can also use Ctrl+Insert / Shift+Insert. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
 
@@ -260,7 +330,9 @@ If you do not want to start by dragging panels around the canvas, use Horizon li
 
 ## Configuration
 
-The settings editor writes back to the same config file Horizon loaded. By default that is `~/.horizon/config.yaml`, and `config.yml` is also supported when discovered or passed explicitly. You can define workspaces, panel presets, feature flags, and keyboard shortcuts:
+The settings editor writes back to the same file Horizon loaded. By default that is `~/.horizon/config.yaml` (`config.yml` is also accepted). You can seed workspaces, panel presets, feature flags, and shortcuts.
+
+Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys are ignored, so a `panels:` block will not create anything.
 
 ```yaml
 appearance:
@@ -272,6 +344,7 @@ shortcuts:
   focus_active_workspace: Ctrl+Shift+W
   fit_active_workspace: Ctrl+Shift+9
   open_remote_hosts: Ctrl+Shift+H
+  toggle_sessions: Ctrl+Shift+J
   toggle_sidebar: Ctrl+Shift+B
   toggle_hud: Ctrl+Shift+U
   toggle_minimap: Ctrl+Shift+M
@@ -289,25 +362,38 @@ shortcuts:
 workspaces:
   - name: Backend
     cwd: ~/projects/api
-    panels:
-      - kind: shell
-      - kind: claude
-      - kind: open_code
-      - kind: git_changes
+    terminals:
+      - name: Shell
+        kind: shell
+      - name: Grok
+        kind: grok
+      - name: App
+        kind: browser
+        command: http://127.0.0.1:3000
+      - name: Git
+        kind: git_changes
 
   - name: Frontend
     cwd: ~/projects/web
-    panels:
-      - kind: shell
-      - kind: shell
+    terminals:
+      - name: Shell
+        kind: shell
+      - name: Claude
+        kind: claude
 
 presets:
   - name: Shell
     alias: sh
     kind: shell
+  - name: Grok
+    alias: gb
+    kind: grok
   - name: Claude Code
     alias: cc
     kind: claude
+  - name: Codex
+    alias: cx
+    kind: codex
   - name: OpenCode
     alias: oc
     kind: open_code
@@ -317,9 +403,21 @@ presets:
   - name: KiloCode
     alias: kc
     kind: kilo_code
+  - name: Pi
+    alias: pi
+    kind: pi
+  - name: Browser
+    alias: web
+    kind: browser
   - name: Git Changes
     alias: gc
     kind: git_changes
+  - name: Markdown
+    alias: md
+    kind: editor
+  - name: Usage
+    alias: u
+    kind: usage
 
 features:
   # Optional: disable the default attention feed
@@ -330,48 +428,55 @@ features:
   sidebar_accordion: true
 ```
 
-`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as `Ctrl+Shift+A` whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles, preventing an interaction from being overwritten by the one-shot layout. The default-disabled path does not show this modal overlay. Changing the setting in the live editor takes effect when a session is next loaded.
+`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
 `features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features or by setting the flag in `config.yaml`. Like other General feature toggles, the Settings editor applies the change immediately as a live preview; save to persist it, or close/revert without saving to restore the previous value.
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
 
+Fresh configs already ship the agent, browser, git, markdown, and usage presets above. Existing configs gain missing defaults through migration (Grok, Pi, Browser, and the others) without overwriting presets you renamed.
+
+### Launch flags
+
+| Flag | What it does |
+|:-----|:-------------|
+| `--config <path>` / `-c <path>` | Load an explicit config file |
+| `--ephemeral` | Do not persist this run |
+| `--new-session` | Start a new saved session from the current config |
+| `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
+
 ---
 
 ## Browser Panels
 
-Browser panels render a real browser inside the Horizon canvas through the first-party `horizon-browser` engine. Add one from the built-in **Browser** (`web`) preset, or declare one in a workspace and use `command` as its initial URL:
+Browser panels render a real browser on the canvas through the first-party `horizon-browser` engine. Add one from the **Browser** (`web`) preset, or declare it in a workspace — `command` is the initial URL:
 
 ```yaml
 workspaces:
   - name: Web
-    panels:
+    terminals:
       - name: App
         kind: browser
         command: http://127.0.0.1:3000
 ```
 
-The panel is a shared human-and-agent browser session. Today it can:
+The panel is a shared human-and-agent session. It can:
 
 - navigate, reload, traverse history, wait for page state, and query or snapshot semantic DOM nodes;
-- click (including trusted double-click), fill, scroll, evaluate bounded JavaScript, and preserve the URL while the page scrolls;
-- start visible or hidden, switch visibility without losing the session, and pause automation for user steering before handing the same panel back;
-- capture bounded HTTP metadata and response bodies plus high-rate WebSocket lifecycle and frames on Chromium and Firefox, with cursor-based MCP watching or a private NDJSON export;
-- reconnect an MCP client without restarting the browser and retain a redacted action audit after the panel closes.
+- click (including trusted double-click), fill, scroll, evaluate bounded JavaScript, and keep the URL while the page scrolls;
+- start visible or hidden, switch visibility without losing the session, and pause automation so you can steer before handing the same panel back;
+- capture bounded HTTP metadata and response bodies plus high-rate WebSocket frames on Chromium and Firefox;
+- reconnect an MCP client without restarting the browser, and keep a redacted action audit after the panel closes.
 
 Safari shares the semantic action and audit surface but currently reports network capture as unsupported.
-
-The backend picker in each panel switches among the protocols supported on the current host:
 
 | Backend | Automation and pixels | Prerequisites | Important limits |
 |:--|:--|:--|:--|
 | **Chromium** | CDP with change-driven JPEG screencast frames | Chrome, Chromium, Edge, or Brave | Push frames; separate persistent profile per panel |
 | **Firefox** | WebDriver BiDi plus adaptive lossless WebDriver screenshots | Firefox and `geckodriver` | Screenshots, not a live BiDi video stream; capture decays to zero on a static page and is capped at 30 fps while active |
-| **Safari** | Classic WebDriver screenshots, with BiDi events when `webSocketUrl` is negotiated | macOS, Safari, and an explicitly enabled `safaridriver` | One automation session at a time; isolated Safari automation state; exact-head macOS validation is required before release support is claimed |
+| **Safari** | Classic WebDriver screenshots, with BiDi events when `webSocketUrl` is negotiated | macOS, Safari, and an explicitly enabled `safaridriver` | One automation session at a time; isolated Safari automation state |
 
-Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself before a Safari smoke test. Safari remains disabled in the picker on Linux and Windows.
-
-The browser settings select the default backend and allow explicit executable paths:
+Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself. Safari remains disabled in the picker on Linux and Windows.
 
 ```yaml
 browser:
@@ -386,98 +491,30 @@ browser:
   profile_root: ~/.horizon/browser-profiles
 ```
 
-All executable fields are optional. Chromium and Firefox receive separate directories beneath `profile_root`, so cookies and page storage persist for a saved panel without sharing a browser profile lock. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not expose or reuse the user's normal history, AutoFill data, cookies, or preferences.
+All executable fields are optional. Chromium and Firefox get separate directories under `profile_root`. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not reuse your normal history, cookies, or preferences.
 
-Chromium is the only push-frame backend. Firefox and Safari deliberately use newest-frame adaptive screenshots because the standardized BiDi recording command writes a remote media file; it is not an interactive client-frame stream. Firefox still uses BiDi for contexts, navigation, lifecycle events, and input, while its measured-faster classic WebDriver PNG endpoint supplies pixels. Horizon permits one capture in flight, discards a result superseded by navigation/context/viewport generation changes, coalesces input and resize demand, and keeps the prior valid frame after a decode failure.
+### Agent steering, audit, and CLI
 
-### Agent steering and audit
+Horizon-launched Codex and Claude agents receive the bundled `horizon-browser` MCP server automatically. Agents start with `browser_list` and use `browser_create` to open a visible browser in their own workspace when none exists. They reuse that panel for iframe, popup, dialog, and consent flows. A fresh user page action pauses the agent queue for five seconds; an explicit handoff keeps it paused until you select **Done — hand back to agent**.
 
-MCP is the only agent-facing browser contract. Horizon-launched Codex and
-Claude agents receive the bundled `horizon-browser` MCP server and discovery
-skill automatically. Agents start with `browser_list` and use `browser_create`
-to open a visible browser in their own workspace when none exists. An agent
-reuses that panel for iframe, popup, dialog, and consent flows; creating another
-panel requires the user's explicit request for an independent session and
-`allow_additional: true`. Semantic snapshots expose iframe boundaries, and
-embedded content that cannot be reached through the current top-level semantic
-tools is handled by handing the original panel to the user. Agents then use semantic snapshots and queries,
-ref-based actions, waits, handoff, and audit tools; they never receive
-raw CDP, BiDi, WebDriver, manifest, or result-file endpoints. The validated
-action model is shared by Chromium, Firefox, and Safari. A fresh user page
-action or browser-control action pauses the agent queue for five seconds. An
-explicit handoff keeps it paused until the user selects **Done — hand back to
-agent**.
+MCP is the only agent-facing browser contract. Audit journals live under `~/.horizon/audit/browsers/` and redact credentials, query values, and typed text (stored as a character count). See the [browser crate README](crates/horizon-browser/README.md) for backend and embedding details.
 
-The MCP adapter claims and refreshes ownership automatically. Live discovery,
-action queues, and one-shot results are private implementation files beneath
-`~/.horizon/runtime/browsers/`. Ordered action records remain in private JSONL
-journals beneath `~/.horizon/audit/browsers/` after the panel closes. Audit
-entries identify the user, agent, or system and correlate queue/dispatch state
-with an action id. They exclude printable text content, redact URL credentials,
-query values, fragments, and script/data payloads, and store pasted or typed
-text only as a character count. `dispatched` means the backend adapter received
-the command; use a later MCP snapshot, query, wait, or action result as
-execution evidence. Raw CDP/BiDi/WebDriver clients and direct manifest access
-are outside the supported agent contract.
-Queued agent actions are claimed at most once; after a crash, a queued record
-without a matching dispatched record requires an explicit retry decision. The
-local journal is application-append-only, not tamper-evident compliance
-storage.
-
-For scripts and service hosting, the workspace also builds
-[`horizon-browser-cli`](crates/horizon-browser-cli). Its `run` command consumes a
-versioned JSON plan made of those same MCP tool calls and emits one structured
-report to stdout or an owner-only file; typed `$ref` values can pass a prior
-step's result to a later call. Outside Horizon, `horizon-browser mcp` starts an
-isolated headless Chromium or Firefox session and serves the unchanged local
-stdio MCP contract. Add `--visible` to watch the native window, select a browser
-with `--backend`, or use `--connect` to control panels already hosted by
-Horizon. The runner deliberately adds no alternate browser action API and
-accepts no actor-impersonation flag.
-
-For an adaptive task, users can describe the goal to an agent panel or pass it
-directly to the CLI. Prompt jobs start hidden with automatic backend selection;
-`--visible` exposes the native window and `--json` emits machine-readable
-progress. A user-authorized relative output path in the prompt becomes a
-constrained artifact sink. Each completed job also saves a private redacted MCP
-trace, validated executed plan, and report; plans that depend on redacted or
-ephemeral values are explicitly marked non-replayable:
+For scripts, [`horizon-browser-cli`](crates/horizon-browser-cli/README.md) exposes the same MCP tools three ways: a quoted goal, a deterministic `run` plan, or `mcp` as a standalone stdio server. Deterministic `run` jobs remain model-free and persist a private job id, validated plan, and atomic lifecycle state; runs that reach plan execution also persist a final report.
 
 ```bash
 cargo build -p horizon-browser-cli
-horizon-browser "Go to amazon.com, extract 100 products with price and reviews, save to products.csv"
-target/debug/horizon-browser run browser-job.json --output browser-report.json
+horizon-browser "Go to example.com, extract the heading, save to heading.txt"
+horizon-browser run browser-job.json --output browser-report.json
+horizon-browser mcp --backend firefox --visible
 ```
-
-Any MCP-capable agent host can launch `horizon-browser mcp` to provide the same
-tool contract. Prompt adaptation stays outside the browser engine and is
-optional; deterministic `run` jobs remain model-free and always persist a
-private job id, validated plan, and atomic lifecycle state. Runs that reach
-plan execution also persist a final report. See the
-[CLI README](crates/horizon-browser-cli/README.md) for prompt behavior, the plan
-format, typed result references, output behavior, and lifecycle boundaries.
-
-The engine is isolated in [`crates/horizon-browser`](crates/horizon-browser)
-for reuse by non-Horizon applications. It has no Horizon, egui, winit, Tokio,
-or async-runtime dependency, and hosts provide rendering, persistence,
-coordination, authentication, and audit retention. Its package metadata and
-crate README make a future crates.io release straightforward, but this project
-does not publish the crate as part of the browser-panel rollout.
-
-Contract-only integrations can instead depend on the internal
-[`horizon-browser-protocol`](crates/horizon-browser-protocol) crate. It contains
-the shared serialized actions, results, network records, and redacted audit
-values without pulling in browser transport, process ownership, frame
-decoders, MCP, or Horizon UI. Both crates remain unpublished until a separate
-release decision.
 
 ---
 
 ## Speech Input (opt-in)
 
-Dictate straight into a terminal or a browser page: terminal-backed and Browser panels get a mic button in their title bar (Editor, Git Changes, and Usage panels do not), and a Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
+Dictate into a terminal or a browser page. Terminal-backed and Browser panels get a mic button in the title bar (Editor, Git Changes, and Usage panels do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
 
-It is a compile-time opt-in because it builds a native C++ inference library. The dependency comes from crates.io with the C++ sources vendored inside (no git submodules); you need **CMake and a C++ compiler**, plus on Linux the ALSA headers for microphone capture (`pkg-config` and `libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora):
+Speech is a compile-time opt-in because it builds a native C++ inference library. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
 
 ```bash
 cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)
@@ -485,9 +522,7 @@ cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
 cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
 ```
 
-On Linux, capture routes through PulseAudio/PipeWire (pipewire-pulse) whenever that sound server is running, so the microphone is shared with whatever else is using it (Discord, a video call, ...). Without a sound server it falls back to raw ALSA, which claims the device exclusively.
-
-When a GPU backend is compiled in (Metal ships automatically in plain `speech` on macOS), the `auto` backend probes discrete GPUs first and always falls back to CPU; a CPU-only build simply runs on CPU.
+On Linux, capture routes through PulseAudio/PipeWire whenever that sound server is running, so the microphone stays shared with other apps. Without a sound server it falls back to raw ALSA, which claims the device exclusively.
 
 ```yaml
 features:
@@ -497,26 +532,22 @@ features:
     language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
     task: transcribe     # translate = speak any language, insert English text
     backend: auto        # auto | cpu | cuda | vulkan | metal
-    input_device: ""     # microphone name (exact, substring, or cross-backend-normalized, e.g. "NT-USB"); "" = system default
+    input_device: ""     # microphone name; "" = system default
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
-    preload: false       # true = load the model at startup; first dictation becomes instant
+    preload: false       # true = load the model at startup
     desktop_injection: false  # true = PTT pastes into the focused OS window when no Horizon window is focused (X11)
 ```
 
-The push-to-talk hotkey listens in the main window (it targets the focused panel there); panels in detached windows can still dictate via their title-bar mic button. With `desktop_injection: true` on X11, the same hotkey is grabbed globally: if any Horizon window is focused — root or detached — the transcript goes to that window's focused terminal; if no Horizon window is focused, it is pasted into the focused OS application.
+The push-to-talk hotkey listens in the main window. Panels in detached windows can still dictate via their title-bar mic button. With `desktop_injection: true` on X11, the same hotkey is grabbed globally: a focused Horizon window receives the transcript; otherwise it is pasted into the focused OS application. Background push-to-talk currently requires X11 (`XGrabKey`) and is unavailable on a pure Wayland session.
 
-Set `desktop_injection: true` to dictate into other applications: click the target (a Teams chat, a browser field, another terminal), hold the push-to-talk key, speak, and release. Horizon must not steal focus. Background push-to-talk currently requires X11 (`XGrabKey`). On a pure Wayland session the global listener is unavailable, so dictation will not start while another application is focused. After a successful capture, Linux pastes with clipboard + Ctrl+V; if that paste chord cannot be synthesized, the transcript stays on the clipboard and a notice asks you to paste with Ctrl+V. The mic button always types into its Horizon panel.
+Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages). For Norwegian — including dialects — convert [NB-Whisper Large](https://huggingface.co/NbAiLab/nb-whisper-large) to GGUF per the transcribe.cpp docs and set `language: "no"` (or `"nn"`). NB-Whisper normalizes dialect speech into standard written Norwegian and ignores the `translate` task; spoken-Norwegian → English text needs stock `whisper-large-v3`.
 
-Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages), and for Norwegian — including dialects — NB-Whisper Large converted per the transcribe.cpp docs. A model's supported languages are read from its GGUF metadata at load time.
-
-Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: the spoken-language list and translation targets are read from the model's own GGUF metadata, the push-to-talk key is rebindable by pressing it, the microphone is picked from the devices the audio host reports (machines with several — webcam, USB mic — often default to the wrong one), the actually-selected backend is shown next to `auto`, and saved changes apply live — no restart.
-
-Dictation outcomes that would otherwise be invisible are surfaced as a transient message: a tap too short to transcribe, a recording in which no speech was detected (named with the microphone it came from), a push-to-talk press while the previous dictation is still processing, and speech errors.
+Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: languages from the GGUF metadata, a rebindable push-to-talk key, a microphone picker, and the actually-selected backend next to `auto`. Saved changes apply live.
 
 ### Speech profiles: one key per language
 
-For switching languages without touching settings, define **profiles** — each with its own model, language, output, and push-to-talk key. The key *is* the language (Ventrilo-style channel binds): hold **F1** to dictate Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Each profile's model loads lazily on first use and then stays warm; set `preload: true` on a profile to load it at startup instead, so its first dictation is instant (the model's memory is resident from launch — budget accordingly).
+Each profile has its own model, language, output, and push-to-talk key. Hold **F1** for Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Models load lazily on first use unless `preload: true`.
 
 ```yaml
 features:
@@ -530,7 +561,7 @@ features:
         language: "no"
         task: transcribe
         hotkey: F1
-        preload: true    # optional: load at startup for an instant first dictation
+        preload: true
       - name: English
         model: ~/models/whisper-large-v3-Q8_0.gguf
         language: en
@@ -544,24 +575,7 @@ features:
         hotkey: F3
 ```
 
-Profile hotkeys are validated against each other and against every global shortcut. The mic button uses the last-used profile; with no `profiles:` list, the flat `model`/`language`/`hotkey` fields act as a single profile as before.
-
-### Norwegian dictation (NB-Whisper)
-
-For Norwegian — including dialects — the strongest model is **NB-Whisper Large**, a Whisper fine-tune by the National Library of Norway ([NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large), trained on ~20 000 hours of Norwegian speech). It is not distributed as a GGUF, so convert it once with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (community whisper fine-tunes convert like the stock checkpoints; NbAiLab ships sharded safetensors that must be merged into a single `model.safetensors` first), quantize to `Q8_0`, then:
-
-```yaml
-features:
-  speech:
-    enabled: true
-    model: /path/to/nb-whisper-large-Q8_0.gguf
-    language: "no"        # bokmål output; "nn" for nynorsk
-    task: transcribe
-```
-
-Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standard written Norwegian rather than transcribing verbatim (usually what you want), and it ignores the `translate` task — for spoken-Norwegian → English text, point the model at stock `whisper-large-v3` (prebuilt GGUF under `handy-computer`) and set Output to *Translate to en*.
-
-**For agents** — when a user asks for speech support: build with the right feature for the machine's GPU (`speech-cuda` for NVIDIA, `speech` on macOS, `speech-vulkan` otherwise), download a model GGUF, fill in `features.speech` in `~/.horizon/config.yaml` (or via Settings), and verify the mic button appears on terminal and Browser panel title bars.
+Profile hotkeys are validated against each other and against every global shortcut. The mic button uses the last-used profile; with no `profiles:` list, the flat `model` / `language` / `hotkey` fields act as a single profile.
 
 ---
 
@@ -581,8 +595,7 @@ Two NB-Whisper quirks worth knowing: it *normalizes* dialect speech into standar
 
 See [**AGENTS.md**](AGENTS.md) for development setup, architecture, coding standards, and CI requirements.
 Release instructions live in [**docs/release-flow.md**](docs/release-flow.md).
-Manual smoke-test plans live under [**docs/testing**](docs/testing), including the
-[**workspace close smoke test**](docs/testing/workspace-close-smoketest-plan.md).
+Manual smoke-test plans live under [**docs/testing**](docs/testing).
 
 ```bash
 cargo fmt --all -- --check
