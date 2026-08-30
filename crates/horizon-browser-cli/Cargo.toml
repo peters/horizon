@@ -30,3 +30,4 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true

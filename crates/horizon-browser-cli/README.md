@@ -130,10 +130,15 @@ References cannot point forward. The runner checks every tool against
 and never copies tool arguments into its report. Plans are limited to 1 MiB and
 256 steps.
 
-The report is JSON with top-level `ok`, `completed_steps`, and ordered step
-results. Stdout contains only the report; diagnostics use stderr. A file report
-is created with owner-only permissions on Unix. An unsuccessful report produces
-a non-zero exit status.
+The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,
+`completed_steps`, and ordered step results. Every invocation saves its
+validated plan and atomic lifecycle state in a private directory under
+`~/.horizon/browser-jobs/`; runs that reach plan execution also save a final
+report. A state left as `running` is durable evidence that the runner stopped
+before recording a terminal outcome; automatic continuation is not enabled
+yet. Stdout contains only the report; diagnostics use stderr. A file report is
+created with owner-only permissions on Unix. An unsuccessful report produces a
+non-zero exit status.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the

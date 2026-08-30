@@ -24,6 +24,19 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert_eq!(stdout_report["ok"], true);
     assert_eq!(stdout_report["steps"][0]["tool"], "browser_list");
     assert_eq!(stdout_report["steps"][0]["result"]["panels"], json!([]));
+    let job_dir = std::path::PathBuf::from(stdout_report["job_dir"].as_str().expect("job directory"));
+    assert!(job_dir.starts_with(root.path().join(".horizon/browser-jobs")));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
+        .expect("decode job state");
+    assert_eq!(state["job_id"], stdout_report["job_id"]);
+    assert_eq!(state["status"], "succeeded");
+    assert_eq!(state["completed_steps"], 1);
+    assert_eq!(state["report_file"], "report.json");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(job_dir.join("report.json")).expect("durable report"))
+            .expect("decode durable report"),
+        stdout_report
+    );
 
     let report = root.path().join("report.json");
     let file = run_command(
@@ -43,12 +56,23 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert!(file.stdout.is_empty());
     let file_report: Value =
         serde_json::from_slice(&std::fs::read(&report).expect("read report")).expect("file report");
-    assert_eq!(file_report, stdout_report);
+    assert_ne!(file_report["job_id"], stdout_report["job_id"]);
+    assert_eq!(file_report["ok"], stdout_report["ok"]);
+    assert_eq!(file_report["completed_steps"], stdout_report["completed_steps"]);
+    assert_eq!(file_report["steps"], stdout_report["steps"]);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         assert_eq!(
             std::fs::metadata(report).expect("report metadata").permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(job_dir.join("state.json"))
+                .expect("state metadata")
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
     }
@@ -64,6 +88,50 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert_eq!(failure_report["completed_steps"], 1);
     assert_eq!(failure_report["steps"].as_array().map(Vec::len), Some(1));
     assert!(!String::from_utf8_lossy(&failed.stdout).contains("do-not-echo"));
+    let failed_state: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(failure_report["job_dir"].as_str().expect("failed job directory")).join("state.json"),
+        )
+        .expect("failed job state"),
+    )
+    .expect("decode failed job state");
+    assert_eq!(failed_state["status"], "failed");
+    assert_eq!(failed_state["completed_steps"], 1);
+}
+
+#[test]
+fn run_persists_preflight_failure_before_any_browser_action() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let plan = root.path().join("unknown-tool.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"steps":[{"id":"unknown","tool":"browser_missing"}]}"#,
+    )
+    .expect("write plan");
+
+    let output = run_command(root.path(), ["run", plan.to_str().expect("UTF-8 path")]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let jobs = root.path().join(".horizon/browser-jobs");
+    let entries = std::fs::read_dir(&jobs)
+        .expect("job directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job entries");
+    assert_eq!(entries.len(), 1);
+    let job_dir = entries[0].path();
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("failed state"))
+        .expect("decode failed state");
+    assert_eq!(state["status"], "failed");
+    assert_eq!(state["completed_steps"], 0);
+    assert!(
+        state["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("unavailable MCP tool"))
+    );
+    assert!(!job_dir.join("report.json").exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(state["job_id"].as_str().expect("job id")));
+    assert!(stderr.contains(job_dir.join("state.json").to_string_lossy().as_ref()));
 }
 
 #[test]
