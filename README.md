@@ -96,7 +96,7 @@ You do not need a config file to start. Launch Horizon, then:
 2. Press **Ctrl+Shift+N** for another panel of the first preset (Shell by default), or **Ctrl+Shift+K** and type a preset alias (`gb`, `cc`, `web`, `gc`).
 3. On the workspace header, click **Rows**, **Cols**, or **Grid** when you want structure, or **Default** to drag freely.
 4. Press **Ctrl+Shift+9** to fit the workspace into view. Press **Ctrl+Shift+W** to jump back to it without changing zoom.
-5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for actions only.
+5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for presets and actions.
 6. Close Horizon. Reopen it tomorrow — the session, layout, scroll positions, and terminal history are still there.
 
 Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a Browser panel for a live page, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
@@ -130,7 +130,7 @@ Group related panels into **color-coded workspaces**. Auto-arrange with rows, co
 <td>
 
 ### Command Palette
-**Ctrl+Shift+K** searches workspaces, panels, presets, and actions. Prefix `>` for actions only, `@` for panels only. Selecting a panel pans the canvas to it.
+**Ctrl+Shift+K** searches workspaces, panels, presets, and actions. Prefix `>` for presets and actions, `@` for panels only. Selecting a panel pans the canvas to it.
 
 </td>
 </tr>
@@ -391,9 +391,14 @@ presets:
   - name: Claude Code
     alias: cc
     kind: claude
+    args:
+      - --permission-mode
+      - auto
   - name: Codex
     alias: cx
     kind: codex
+    args:
+      - --no-alt-screen
   - name: OpenCode
     alias: oc
     kind: open_code
@@ -503,9 +508,9 @@ For scripts, [`horizon-browser-cli`](crates/horizon-browser-cli/README.md) expos
 
 ```bash
 cargo build -p horizon-browser-cli
-horizon-browser "Go to example.com, extract the heading, save to heading.txt"
-horizon-browser run browser-job.json --output browser-report.json
-horizon-browser mcp --backend firefox --visible
+target/debug/horizon-browser "Go to example.com, extract the heading, save to heading.txt"
+target/debug/horizon-browser run browser-job.json --output browser-report.json
+target/debug/horizon-browser mcp --backend firefox --visible
 ```
 
 ---
