@@ -428,9 +428,12 @@ For scripts and service hosting, the workspace also builds
 [`horizon-browser-cli`](crates/horizon-browser-cli). Its `run` command consumes a
 versioned JSON plan made of those same MCP tool calls and emits one structured
 report to stdout or an owner-only file; typed `$ref` values can pass a prior
-step's result to a later call. `horizon-browser mcp` launches the unchanged
-local stdio MCP service as a standalone process. The runner deliberately adds
-no alternate browser action API and accepts no actor-impersonation flag.
+step's result to a later call. Outside Horizon, `horizon-browser mcp` starts an
+isolated headless Chromium or Firefox session and serves the unchanged local
+stdio MCP contract. Add `--visible` to watch the native window, select a browser
+with `--backend`, or use `--connect` to control panels already hosted by
+Horizon. The runner deliberately adds no alternate browser action API and
+accepts no actor-impersonation flag.
 
 For an interactive task, users normally describe the goal to an agent panel
 instead of writing JSON. Horizon advertises the MCP tools automatically, the
