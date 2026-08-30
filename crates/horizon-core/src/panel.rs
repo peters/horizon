@@ -128,6 +128,9 @@ impl Default for PanelLayout {
 
 pub struct PanelOptions {
     pub name: Option<String>,
+    /// Whether `name` was explicitly chosen by the user. `None` preserves
+    /// the legacy behavior of treating every supplied name as custom.
+    pub name_is_custom: Option<bool>,
     pub command: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
@@ -157,6 +160,7 @@ impl Default for PanelOptions {
     fn default() -> Self {
         Self {
             name: None,
+            name_is_custom: None,
             command: None,
             args: Vec::new(),
             cwd: None,
@@ -435,6 +439,11 @@ impl Panel {
         } else {
             Cow::Borrowed(&self.terminal_title)
         }
+    }
+
+    #[must_use]
+    pub(crate) fn name_is_custom(&self) -> bool {
+        self.has_custom_name
     }
 
     #[must_use]

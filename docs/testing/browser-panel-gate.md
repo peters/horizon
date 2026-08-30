@@ -259,8 +259,14 @@ Run these checks on each selected backend while G1 is open:
    back, forward, reload, URL submission, and an unreachable loopback URL. An
    error retains the last valid frame and committed URL and offers Retry.
    Submit a hostname without a scheme and require the bar plus committed page
-   to use `https://`; submit the fixture's explicit `http://` URL and require
-   that override to remain HTTP.
+   to use `https://`; when unfocused, the bar hides only that secure scheme and
+   a redundant root slash, while focus reveals and selects the full canonical
+   URL. Submit the fixture's explicit `http://` URL and require that override
+   to remain HTTP and fully visible. Submit `https://user@/` and
+   `https://:443/`; neither hostless target may be compacted into a misleading
+   scheme-less value. Also submit `https://example.com?q=/` and
+   `https://example.com#/`; compaction must preserve the slash belonging to
+   the query or fragment.
 7. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
    off-screen placement, detach, native-window move/resize, and reattach.
    Capture launch and post-interaction screenshots. Record a native position
@@ -327,6 +333,31 @@ Run G0 once and G1–G3 for both backends:
 DISPLAY=:91 python3 scripts/browser-smoke/run.py --backend chromium --horizon target/debug/horizon
 DISPLAY=:91 python3 scripts/browser-smoke/run.py --backend firefox --horizon target/debug/horizon
 ```
+
+When a Snap-packaged browser is installed, add a confinement lane without an
+explicit profile root. Put the isolated runner root beneath a non-hidden
+directory in the real user's home so the Snap `home` interface can reach the
+task-owned files; never point this lane at a personal browser profile:
+
+```bash
+mkdir -p "$HOME/Horizon"
+browser_snap_root=$(mktemp -d "$HOME/Horizon/horizon-browser-smoke.XXXXXX")
+DISPLAY=:91 python3 scripts/browser-smoke/run.py \
+  --backend firefox \
+  --firefox-command /snap/bin/firefox \
+  --use-default-profile-root \
+  --root "$browser_snap_root" \
+  --horizon target/debug/horizon
+```
+
+Require the launched Firefox profile to resolve beneath
+`$browser_snap_root/home/Horizon/browser-profiles`, not the hidden
+`$browser_snap_root/home/.horizon/browser-profiles`. Run the ordinary Firefox
+lane separately with the native executable (for example
+`--firefox-command /usr/bin/firefox`) so Snap support cannot mask an
+unconfined regression. Apply the same default-root confinement check to
+`/snap/bin/chromium` when installed. Preserve the printed artifact root until
+the report is complete, then remove only that exact task-owned root.
 
 Drive and inspect only the printed candidate PID. Close each Horizon window
 through the window manager and wait for the runner's cleanup report. After both

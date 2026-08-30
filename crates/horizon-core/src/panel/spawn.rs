@@ -28,6 +28,7 @@ struct StaticPanelSeed {
     workspace_id: WorkspaceId,
     local_id: String,
     name: Option<String>,
+    name_is_custom: Option<bool>,
     position: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
     template: Option<PanelTemplateRef>,
@@ -79,28 +80,21 @@ struct TerminalPanelBuildArgs {
 }
 
 impl StaticPanelSeed {
-    fn new(
-        id: PanelId,
-        workspace_id: WorkspaceId,
-        local_id: String,
-        name: Option<String>,
-        position: Option<[f32; 2]>,
-        size: Option<[f32; 2]>,
-        template: Option<PanelTemplateRef>,
-    ) -> Self {
+    fn from_options(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts: &mut PanelOptions) -> Self {
         Self {
             id,
             workspace_id,
             local_id,
-            name,
-            position,
-            size,
-            template,
+            name: opts.name.take(),
+            name_is_custom: opts.name_is_custom,
+            position: opts.position,
+            size: opts.size,
+            template: opts.template.take(),
         }
     }
 
     fn take_title(&mut self, fallback: impl FnOnce() -> String) -> (String, bool) {
-        let has_custom_name = self.name.is_some();
+        let has_custom_name = self.name_is_custom.unwrap_or_else(|| self.name.is_some());
         (self.name.take().unwrap_or_else(fallback), has_custom_name)
     }
 
@@ -143,56 +137,28 @@ impl StaticPanelSeed {
     }
 }
 
-pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, opts: PanelOptions) -> Result<Panel> {
+pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 
     match opts.kind {
         PanelKind::Editor => {
-            let PanelOptions {
-                name,
-                command,
-                position,
-                size,
-                template,
-                ..
-            } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let command = opts.command.take();
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_editor(seed, command)
         }
         PanelKind::GitChanges => {
-            let PanelOptions {
-                name,
-                position,
-                size,
-                template,
-                cwd,
-                ..
-            } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let cwd = opts.cwd.take();
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_git_changes(seed, cwd))
         }
         PanelKind::Usage => {
-            let PanelOptions {
-                name,
-                position,
-                size,
-                template,
-                ..
-            } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_usage(seed))
         }
         PanelKind::Browser => {
-            let PanelOptions {
-                name,
-                command,
-                position,
-                size,
-                template,
-                browser_config,
-                ..
-            } = opts;
-            let seed = StaticPanelSeed::new(id, workspace_id, local_id, name, position, size, template);
+            let command = opts.command.take();
+            let browser_config = opts.browser_config.take();
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_browser(seed, command, browser_config)
         }
         _ => spawn_terminal(id, workspace_id, local_id, opts),
@@ -208,6 +174,7 @@ pub(super) fn restore_failure_panel(
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
     let PanelOptions {
         name,
+        name_is_custom,
         command,
         args,
         cwd,
@@ -224,7 +191,7 @@ pub(super) fn restore_failure_panel(
     } = opts;
 
     let saved_ssh_connection = ssh_connection.clone();
-    let has_custom_name = name.is_some();
+    let has_custom_name = name_is_custom.unwrap_or_else(|| name.is_some());
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
     let replay_bytes = restore_failure_replay_bytes(&title, error_message);
     let terminal = spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, replay_bytes)?;
@@ -260,6 +227,7 @@ pub(super) fn restore_failure_panel(
 fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts: PanelOptions) -> Result<Panel> {
     let PanelOptions {
         name,
+        name_is_custom,
         command,
         args,
         cwd,
@@ -302,7 +270,7 @@ fn spawn_terminal(id: PanelId, workspace_id: WorkspaceId, local_id: String, opts
         program,
         launch_args,
     } = resolved_launch;
-    let has_custom_name = name.is_some();
+    let has_custom_name = name_is_custom.unwrap_or_else(|| name.is_some());
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
     let initial_ssh_status = if kind == PanelKind::Ssh {
         Some(SshConnectionStatus::Connecting)
@@ -986,6 +954,36 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_generated_name_stays_non_custom() {
+        let mut options = PanelOptions {
+            name: Some("127.0.0.1".to_string()),
+            name_is_custom: Some(false),
+            ..PanelOptions::default()
+        };
+        let mut seed =
+            StaticPanelSeed::from_options(PanelId(1), WorkspaceId(1), "browser-panel".to_string(), &mut options);
+
+        let (title, has_custom_name) = seed.take_title(|| "Browser".to_string());
+
+        assert_eq!(title, "127.0.0.1");
+        assert!(!has_custom_name);
+    }
+
+    #[test]
+    fn legacy_supplied_name_remains_custom() {
+        let mut options = PanelOptions {
+            name: Some("Pinned name".to_string()),
+            ..PanelOptions::default()
+        };
+        let mut seed =
+            StaticPanelSeed::from_options(PanelId(1), WorkspaceId(1), "browser-panel".to_string(), &mut options);
+
+        let (_, has_custom_name) = seed.take_title(|| "Browser".to_string());
+
+        assert!(has_custom_name);
+    }
 
     #[test]
     fn agent_environment_exposes_a_stable_browser_actor() {

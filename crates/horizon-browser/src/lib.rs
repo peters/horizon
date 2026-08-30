@@ -21,7 +21,7 @@ pub mod session;
 mod webdriver;
 mod websocket;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id};
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
@@ -110,6 +110,22 @@ impl BrowserConfig {
     #[must_use]
     pub fn profile_dir(&self, panel_local_id: &str) -> PathBuf {
         profile::profile_dir(self, panel_local_id)
+    }
+
+    /// Resolve the profile root selected for this backend. An explicit
+    /// `profile_root` wins; otherwise the supplied host default is used,
+    /// except that confined Snap browsers use a non-hidden, cross-backend
+    /// writable directory beneath the user's home.
+    #[must_use]
+    pub fn effective_profile_root(&self, default_root: &Path) -> PathBuf {
+        profile::effective_profile_root(self, default_root)
+    }
+
+    /// Resolve the panel-owned parent directory shared by backend profiles
+    /// and explicit capture exports.
+    #[must_use]
+    pub fn panel_profile_dir_with_default_root(&self, panel_local_id: &str, default_root: &Path) -> PathBuf {
+        profile::panel_profile_dir_with_default_root(self, panel_local_id, default_root)
     }
 }
 
