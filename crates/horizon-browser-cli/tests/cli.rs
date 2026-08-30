@@ -30,6 +30,7 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
         .expect("decode job state");
     assert_eq!(state["job_id"], stdout_report["job_id"]);
     assert_eq!(state["status"], "succeeded");
+    assert_eq!(state["execution_timeout_seconds"], 1800);
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
     assert_eq!(
@@ -135,6 +136,35 @@ fn run_persists_preflight_failure_before_any_browser_action() {
 }
 
 #[test]
+fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, _manifest_path) = write_blocking_plan(root.path());
+    let plan = plan.to_str().expect("UTF-8 path");
+    let output = run_command(root.path(), ["run", plan, "--timeout", "1"]);
+
+    assert_eq!(output.status.code(), Some(124));
+    assert!(
+        output.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    assert_eq!(report["completed_steps"], 1);
+    assert_eq!(report["stop_reason"], "deadline_exceeded");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
+        .expect("decode deadline state");
+    assert_eq!(state["status"], "timed_out");
+    assert_eq!(state["execution_timeout_seconds"], 1);
+    assert_eq!(state["completed_steps"], 1);
+    assert_eq!(state["report_file"], "report.json");
+    let output_dir = root.path().to_str().expect("UTF-8 root");
+    let failed_output = run_command(root.path(), ["run", plan, "--timeout", "1", "--output", output_dir]);
+    assert_eq!(failed_output.status.code(), Some(124));
+    assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+}
+
+#[test]
 fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
     let root = tempfile::tempdir().expect("isolated root");
     let mut process = McpProcess::start(root.path());
@@ -222,6 +252,28 @@ fn run_process_local_command<const N: usize>(home: &std::path::Path, arguments: 
         .env("RUST_LOG", "off")
         .output()
         .expect("run process-local horizon-browser")
+}
+
+fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let panel_id = "blocked-panel";
+    let manifest_path = manifest::manifest_path_for_root(&home.join(".horizon"), panel_id);
+    manifest::write_at(
+        &manifest_path,
+        &BrowserManifest {
+            panel_local_id: panel_id.to_string(),
+            ..BrowserManifest::default()
+        },
+    )
+    .expect("write blocking browser manifest");
+    let plan = home.join("blocking-plan.json");
+    std::fs::write(
+        &plan,
+        format!(
+            r#"{{"version":1,"steps":[{{"id":"list","tool":"browser_list"}},{{"id":"snapshot","tool":"browser_snapshot","arguments":{{"panel_id":"{panel_id}","timeout_millis":60000}}}}]}}"#
+        ),
+    )
+    .expect("write blocking plan");
+    (plan, manifest_path)
 }
 
 struct McpProcess {
