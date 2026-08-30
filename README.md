@@ -97,7 +97,7 @@ You do not need a config file to start. Launch Horizon, then:
 3. On the workspace header, click **Rows**, **Cols**, or **Grid** when you want structure, or **Default** to drag freely.
 4. Press **Ctrl+Shift+9** to fit the workspace into view. Press **Ctrl+Shift+W** to jump back to it without changing zoom.
 5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for presets and actions.
-6. Close Horizon. Reopen it tomorrow — the session, layout, scroll positions, and terminal history are still there.
+6. Close Horizon. Reopen it tomorrow — the session, layout, canvas pan/zoom, and terminal history are still there.
 
 Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a Browser panel for a live page, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
 
@@ -143,7 +143,7 @@ First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, 
 </td>
 <td>
 
-### Browser Panels
+### Live Browser
 Run Chromium, Firefox, or Safari automation on the canvas. You and an agent share the same live page — navigate, inspect, click, fill, capture network traffic, then hand control back and forth.
 
 </td>
@@ -180,7 +180,7 @@ A built-in **git status panel** watches the workspace repo. See changed files, i
 <td>
 
 ### Session Persistence
-Close Horizon, come back tomorrow. Sessions, panel layouts, scroll positions, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row after restore.
+Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row after restore.
 
 </td>
 <td>
