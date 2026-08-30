@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{ExecutionReport, Plan};
+use crate::{ExecutionReport, Plan, execution_control::ExecutionStopReason};
 
 const STATE_VERSION: u32 = 1;
 const PLAN_FILE: &str = "plan.json";
@@ -32,6 +32,9 @@ pub struct RunState {
     pub status: RunStatus,
     /// Unix timestamp in milliseconds when the job was created.
     pub created_at_millis: u64,
+    /// Configured MCP execution budget, excluding plan input and durable setup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_timeout_seconds: Option<u64>,
     /// Unix timestamp in milliseconds when this state was last persisted.
     pub updated_at_millis: u64,
     /// Process that initially executed the job. This is diagnostic only.
@@ -59,6 +62,8 @@ pub enum RunStatus {
     Succeeded,
     /// A plan step, MCP connection, or runner operation failed.
     Failed,
+    /// The configured MCP execution deadline elapsed.
+    TimedOut,
 }
 
 /// CLI report envelope that makes the durable job discoverable to callers.
@@ -106,8 +111,9 @@ impl DurableRun {
     /// # Errors
     /// Returns when the private directory or either initial artifact cannot be
     /// created durably.
-    pub fn start(plan: &Plan) -> Result<Self, RunStateError> {
-        Self::start_in(&HorizonHome::resolve().root().join("browser-jobs"), plan)
+    pub fn start(plan: &Plan, execution_timeout_seconds: u64) -> Result<Self, RunStateError> {
+        let root = HorizonHome::resolve().root().join("browser-jobs");
+        Self::start_in(&root, plan, Some(execution_timeout_seconds))
     }
 
     /// Stable id of this durable run.
@@ -122,7 +128,7 @@ impl DurableRun {
         &self.state_path
     }
 
-    fn start_in(root: &Path, plan: &Plan) -> Result<Self, RunStateError> {
+    fn start_in(root: &Path, plan: &Plan, execution_timeout_seconds: Option<u64>) -> Result<Self, RunStateError> {
         ensure_private_directory(root)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
@@ -133,6 +139,7 @@ impl DurableRun {
             job_id,
             status: RunStatus::Running,
             created_at_millis,
+            execution_timeout_seconds,
             updated_at_millis: created_at_millis,
             runner_pid: std::process::id(),
             plan_file: PLAN_FILE.to_string(),
@@ -167,10 +174,10 @@ impl DurableRun {
     /// Returns when either terminal artifact cannot be atomically persisted.
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
         self.write_json(REPORT_FILE, &self.report(execution), "report")?;
-        self.state.status = if execution.ok {
-            RunStatus::Succeeded
-        } else {
-            RunStatus::Failed
+        self.state.status = match execution.stop_reason {
+            Some(ExecutionStopReason::DeadlineExceeded) => RunStatus::TimedOut,
+            None if execution.ok => RunStatus::Succeeded,
+            None => RunStatus::Failed,
         };
         self.state.updated_at_millis = now_millis();
         self.state.report_file = Some(REPORT_FILE.to_string());
@@ -188,6 +195,17 @@ impl DurableRun {
         self.state.status = RunStatus::Failed;
         self.state.updated_at_millis = now_millis();
         self.state.error = Some(error.to_string());
+        self.persist_state()
+    }
+
+    /// Persist a terminal stop that happened before a step report existed.
+    ///
+    /// # Errors
+    /// Returns when the stopped state cannot be atomically persisted.
+    pub fn stop(&mut self, _reason: ExecutionStopReason) -> Result<(), RunStateError> {
+        self.state.status = RunStatus::TimedOut;
+        self.state.updated_at_millis = now_millis();
+        self.state.error = Some(ExecutionStopReason::MESSAGE.to_string());
         self.persist_state()
     }
 
@@ -272,17 +290,19 @@ mod tests {
             completed_steps: 0,
             steps: Vec::new(),
             error: None,
+            stop_reason: None,
         }
     }
 
     #[test]
     fn state_is_running_before_execution_and_terminal_after_report() {
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan()).expect("start durable run");
+        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
         let running: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("running state"))
             .expect("decode running state");
         assert_eq!(running.status, RunStatus::Running);
         assert_eq!(running.completed_steps, 0);
+        assert_eq!(running.execution_timeout_seconds, Some(30));
         assert_eq!(running.plan_file, PLAN_FILE);
         assert_eq!(
             Plan::from_slice(&std::fs::read(run.directory.join(PLAN_FILE)).expect("saved plan"))
@@ -302,6 +322,7 @@ mod tests {
                 error: None,
             }],
             error: None,
+            stop_reason: None,
         };
         run.finish(&report).expect("finish durable run");
         let succeeded: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
@@ -339,9 +360,26 @@ mod tests {
     }
 
     #[test]
+    fn state_accepts_jobs_created_before_execution_timeouts() {
+        let state: RunState = serde_json::from_value(json!({
+            "version": 1,
+            "job_id": "job-existing",
+            "status": "running",
+            "created_at_millis": 1,
+            "updated_at_millis": 1,
+            "runner_pid": 42,
+            "plan_file": "plan.json",
+            "completed_steps": 0
+        }))
+        .expect("decode existing durable state");
+
+        assert_eq!(state.execution_timeout_seconds, None);
+    }
+
+    #[test]
     fn initialization_failure_is_durable() {
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan()).expect("start durable run");
+        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
         run.fail("adapter unavailable").expect("persist failure");
         let failed: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("failed state"))
             .expect("decode failed state");
@@ -357,7 +395,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt as _;
 
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan()).expect("start durable run");
+        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
         run.directory = PathBuf::from(OsString::from_vec(b"home-\xff/.horizon/browser-jobs/job".to_vec()));
         run.state_path = run.directory.join(STATE_FILE);
 

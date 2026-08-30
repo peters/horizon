@@ -6,8 +6,8 @@ modes:
 
 - a quoted goal (or explicit `do`) lets an optional local agent observe and
   adapt through the MCP tools;
-- `run` executes a bounded, fail-fast JSON plan and writes a structured report
-  to stdout or a private file;
+- `run` executes a fail-fast JSON plan with bounded MCP execution and writes a
+  structured report to stdout or a private file;
 - `mcp` runs the same local stdio MCP server that Horizon registers for agents.
   Outside Horizon it starts and owns an isolated browser automatically.
 
@@ -82,6 +82,7 @@ Build the binary, then pass it a plan path or `-` for stdin:
 cargo build -p horizon-browser-cli
 target/debug/horizon-browser run plan.json
 target/debug/horizon-browser run plan.json --output report.json
+target/debug/horizon-browser run plan.json --timeout 300
 ```
 
 A plan is a sequence of literal MCP tool names and arguments:
@@ -136,9 +137,25 @@ validated plan and atomic lifecycle state in a private directory under
 `~/.horizon/browser-jobs/`; runs that reach plan execution also save a final
 report. A state left as `running` is durable evidence that the runner stopped
 before recording a terminal outcome; automatic continuation is not enabled
-yet. Stdout contains only the report; diagnostics use stderr. A file report is
-created with owner-only permissions on Unix. An unsuccessful report produces a
-non-zero exit status.
+yet.
+
+Every deterministic run gives its MCP execution phase a deadline. The default
+is 1800 seconds; `--timeout` accepts 1 through 86400 whole seconds. The budget
+starts after plan input, validation, and initial durable-job setup. It covers
+MCP initialization, tool discovery, calls, and client/server shutdown. Plan
+input plus durable state, report, and requested-output writes are preparatory or
+post-processing I/O and can add wall-clock time outside that budget.
+
+A deadline during a tool call saves the completed prefix as a partial report
+and records `timed_out` in `state.json`; the state also records the configured
+`execution_timeout_seconds`. An already-dispatched browser mutation may still
+complete, so inspect the browser audit before retrying it; automatic replay
+remains disabled.
+
+Stdout contains only the report; diagnostics use stderr. A file report is
+created with owner-only permissions on Unix. Stable exit codes are 0 for
+success, 1 for execution failure, 2 for invalid CLI or plan input, and 124 for
+an execution deadline.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the

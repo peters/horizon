@@ -6,6 +6,7 @@
 //! add a second browser action API: it connects an MCP client to the same
 //! [`horizon_browser_mcp::HorizonBrowserMcp`] service used by agents.
 
+pub mod execution_control;
 pub mod job;
 pub mod run_state;
 pub mod standalone;
@@ -20,6 +21,8 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
+
+use execution_control::{ExecutionControl, ExecutionStopReason};
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
@@ -61,9 +64,12 @@ pub struct ExecutionReport {
     pub completed_steps: usize,
     /// Ordered results. Tool arguments are deliberately excluded.
     pub steps: Vec<StepReport>,
-    /// Connection-level failure, when one happened after execution started.
+    /// Connection-level failure or execution-deadline description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Explicit stop condition when the execution deadline won.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<ExecutionStopReason>,
 }
 
 /// Result of one MCP tool call.
@@ -127,6 +133,9 @@ pub enum RunError {
     /// A plan names a tool the current MCP server does not publish.
     #[error("plan step `{step}` names unavailable MCP tool `{tool}`")]
     UnknownTool { step: String, tool: String },
+    /// The job stopped before step execution produced a report.
+    #[error("{}", ExecutionStopReason::MESSAGE)]
+    Stopped(ExecutionStopReason),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -162,6 +171,22 @@ impl Plan {
 /// # Errors
 /// Returns only for plan validation, MCP initialization, or unavailable tools.
 pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
+    execute_plan_with_control(plan, &mut ExecutionControl::unbounded()).await
+}
+
+/// Execute a plan with one deadline across MCP initialization, calls, and shutdown.
+///
+/// A stop during tool execution returns a partial report containing only
+/// completed calls. A stop during initialization returns [`RunError::Stopped`]
+/// because no step report exists yet.
+///
+/// # Errors
+/// Returns for plan validation, MCP initialization, unavailable tools, or a
+/// stop before step execution begins.
+pub async fn execute_plan_with_control(
+    plan: &Plan,
+    control: &mut ExecutionControl,
+) -> Result<ExecutionReport, RunError> {
     validate_plan(plan)?;
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
     let mut server_task = tokio::spawn(async move {
@@ -172,22 +197,29 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
         service.waiting().await.map_err(|error| error.to_string())?;
         Ok::<(), String>(())
     });
-    let mut client = match PlanClient.serve(client_transport).await {
-        Ok(client) => client,
-        Err(error) => {
+    let mut client = match control.wait(PlanClient.serve(client_transport)).await {
+        Ok(Ok(client)) => client,
+        Ok(Err(error)) => {
             server_task.abort();
-            let _ = server_task.await;
             return Err(RunError::Initialize(error.to_string()));
+        }
+        Err(reason) => {
+            server_task.abort();
+            return Err(RunError::Stopped(reason));
         }
     };
 
-    let tools = match client.list_tools(None).await {
-        Ok(tools) => tools,
-        Err(error) => {
-            let _ = client.close().await;
+    let tools = match control.wait(client.list_tools(None)).await {
+        Ok(Ok(tools)) => tools,
+        Ok(Err(error)) => {
+            drop(client);
             server_task.abort();
-            let _ = server_task.await;
             return Err(RunError::Initialize(error.to_string()));
+        }
+        Err(reason) => {
+            drop(client);
+            server_task.abort();
+            return Err(RunError::Stopped(reason));
         }
     }
     .tools
@@ -196,9 +228,8 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
     .collect::<BTreeSet<_>>();
     for step in &plan.steps {
         if !tools.contains(&step.tool) {
-            let _ = client.close().await;
+            drop(client);
             server_task.abort();
-            let _ = server_task.await;
             return Err(RunError::UnknownTool {
                 step: step.id.clone(),
                 tool: step.tool.clone(),
@@ -206,18 +237,35 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
         }
     }
 
-    let mut report = execute_steps(plan, &client).await;
-    if let Err(error) = client.close().await {
-        report.fail_connection(format!("MCP client shutdown failed: {error}"));
+    let mut report = execute_steps(plan, &client, control).await;
+    if report.stop_reason.is_some() {
+        drop(client);
+        server_task.abort();
+        return Ok(report);
     }
-    match tokio::time::timeout(MCP_SHUTDOWN_TIMEOUT, &mut server_task).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(error))) => report.fail_connection(format!("MCP server shutdown failed: {error}")),
-        Ok(Err(error)) => report.fail_connection(format!("MCP server task failed: {error}")),
-        Err(_) => {
+    match control.wait(client.close()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => report.fail_connection(format!("MCP client shutdown failed: {error}")),
+        Err(reason) => {
+            report.stop(reason);
             server_task.abort();
-            let _ = server_task.await;
+            return Ok(report);
+        }
+    }
+    match control
+        .wait(tokio::time::timeout(MCP_SHUTDOWN_TIMEOUT, &mut server_task))
+        .await
+    {
+        Ok(Ok(Ok(Ok(())))) => {}
+        Ok(Ok(Ok(Err(error)))) => report.fail_connection(format!("MCP server shutdown failed: {error}")),
+        Ok(Ok(Err(error))) => report.fail_connection(format!("MCP server task failed: {error}")),
+        Ok(Err(_)) => {
+            server_task.abort();
             report.fail_connection("MCP server did not stop within 5 seconds".to_string());
+        }
+        Err(reason) => {
+            server_task.abort();
+            report.stop(reason);
         }
     }
     Ok(report)
@@ -226,6 +274,7 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
 async fn execute_steps(
     plan: &Plan,
     client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
+    control: &mut ExecutionControl,
 ) -> ExecutionReport {
     let mut result_indexes = BTreeMap::new();
     let mut steps = Vec::with_capacity(plan.steps.len());
@@ -238,12 +287,13 @@ async fn execute_steps(
             }
         };
         let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match client.call_tool(params).await {
-            Ok(result) => result,
-            Err(error) => {
+        let result = match control.wait(client.call_tool(params)).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
                 steps.push(failed_step(step, format!("MCP call failed: {error}")));
                 break;
             }
+            Err(reason) => return stopped_report(steps, reason),
         };
         let structured = result.structured_content;
         if result.is_error.unwrap_or(false) {
@@ -277,6 +327,7 @@ async fn execute_steps(
         completed_steps: steps.len(),
         steps,
         error: None,
+        stop_reason: None,
     }
 }
 
@@ -286,6 +337,23 @@ impl ExecutionReport {
         if self.error.is_none() {
             self.error = Some(error);
         }
+    }
+
+    fn stop(&mut self, reason: ExecutionStopReason) {
+        self.ok = false;
+        self.error = Some(ExecutionStopReason::MESSAGE.to_string());
+        self.stop_reason = Some(reason);
+    }
+}
+
+fn stopped_report(steps: Vec<StepReport>, reason: ExecutionStopReason) -> ExecutionReport {
+    ExecutionReport {
+        version: PLAN_VERSION,
+        ok: false,
+        completed_steps: steps.len(),
+        steps,
+        error: Some(ExecutionStopReason::MESSAGE.to_string()),
+        stop_reason: Some(reason),
     }
 }
 

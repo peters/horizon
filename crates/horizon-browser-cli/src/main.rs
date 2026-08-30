@@ -5,22 +5,27 @@ use std::fs::OpenOptions;
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use horizon_browser::BackendKind;
 use horizon_browser_cli::{
     Plan,
+    execution_control::{ExecutionControl, ExecutionStopReason},
     job::JobOptions,
     run_state::{DurableExecutionReport, DurableRun},
     standalone::StandaloneOptions,
 };
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
+const DEFAULT_RUN_TIMEOUT_SECONDS: u64 = 30 * 60;
+const MAX_RUN_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
+const EXIT_TIMED_OUT: u8 = 124;
 const HELP: &str = r#"horizon-browser — run browser jobs through one MCP contract
 
 USAGE:
     horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
     horizon-browser do "<GOAL>" [OPTIONS]
-    horizon-browser run <PLAN.json|-> [--output <REPORT.json|->]
+    horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser mcp [--standalone|--connect] [--backend <BACKEND>] [--visible]
 
 COMMANDS:
@@ -37,6 +42,7 @@ OPTIONS:
     --visible             Show a native browser window; jobs default headless.
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
+    --timeout <SECONDS>    Bound MCP execution (default 1800, max 86400).
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
@@ -45,6 +51,7 @@ enum Command {
     Run {
         plan: PathBuf,
         output: Option<PathBuf>,
+        timeout: Duration,
     },
     Do(JobOptions),
     Mcp {
@@ -69,7 +76,7 @@ async fn main() -> ExitCode {
         }
         Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
-        Ok(Command::Run { plan, output }) => run(plan, output.as_deref()).await,
+        Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
         Err(error) => {
             eprintln!("error: {error}\n\n{HELP}");
             ExitCode::from(2)
@@ -115,7 +122,7 @@ async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
     }
 }
 
-async fn run(plan_path: PathBuf, output_path: Option<&Path>) -> ExitCode {
+async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
     let bytes = match read_bounded(&plan_path) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -130,15 +137,32 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut durable = match DurableRun::start(&plan) {
+    let mut durable = match DurableRun::start(&plan, timeout.as_secs()) {
         Ok(durable) => durable,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let report = match horizon_browser_cli::execute_plan(&plan).await {
+    let mut control = ExecutionControl::with_timeout(timeout);
+    let report = match horizon_browser_cli::execute_plan_with_control(&plan, &mut control).await {
         Ok(report) => report,
+        Err(horizon_browser_cli::RunError::Stopped(reason)) => {
+            if let Err(state_error) = durable.stop(reason) {
+                eprintln!(
+                    "error: {}; additionally could not persist stopped state: {state_error}",
+                    ExecutionStopReason::MESSAGE
+                );
+                return ExitCode::from(EXIT_TIMED_OUT);
+            }
+            eprintln!(
+                "error: {}; durable job {}: {}",
+                ExecutionStopReason::MESSAGE,
+                durable.job_id(),
+                durable.state_path().display()
+            );
+            return ExitCode::from(EXIT_TIMED_OUT);
+        }
         Err(error) => {
             if let Err(state_error) = durable.fail(&error.to_string()) {
                 eprintln!("error: {error}; additionally could not persist failure state: {state_error}");
@@ -152,16 +176,21 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let post_process_error_exit = report
+        .stop_reason
+        .map_or(ExitCode::FAILURE, |_| ExitCode::from(EXIT_TIMED_OUT));
     if let Err(error) = durable.finish(&report) {
         eprintln!("error: {error}");
-        return ExitCode::FAILURE;
+        return post_process_error_exit;
     }
     let report = durable.report(&report);
     if let Err(error) = write_report(&report, output_path) {
         eprintln!("error: {error}");
-        return ExitCode::FAILURE;
+        return post_process_error_exit;
     }
-    if report.execution.ok {
+    if report.execution.stop_reason.is_some() {
+        ExitCode::from(EXIT_TIMED_OUT)
+    } else if report.execution.ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -281,6 +310,8 @@ fn parse_run(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
         .map(PathBuf::from)
         .ok_or_else(|| "run requires a plan path or '-'".to_string())?;
     let mut output = None;
+    let mut timeout = Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECONDS);
+    let mut timeout_seen = false;
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("-o" | "--output") if output.is_none() => {
@@ -290,11 +321,25 @@ fn parse_run(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
                 ));
             }
             Some("-o" | "--output") => return Err("--output may be specified only once".to_string()),
+            Some("--timeout") if !timeout_seen => {
+                timeout_seen = true;
+                timeout = parse_run_timeout(args.next().as_ref())?;
+            }
+            Some("--timeout") => return Err("--timeout may be specified only once".to_string()),
             Some(argument) => return Err(format!("unexpected run argument `{argument}`")),
             None => return Err("run argument is not valid UTF-8".to_string()),
         }
     }
-    Ok(Command::Run { plan, output })
+    Ok(Command::Run { plan, output, timeout })
+}
+
+fn parse_run_timeout(value: Option<&OsString>) -> Result<Duration, String> {
+    let seconds = value
+        .and_then(|value| value.to_str())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (1..=MAX_RUN_TIMEOUT_SECONDS).contains(seconds))
+        .ok_or_else(|| format!("--timeout requires whole seconds from 1 through {MAX_RUN_TIMEOUT_SECONDS}"))?;
+    Ok(Duration::from_secs(seconds))
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
@@ -378,11 +423,15 @@ mod tests {
     fn command_parser_keeps_run_surface_small() {
         let command =
             parse_args(["run", "plan.json", "--output", "report.json"].map(OsString::from)).expect("valid run command");
-        let Command::Run { plan, output } = command else {
+        let Command::Run { plan, output, timeout } = command else {
             panic!("expected run command");
         };
         assert_eq!(plan, Path::new("plan.json"));
         assert_eq!(output.as_deref(), Some(Path::new("report.json")));
+        assert_eq!(timeout, Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECONDS));
+        assert!(parse_args(["run", "plan.json", "--timeout", "0"].map(OsString::from)).is_err());
+        assert!(parse_args(["run", "plan.json", "--timeout", "86401"].map(OsString::from)).is_err());
+        assert!(parse_args(["run", "plan.json", "--timeout", "1", "--timeout", "2"].map(OsString::from)).is_err());
         assert!(parse_args(["run", "plan.json", "--actor", "spoof"].map(OsString::from)).is_err());
         assert!(parse_args(["mcp", "extra"].map(OsString::from)).is_err());
 
