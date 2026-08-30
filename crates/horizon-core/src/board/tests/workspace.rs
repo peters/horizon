@@ -470,6 +470,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 panels: vec![PanelState {
                     local_id: "panel".to_string(),
                     name: "notes".to_string(),
+                    name_is_custom: None,
                     kind: PanelKind::Editor,
                     command: None,
                     args: Vec::new(),
@@ -514,6 +515,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                 PanelState {
                     local_id: "panel-a".to_string(),
                     name: "a".to_string(),
+                    name_is_custom: None,
                     kind: PanelKind::Editor,
                     command: None,
                     args: Vec::new(),
@@ -533,6 +535,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                 PanelState {
                     local_id: "panel-b".to_string(),
                     name: "b".to_string(),
+                    name_is_custom: None,
                     kind: PanelKind::Editor,
                     command: None,
                     args: Vec::new(),
@@ -575,6 +578,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
             panels: vec![PanelState {
                 local_id: "ssh-panel".to_string(),
                 name: "prod".to_string(),
+                name_is_custom: None,
                 kind: PanelKind::Ssh,
                 command: None,
                 args: Vec::new(),
@@ -626,6 +630,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                 PanelState {
                     local_id: "notes".to_string(),
                     name: "Notes".to_string(),
+                    name_is_custom: None,
                     kind: PanelKind::Editor,
                     command: None,
                     args: Vec::new(),
@@ -645,6 +650,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                 PanelState {
                     local_id: "broken-codex".to_string(),
                     name: "Broken Codex".to_string(),
+                    name_is_custom: None,
                     kind: PanelKind::Codex,
                     command: Some(invalid_command.to_string()),
                     args: vec!["--no-alt-screen".to_string()],

@@ -215,6 +215,7 @@ impl RuntimeState {
                         PanelState {
                             local_id: panel.local_id.clone(),
                             name: panel.title.clone(),
+                            name_is_custom: Some(panel.name_is_custom()),
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
                             args: panel.launch_args.clone(),
@@ -396,6 +397,10 @@ impl WorkspaceState {
 pub struct PanelState {
     pub local_id: String,
     pub name: String,
+    /// Whether `name` was explicitly chosen rather than generated. Missing
+    /// values retain the legacy restore behavior for older runtime snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_is_custom: Option<bool>,
     pub kind: PanelKind,
     pub command: Option<String>,
     pub args: Vec<String>,
@@ -487,6 +492,7 @@ impl PanelState {
         Self {
             local_id: new_local_id(),
             name: panel.name.clone(),
+            name_is_custom: Some(!panel.name.is_empty()),
             kind: panel.kind,
             command: command.clone(),
             args: args.clone(),
@@ -541,6 +547,7 @@ impl PanelState {
             } else {
                 Some(self.name.clone())
             },
+            name_is_custom: self.name_is_custom,
             command,
             args: self.args.clone(),
             cwd: self.cwd.as_deref().map(Config::expand_tilde),
@@ -568,6 +575,7 @@ impl Default for PanelState {
         Self {
             local_id: String::new(),
             name: String::new(),
+            name_is_custom: None,
             kind: PanelKind::default(),
             command: None,
             args: Vec::new(),
@@ -751,6 +759,7 @@ mod tests {
         assert_eq!(saved_workspace.layout, None);
         assert_eq!(saved_panel.position, Some([180.0, 120.0]));
         assert_eq!(saved_panel.size, Some([640.0, 420.0]));
+        assert_eq!(saved_panel.name_is_custom, Some(true));
         assert_eq!(
             saved_panel
                 .session_binding
@@ -786,6 +795,7 @@ mod tests {
         let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
         let saved = &state.workspaces[0].panels[0];
 
+        assert_eq!(saved.name_is_custom, Some(false));
         assert_eq!(
             saved.browser_profile.as_ref().and_then(|profile| profile.root.as_ref()),
             Some(&launched_root)
@@ -852,6 +862,38 @@ mod tests {
         let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
 
         assert_eq!(options.command.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn generated_panel_name_metadata_survives_yaml_roundtrip() {
+        let state = RuntimeState {
+            workspaces: vec![WorkspaceState {
+                panels: vec![PanelState {
+                    name: "127.0.0.1".to_string(),
+                    name_is_custom: Some(false),
+                    kind: PanelKind::Browser,
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        };
+
+        let yaml = state.to_yaml().expect("serialize runtime state");
+        let restored: RuntimeState = serde_yaml::from_str(&yaml).expect("deserialize runtime state");
+        let options = restored.workspaces[0].panels[0].to_panel_options(&crate::browser::BrowserConfig::default());
+
+        assert_eq!(options.name.as_deref(), Some("127.0.0.1"));
+        assert_eq!(options.name_is_custom, Some(false));
+    }
+
+    #[test]
+    fn legacy_panel_name_metadata_keeps_supplied_name_inference() {
+        let panel: PanelState = serde_yaml::from_str("name: Pinned name\n").expect("deserialize legacy panel state");
+        let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+
+        assert_eq!(options.name.as_deref(), Some("Pinned name"));
+        assert_eq!(options.name_is_custom, None);
     }
 
     #[test]
