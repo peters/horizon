@@ -9,6 +9,7 @@ use egui::{
 use horizon_core::browser::{
     BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState, normalize_navigation_target,
 };
+use url::Url;
 
 use crate::browser_widget::BrowserUiState;
 use crate::theme;
@@ -231,8 +232,13 @@ fn address_bar_url(url: &str, focused: bool) -> &str {
         return url;
     };
     let authority_end = compact.find(['/', '?', '#']).unwrap_or(compact.len());
-    let authority = &compact[..authority_end];
-    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
+    if authority_end == 0 {
+        return url;
+    }
+    let Ok(parsed) = Url::parse(url) else {
+        return url;
+    };
+    if parsed.host_str().is_none_or(str::is_empty) {
         return url;
     }
     compact
@@ -328,6 +334,8 @@ mod tests {
         assert_eq!(address_bar_url("file:///tmp/page.html", false), "file:///tmp/page.html");
         assert_eq!(address_bar_url("", false), "");
         assert_eq!(address_bar_url("https:///missing-host", false), "https:///missing-host");
+        assert_eq!(address_bar_url("https://user@/", false), "https://user@/");
+        assert_eq!(address_bar_url("https://:443/", false), "https://:443/");
         assert_eq!(
             address_bar_url("https://?q=missing-host", false),
             "https://?q=missing-host"

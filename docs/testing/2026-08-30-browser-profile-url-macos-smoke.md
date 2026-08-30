@@ -133,9 +133,9 @@ backends must agree.
 8. Exercise Back, Forward, and Reload. The displayed value must track the
    committed page, and merely focusing or defocusing the bar must not cause a
    reload or add a history entry.
-9. Type an invalid or hostless secure target and confirm it is not misleadingly
-   compacted. The existing typed error/last-valid-page behavior must remain
-   bounded and recoverable.
+9. Type the hostless secure targets `https://user@/` and `https://:443/` and
+   confirm neither is misleadingly compacted. The existing typed
+   error/last-valid-page behavior must remain bounded and recoverable.
 10. Scroll, drag the page scrollbar, resize the panel, and resize the native
     Horizon window. The committed URL and compact/full presentation must remain
     stable throughout.

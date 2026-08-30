@@ -259,8 +259,12 @@ Run these checks on each selected backend while G1 is open:
    back, forward, reload, URL submission, and an unreachable loopback URL. An
    error retains the last valid frame and committed URL and offers Retry.
    Submit a hostname without a scheme and require the bar plus committed page
-   to use `https://`; submit the fixture's explicit `http://` URL and require
-   that override to remain HTTP.
+   to use `https://`; when unfocused, the bar hides only that secure scheme and
+   a redundant root slash, while focus reveals and selects the full canonical
+   URL. Submit the fixture's explicit `http://` URL and require that override
+   to remain HTTP and fully visible. Submit `https://user@/` and
+   `https://:443/`; neither hostless target may be compacted into a misleading
+   scheme-less value.
 7. Resize repeatedly, Fit, panel fullscreen, canvas zoom/pan, partially
    off-screen placement, detach, native-window move/resize, and reattach.
    Capture launch and post-interaction screenshots. Record a native position
