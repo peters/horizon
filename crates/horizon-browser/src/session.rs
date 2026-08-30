@@ -41,6 +41,7 @@ pub(crate) use command_queue::CommandReceiver;
 use command_queue::CommandSender;
 pub(crate) use handle::{BrowserEventSender, BrowserEventWake, publish_frame};
 pub use handle::{BrowserEventWaker, CommittedUrl};
+pub use horizon_browser_protocol::BrowserCommand;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
@@ -55,7 +56,7 @@ use crate::frames::FrameSlot;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
 use crate::{ActiveBackendCapabilities, BackendKind, normalize_navigation_target};
-use crate::{BrowserConfig, BrowserControlFailure, BrowserInput};
+use crate::{BrowserConfig, BrowserControlFailure};
 
 /// What the driver reports to the panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,36 +98,6 @@ pub enum BrowserEvent {
     },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
-}
-
-/// What the panel/UI asks the driver to do.
-#[derive(Clone, Debug)]
-pub enum BrowserCommand {
-    Navigate(String),
-    Reload,
-    Back,
-    Forward,
-    SetViewport {
-        width: u32,
-        height: u32,
-    },
-    Input(BrowserInput),
-    /// The user clicked "hand back to agent" in the panel.
-    HandoffDone,
-    Stop,
-}
-
-impl BrowserCommand {
-    /// Whether a user-originated command means the user is actively steering
-    /// the page and should temporarily pause external agent actions.
-    #[must_use]
-    pub fn is_user_activity(&self) -> bool {
-        match self {
-            Self::Navigate(_) | Self::Reload | Self::Back | Self::Forward => true,
-            Self::Input(input) => input.is_activity(),
-            Self::SetViewport { .. } | Self::HandoffDone | Self::Stop => false,
-        }
-    }
 }
 
 /// Everything the driver needs to start.
@@ -713,6 +684,7 @@ fn normalized_committed_url(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::is_user_activity;
 
     #[test]
     fn blank_target_is_an_empty_committed_url() {
@@ -723,18 +695,17 @@ mod tests {
 
     #[test]
     fn page_controls_count_as_user_steering_but_system_controls_do_not() {
-        assert!(BrowserCommand::Navigate("https://example.test".to_string()).is_user_activity());
-        assert!(BrowserCommand::Reload.is_user_activity());
-        assert!(BrowserCommand::Back.is_user_activity());
-        assert!(BrowserCommand::Forward.is_user_activity());
-        assert!(
-            !BrowserCommand::SetViewport {
-                width: 800,
-                height: 600
-            }
-            .is_user_activity()
-        );
-        assert!(!BrowserCommand::HandoffDone.is_user_activity());
-        assert!(!BrowserCommand::Stop.is_user_activity());
+        assert!(is_user_activity(&BrowserCommand::Navigate(
+            "https://example.test".to_string()
+        )));
+        assert!(is_user_activity(&BrowserCommand::Reload));
+        assert!(is_user_activity(&BrowserCommand::Back));
+        assert!(is_user_activity(&BrowserCommand::Forward));
+        assert!(!is_user_activity(&BrowserCommand::SetViewport {
+            width: 800,
+            height: 600
+        }));
+        assert!(!is_user_activity(&BrowserCommand::HandoffDone));
+        assert!(!is_user_activity(&BrowserCommand::Stop));
     }
 }

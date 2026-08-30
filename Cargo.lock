@@ -1576,6 +1576,7 @@ name = "horizon-browser"
 version = "0.2.7"
 dependencies = [
  "base64 0.23.1",
+ "horizon-browser-protocol",
  "png",
  "process-wrap",
  "serde",
@@ -1618,6 +1619,14 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "horizon-browser-protocol"
+version = "0.2.7"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

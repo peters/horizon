@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::frames::FrameSlot;
+use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression,

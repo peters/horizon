@@ -456,6 +456,13 @@ coordination, authentication, and audit retention. Its package metadata and
 crate README make a future crates.io release straightforward, but this project
 does not publish the crate as part of the browser-panel rollout.
 
+Contract-only integrations can instead depend on the internal
+[`horizon-browser-protocol`](crates/horizon-browser-protocol) crate. It contains
+the shared serialized actions, results, network records, and redacted audit
+values without pulling in browser transport, process ownership, frame
+decoders, MCP, or Horizon UI. Both crates remain unpublished until a separate
+release decision.
+
 ---
 
 ## Speech Input (opt-in)

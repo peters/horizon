@@ -4,6 +4,7 @@ members = [
     "crates/horizon-browser",
     "crates/horizon-browser-cli",
     "crates/horizon-browser-mcp",
+    "crates/horizon-browser-protocol",
     "crates/horizon-core",
     "crates/horizon-cursor",
     "crates/horizon-ui",
@@ -28,6 +29,7 @@ struct_excessive_bools = "allow"
 [workspace.dependencies]
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
+horizon-browser-protocol = { path = "crates/horizon-browser-protocol", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
 thiserror = "2.0.20"

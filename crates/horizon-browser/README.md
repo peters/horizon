@@ -6,6 +6,12 @@ delivery, bounded command queues, capability reporting, and deterministic
 shutdown. It does not depend on Horizon, egui, winit, tokio, or an async
 runtime.
 
+Serialized backend, input, action, result, network, and audit values live in
+the much smaller `horizon-browser-protocol` crate and are re-exported here for
+source compatibility. Contract-only clients can use that crate without
+compiling browser transport, process ownership, or frame decoders; applications
+that launch a browser in-process use this engine crate.
+
 The crate is prepared for a future crates.io release, but publishing remains a
 separate release decision. No crate is published by building or packaging the
 workspace.

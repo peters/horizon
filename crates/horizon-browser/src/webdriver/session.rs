@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
+use crate::input::{is_activity, is_user_activity};
 use crate::process::{ChromeProcessControl, resolve_binary};
 use crate::semantic::SemanticState;
 use crate::session::{
@@ -373,7 +374,7 @@ impl Driver {
         events: &BrowserEventSender,
         user: bool,
     ) -> Result<bool, String> {
-        if user && command.is_user_activity() {
+        if user && is_user_activity(&command) {
             self.stamp_user_active();
         }
         match command {
@@ -451,7 +452,7 @@ impl Driver {
     }
 
     fn perform_input(&mut self, input: crate::BrowserInput, event_tx: &BrowserEventSender) -> Result<(), String> {
-        let activity = input.is_activity();
+        let activity = is_activity(&input);
         if activity {
             self.pending_classic_history_start = None;
         }

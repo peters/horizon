@@ -1,6 +1,5 @@
 //! Backend-neutral, bounded network observation and private NDJSON export.
 
-mod model;
 mod writer;
 
 use std::collections::HashMap;
@@ -8,8 +7,8 @@ use std::path::Path;
 
 use crate::{BackendKind, BrowserControlFailure, BrowserCoordination};
 #[cfg(test)]
-use model::MAX_NETWORK_PATTERN_BYTES;
-pub use model::{
+const MAX_NETWORK_PATTERN_BYTES: usize = 2 * 1024;
+pub use horizon_browser_protocol::{
     BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection, BrowserNetworkConnectionState,
     BrowserNetworkDirection, BrowserNetworkEventKind, BrowserNetworkFrameOptions, BrowserNetworkOperation,
     BrowserNetworkPayloadEncoding, BrowserNetworkRecord, DEFAULT_NETWORK_MAX_FILE_BYTES,

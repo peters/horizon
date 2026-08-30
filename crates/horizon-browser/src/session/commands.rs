@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
+use crate::input::{BrowserInputCdpExt, is_user_activity};
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
 
 use super::{
@@ -72,7 +73,7 @@ impl DriverState {
         command: BrowserCommand,
         user_origin: bool,
     ) -> Result<bool, BrowserControlFailure> {
-        if user_origin && command.is_user_activity() {
+        if user_origin && is_user_activity(&command) {
             self.stamp_user_active();
         }
         if matches!(
