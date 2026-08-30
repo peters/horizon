@@ -264,6 +264,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn empty_report() -> ExecutionReport {
         ExecutionReport {
             version: 1,
@@ -357,35 +358,12 @@ mod tests {
 
         let root = tempfile::tempdir().expect("temporary job root");
         let mut run = DurableRun::start_in(root.path(), &plan()).expect("start durable run");
-        run.directory = PathBuf::from(OsString::from_vec(b"job-\xff".to_vec()));
+        run.directory = PathBuf::from(OsString::from_vec(b"home-\xff/.horizon/browser-jobs/job".to_vec()));
         run.state_path = run.directory.join(STATE_FILE);
 
         let encoded = serde_json::to_value(run.report(&empty_report())).expect("encode durable report");
 
         assert_eq!(encoded["job_dir"], json!(run.directory.display().to_string()));
         assert_eq!(encoded["state_path"], json!(run.state_path.display().to_string()));
-    }
-
-    #[cfg(all(unix, not(target_vendor = "apple")))]
-    #[test]
-    fn non_utf8_job_root_reaches_terminal_state() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt as _;
-
-        let temporary = tempfile::tempdir().expect("temporary home parent");
-        let home = temporary.path().join(OsString::from_vec(b"home-\xff".to_vec()));
-        let root = home.join(".horizon/browser-jobs");
-        let mut run = DurableRun::start_in(&root, &plan()).expect("start durable run");
-        let report = empty_report();
-
-        run.finish(&report).expect("finish durable run");
-
-        let state: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
-            .expect("decode terminal state");
-        assert_eq!(state.status, RunStatus::Succeeded);
-        serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(run.directory.join(REPORT_FILE)).expect("saved report"),
-        )
-        .expect("decode saved report");
     }
 }

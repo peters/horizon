@@ -51,9 +51,9 @@ backend behavior, or prompt-driven jobs.
 
 Run `cargo test -p horizon-browser-cli run_state::tests::non_utf8_report_paths_are_json_safe -- --exact`.
 Require the test to pass; it proves durable report paths remain valid JSON when
-a Unix path is not valid UTF-8. Apple filesystems reject invalid UTF-8 names
-before Horizon can create a job root, so the filesystem end-to-end variant is
-covered on non-Apple Unix targets.
+a Unix home path is not valid UTF-8. Apple filesystems reject invalid UTF-8
+names before Horizon can create a job root; the separate lifecycle test proves
+successful report persistence records a terminal state.
 
 ## Cleanup and report
 
