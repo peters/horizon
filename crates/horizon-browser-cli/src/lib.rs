@@ -7,6 +7,7 @@
 //! [`horizon_browser_mcp::HorizonBrowserMcp`] service used by agents.
 
 pub mod job;
+pub mod run_state;
 pub mod standalone;
 
 use std::collections::{BTreeMap, BTreeSet};

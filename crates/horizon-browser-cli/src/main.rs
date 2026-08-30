@@ -7,7 +7,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use horizon_browser::BackendKind;
-use horizon_browser_cli::{ExecutionReport, Plan, job::JobOptions, standalone::StandaloneOptions};
+use horizon_browser_cli::{
+    Plan,
+    job::JobOptions,
+    run_state::{DurableExecutionReport, DurableRun},
+    standalone::StandaloneOptions,
+};
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
 const HELP: &str = r#"horizon-browser — run browser jobs through one MCP contract
@@ -22,7 +27,8 @@ COMMANDS:
     do     Ask an optional local agent to complete a goal through Horizon MCP.
            This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
-           Reads stdin when PLAN is '-' and writes JSON to stdout by default.
+           Saves durable job state; reads stdin when PLAN is '-' and writes
+           JSON to stdout by default.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
 
@@ -124,18 +130,38 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = match horizon_browser_cli::execute_plan(&plan).await {
-        Ok(report) => report,
+    let mut durable = match DurableRun::start(&plan) {
+        Ok(durable) => durable,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
+    let report = match horizon_browser_cli::execute_plan(&plan).await {
+        Ok(report) => report,
+        Err(error) => {
+            if let Err(state_error) = durable.fail(&error.to_string()) {
+                eprintln!("error: {error}; additionally could not persist failure state: {state_error}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!(
+                "error: {error}; durable job {}: {}",
+                durable.job_id(),
+                durable.state_path().display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = durable.finish(&report) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
+    let report = durable.report(&report);
     if let Err(error) = write_report(&report, output_path) {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
-    if report.ok {
+    if report.execution.ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -291,7 +317,7 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn write_report(report: &ExecutionReport, output: Option<&Path>) -> Result<(), String> {
+fn write_report(report: &DurableExecutionReport<'_>, output: Option<&Path>) -> Result<(), String> {
     if output.is_none_or(|path| path == Path::new("-")) {
         let mut stdout = io::stdout().lock();
         encode_report(report, &mut stdout, "stdout")?;
@@ -305,7 +331,7 @@ fn write_report(report: &ExecutionReport, output: Option<&Path>) -> Result<(), S
     }
 }
 
-fn write_private_file(path: &Path, report: &ExecutionReport) -> Result<(), String> {
+fn write_private_file(path: &Path, report: &DurableExecutionReport<'_>) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]
@@ -332,7 +358,11 @@ fn write_private_file(path: &Path, report: &ExecutionReport) -> Result<(), Strin
         .map_err(|error| format!("could not write report {}: {error}", path.display()))
 }
 
-fn encode_report(report: &ExecutionReport, writer: &mut impl io::Write, destination: &str) -> Result<(), String> {
+fn encode_report(
+    report: &DurableExecutionReport<'_>,
+    writer: &mut impl io::Write,
+    destination: &str,
+) -> Result<(), String> {
     serde_json::to_writer_pretty(&mut *writer, report)
         .map_err(|error| format!("could not encode report to {destination}: {error}"))?;
     writer
