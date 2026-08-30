@@ -38,7 +38,7 @@ supported backends.
 
 The default command is a quoted goal. It starts an isolated hidden browser,
 selects Chromium or Firefox automatically, and prints only concise completed
-tool names followed by the final summary:
+tool names followed by the final summary and private report path:
 
 ```bash
 horizon-browser "Go to amazon.com, extract 100 products with price and reviews, save to products.csv"
@@ -60,6 +60,14 @@ path. Without an authorized path, returned artifact content is rejected.
 Diagnostics and structured agent results stay in
 an owner-only job directory under `~/.horizon/browser-jobs/`; MCP runtime
 profiles use a separate temporary home and are removed after each job.
+
+Every completed prompt job also writes a private redacted `trace.jsonl`, a
+validated `executed-plan.json`, and `report.json`. The plan replaces the
+standalone panel id with a typed reference to the recorded `browser_list`
+result. The report marks the plan non-replayable when execution depended on
+ephemeral semantic references or when selectors, scripts, text, values, URL
+credentials, query values, or fragments had to be redacted. Tool results and
+page contents are not copied into the trace.
 
 The normal workspace build contains no model SDK. Job mode invokes an optional
 local agent executable and expects its structured `exec` event interface; set

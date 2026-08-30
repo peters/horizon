@@ -20,6 +20,7 @@ workspace = true
 atomicwrites.workspace = true
 horizon-browser.workspace = true
 horizon-browser-mcp.workspace = true
+horizon-browser-protocol.workspace = true
 horizon-core.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 serde.workspace = true

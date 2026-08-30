@@ -26,7 +26,7 @@ const MCP_BUFFER_BYTES: usize = 64 * 1024;
 const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A versioned, fail-fast sequence of Horizon browser MCP tool calls.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     /// Plan format version. The only supported value is `1`.
@@ -36,7 +36,7 @@ pub struct Plan {
 }
 
 /// One named MCP tool call in a [`Plan`].
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanStep {
     /// Unique identifier used in the report and by later `$ref` values.
