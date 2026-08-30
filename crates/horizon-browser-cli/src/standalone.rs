@@ -288,15 +288,18 @@ fn start_backend(
     visible: bool,
 ) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
     let panel_id = standalone_panel_id();
-    let profile_root = home.browser_profile_dir(&panel_id);
+    let mut browser = BrowserConfig {
+        backend,
+        headless: !visible,
+        ..BrowserConfig::default()
+    };
+    if browser.profile_root.is_none() {
+        browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
+    }
+    let profile_root = browser.panel_profile_dir_with_default_root(&panel_id, &home.root().join("browser-profiles"));
     let coordination = Arc::new(ManifestCoordination::default());
     let session = start_session(BrowserSessionConfig {
-        browser: BrowserConfig {
-            backend,
-            headless: !visible,
-            profile_root: Some(home.root().join("browser-profiles")),
-            ..BrowserConfig::default()
-        },
+        browser,
         panel_local_id: panel_id.clone(),
         initial_url: None,
         width: horizon_browser::DEFAULT_VIEWPORT.0,

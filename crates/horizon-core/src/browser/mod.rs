@@ -268,7 +268,7 @@ impl BrowserPanelState {
         let mut browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
         if browser.profile_root.is_none() {
-            browser.profile_root = Some(home.root().join("browser-profiles"));
+            browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
         }
         let capture_directory = profile_dir_for_home(&browser, &home, &self.panel_local_id).join("captures");
         let session_config = session::BrowserSessionConfig {
@@ -624,11 +624,7 @@ pub(crate) fn profile_dir_for_home(
     home: &crate::horizon_home::HorizonHome,
     panel_local_id: &str,
 ) -> PathBuf {
-    match &config.profile_root {
-        Some(root) => crate::dir_search::expand_tilde(&root.to_string_lossy())
-            .join(crate::horizon_home::safe_local_id(panel_local_id)),
-        None => home.browser_profile_dir(panel_local_id),
-    }
+    config.panel_profile_dir_with_default_root(panel_local_id, &home.root().join("browser-profiles"))
 }
 
 #[cfg(test)]

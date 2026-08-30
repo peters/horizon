@@ -1,8 +1,14 @@
 //! Browser panel chrome strip: navigation buttons, URL bar, ownership
 //! chip, and the handoff banner.
 
-use egui::{RichText, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo, WidgetType, vec2};
-use horizon_core::browser::{BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState};
+use egui::{
+    RichText, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo, WidgetType,
+    text::{CCursor, CCursorRange},
+    vec2,
+};
+use horizon_core::browser::{
+    BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState, normalize_navigation_target,
+};
 
 use crate::browser_widget::BrowserUiState;
 use crate::theme;
@@ -168,9 +174,10 @@ fn url_bar(
     max_width: f32,
 ) -> (bool, bool) {
     let id = ui.make_persistent_id(("browser-url-bar", panel_id));
-    let display_url = browser.display_url();
+    let was_focused = ui.memory(|memory| memory.focused() == Some(id));
+    let display_url = address_bar_url(browser.display_url(), was_focused);
     // Keep the buffer in sync with the live URL while unfocused.
-    if ui.memory(|m| m.focused() != Some(id)) && state.url_buffer != display_url {
+    if !was_focused && state.url_buffer != display_url {
         state.url_buffer.clear();
         state.url_buffer.push_str(display_url);
     }
@@ -178,10 +185,24 @@ fn url_bar(
         interactive,
         TextEdit::singleline(&mut state.url_buffer)
             .id(id)
-            .hint_text("https://…")
+            .hint_text("Enter address")
             .desired_width(max_width)
             .font(egui::FontId::monospace(11.5)),
     );
+    // Match native browser chrome: the compact, scheme-less form is for
+    // passive display only. Reveal the canonical URL when the user focuses
+    // the field so security-sensitive details remain directly inspectable.
+    if response.gained_focus() && !response.changed() {
+        state.url_buffer.clear();
+        state.url_buffer.push_str(browser.display_url());
+        let mut edit_state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        edit_state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::default(),
+            CCursor::new(state.url_buffer.chars().count()),
+        )));
+        edit_state.store(ui.ctx(), id);
+        ui.ctx().request_repaint();
+    }
     // egui's singleline TextEdit consumes Enter and drops its own focus
     // (the default `return_key` shortcut), so "focus was lost on the same
     // frame as an Enter press" is the submit signal.
@@ -189,16 +210,35 @@ fn url_bar(
     if submitted {
         state.url_submit_enter_pending = !ui.input(|i| i.key_released(egui::Key::Enter));
         let url = state.url_buffer.trim().to_string();
-        if !url.is_empty() && browser.display_url() != url {
+        let target = normalize_navigation_target(&url);
+        if !url.is_empty() && browser.display_url() != target {
             // A driver-less submission is retained as the relaunch target and
             // surfaced via navigation_error instead of being dropped. The
             // guard compares the displayed target (pending first), not the
             // committed URL: resubmitting the persisted URL while a newer
             // pending target is queued must replace it, not be skipped.
-            browser.submit_navigation(&url);
+            browser.submit_navigation(&target);
         }
     }
     (response.has_focus() || submitted, response.clicked())
+}
+
+fn address_bar_url(url: &str, focused: bool) -> &str {
+    if focused {
+        return url;
+    }
+    let Some(compact) = url.strip_prefix("https://") else {
+        return url;
+    };
+    let authority_end = compact.find(['/', '?', '#']).unwrap_or(compact.len());
+    let authority = &compact[..authority_end];
+    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
+        return url;
+    }
+    compact
+        .strip_suffix('/')
+        .filter(|authority| !authority.contains('/'))
+        .unwrap_or(compact)
 }
 
 /// The chip's label and color, or `None` when neither an agent owner nor a
@@ -270,7 +310,35 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 
 #[cfg(test)]
 mod tests {
-    use super::nav_widget_info;
+    use super::{address_bar_url, nav_widget_info};
+
+    #[test]
+    fn unfocused_address_bar_compacts_secure_urls() {
+        assert_eq!(
+            address_bar_url("https://example.com/path?q=1#result", false),
+            "example.com/path?q=1#result"
+        );
+        assert_eq!(address_bar_url("https://example.com/", false), "example.com");
+        assert_eq!(address_bar_url("https://example.com/path/", false), "example.com/path/");
+        assert_eq!(
+            address_bar_url("http://example.com/path", false),
+            "http://example.com/path"
+        );
+        assert_eq!(address_bar_url("about:blank", false), "about:blank");
+        assert_eq!(address_bar_url("file:///tmp/page.html", false), "file:///tmp/page.html");
+        assert_eq!(address_bar_url("", false), "");
+        assert_eq!(address_bar_url("https:///missing-host", false), "https:///missing-host");
+        assert_eq!(
+            address_bar_url("https://?q=missing-host", false),
+            "https://?q=missing-host"
+        );
+    }
+
+    #[test]
+    fn focused_address_bar_reveals_the_canonical_url() {
+        assert_eq!(address_bar_url("https://example.com/", true), "https://example.com/");
+        assert_eq!(address_bar_url("http://example.com/", true), "http://example.com/");
+    }
 
     #[test]
     fn navigation_widget_info_names_glyph_only_controls() {

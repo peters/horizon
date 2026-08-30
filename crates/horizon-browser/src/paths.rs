@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -21,7 +21,7 @@ pub(crate) fn expand_tilde(input: &str) -> PathBuf {
     }
 }
 
-fn home_dir() -> PathBuf {
+pub(crate) fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
@@ -34,9 +34,4 @@ pub(crate) fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
-}
-
-#[must_use]
-pub(crate) fn browser_profile_dir(root: &Path, local_id: &str) -> PathBuf {
-    root.join("profiles").join(safe_local_id(local_id))
 }
