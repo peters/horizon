@@ -77,8 +77,10 @@ Save and inspect launch and post-interaction screenshots for both runs.
 
 ## Default Profile Startup
 
-Use a fresh isolated runner root for each case. Do not configure an explicit
-`profile_root`.
+Use a fresh isolated runner root for each case and pass
+`--use-default-profile-root` to `scripts/browser-smoke/run.py`. The flag is
+required here: without it the runner configures an explicit `profile_root` and
+does not exercise platform-default profile discovery.
 
 ### Chromium
 
