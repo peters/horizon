@@ -65,16 +65,9 @@ fn snap_browser_profile_root(config: &BrowserConfig, default_root: &Path) -> Opt
     {
         return Some(root);
     }
-    let firefox = config
-        .firefox_command
-        .as_deref()
-        .filter(|command| !command.trim().is_empty())
-        .map_or_else(
-            || crate::process::resolve_binary("firefox"),
-            crate::process::resolve_binary,
-        )
-        .ok()?;
-    snap_browser_profile_root_for_command(&firefox, "firefox", &home)
+    snap_firefox_profile_root_with_resolver(config.firefox_command.as_deref(), &home, |command| {
+        crate::process::resolve_binary(command).ok()
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -103,6 +96,35 @@ fn snap_browser_profile_root_for_command(command: &Path, browser_name: &str, hom
     // other backend; this non-hidden directory is writable through Snap's
     // `home` interface and by regular browser packages.
     Some(home.join("Horizon").join("browser-profiles"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn snap_firefox_profile_root_with_resolver(
+    configured_command: Option<&str>,
+    home: &Path,
+    mut resolve: impl FnMut(&str) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(command) = configured_command.filter(|command| !command.trim().is_empty()) {
+        return resolve(command)
+            .as_deref()
+            .and_then(|resolved| snap_browser_profile_root_for_command(resolved, "firefox", home));
+    }
+
+    // Ubuntu's default `firefox` on PATH can be `/usr/bin/firefox`, a
+    // wrapper for the real Snap launcher. Check that launcher directly for
+    // automatic discovery, but never override an explicitly configured
+    // native Firefox command.
+    let snap_launcher = resolve("/snap/bin/firefox");
+    if let Some(root) = snap_launcher
+        .as_deref()
+        .and_then(|resolved| snap_browser_profile_root_for_command(resolved, "firefox", home))
+    {
+        return Some(root);
+    }
+
+    resolve("firefox")
+        .as_deref()
+        .and_then(|resolved| snap_browser_profile_root_for_command(resolved, "firefox", home))
 }
 
 pub(crate) fn schedule_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
@@ -157,6 +179,49 @@ mod tests {
             snap_browser_profile_root_for_command(Path::new("/usr/bin/firefox"), "firefox", Path::new("/home/alice")),
             None
         );
+    }
+
+    #[test]
+    fn default_firefox_discovery_detects_the_snap_launcher_behind_a_path_wrapper() {
+        let mut requests = Vec::new();
+        let root = snap_firefox_profile_root_with_resolver(None, Path::new("/home/alice"), |command| {
+            requests.push(command.to_string());
+            match command {
+                "/snap/bin/firefox" => Some(PathBuf::from("/snap/bin/firefox")),
+                "firefox" => Some(PathBuf::from("/usr/bin/firefox")),
+                _ => None,
+            }
+        });
+
+        assert_eq!(root, Some(PathBuf::from("/home/alice/Horizon/browser-profiles")));
+        assert_eq!(requests, ["/snap/bin/firefox"]);
+    }
+
+    #[test]
+    fn explicit_native_firefox_does_not_use_the_default_snap_launcher() {
+        let mut requests = Vec::new();
+        let root =
+            snap_firefox_profile_root_with_resolver(Some("/usr/bin/firefox"), Path::new("/home/alice"), |command| {
+                requests.push(command.to_string());
+                match command {
+                    "/usr/bin/firefox" => Some(PathBuf::from("/usr/bin/firefox")),
+                    "/snap/bin/firefox" => Some(PathBuf::from("/snap/bin/firefox")),
+                    _ => None,
+                }
+            });
+
+        assert_eq!(root, None);
+        assert_eq!(requests, ["/usr/bin/firefox"]);
+    }
+
+    #[test]
+    fn default_native_firefox_keeps_the_hidden_root_when_no_snap_exists() {
+        let root = snap_firefox_profile_root_with_resolver(None, Path::new("/home/alice"), |command| match command {
+            "firefox" => Some(PathBuf::from("/usr/bin/firefox")),
+            _ => None,
+        });
+
+        assert_eq!(root, None);
     }
 
     #[test]

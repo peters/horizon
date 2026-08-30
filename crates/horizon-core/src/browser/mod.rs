@@ -136,7 +136,9 @@ impl BrowserPanelState {
         initial_url: Option<String>,
     ) -> crate::error::Result<Self> {
         let panel_local_id = panel_local_id.into();
-        let config = config.resolved_for_launch()?;
+        let mut config = config.resolved_for_launch()?;
+        let home = crate::horizon_home::HorizonHome::resolve();
+        let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
         let mut state = Self {
             status: BrowserStatus::Starting,
@@ -158,7 +160,7 @@ impl BrowserPanelState {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
-            persisted_config_changed: false,
+            persisted_config_changed: profile_root_resolved,
             config,
         };
         state.launch_session(initial_url);
@@ -265,11 +267,8 @@ impl BrowserPanelState {
     }
 
     fn start_session(&mut self, initial_url: Option<String>) {
-        let mut browser = self.config.clone();
+        let browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
-        if browser.profile_root.is_none() {
-            browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
-        }
         let capture_directory = profile_dir_for_home(&browser, &home, &self.panel_local_id).join("captures");
         let session_config = session::BrowserSessionConfig {
             browser,
@@ -627,6 +626,14 @@ pub(crate) fn profile_dir_for_home(
     config.panel_profile_dir_with_default_root(panel_local_id, &home.root().join("browser-profiles"))
 }
 
+fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path) -> bool {
+    if config.profile_root.is_some() {
+        return false;
+    }
+    config.profile_root = Some(config.effective_profile_root(default_root));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,6 +644,22 @@ mod tests {
         assert_eq!(config.quality, 60);
         assert_eq!(config.every_nth_frame, 1);
         assert!(config.command.is_none());
+    }
+
+    #[test]
+    fn resolved_profile_root_is_retained_for_persistence_and_cleanup() {
+        let mut config = BrowserConfig::default();
+
+        assert!(retain_effective_profile_root(
+            &mut config,
+            Path::new("/profiles/first-default")
+        ));
+        assert_eq!(config.profile_root, Some(PathBuf::from("/profiles/first-default")));
+        assert!(!retain_effective_profile_root(
+            &mut config,
+            Path::new("/profiles/later-default")
+        ));
+        assert_eq!(config.profile_root, Some(PathBuf::from("/profiles/first-default")));
     }
 
     #[test]
