@@ -69,6 +69,7 @@ const fn snap_chromium_profile_root(_config: &BrowserConfig, _default_root: &Pat
     None
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn default_root_is_hidden_beneath_home(default_root: &Path, home: &Path) -> bool {
     default_root
         .strip_prefix(home)
