@@ -328,6 +328,31 @@ DISPLAY=:91 python3 scripts/browser-smoke/run.py --backend chromium --horizon ta
 DISPLAY=:91 python3 scripts/browser-smoke/run.py --backend firefox --horizon target/debug/horizon
 ```
 
+When a Snap-packaged browser is installed, add a confinement lane without an
+explicit profile root. Put the isolated runner root beneath a non-hidden
+directory in the real user's home so the Snap `home` interface can reach the
+task-owned files; never point this lane at a personal browser profile:
+
+```bash
+mkdir -p "$HOME/Horizon"
+browser_snap_root=$(mktemp -d "$HOME/Horizon/horizon-browser-smoke.XXXXXX")
+DISPLAY=:91 python3 scripts/browser-smoke/run.py \
+  --backend firefox \
+  --firefox-command /snap/bin/firefox \
+  --use-default-profile-root \
+  --root "$browser_snap_root" \
+  --horizon target/debug/horizon
+```
+
+Require the launched Firefox profile to resolve beneath
+`$browser_snap_root/home/Horizon/browser-profiles`, not the hidden
+`$browser_snap_root/home/.horizon/browser-profiles`. Run the ordinary Firefox
+lane separately with the native executable (for example
+`--firefox-command /usr/bin/firefox`) so Snap support cannot mask an
+unconfined regression. Apply the same default-root confinement check to
+`/snap/bin/chromium` when installed. Preserve the printed artifact root until
+the report is complete, then remove only that exact task-owned root.
+
 Drive and inspect only the printed candidate PID. Close each Horizon window
 through the window manager and wait for the runner's cleanup report. After both
 runs finish, stop only the display and window-manager PIDs created above:

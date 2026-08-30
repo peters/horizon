@@ -114,7 +114,7 @@ impl BrowserConfig {
 
     /// Resolve the profile root selected for this backend. An explicit
     /// `profile_root` wins; otherwise the supplied host default is used,
-    /// except that confined Snap Chromium uses a non-hidden, cross-backend
+    /// except that confined Snap browsers use a non-hidden, cross-backend
     /// writable directory beneath the user's home.
     #[must_use]
     pub fn effective_profile_root(&self, default_root: &Path) -> PathBuf {

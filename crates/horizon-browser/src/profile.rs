@@ -51,21 +51,34 @@ pub(crate) fn effective_profile_root(config: &BrowserConfig, default_root: &Path
     if let Some(root) = &config.profile_root {
         return paths::expand_tilde(&root.to_string_lossy());
     }
-    snap_chromium_profile_root(config, default_root).unwrap_or_else(|| default_root.to_path_buf())
+    snap_browser_profile_root(config, default_root).unwrap_or_else(|| default_root.to_path_buf())
 }
 
 #[cfg(target_os = "linux")]
-fn snap_chromium_profile_root(config: &BrowserConfig, default_root: &Path) -> Option<PathBuf> {
+fn snap_browser_profile_root(config: &BrowserConfig, default_root: &Path) -> Option<PathBuf> {
     let home = paths::home_dir();
     if !default_root_is_hidden_beneath_home(default_root, &home) {
         return None;
     }
-    let command = crate::process::resolve_binary_or_default(&config.command).ok()?;
-    snap_chromium_profile_root_for_command(&command, &home)
+    if let Ok(command) = crate::process::resolve_binary_or_default(&config.command)
+        && let Some(root) = snap_browser_profile_root_for_command(&command, "chromium", &home)
+    {
+        return Some(root);
+    }
+    let firefox = config
+        .firefox_command
+        .as_deref()
+        .filter(|command| !command.trim().is_empty())
+        .map_or_else(
+            || crate::process::resolve_binary("firefox"),
+            crate::process::resolve_binary,
+        )
+        .ok()?;
+    snap_browser_profile_root_for_command(&firefox, "firefox", &home)
 }
 
 #[cfg(not(target_os = "linux"))]
-const fn snap_chromium_profile_root(_config: &BrowserConfig, _default_root: &Path) -> Option<PathBuf> {
+const fn snap_browser_profile_root(_config: &BrowserConfig, _default_root: &Path) -> Option<PathBuf> {
     None
 }
 
@@ -79,15 +92,15 @@ fn default_root_is_hidden_beneath_home(default_root: &Path, home: &Path) -> bool
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn snap_chromium_profile_root_for_command(command: &Path, home: &Path) -> Option<PathBuf> {
+fn snap_browser_profile_root_for_command(command: &Path, browser_name: &str, home: &Path) -> Option<PathBuf> {
     let parent = command.parent()?;
     let is_snap_launcher = parent == Path::new("/snap/bin") || parent.ends_with(Path::new("snap/bin"));
-    if !is_snap_launcher || command.file_name()? != "chromium" {
+    if !is_snap_launcher || command.file_name()? != browser_name {
         return None;
     }
-    // Keep one panel root across backend switches. A Chromium-owned Snap
-    // directory would work for CDP but can be inaccessible to a confined
-    // Firefox; the non-hidden Horizon directory is writable through Snap's
+    // Keep one panel root across backend switches. A package-owned Snap
+    // directory would work for that package but can be inaccessible to the
+    // other backend; this non-hidden directory is writable through Snap's
     // `home` interface and by regular browser packages.
     Some(home.join("Horizon").join("browser-profiles"))
 }
@@ -117,23 +130,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snap_chromium_profiles_live_in_a_cross_backend_writable_directory() {
+    fn snap_browser_profiles_live_in_a_cross_backend_writable_directory() {
         let home = Path::new("/home/alice");
 
         assert_eq!(
-            snap_chromium_profile_root_for_command(Path::new("/snap/bin/chromium"), home),
+            snap_browser_profile_root_for_command(Path::new("/snap/bin/chromium"), "chromium", home),
             Some(PathBuf::from("/home/alice/Horizon/browser-profiles"))
         );
         assert_eq!(
-            snap_chromium_profile_root_for_command(Path::new("/var/lib/snapd/snap/bin/chromium"), home),
+            snap_browser_profile_root_for_command(Path::new("/var/lib/snapd/snap/bin/chromium"), "chromium", home),
+            Some(PathBuf::from("/home/alice/Horizon/browser-profiles"))
+        );
+        assert_eq!(
+            snap_browser_profile_root_for_command(Path::new("/snap/bin/firefox"), "firefox", home),
             Some(PathBuf::from("/home/alice/Horizon/browser-profiles"))
         );
     }
 
     #[test]
-    fn non_snap_chromium_does_not_change_the_default_profile_root() {
+    fn non_snap_browsers_do_not_change_the_default_profile_root() {
         assert_eq!(
-            snap_chromium_profile_root_for_command(Path::new("/usr/bin/chromium"), Path::new("/home/alice")),
+            snap_browser_profile_root_for_command(Path::new("/usr/bin/chromium"), "chromium", Path::new("/home/alice")),
+            None
+        );
+        assert_eq!(
+            snap_browser_profile_root_for_command(Path::new("/usr/bin/firefox"), "firefox", Path::new("/home/alice")),
             None
         );
     }

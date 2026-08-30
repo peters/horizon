@@ -30,6 +30,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--geckodriver-command", type=Path)
     parser.add_argument("--safaridriver-command", type=Path)
     parser.add_argument(
+        "--use-default-profile-root",
+        action="store_true",
+        help="omit the explicit profile root to exercise platform default selection",
+    )
+    parser.add_argument(
         "--automation-disclosure",
         choices=["minimize_common_signals", "browser_default"],
         default="minimize_common_signals",
@@ -101,10 +106,11 @@ def browser_config(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     config: dict[str, Any] = {
         "backend": args.backend,
         "automation_disclosure": args.automation_disclosure,
-        "profile_root": str(root / "profiles" / args.backend),
         "quality": 70,
         "every_nth_frame": 1,
     }
+    if not args.use_default_profile_root:
+        config["profile_root"] = str(root / "profiles" / args.backend)
     optional = {
         "command": optional_executable(args.chromium_command),
         "firefox_command": optional_executable(args.firefox_command),
