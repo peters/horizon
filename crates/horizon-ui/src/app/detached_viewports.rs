@@ -1,3 +1,4 @@
+mod reattach;
 mod shortcut_actions;
 
 use std::collections::BTreeSet;
@@ -82,14 +83,14 @@ impl HorizonApp {
     }
 
     pub(super) fn reattach_workspace(&mut self, workspace_id: WorkspaceId) {
-        let Some(workspace) = self.board.workspace(workspace_id) else {
+        let Some(workspace_local_id) = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| workspace.local_id.clone())
+        else {
             return;
         };
-        if self.detached_workspaces.remove(&workspace.local_id).is_some() {
-            self.pending_detached_window_position_restore
-                .remove(&workspace.local_id);
-            self.mark_runtime_dirty();
-        }
+        self.schedule_detached_workspace_reattach(&workspace_local_id);
     }
 
     pub(super) fn focus_workspace_window(&self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
@@ -105,7 +106,7 @@ impl HorizonApp {
     }
 
     pub(super) fn render_detached_viewports(&mut self, ctx: &Context) {
-        self.process_pending_detached_reattach();
+        self.process_pending_detached_reattach(ctx);
 
         let local_ids: Vec<_> = self.detached_workspaces.keys().cloned().collect();
         let mut stale_local_ids = Vec::new();
@@ -533,26 +534,6 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
     }
-
-    fn process_pending_detached_reattach(&mut self) {
-        if self.pending_detached_reattach.is_empty() {
-            return;
-        }
-
-        // Remove pending viewports at the start of the root pass so egui
-        // simply stops emitting them this frame.
-        let pending = std::mem::take(&mut self.pending_detached_reattach);
-        let mut changed = false;
-        for workspace_local_id in pending {
-            changed |= self.detached_workspaces.remove(&workspace_local_id).is_some();
-            self.pending_detached_window_position_restore
-                .remove(&workspace_local_id);
-        }
-
-        if changed {
-            self.mark_runtime_dirty();
-        }
-    }
 }
 
 fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
@@ -603,12 +584,105 @@ fn detached_viewport_builder(
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::app::test_support::test_app;
+    use crate::app::test_support::{editor_workspace_state, test_app, test_app_with_config_and_startup};
+    use crate::app::{WS_BG_PAD, WS_TITLE_HEIGHT};
     use crate::test_egui::DiscardTextures;
     use egui::{Event, RawInput};
 
     use super::{consume_detached_position_restore, detached_viewport_builder, detached_viewport_id};
-    use horizon_core::WindowConfig;
+    use horizon_core::{
+        CanvasViewState, Config, DetachedWorkspaceState, RuntimeState, StartupDecision, WindowConfig, WorkspaceId,
+    };
+
+    const POSITION_TOLERANCE: f32 = 0.01;
+
+    fn reattach_test_app(
+        organize_workspaces_on_session_load: bool,
+    ) -> (tempfile::TempDir, egui::Context, super::HorizonApp) {
+        let mut config = Config::default();
+        config.features.organize_workspaces_on_session_load = organize_workspaces_on_session_load;
+        let runtime_state = RuntimeState {
+            detached_workspaces: vec![DetachedWorkspaceState {
+                workspace_local_id: "detached".to_string(),
+                window: WindowConfig::default(),
+            }],
+            workspaces: vec![
+                editor_workspace_state("left", [100.0, 300.0]),
+                editor_workspace_state("detached", [105.0, 305.0]),
+                editor_workspace_state("right", [700.0, 500.0]),
+            ],
+            ..RuntimeState::default()
+        };
+
+        let (temp, ctx, mut app) = test_app_with_config_and_startup(
+            &config,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(runtime_state),
+            },
+        );
+        let left = workspace_id(&app, "left");
+        let detached = workspace_id(&app, "detached");
+        let left_frame = workspace_frame(&app, left);
+        let detached_frame = workspace_frame(&app, detached);
+        assert!(app.board.translate_workspace(
+            detached,
+            [
+                left_frame[0] + 5.0 - detached_frame[0],
+                left_frame[1] + 5.0 - detached_frame[1],
+            ],
+        ));
+        assert!(frames_overlap(workspace_frame(&app, detached), left_frame));
+        (temp, ctx, app)
+    }
+
+    fn workspace_frame(app: &super::HorizonApp, workspace_id: WorkspaceId) -> [f32; 4] {
+        let (min, max) = app.board.workspace_bounds(workspace_id).expect("workspace bounds");
+        [
+            min[0] - WS_BG_PAD,
+            min[1] - WS_BG_PAD - WS_TITLE_HEIGHT,
+            max[0] + WS_BG_PAD,
+            max[1] + WS_BG_PAD,
+        ]
+    }
+
+    fn workspace_id(app: &super::HorizonApp, local_id: &str) -> WorkspaceId {
+        app.board
+            .workspace_id_by_local_id(local_id)
+            .expect("workspace local id")
+    }
+
+    fn assert_attached_workspaces_form_organized_row(app: &mut super::HorizonApp) {
+        let mut frames: Vec<_> = app
+            .board
+            .workspaces
+            .iter()
+            .filter(|workspace| !app.workspace_is_detached(workspace.id))
+            .map(|workspace| workspace_frame(app, workspace.id))
+            .collect();
+        frames.sort_by(|left, right| left[0].total_cmp(&right[0]));
+
+        for pair in frames.windows(2) {
+            assert!(
+                (pair[0][1] - pair[1][1]).abs() <= POSITION_TOLERANCE,
+                "expected aligned frame tops, got {pair:?}"
+            );
+            assert!(
+                !frames_overlap(pair[0], pair[1]),
+                "expected separated frames, got {pair:?}"
+            );
+        }
+
+        let alignment = super::super::actions::align_attached_workspaces(&mut app.board, &app.detached_workspaces)
+            .expect("multiple attached workspaces");
+        assert!(
+            !alignment.positions_changed,
+            "reattachment must already match Ctrl+Shift+A"
+        );
+    }
+
+    fn frames_overlap(left: [f32; 4], right: [f32; 4]) -> bool {
+        !(left[2] <= right[0] || right[2] <= left[0] || left[3] <= right[1] || right[3] <= left[1])
+    }
 
     #[test]
     fn detached_viewport_builder_only_restores_window_state_when_requested() {
@@ -670,5 +744,76 @@ mod tests {
             .map(|input| input.event.clone())
             .collect::<Vec<_>>();
         assert_eq!(collected, events);
+    }
+
+    #[test]
+    fn direct_reattach_reuses_enabled_session_organization() {
+        let (_temp, ctx, mut app) = reattach_test_app(true);
+        app.apply_startup_workspace_organization(&ctx)
+            .expect("initial attached workspaces should organize");
+        let detached = workspace_id(&app, "detached");
+        app.canvas_view = CanvasViewState::new([4_000.0, -2_000.0], 1.0);
+        app.pan_target = None;
+
+        app.reattach_workspace(detached);
+        app.process_pending_detached_reattach(&ctx);
+
+        assert!(!app.workspace_is_detached(detached));
+        assert_attached_workspaces_form_organized_row(&mut app);
+        assert!(
+            app.pan_target.is_some(),
+            "reattachment should reuse the shortcut's view target"
+        );
+        assert!(app.runtime_dirty_since.is_some());
+    }
+
+    #[test]
+    fn deferred_reattach_reuses_enabled_session_organization() {
+        let (_temp, ctx, mut app) = reattach_test_app(true);
+        app.apply_startup_workspace_organization(&ctx)
+            .expect("initial attached workspaces should organize");
+        let detached = workspace_id(&app, "detached");
+        app.pending_detached_reattach.insert("detached".to_string());
+
+        app.process_pending_detached_reattach(&ctx);
+
+        assert!(!app.workspace_is_detached(detached));
+        assert_attached_workspaces_form_organized_row(&mut app);
+        assert!(app.runtime_dirty_since.is_some());
+    }
+
+    #[test]
+    fn reattach_separates_overlap_without_organizing_freeform_workspaces() {
+        let (_temp, ctx, mut app) = reattach_test_app(false);
+        let left = workspace_id(&app, "left");
+        let right = workspace_id(&app, "right");
+        let detached = workspace_id(&app, "detached");
+        let left_before = app.board.workspace(left).expect("left workspace").position;
+        let right_before = app.board.workspace(right).expect("right workspace").position;
+
+        app.reattach_workspace(detached);
+        app.process_pending_detached_reattach(&ctx);
+
+        assert!(!app.workspace_is_detached(detached));
+        assert_eq!(
+            app.board
+                .workspace(left)
+                .expect("left workspace")
+                .position
+                .map(f32::to_bits),
+            left_before.map(f32::to_bits)
+        );
+        assert_eq!(
+            app.board
+                .workspace(right)
+                .expect("right workspace")
+                .position
+                .map(f32::to_bits),
+            right_before.map(f32::to_bits)
+        );
+        let detached_frame = workspace_frame(&app, detached);
+        assert!(!frames_overlap(detached_frame, workspace_frame(&app, left)));
+        assert!(!frames_overlap(detached_frame, workspace_frame(&app, right)));
+        assert!(app.runtime_dirty_since.is_some());
     }
 }

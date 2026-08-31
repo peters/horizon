@@ -5,6 +5,7 @@ use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
+use super::arrangement::rects_overlap;
 use super::{Board, WorkspaceDockSide, vec2_eq};
 
 impl Board {
@@ -417,6 +418,79 @@ impl Board {
         true
     }
 
+    /// Moves a workspace to the right of its scope only when its current
+    /// frame overlaps another scoped workspace. Existing non-overlapping
+    /// freeform layouts are otherwise preserved.
+    pub fn separate_workspace_from_overlaps_in_scope(
+        &mut self,
+        id: WorkspaceId,
+        workspace_ids: &[WorkspaceId],
+    ) -> bool {
+        if !workspace_ids.contains(&id) {
+            return false;
+        }
+
+        let Some(source_frame) = self.workspace_frame_rect(id) else {
+            return false;
+        };
+        if !workspace_frame_is_valid(source_frame) {
+            return false;
+        }
+        let mut overlaps = false;
+        let mut rightmost_frame: Option<[f32; 4]> = None;
+
+        for workspace_id in workspace_ids.iter().copied().filter(|workspace_id| *workspace_id != id) {
+            let Some(frame) = self.workspace_frame_rect(workspace_id) else {
+                continue;
+            };
+            if !workspace_frame_is_valid(frame) {
+                continue;
+            }
+            overlaps |= rects_overlap(source_frame, frame);
+            if rightmost_frame.is_none_or(|rightmost| frame[2].total_cmp(&rightmost[2]).is_gt()) {
+                rightmost_frame = Some(frame);
+            }
+        }
+
+        if !overlaps {
+            return false;
+        }
+
+        let Some(anchor_frame) = rightmost_frame else {
+            return false;
+        };
+        let delta = [
+            anchor_frame[2] + WS_COLLISION_GAP - source_frame[0],
+            anchor_frame[1] - source_frame[1],
+        ];
+        let translated_frame = [
+            source_frame[0] + delta[0],
+            source_frame[1] + delta[1],
+            source_frame[2] + delta[0],
+            source_frame[3] + delta[1],
+        ];
+        let translated_position_is_finite = |position: [f32; 2]| {
+            [position[0] + delta[0], position[1] + delta[1]]
+                .iter()
+                .all(|component| component.is_finite())
+        };
+        if !delta.iter().all(|component| component.is_finite())
+            || !translated_frame.iter().all(|component| component.is_finite())
+            || !self
+                .workspace(id)
+                .is_some_and(|workspace| translated_position_is_finite(workspace.position))
+            || !self
+                .panels
+                .iter()
+                .filter(|panel| panel.workspace_id == id)
+                .all(|panel| translated_position_is_finite(panel.layout.position))
+        {
+            return false;
+        }
+
+        self.translate_workspace(id, delta)
+    }
+
     pub fn move_workspace_before(&mut self, id: WorkspaceId, anchor_id: WorkspaceId) -> bool {
         self.reorder_workspace_relative(id, anchor_id, false)
     }
@@ -509,4 +583,8 @@ impl Board {
         self.workspaces.insert(insert_index, source_workspace);
         true
     }
+}
+
+fn workspace_frame_is_valid(frame: [f32; 4]) -> bool {
+    frame.iter().all(|component| component.is_finite()) && frame[2] > frame[0] && frame[3] > frame[1]
 }

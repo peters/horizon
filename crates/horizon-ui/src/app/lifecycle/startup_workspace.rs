@@ -10,14 +10,8 @@ impl HorizonApp {
             return None;
         }
 
-        let visible_anchor = if self.initial_pan_done {
-            self.startup_workspace_view_anchor(ctx)
-        } else {
-            None
-        };
-        let Some(alignment) =
-            super::super::actions::align_attached_workspaces(&mut self.board, &self.detached_workspaces)
-        else {
+        let visible_anchor = self.startup_workspace_view_anchor(ctx);
+        let Some(alignment) = self.align_attached_workspaces_horizontally(ctx) else {
             tracing::debug!("startup workspace organization skipped: no valid multi-workspace alignment");
             return None;
         };
@@ -27,14 +21,21 @@ impl HorizonApp {
             positions_changed = alignment.positions_changed,
             "startup workspace organization applied"
         );
-        if alignment.positions_changed {
-            if let Some((workspace_id, screen_anchor)) = visible_anchor {
-                self.restore_startup_workspace_view_anchor(ctx, workspace_id, screen_anchor);
-            } else if self.initial_pan_done && self.startup_workspace_view_anchor(ctx).is_none() {
-                let _ = self.align_initial_view_to_workspace(ctx, alignment.leftmost_workspace);
-            }
+
+        // The shortcut animates toward this same target. Session loading
+        // applies it immediately so the first interactive frame is already
+        // settled and cannot expose the pre-organization camera.
+        if let Some(target) = self.pan_target.take() {
+            self.canvas_view.set_pan_offset([target.x, target.y]);
             self.mark_runtime_dirty();
+        } else if alignment.positions_changed
+            && let Some((workspace_id, screen_anchor)) = visible_anchor
+        {
+            // An empty row head has no bounds from which the shared action can
+            // derive a target. Keep a previously visible workspace anchored.
+            self.restore_startup_workspace_view_anchor(ctx, workspace_id, screen_anchor);
         }
+        self.initial_pan_done = true;
         Some(alignment.leftmost_workspace)
     }
 

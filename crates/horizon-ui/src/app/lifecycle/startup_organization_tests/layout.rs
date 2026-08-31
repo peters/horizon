@@ -20,20 +20,36 @@ fn startup_frame_organizes_attached_workspaces_only_once() {
 }
 
 #[test]
-fn startup_frame_preserves_persisted_canvas_view() {
+fn startup_frame_reuses_manual_organization_view() {
     let saved_view = CanvasViewState::new([220.0, -80.0], 1.25);
-    let (_temp, ctx, mut app) = enabled_test_app(two_workspace_runtime(Some(saved_view)));
-    app.theme_applied = true;
+    let runtime_state = two_workspace_runtime(Some(saved_view));
+    let (_startup_temp, startup_ctx, mut startup_app) = enabled_test_app(runtime_state.clone());
+    startup_app.theme_applied = true;
+    let (_manual_temp, manual_ctx, mut manual_app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    manual_app.theme_applied = true;
 
-    run_frame_at_configured_size(&ctx, &mut app);
+    run_frame_at_configured_size(&startup_ctx, &mut startup_app);
+    run_frame_at_configured_size(&manual_ctx, &mut manual_app);
+    manual_app.execute_command(&manual_ctx, &CommandId::AlignWorkspacesHorizontally);
 
-    assert_eq!(app.canvas_view, saved_view);
-    assert!(app.pan_target.is_none());
-    assert_horizontal_row(&app, "left", "right");
+    assert_position_near(
+        workspace_position(&startup_app, "left"),
+        workspace_position(&manual_app, "left"),
+    );
+    assert_position_near(
+        workspace_position(&startup_app, "right"),
+        workspace_position(&manual_app, "right"),
+    );
+    let manual_target = manual_app.pan_target.expect("manual organization view target");
+    assert_position_near(startup_app.canvas_view.pan_offset, [manual_target.x, manual_target.y]);
+    assert_eq!(startup_app.canvas_view.zoom.to_bits(), saved_view.zoom.to_bits());
+    assert!(startup_app.pan_target.is_none());
 }
 
 #[test]
-fn startup_frame_keeps_a_visible_focused_workspace_on_screen() {
+fn startup_frame_preserves_selection_while_showing_the_organized_row_head() {
     let saved_view = CanvasViewState::new([-4_700.0, -250.0], 1.0);
     let runtime_state = RuntimeState {
         canvas_view: Some(saved_view),
@@ -51,7 +67,7 @@ fn startup_frame_keeps_a_visible_focused_workspace_on_screen() {
     run_frame_at_configured_size(&ctx, &mut app);
 
     assert_horizontal_row(&app, "left", "right");
-    assert_workspace_center_is_on_canvas(&ctx, &app, "right");
+    assert_workspace_center_is_on_canvas(&ctx, &app, "left");
     assert!(
         app.canvas_view
             .pan_offset
@@ -196,11 +212,16 @@ fn manual_alignment_still_runs_after_startup_one_shot() {
     run_frame_at_configured_size(&ctx, &mut app);
     let right_id = app.board.workspace_id_by_local_id("right").expect("right workspace");
     assert!(app.board.translate_workspace(right_id, [0.0, 137.0]));
+    app.runtime_dirty_since = None;
 
     app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
 
     assert_horizontal_row(&app, "left", "right");
-    assert!(app.pan_target.is_some());
+    assert!(
+        app.pan_target.is_none(),
+        "the view already matches the shared organization target"
+    );
+    assert!(app.runtime_dirty_since.is_some());
 }
 
 #[test]
@@ -242,9 +263,17 @@ fn already_aligned_startup_does_not_mark_runtime_dirty() {
     let (_temp, ctx, mut app) = enabled_test_app(runtime_state);
     app.theme_applied = true;
     let workspace_ids: Vec<_> = app.board.workspaces.iter().map(|workspace| workspace.id).collect();
-    app.board
+    let alignment = app
+        .board
         .align_workspaces_horizontally(&workspace_ids)
         .expect("two workspaces");
+    let (min, max) = app
+        .board
+        .workspace_bounds(alignment.leftmost_workspace)
+        .expect("leftmost workspace bounds");
+    app.focus_workspace_bounds(&ctx, min, max, true);
+    let target = app.pan_target.take().expect("startup-compatible view target");
+    app.canvas_view.set_pan_offset([target.x, target.y]);
     app.runtime_dirty_since = None;
 
     run_frame_at_configured_size(&ctx, &mut app);
@@ -322,13 +351,15 @@ fn startup_organization_precedes_one_immediate_initial_pan() {
     assert_eq!(active_workspace_local_id(&app), Some("right"));
 
     let left_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
-    let (min, _max) = app.board.workspace_bounds(left_id).expect("left bounds");
+    let (min, max) = app.board.workspace_bounds(left_id).expect("left bounds");
     let canvas_rect = app.canvas_rect(&ctx);
     let frame_left = min[0] - WS_BG_PAD;
     let frame_top = min[1] - WS_BG_PAD - WS_TITLE_HEIGHT;
-    let mapped = app
-        .canvas_view
-        .canvas_to_screen([canvas_rect.min.x, canvas_rect.min.y], [frame_left, frame_top]);
+    let frame_bottom = max[1] + WS_BG_PAD;
+    let mapped = app.canvas_view.canvas_to_screen(
+        [canvas_rect.min.x, canvas_rect.min.y],
+        [frame_left, f32::midpoint(frame_top, frame_bottom)],
+    );
     assert!((mapped[0] - (canvas_rect.min.x + 40.0)).abs() <= POSITION_TOLERANCE);
     assert!((mapped[1] - canvas_rect.center().y).abs() <= POSITION_TOLERANCE);
 
@@ -402,12 +433,12 @@ fn initial_pan_uses_the_row_head_selected_by_core_alignment() {
 
     run_frame_at_configured_size(&ctx, &mut app);
 
-    let (pos, _size) = workspace_frame(&app, "frame-left");
+    let (pos, size) = workspace_frame(&app, "frame-left");
     let (origin_left_pos, _size) = workspace_frame(&app, "origin-left");
     assert!(pos.x < origin_left_pos.x);
     assert!((pos.y - origin_left_pos.y).abs() <= POSITION_TOLERANCE);
     let canvas_rect = app.canvas_rect(&ctx);
-    let mapped = app.canvas_to_screen(canvas_rect, pos);
+    let mapped = app.canvas_to_screen(canvas_rect, Pos2::new(pos.x, pos.y + size.y * 0.5));
     let origin_left_frame = workspace_frame(&app, "origin-left");
     let origin_left_mapped = app.canvas_to_screen(canvas_rect, origin_left_frame.0);
     assert!(
@@ -421,7 +452,7 @@ fn initial_pan_uses_the_row_head_selected_by_core_alignment() {
     );
     assert!(
         (mapped.y - canvas_rect.center().y).abs() <= POSITION_TOLERANCE,
-        "expected frame-left y anchor {}, got {}",
+        "expected frame-left center y anchor {}, got {}",
         canvas_rect.center().y,
         mapped.y
     );
@@ -461,7 +492,7 @@ fn default_disabled_initial_pan_keeps_focus_and_camera_on_leftmost_workspace() {
 }
 
 #[test]
-fn enabled_initial_pan_repairs_an_unpersisted_fallback_selection() {
+fn enabled_organization_preserves_an_unpersisted_fallback_selection() {
     let runtime_state = RuntimeState {
         canvas_view: None,
         workspaces: vec![
@@ -476,7 +507,7 @@ fn enabled_initial_pan_repairs_an_unpersisted_fallback_selection() {
     run_frame_at_configured_size(&ctx, &mut app);
 
     assert_eq!(active_workspace_local_id(&app), Some("left"));
-    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
+    assert_eq!(focused_panel_local_id(&app), Some("right-panel"));
     assert_workspace_center_is_on_canvas(&ctx, &app, "left");
 }
 

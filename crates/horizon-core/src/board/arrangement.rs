@@ -622,6 +622,6 @@ fn resize_axis_push(a: [f32; 4], b: [f32; 4], axis: ResizeCollisionAxis, gap: f3
     }
 }
 
-fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+pub(super) fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
     !(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1])
 }
