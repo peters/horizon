@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
+const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
+
 #[test]
 fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     let root = tempfile::tempdir().expect("isolated root");
@@ -183,9 +185,8 @@ fn run_persists_preflight_failure_before_any_browser_action() {
 #[test]
 fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let root = tempfile::tempdir().expect("isolated root");
-    let (plan, _manifest_path) = write_blocking_plan(root.path());
-    let plan = plan.to_str().expect("UTF-8 path");
-    let output = run_command(root.path(), ["run", plan, "--timeout", "1"]);
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
 
     assert_eq!(output.status.code(), Some(124));
     assert!(
@@ -205,12 +206,18 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
         .expect("decode deadline state");
     assert_eq!(state["status"], "timed_out");
-    assert_eq!(state["execution_timeout_seconds"], 1);
+    assert_eq!(state["execution_timeout_seconds"], DEADLINE_TEST_TIMEOUT_SECONDS);
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
-    let output_dir = root.path().to_str().expect("UTF-8 root");
-    let failed_output = run_command(root.path(), ["run", plan, "--timeout", "1", "--output", output_dir]);
+    let failed_root = tempfile::tempdir().expect("isolated failed-output root");
+    let (failed_plan, failed_manifest_path) = write_blocking_plan(failed_root.path());
+    let failed_output = run_deadline_after_action(
+        failed_root.path(),
+        &failed_plan,
+        &failed_manifest_path,
+        Some(failed_root.path()),
+    );
     assert_eq!(failed_output.status.code(), Some(124));
     assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
 }
@@ -345,6 +352,30 @@ fn run_process_local_command<const N: usize>(home: &std::path::Path, arguments: 
         .expect("run process-local horizon-browser")
 }
 
+fn run_deadline_after_action(
+    home: &std::path::Path,
+    plan: &std::path::Path,
+    manifest_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser"));
+    let timeout = DEADLINE_TEST_TIMEOUT_SECONDS.to_string();
+    command
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", &timeout])
+        .env("HOME", home)
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(output) = output {
+        command.args(["--output", output.to_str().expect("UTF-8 output path")]);
+    }
+    let mut child = command.spawn().expect("spawn deadline browser job");
+    wait_for_manifest_action(&mut child, manifest_path);
+    child.wait_with_output().expect("collect deadline browser job")
+}
+
 fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let panel_id = "blocked-panel";
     let manifest_path = manifest::manifest_path_for_root(&home.join(".horizon"), panel_id);
@@ -365,6 +396,28 @@ fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path
     )
     .expect("write blocking plan");
     (plan, manifest_path)
+}
+
+fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(bytes) = std::fs::read(manifest_path)
+            && let Ok(manifest) = serde_json::from_slice::<BrowserManifest>(&bytes)
+            && !manifest.actions.is_empty()
+        {
+            return;
+        }
+        assert!(
+            child.try_wait().expect("poll browser job").is_none(),
+            "browser job exited before queueing its blocking action"
+        );
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled task-owned browser job");
+            child.wait().expect("reap stalled task-owned browser job");
+            panic!("browser job did not queue its blocking action");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 struct McpProcess {

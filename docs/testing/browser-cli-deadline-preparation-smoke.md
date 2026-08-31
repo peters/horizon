@@ -77,8 +77,9 @@ cargo test -p horizon-browser-cli --lib tests::pre_dispatch_deadline_uses_the_ph
 ```
 
 It must prove exit `124`, one completed step, `stop_reason=deadline_exceeded`,
-an in-flight-action warning in the partial report, and terminal `timed_out`
-state even when the requested output cannot be written. The open-stdin and
+that the blocking MCP action was visibly queued in the test manifest before an
+in-flight-action warning is emitted, and terminal `timed_out` state even when
+the requested output cannot be written. The open-stdin and
 pre-dispatch lanes must use the phase-neutral deadline message without that
 warning; the latter also proves the MCP action future was never polled.
 
