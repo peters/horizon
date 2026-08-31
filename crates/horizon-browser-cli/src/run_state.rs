@@ -315,8 +315,8 @@ impl DurableRun {
         let path = self
             .directory
             .join(format!(".state-activation-{}.json", Uuid::new_v4()));
+        self.activation_path = Some(path.clone());
         write_private_staged_json(&path, &running, "state")?;
-        self.activation_path = Some(path);
         Ok(())
     }
 
