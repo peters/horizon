@@ -134,7 +134,7 @@ pub enum RunError {
     #[error("plan step `{step}` names unavailable MCP tool `{tool}`")]
     UnknownTool { step: String, tool: String },
     /// The job stopped before step execution produced a report.
-    #[error("{}", ExecutionStopReason::MESSAGE)]
+    #[error("{}", .0.message())]
     Stopped(ExecutionStopReason),
 }
 
@@ -341,7 +341,7 @@ impl ExecutionReport {
 
     fn stop(&mut self, reason: ExecutionStopReason) {
         self.ok = false;
-        self.error = Some(ExecutionStopReason::MESSAGE.to_string());
+        self.error = Some(reason.message().to_string());
         self.stop_reason = Some(reason);
     }
 }
@@ -352,7 +352,7 @@ fn stopped_report(steps: Vec<StepReport>, reason: ExecutionStopReason) -> Execut
         ok: false,
         completed_steps: steps.len(),
         steps,
-        error: Some(ExecutionStopReason::MESSAGE.to_string()),
+        error: Some(reason.in_flight_message().to_string()),
         stop_reason: Some(reason),
     }
 }

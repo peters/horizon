@@ -153,6 +153,11 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
     assert_eq!(report["completed_steps"], 1);
     assert_eq!(report["stop_reason"], "deadline_exceeded");
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("in-flight browser action may still complete"))
+    );
     let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
         .expect("decode deadline state");
@@ -201,7 +206,9 @@ fn run_deadline_bounds_open_stdin_before_durable_setup() {
     assert_eq!(output.status.code(), Some(124));
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("job deadline exceeded"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("job deadline exceeded"));
+    assert!(!stderr.contains("in-flight browser action"));
     assert!(!root.path().join(".horizon/browser-jobs").exists());
 }
 

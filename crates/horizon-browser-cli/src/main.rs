@@ -12,7 +12,7 @@ use horizon_browser_cli::{
     Plan,
     execution_control::{ExecutionControl, ExecutionStopReason, JobDeadline},
     job::JobOptions,
-    run_state::{DurableExecutionReport, DurableRun},
+    run_state::{DurableExecutionReport, DurablePreparationError, DurableRun},
     standalone::StandaloneOptions,
 };
 
@@ -128,6 +128,11 @@ struct PreparedRun {
     control: ExecutionControl,
 }
 
+enum BlockingCompletion<T> {
+    Completed(T),
+    InfrastructureFailed(String),
+}
+
 async fn prepare_run(plan_path: PathBuf, timeout: Duration) -> Result<PreparedRun, ExitCode> {
     let deadline = JobDeadline::after(timeout);
     let mut control = ExecutionControl::until(deadline);
@@ -137,13 +142,17 @@ async fn prepare_run(plan_path: PathBuf, timeout: Duration) -> Result<PreparedRu
     })
     .await
     {
-        Ok(Ok(plan)) => plan,
-        Ok(Err(error)) => {
+        Ok(BlockingCompletion::Completed(Ok(plan))) => plan,
+        Ok(BlockingCompletion::Completed(Err(error))) => {
             eprintln!("error: {error}");
             return Err(ExitCode::from(2));
         }
-        Err(_) => {
-            eprintln!("error: {}", ExecutionStopReason::MESSAGE);
+        Ok(BlockingCompletion::InfrastructureFailed(error)) => {
+            eprintln!("error: {error}");
+            return Err(ExitCode::FAILURE);
+        }
+        Err(reason) => {
+            eprintln!("error: {}", reason.message());
             return Err(ExitCode::from(EXIT_TIMED_OUT));
         }
     };
@@ -151,24 +160,25 @@ async fn prepare_run(plan_path: PathBuf, timeout: Duration) -> Result<PreparedRu
     let timeout_seconds = timeout.as_secs();
     let deadline_at_millis = deadline.unix_millis();
     let mut durable = match deadline_bound_blocking(&mut control, "horizon-browser-state-prepare", move || {
-        DurableRun::prepare(&durable_plan, timeout_seconds, deadline_at_millis).map_err(|error| error.to_string())
+        DurableRun::prepare(&durable_plan, timeout_seconds, deadline_at_millis)
     })
     .await
     {
-        Ok(Ok(durable)) => durable,
-        Ok(Err(error)) => {
+        Ok(BlockingCompletion::Completed(Ok(durable))) => durable,
+        Ok(BlockingCompletion::Completed(Err(error))) => return Err(persist_preparation_failure(error)),
+        Ok(BlockingCompletion::InfrastructureFailed(error)) => {
             eprintln!("error: {error}");
             return Err(ExitCode::FAILURE);
         }
-        Err(_) => {
-            eprintln!("error: {}", ExecutionStopReason::MESSAGE);
+        Err(reason) => {
+            eprintln!("error: {}", reason.message());
             return Err(ExitCode::from(EXIT_TIMED_OUT));
         }
     };
-    if deadline.check().is_err() {
+    if let Err(reason) = deadline.check() {
         eprintln!(
             "error: {}; durable job {}: {}",
-            ExecutionStopReason::MESSAGE,
+            reason.message(),
             durable.job_id(),
             durable.state_path().display()
         );
@@ -190,12 +200,12 @@ async fn prepare_run(plan_path: PathBuf, timeout: Duration) -> Result<PreparedRu
         if let Err(state_error) = durable.stop(reason) {
             eprintln!(
                 "error: {}; additionally could not persist stopped state: {state_error}",
-                ExecutionStopReason::MESSAGE
+                reason.message()
             );
         } else {
             eprintln!(
                 "error: {}; durable job {}: {}",
-                ExecutionStopReason::MESSAGE,
+                reason.message(),
                 durable.job_id(),
                 durable.state_path().display()
             );
@@ -221,13 +231,13 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) 
             if let Err(state_error) = durable.stop(reason) {
                 eprintln!(
                     "error: {}; additionally could not persist stopped state: {state_error}",
-                    ExecutionStopReason::MESSAGE
+                    reason.message()
                 );
                 return ExitCode::from(EXIT_TIMED_OUT);
             }
             eprintln!(
                 "error: {}; durable job {}: {}",
-                ExecutionStopReason::MESSAGE,
+                reason.message(),
                 durable.job_id(),
                 durable.state_path().display()
             );
@@ -415,25 +425,51 @@ fn parse_run_timeout(value: Option<&OsString>) -> Result<Duration, String> {
 async fn deadline_bound_blocking<T>(
     control: &mut ExecutionControl,
     worker_name: &'static str,
-    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<Result<T, String>, ExecutionStopReason>
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Result<BlockingCompletion<T>, ExecutionStopReason>
 where
     T: Send + 'static,
 {
     control
         .wait(async move {
             let (sender, receiver) = tokio::sync::oneshot::channel();
-            let _worker = std::thread::Builder::new()
+            let _worker = match std::thread::Builder::new()
                 .name(worker_name.to_string())
                 .spawn(move || {
                     let _ = sender.send(operation());
-                })
-                .map_err(|error| format!("could not start {worker_name}: {error}"))?;
-            receiver
-                .await
-                .map_err(|error| format!("{worker_name} stopped without a result: {error}"))?
+                }) {
+                Ok(worker) => worker,
+                Err(error) => {
+                    return BlockingCompletion::InfrastructureFailed(format!("could not start {worker_name}: {error}"));
+                }
+            };
+            match receiver.await {
+                Ok(result) => BlockingCompletion::Completed(result),
+                Err(error) => {
+                    BlockingCompletion::InfrastructureFailed(format!("{worker_name} stopped without a result: {error}"))
+                }
+            }
         })
         .await
+}
+
+fn persist_preparation_failure(error: DurablePreparationError) -> ExitCode {
+    let (durable, source) = error.into_parts();
+    let message = source.to_string();
+    if let Some(mut durable) = durable {
+        if let Err(state_error) = durable.fail(&message) {
+            eprintln!("error: {message}; additionally could not persist failure state: {state_error}");
+        } else {
+            eprintln!(
+                "error: {message}; durable job {}: {}",
+                durable.job_id(),
+                durable.state_path().display()
+            );
+        }
+    } else {
+        eprintln!("error: {message}");
+    }
+    ExitCode::FAILURE
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
