@@ -140,23 +140,26 @@ reach plan execution also save a final report. A state left as `running` is
 durable evidence that the runner stopped before recording a terminal outcome;
 automatic continuation is not enabled yet.
 
-Every deterministic run gives its MCP execution phase a deadline. The default
-is 1800 seconds; `--timeout` accepts 1 through 86400 whole seconds. The budget
-starts after plan input, validation, and initial durable-job setup. It covers
-MCP initialization, tool discovery, calls, and client/server shutdown. Plan
-input plus durable state, report, and requested-output writes are preparatory or
-post-processing I/O and can add wall-clock time outside that budget.
+Every deterministic run has one deadline. The default is 1800 seconds;
+`--timeout` accepts 1 through 86400 whole seconds. The budget starts before plan
+input and covers validation, initial durable-job setup, MCP initialization,
+tool discovery, calls, and client/server shutdown. Final durable state, report,
+and requested-output writes can add post-processing time after that budget.
+
+Durable setup first writes a conservative `timed_out` state and a private,
+fully synced activation file. Only the deadline-owning caller can atomically
+publish `running`; an abandoned or late setup worker can never do so.
 
 A deadline during a tool call saves the completed prefix as a partial report
 and records `timed_out` in `state.json`; the state also records the configured
-`execution_timeout_seconds`. An already-dispatched browser mutation may still
-complete, so inspect the browser audit before retrying it; automatic replay
-remains disabled.
+`execution_timeout_seconds` and absolute `deadline_at_millis`. An
+already-dispatched browser mutation may still complete, so inspect the browser
+audit before retrying it; automatic replay remains disabled.
 
 Stdout contains only the report; diagnostics use stderr. A file report is
 created with owner-only permissions on Unix. Stable exit codes are 0 for
 success, 1 for execution failure, 2 for invalid CLI or plan input, and 124 for
-an execution deadline.
+a whole-job deadline.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the

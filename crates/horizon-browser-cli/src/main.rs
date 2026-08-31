@@ -10,7 +10,7 @@ use std::time::Duration;
 use horizon_browser::BackendKind;
 use horizon_browser_cli::{
     Plan,
-    execution_control::{ExecutionControl, ExecutionStopReason},
+    execution_control::{ExecutionControl, ExecutionStopReason, JobDeadline},
     job::JobOptions,
     run_state::{DurableExecutionReport, DurableRun},
     standalone::StandaloneOptions,
@@ -42,7 +42,7 @@ OPTIONS:
     --visible             Show a native browser window; jobs default headless.
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
-    --timeout <SECONDS>    Bound MCP execution (default 1800, max 86400).
+    --timeout <SECONDS>    Bound the whole deterministic run (default 1800, max 86400).
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
@@ -122,29 +122,99 @@ async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
     }
 }
 
+struct PreparedRun {
+    plan: Plan,
+    durable: DurableRun,
+    control: ExecutionControl,
+}
+
+async fn prepare_run(plan_path: PathBuf, timeout: Duration) -> Result<PreparedRun, ExitCode> {
+    let deadline = JobDeadline::after(timeout);
+    let mut control = ExecutionControl::until(deadline);
+    let plan = match deadline_bound_blocking(&mut control, "horizon-browser-plan-load", move || {
+        let bytes = read_bounded(&plan_path)?;
+        Plan::from_slice(&bytes).map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(error)) => {
+            eprintln!("error: {error}");
+            return Err(ExitCode::from(2));
+        }
+        Err(_) => {
+            eprintln!("error: {}", ExecutionStopReason::MESSAGE);
+            return Err(ExitCode::from(EXIT_TIMED_OUT));
+        }
+    };
+    let durable_plan = plan.clone();
+    let timeout_seconds = timeout.as_secs();
+    let deadline_at_millis = deadline.unix_millis();
+    let mut durable = match deadline_bound_blocking(&mut control, "horizon-browser-state-prepare", move || {
+        DurableRun::prepare(&durable_plan, timeout_seconds, deadline_at_millis).map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(durable)) => durable,
+        Ok(Err(error)) => {
+            eprintln!("error: {error}");
+            return Err(ExitCode::FAILURE);
+        }
+        Err(_) => {
+            eprintln!("error: {}", ExecutionStopReason::MESSAGE);
+            return Err(ExitCode::from(EXIT_TIMED_OUT));
+        }
+    };
+    if deadline.check().is_err() {
+        eprintln!(
+            "error: {}; durable job {}: {}",
+            ExecutionStopReason::MESSAGE,
+            durable.job_id(),
+            durable.state_path().display()
+        );
+        return Err(ExitCode::from(EXIT_TIMED_OUT));
+    }
+    if let Err(error) = durable.activate() {
+        if let Err(state_error) = durable.fail(&error.to_string()) {
+            eprintln!("error: {error}; additionally could not persist failure state: {state_error}");
+        } else {
+            eprintln!(
+                "error: {error}; durable job {}: {}",
+                durable.job_id(),
+                durable.state_path().display()
+            );
+        }
+        return Err(ExitCode::FAILURE);
+    }
+    if let Err(reason) = deadline.check() {
+        if let Err(state_error) = durable.stop(reason) {
+            eprintln!(
+                "error: {}; additionally could not persist stopped state: {state_error}",
+                ExecutionStopReason::MESSAGE
+            );
+        } else {
+            eprintln!(
+                "error: {}; durable job {}: {}",
+                ExecutionStopReason::MESSAGE,
+                durable.job_id(),
+                durable.state_path().display()
+            );
+        }
+        return Err(ExitCode::from(EXIT_TIMED_OUT));
+    }
+
+    Ok(PreparedRun { plan, durable, control })
+}
+
 async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
-    let bytes = match read_bounded(&plan_path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::from(2);
-        }
+    let PreparedRun {
+        plan,
+        mut durable,
+        mut control,
+    } = match prepare_run(plan_path, timeout).await {
+        Ok(prepared) => prepared,
+        Err(exit) => return exit,
     };
-    let plan = match Plan::from_slice(&bytes) {
-        Ok(plan) => plan,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::from(2);
-        }
-    };
-    let mut durable = match DurableRun::start(&plan, timeout.as_secs()) {
-        Ok(durable) => durable,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut control = ExecutionControl::with_timeout(timeout);
     let report = match horizon_browser_cli::execute_plan_with_control(&plan, &mut control).await {
         Ok(report) => report,
         Err(horizon_browser_cli::RunError::Stopped(reason)) => {
@@ -340,6 +410,30 @@ fn parse_run_timeout(value: Option<&OsString>) -> Result<Duration, String> {
         .filter(|seconds| (1..=MAX_RUN_TIMEOUT_SECONDS).contains(seconds))
         .ok_or_else(|| format!("--timeout requires whole seconds from 1 through {MAX_RUN_TIMEOUT_SECONDS}"))?;
     Ok(Duration::from_secs(seconds))
+}
+
+async fn deadline_bound_blocking<T>(
+    control: &mut ExecutionControl,
+    worker_name: &'static str,
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<Result<T, String>, ExecutionStopReason>
+where
+    T: Send + 'static,
+{
+    control
+        .wait(async move {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let _worker = std::thread::Builder::new()
+                .name(worker_name.to_string())
+                .spawn(move || {
+                    let _ = sender.send(operation());
+                })
+                .map_err(|error| format!("could not start {worker_name}: {error}"))?;
+            receiver
+                .await
+                .map_err(|error| format!("{worker_name} stopped without a result: {error}"))?
+        })
+        .await
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {

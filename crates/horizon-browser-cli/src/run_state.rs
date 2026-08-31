@@ -7,7 +7,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
+use atomicwrites::{AllowOverwrite, AtomicFile, replace_atomic};
 use horizon_core::HorizonHome;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,9 +32,12 @@ pub struct RunState {
     pub status: RunStatus,
     /// Unix timestamp in milliseconds when the job was created.
     pub created_at_millis: u64,
-    /// Configured MCP execution budget, excluding plan input and durable setup.
+    /// Configured whole-job budget, including plan input and durable setup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeout_seconds: Option<u64>,
+    /// Absolute wall-clock deadline selected when the run started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at_millis: Option<u64>,
     /// Unix timestamp in milliseconds when this state was last persisted.
     pub updated_at_millis: u64,
     /// Process that initially executed the job. This is diagnostic only.
@@ -62,7 +65,7 @@ pub enum RunStatus {
     Succeeded,
     /// A plan step, MCP connection, or runner operation failed.
     Failed,
-    /// The configured MCP execution deadline elapsed.
+    /// The configured whole-job deadline elapsed.
     TimedOut,
 }
 
@@ -84,6 +87,7 @@ pub struct DurableExecutionReport<'a> {
 pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
+    activation_path: Option<PathBuf>,
     state: RunState,
 }
 
@@ -105,15 +109,19 @@ pub enum RunStateError {
 }
 
 impl DurableRun {
-    /// Create a private job directory and persist the validated plan plus its
-    /// initial running state before any MCP action is attempted.
+    /// Prepare a private job directory with a conservative timed-out state and
+    /// a fully synced running state that only the caller can activate.
     ///
     /// # Errors
     /// Returns when the private directory or either initial artifact cannot be
     /// created durably.
-    pub fn start(plan: &Plan, execution_timeout_seconds: u64) -> Result<Self, RunStateError> {
+    pub fn prepare(
+        plan: &Plan,
+        execution_timeout_seconds: u64,
+        deadline_at_millis: u64,
+    ) -> Result<Self, RunStateError> {
         let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::start_in(&root, plan, Some(execution_timeout_seconds))
+        Self::prepare_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
     }
 
     /// Stable id of this durable run.
@@ -128,7 +136,12 @@ impl DurableRun {
         &self.state_path
     }
 
-    fn start_in(root: &Path, plan: &Plan, execution_timeout_seconds: Option<u64>) -> Result<Self, RunStateError> {
+    fn prepare_in(
+        root: &Path,
+        plan: &Plan,
+        execution_timeout_seconds: Option<u64>,
+        deadline_at_millis: Option<u64>,
+    ) -> Result<Self, RunStateError> {
         ensure_private_directory(root)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
@@ -141,25 +154,58 @@ impl DurableRun {
         let state = RunState {
             version: STATE_VERSION,
             job_id,
-            status: RunStatus::Running,
+            status: RunStatus::TimedOut,
             created_at_millis,
             execution_timeout_seconds,
+            deadline_at_millis,
             updated_at_millis: created_at_millis,
             runner_pid: std::process::id(),
             plan_file: PLAN_FILE.to_string(),
             report_file: None,
             completed_steps: 0,
-            error: None,
+            error: Some(ExecutionStopReason::MESSAGE.to_string()),
         };
-        write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")?;
-        write_private_json(&staging.path().join(STATE_FILE), &state, "state")?;
-        sync_directory(staging.path())?;
-        publish_job_directory(staging, &directory, root)?;
-        Ok(Self {
-            state_path: directory.join(STATE_FILE),
-            directory,
+        let mut run = Self {
+            directory: staging.path().to_path_buf(),
+            state_path: staging.path().join(STATE_FILE),
+            activation_path: None,
             state,
-        })
+        };
+        run.write_json(PLAN_FILE, plan, "plan")?;
+        run.persist_state()?;
+        run.stage_activation()?;
+        sync_directory(staging.path())?;
+        publish_job_directory(staging, &directory)?;
+        run.directory = directory;
+        run.state_path = run.directory.join(STATE_FILE);
+        run.activation_path = run
+            .activation_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| run.directory.join(name));
+        sync_directory(root)?;
+        Ok(run)
+    }
+
+    /// Atomically publish the already-synced running state.
+    ///
+    /// No background preparation worker can perform this transition.
+    ///
+    /// # Errors
+    /// Returns when the staged state cannot replace the conservative state.
+    pub fn activate(&mut self) -> Result<(), RunStateError> {
+        let activation_path = self.activation_path.as_ref().ok_or_else(|| {
+            io_error(
+                "durable job has no pending activation".to_string(),
+                std::io::Error::other("activation already consumed"),
+            )
+        })?;
+        replace_atomic(activation_path, &self.state_path)
+            .map_err(|source| io_error(format!("could not activate {}", self.state_path.display()), source))?;
+        self.activation_path = None;
+        self.state.status = RunStatus::Running;
+        self.state.error = None;
+        Ok(())
     }
 
     /// Return the report envelope exposed on stdout or through `--output`.
@@ -218,8 +264,29 @@ impl DurableRun {
         write_private_json(&self.state_path, &self.state, "state")
     }
 
+    fn stage_activation(&mut self) -> Result<(), RunStateError> {
+        let mut running = self.state.clone();
+        running.status = RunStatus::Running;
+        running.updated_at_millis = now_millis();
+        running.error = None;
+        let path = self
+            .directory
+            .join(format!(".state-activation-{}.json", Uuid::new_v4()));
+        write_private_staged_json(&path, &running, "state")?;
+        self.activation_path = Some(path);
+        Ok(())
+    }
+
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+}
+
+impl Drop for DurableRun {
+    fn drop(&mut self) {
+        if let Some(path) = self.activation_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -255,7 +322,7 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &Path) -> Result<(), RunStateError> {
+fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Result<(), RunStateError> {
     std::fs::rename(staging.path(), destination).map_err(|source| {
         io_error(
             format!("could not publish durable job {}", destination.display()),
@@ -263,7 +330,7 @@ fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &
         )
     })?;
     let _published_path = staging.keep();
-    sync_directory(root)
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> Result<(), RunStateError> {
@@ -313,6 +380,23 @@ fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static st
     Ok(())
 }
 
+fn write_private_staged_json(path: &Path, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|source| RunStateError::Encode { artifact, source })?;
+    bytes.push(b'\n');
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let result = options
+        .open(path)
+        .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
+        .map_err(|source| io_error(format!("could not stage {}", path.display()), source));
+    if result.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
 fn io_error(operation: String, source: std::io::Error) -> RunStateError {
     RunStateError::Io { operation, source }
 }
@@ -354,15 +438,24 @@ mod tests {
     }
 
     #[test]
-    fn state_is_running_before_execution_and_terminal_after_report() {
-        let home = tempfile::tempdir().expect("temporary home");
-        let root = home.path().join(".horizon/browser-jobs");
-        let mut run = DurableRun::start_in(&root, &plan(), Some(30)).expect("start durable run");
+    fn caller_activates_a_conservatively_prepared_run_before_execution() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let deadline_at_millis = now_millis().saturating_add(30_000);
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), Some(deadline_at_millis))
+            .expect("prepare durable run");
+        let prepared: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("prepared state"))
+            .expect("decode prepared state");
+        assert_eq!(prepared.status, RunStatus::TimedOut);
+        assert_eq!(prepared.error.as_deref(), Some(ExecutionStopReason::MESSAGE));
+
+        run.activate().expect("activate durable run");
         let running: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("running state"))
             .expect("decode running state");
         assert_eq!(running.status, RunStatus::Running);
         assert_eq!(running.completed_steps, 0);
         assert_eq!(running.execution_timeout_seconds, Some(30));
+        assert_eq!(running.deadline_at_millis, Some(deadline_at_millis));
+        assert_eq!(running.error, None);
         assert_eq!(running.plan_file, PLAN_FILE);
         assert_eq!(
             Plan::from_slice(&std::fs::read(run.directory.join(PLAN_FILE)).expect("saved plan"))
@@ -426,6 +519,28 @@ mod tests {
     }
 
     #[test]
+    fn abandoned_preparation_cannot_publish_running_state() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let state_path = {
+            let run = DurableRun::prepare_in(root.path(), &plan(), Some(1), Some(now_millis().saturating_add(1_000)))
+                .expect("prepare durable run");
+            run.state_path.clone()
+        };
+
+        let state: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("prepared state"))
+            .expect("decode prepared state");
+        assert_eq!(state.status, RunStatus::TimedOut);
+        let directory = state_path.parent().expect("job directory");
+        let names = std::fs::read_dir(directory)
+            .expect("job artifacts")
+            .map(|entry| entry.expect("job artifact").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 2);
+        assert!(directory.join(PLAN_FILE).exists());
+        assert!(directory.join(STATE_FILE).exists());
+    }
+
+    #[test]
     fn state_accepts_jobs_created_before_execution_timeouts() {
         let state: RunState = serde_json::from_value(json!({
             "version": 1,
@@ -440,12 +555,14 @@ mod tests {
         .expect("decode existing durable state");
 
         assert_eq!(state.execution_timeout_seconds, None);
+        assert_eq!(state.deadline_at_millis, None);
     }
 
     #[test]
     fn initialization_failure_is_durable() {
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare durable run");
+        run.activate().expect("activate durable run");
         run.fail("adapter unavailable").expect("persist failure");
         let failed: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("failed state"))
             .expect("decode failed state");
@@ -510,7 +627,7 @@ mod tests {
         let staging_path = staging.path().to_path_buf();
         let destination = root.path().join("job-published");
 
-        publish_job_directory(staging, &destination, root.path()).expect("publish job");
+        publish_job_directory(staging, &destination).expect("publish job");
         std::fs::create_dir(&staging_path).expect("reuse staging name");
         std::fs::write(staging_path.join("sentinel"), b"keep me").expect("write sentinel");
 
@@ -528,7 +645,8 @@ mod tests {
         use std::os::unix::ffi::OsStringExt as _;
 
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare durable run");
+        run.activate().expect("activate durable run");
         run.directory = PathBuf::from(OsString::from_vec(b"home-\xff/.horizon/browser-jobs/job".to_vec()));
         run.state_path = run.directory.join(STATE_FILE);
 
