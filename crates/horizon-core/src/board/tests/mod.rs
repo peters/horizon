@@ -3,6 +3,7 @@ use crate::panel::{PanelKind, PanelOptions};
 mod alignment;
 mod core;
 mod layout;
+mod reordering;
 mod workspace;
 mod workspace_separation;
 

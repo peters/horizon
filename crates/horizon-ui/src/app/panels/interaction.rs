@@ -1,4 +1,4 @@
-use egui::{Context, Pos2, Rect, Vec2};
+use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{PanelId, PanelKind, WorkspaceId};
 
 use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
@@ -7,7 +7,73 @@ use crate::theme;
 
 use super::{PanelCommand, PanelFrame, PanelSnapshot, PanelUiOutcome, render_session_rebind_options};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::app) struct ArrangedPanelDrag {
+    panel_id: PanelId,
+    workspace_id: WorkspaceId,
+    viewport_id: ViewportId,
+    preview_position: Pos2,
+}
+
+impl ArrangedPanelDrag {
+    fn new(panel_id: PanelId, workspace_id: WorkspaceId, viewport_id: ViewportId, preview_position: Pos2) -> Self {
+        Self {
+            panel_id,
+            workspace_id,
+            viewport_id,
+            preview_position,
+        }
+    }
+
+    fn matches(self, panel_id: PanelId, workspace_id: WorkspaceId, viewport_id: ViewportId) -> bool {
+        self.panel_id == panel_id && self.workspace_id == workspace_id && self.viewport_id == viewport_id
+    }
+
+    fn preview_for(self, panel_id: PanelId, workspace_id: WorkspaceId) -> Option<Pos2> {
+        (self.panel_id == panel_id && self.workspace_id == workspace_id).then_some(self.preview_position)
+    }
+
+    fn belongs_to(self, panel_id: PanelId, workspace_id: WorkspaceId) -> bool {
+        self.panel_id == panel_id && self.workspace_id == workspace_id
+    }
+
+    fn advance(&mut self, delta: Vec2) -> Pos2 {
+        self.preview_position += delta;
+        self.preview_position
+    }
+}
+
 impl HorizonApp {
+    pub(super) fn clear_inactive_arranged_panel_drag(&mut self, ctx: &Context, panel_id: PanelId) {
+        let should_clear = self.arranged_panel_drag.is_some_and(|drag| {
+            drag.panel_id == panel_id
+                && (drag.viewport_id != ctx.viewport_id() || !ctx.input(|input| input.pointer.primary_down()))
+        });
+        if should_clear {
+            self.arranged_panel_drag = None;
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn arranged_panel_position(&self, panel_id: PanelId, workspace_id: WorkspaceId, fallback: Pos2) -> Pos2 {
+        let Some(preview_position) = self
+            .arranged_panel_drag
+            .and_then(|drag| drag.preview_for(panel_id, workspace_id))
+        else {
+            return fallback;
+        };
+
+        if self
+            .board
+            .workspace(workspace_id)
+            .is_some_and(|workspace| workspace.layout.is_some())
+        {
+            preview_position
+        } else {
+            fallback
+        }
+    }
+
     pub(super) fn update_panel_interactions(
         is_renaming: bool,
         drag_response: &egui::Response,
@@ -26,8 +92,14 @@ impl HorizonApp {
         if !is_renaming && (drag_response.clicked() || drag_response.drag_started()) {
             outcome.focus_requested = true;
         }
+        if !is_renaming && drag_response.drag_started() {
+            outcome.drag.started = true;
+        }
         if !is_renaming && drag_response.dragged() {
-            outcome.drag_delta = drag_response.drag_delta();
+            outcome.drag.delta = drag_response.drag_delta();
+        }
+        if !is_renaming && drag_response.drag_stopped() {
+            outcome.drag.stopped = true;
         }
         if resize_response.dragged() {
             outcome.resize_delta = resize_response.drag_delta();
@@ -159,11 +231,13 @@ impl HorizonApp {
             RenameEditAction::None => {}
         }
 
-        if !self.canvas_pan_input_claimed && outcome.drag_delta != Vec2::ZERO {
-            let new_position = snapshot.canvas_position + outcome.drag_delta;
-            let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
-            self.mark_runtime_dirty();
-        }
+        self.apply_panel_drag(
+            ctx,
+            panel_id,
+            snapshot.current_workspace_id,
+            snapshot.canvas_position,
+            outcome,
+        );
         if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
             let _ = self.board.resize_panel_with_workspace_scope(
@@ -213,5 +287,247 @@ impl HorizonApp {
         }
 
         matches!(outcome.command, Some(PanelCommand::Close))
+    }
+
+    fn apply_panel_drag(
+        &mut self,
+        ctx: &Context,
+        panel_id: PanelId,
+        workspace_id: WorkspaceId,
+        canvas_position: Pos2,
+        outcome: &PanelUiOutcome,
+    ) {
+        let viewport_id = ctx.viewport_id();
+        let arranged = self
+            .board
+            .workspace(workspace_id)
+            .is_some_and(|workspace| workspace.layout.is_some());
+        let active_drag_matches = self
+            .arranged_panel_drag
+            .is_some_and(|drag| drag.matches(panel_id, workspace_id, viewport_id));
+        let drag_belongs_to_panel = self
+            .arranged_panel_drag
+            .is_some_and(|drag| drag.belongs_to(panel_id, workspace_id));
+
+        if drag_belongs_to_panel && !active_drag_matches {
+            self.arranged_panel_drag = None;
+            ctx.request_repaint();
+        }
+
+        if self.canvas_pan_input_claimed {
+            if drag_belongs_to_panel {
+                self.arranged_panel_drag = None;
+                ctx.request_repaint();
+            }
+            return;
+        }
+
+        if !arranged {
+            if drag_belongs_to_panel {
+                self.arranged_panel_drag = None;
+                ctx.request_repaint();
+            }
+            if outcome.drag.delta != Vec2::ZERO {
+                let new_position = canvas_position + outcome.drag.delta;
+                let _ = self.board.move_panel(panel_id, [new_position.x, new_position.y]);
+                self.mark_runtime_dirty();
+            }
+            return;
+        }
+
+        if outcome.drag.started || (outcome.drag.delta != Vec2::ZERO && !active_drag_matches) {
+            let canonical_position = self.board.panel(panel_id).map_or(canvas_position, |panel| {
+                Pos2::new(panel.layout.position[0], panel.layout.position[1])
+            });
+            self.arranged_panel_drag = Some(ArrangedPanelDrag::new(
+                panel_id,
+                workspace_id,
+                viewport_id,
+                canonical_position,
+            ));
+        }
+
+        if outcome.drag.delta != Vec2::ZERO {
+            // Egui reports the transformed Area's drag delta in canvas space,
+            // so applying it directly stays correct at every zoom level.
+            let preview_position = self
+                .arranged_panel_drag
+                .as_mut()
+                .filter(|drag| drag.matches(panel_id, workspace_id, viewport_id))
+                .map(|drag| drag.advance(outcome.drag.delta));
+            if let Some(preview_position) = preview_position {
+                let position = [preview_position.x, preview_position.y];
+                if let Some(target) = self.board.arranged_panel_collision_target(panel_id, position)
+                    && self.board.swap_arranged_panels(panel_id, target)
+                {
+                    self.mark_runtime_dirty();
+                }
+                ctx.request_repaint();
+            }
+        }
+
+        if outcome.drag.stopped
+            && self
+                .arranged_panel_drag
+                .is_some_and(|drag| drag.matches(panel_id, workspace_id, viewport_id))
+        {
+            self.arranged_panel_drag = None;
+            ctx.request_repaint();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{Board, PanelKind, PanelOptions, WorkspaceLayout};
+
+    use super::super::PanelDragOutcome;
+    use crate::app::test_support::test_app;
+
+    use super::*;
+
+    fn editor_panel_options() -> PanelOptions {
+        PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        }
+    }
+
+    #[test]
+    fn arranged_drag_tracks_only_its_panel_workspace_and_viewport() {
+        let panel_id = PanelId(7);
+        let workspace_id = WorkspaceId(11);
+        let mut drag = ArrangedPanelDrag::new(panel_id, workspace_id, ViewportId::ROOT, Pos2::new(120.0, 80.0));
+
+        assert_eq!(drag.preview_for(panel_id, workspace_id), Some(Pos2::new(120.0, 80.0)));
+        assert_eq!(drag.preview_for(PanelId(8), workspace_id), None);
+        assert_eq!(drag.preview_for(panel_id, WorkspaceId(12)), None);
+        assert!(drag.matches(panel_id, workspace_id, ViewportId::ROOT));
+        assert!(!drag.matches(panel_id, workspace_id, ViewportId::from_hash_of("detached")));
+
+        assert_eq!(drag.advance(Vec2::new(24.0, -16.0)), Pos2::new(144.0, 64.0));
+    }
+
+    #[test]
+    fn stale_viewport_or_pointer_release_clears_only_the_source_panel_drag() {
+        let (_temp, mut app) = test_app();
+        let panel_id = PanelId(7);
+        let workspace_id = WorkspaceId(11);
+        let root_ctx = Context::default();
+        app.arranged_panel_drag = Some(ArrangedPanelDrag::new(
+            panel_id,
+            workspace_id,
+            ViewportId::from_hash_of("detached"),
+            Pos2::ZERO,
+        ));
+
+        app.clear_inactive_arranged_panel_drag(&root_ctx, panel_id);
+        assert!(app.arranged_panel_drag.is_none());
+
+        app.arranged_panel_drag = Some(ArrangedPanelDrag::new(
+            panel_id,
+            workspace_id,
+            ViewportId::ROOT,
+            Pos2::ZERO,
+        ));
+        app.clear_inactive_arranged_panel_drag(&root_ctx, PanelId(8));
+        assert!(app.arranged_panel_drag.is_some());
+
+        app.clear_inactive_arranged_panel_drag(&root_ctx, panel_id);
+        assert!(app.arranged_panel_drag.is_none());
+    }
+
+    #[test]
+    fn arranged_drag_swaps_slots_without_clearing_the_layout() {
+        let (_temp, mut app) = test_app();
+        app.board = Board::new();
+        let workspace_id = app.board.create_workspace("grid");
+        let source = app
+            .board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("source panel should spawn");
+        let target = app
+            .board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("target panel should spawn");
+        app.board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
+        let source_position = app.board.panel(source).expect("source panel").layout.position;
+        let target_position = app.board.panel(target).expect("target panel").layout.position;
+        let outcome = PanelUiOutcome {
+            drag: PanelDragOutcome {
+                started: true,
+                delta: Vec2::new(
+                    target_position[0] - source_position[0],
+                    target_position[1] - source_position[1],
+                ),
+                ..PanelDragOutcome::default()
+            },
+            ..PanelUiOutcome::default()
+        };
+
+        app.apply_panel_drag(
+            &Context::default(),
+            source,
+            workspace_id,
+            Pos2::new(source_position[0], source_position[1]),
+            &outcome,
+        );
+
+        let workspace = app.board.workspace(workspace_id).expect("workspace");
+        assert_eq!(workspace.layout, Some(WorkspaceLayout::Grid));
+        assert_eq!(workspace.panels, [target, source]);
+        assert!(app.arranged_panel_drag.is_some());
+
+        app.apply_panel_drag(
+            &Context::default(),
+            source,
+            workspace_id,
+            Pos2::new(target_position[0], target_position[1]),
+            &PanelUiOutcome {
+                drag: PanelDragOutcome {
+                    stopped: true,
+                    ..PanelDragOutcome::default()
+                },
+                ..PanelUiOutcome::default()
+            },
+        );
+        assert!(app.arranged_panel_drag.is_none());
+    }
+
+    #[test]
+    fn default_layout_drag_keeps_freeform_movement() {
+        let (_temp, mut app) = test_app();
+        app.board = Board::new();
+        let workspace_id = app.board.create_workspace("freeform");
+        let panel_id = app
+            .board
+            .create_panel(editor_panel_options(), workspace_id)
+            .expect("panel should spawn");
+        assert!(app.board.clear_workspace_layout(workspace_id));
+        let original = app.board.panel(panel_id).expect("panel").layout.position;
+
+        app.apply_panel_drag(
+            &Context::default(),
+            panel_id,
+            workspace_id,
+            Pos2::new(original[0], original[1]),
+            &PanelUiOutcome {
+                drag: PanelDragOutcome {
+                    started: true,
+                    delta: Vec2::new(30.0, 20.0),
+                    ..PanelDragOutcome::default()
+                },
+                ..PanelUiOutcome::default()
+            },
+        );
+
+        assert_eq!(app.board.workspace(workspace_id).expect("workspace").layout, None);
+        let moved = app.board.panel(panel_id).expect("panel").layout.position;
+        assert!(
+            (moved[0] - original[0] - 30.0).abs() <= f32::EPSILON
+                && (moved[1] - original[1] - 20.0).abs() <= f32::EPSILON,
+            "expected the panel to move by [30, 20], got {moved:?} from {original:?}"
+        );
+        assert!(app.arranged_panel_drag.is_none());
     }
 }

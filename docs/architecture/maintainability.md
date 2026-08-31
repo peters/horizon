@@ -41,7 +41,8 @@ back into large multi-purpose modules.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
   attention flows, agent working-status detection, workspace and panel
   membership changes, arrangement/collision logic, geometry queries, and
-  shutdown state.
+  shutdown state. Preset slot collision and swapping lives in
+  `board/arrangement/reordering.rs`.
 - Large board test surfaces should live in `board/tests/` topic files so
   `board.rs` can stay focused on production orchestration.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,

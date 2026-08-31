@@ -92,6 +92,7 @@ enum CanvasPanSpaceKeyState {
 }
 
 use self::frame_stats::FrameStats;
+use self::panels::ArrangedPanelDrag;
 use self::session::{StartupBootstrapFailure, StartupBootstrapOutcome};
 use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
@@ -198,6 +199,7 @@ pub struct HorizonApp {
     is_panning: bool,
     middle_pan_active: bool,
     canvas_pan_input_claimed: bool,
+    arranged_panel_drag: Option<ArrangedPanelDrag>,
     pending_space_pan_key: CanvasPanSpaceKeyState,
     observed_keyboard_inputs: input::ObservedKeyboardInputs,
     ime_commit_normalizer: input::ImeCommitNormalizer,
@@ -478,7 +480,7 @@ impl HorizonApp {
             pan_target: None,
             is_panning: false,
             middle_pan_active: false,
-            canvas_pan_input_claimed: false,
+            canvas_pan_input_claimed: false, arranged_panel_drag: None,
             pending_space_pan_key: CanvasPanSpaceKeyState::Idle,
             observed_keyboard_inputs,
             ime_commit_normalizer: input::ImeCommitNormalizer::default(),
