@@ -81,7 +81,8 @@ back into large multi-purpose modules.
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
-  - `panels`: panel-area orchestration and body rendering
+  - `panels`: panel-area orchestration and body rendering, with gesture and
+    outcome application in `panels/interaction.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions
