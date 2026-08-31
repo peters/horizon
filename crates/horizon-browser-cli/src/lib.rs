@@ -11,7 +11,9 @@ pub mod job;
 pub mod run_state;
 pub mod standalone;
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::{Future, poll_fn};
 use std::time::Duration;
 
 use rmcp::{
@@ -67,7 +69,7 @@ pub struct ExecutionReport {
     /// Connection-level failure or execution-deadline description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Explicit stop condition when the execution deadline won.
+    /// Explicit stop condition when the job deadline won.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<ExecutionStopReason>,
 }
@@ -141,6 +143,12 @@ pub enum RunError {
 #[derive(Clone, Debug, Default)]
 struct PlanClient;
 
+#[derive(Debug)]
+struct ActionWaitStopped {
+    reason: ExecutionStopReason,
+    request_started: bool,
+}
+
 impl ClientHandler for PlanClient {
     fn get_info(&self) -> ClientInfo {
         ClientInfo::new(
@@ -174,7 +182,7 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
     execute_plan_with_control(plan, &mut ExecutionControl::unbounded()).await
 }
 
-/// Execute a plan with one deadline across MCP initialization, calls, and shutdown.
+/// Execute a plan under the caller's shared job deadline.
 ///
 /// A stop during tool execution returns a partial report containing only
 /// completed calls. A stop during initialization returns [`RunError::Stopped`]
@@ -188,6 +196,7 @@ pub async fn execute_plan_with_control(
     control: &mut ExecutionControl,
 ) -> Result<ExecutionReport, RunError> {
     validate_plan(plan)?;
+    control.check().map_err(RunError::Stopped)?;
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
     let mut server_task = tokio::spawn(async move {
         let service = horizon_browser_mcp::HorizonBrowserMcp::from_environment()
@@ -287,13 +296,13 @@ async fn execute_steps(
             }
         };
         let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match control.wait(client.call_tool(params)).await {
+        let result = match wait_for_browser_action(control, client.call_tool(params)).await {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => {
                 steps.push(failed_step(step, format!("MCP call failed: {error}")));
                 break;
             }
-            Err(reason) => return stopped_report(steps, reason),
+            Err(stopped) => return stopped_report(steps, &stopped),
         };
         let structured = result.structured_content;
         if result.is_error.unwrap_or(false) {
@@ -331,6 +340,28 @@ async fn execute_steps(
     }
 }
 
+async fn wait_for_browser_action<T>(
+    control: &mut ExecutionControl,
+    action: impl Future<Output = T>,
+) -> Result<T, ActionWaitStopped> {
+    let request_started = Cell::new(false);
+    let result = {
+        tokio::pin!(action);
+        control
+            .wait(poll_fn(|context| {
+                // RMCP async calls cannot submit until their future is first
+                // polled, so a ready deadline can remain phase-neutral.
+                request_started.set(true);
+                action.as_mut().poll(context)
+            }))
+            .await
+    };
+    result.map_err(|reason| ActionWaitStopped {
+        reason,
+        request_started: request_started.get(),
+    })
+}
+
 impl ExecutionReport {
     fn fail_connection(&mut self, error: String) {
         self.ok = false;
@@ -346,14 +377,19 @@ impl ExecutionReport {
     }
 }
 
-fn stopped_report(steps: Vec<StepReport>, reason: ExecutionStopReason) -> ExecutionReport {
+fn stopped_report(steps: Vec<StepReport>, stopped: &ActionWaitStopped) -> ExecutionReport {
+    let message = if stopped.request_started {
+        ExecutionStopReason::IN_FLIGHT_MESSAGE
+    } else {
+        ExecutionStopReason::MESSAGE
+    };
     ExecutionReport {
         version: PLAN_VERSION,
         ok: false,
         completed_steps: steps.len(),
         steps,
-        error: Some(ExecutionStopReason::MESSAGE.to_string()),
-        stop_reason: Some(reason),
+        error: Some(message.to_string()),
+        stop_reason: Some(stopped.reason),
     }
 }
 
@@ -585,6 +621,39 @@ mod tests {
         let indexes = BTreeMap::from([("list".to_string(), 0)]);
         let error = resolve_arguments(&plan.steps[1], &results, &indexes).expect_err("missing pointer");
         assert!(error.contains("did not match"));
+    }
+
+    #[tokio::test]
+    async fn expired_control_stops_before_mcp_initialization() {
+        let plan = plan(br#"{"version":1,"steps":[{"id":"list","tool":"browser_list"}]}"#);
+        let mut control = ExecutionControl::with_timeout(Duration::ZERO);
+
+        let error = execute_plan_with_control(&plan, &mut control)
+            .await
+            .expect_err("expired control must stop before MCP initialization");
+
+        assert!(matches!(
+            &error,
+            RunError::Stopped(ExecutionStopReason::DeadlineExceeded)
+        ));
+        let message = error.to_string();
+        assert_eq!(message, ExecutionStopReason::MESSAGE);
+        assert!(!message.contains("in-flight browser action"));
+    }
+
+    #[tokio::test]
+    async fn ready_deadline_does_not_mark_an_unpolled_action_in_flight() {
+        let mut control = ExecutionControl::with_timeout(Duration::ZERO);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        let stopped = wait_for_browser_action(&mut control, std::future::pending::<()>())
+            .await
+            .expect_err("ready deadline must win before polling the action");
+        assert!(!stopped.request_started);
+        let report = stopped_report(Vec::new(), &stopped);
+
+        assert_eq!(report.error.as_deref(), Some(ExecutionStopReason::MESSAGE));
+        assert_eq!(report.stop_reason, Some(ExecutionStopReason::DeadlineExceeded));
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {

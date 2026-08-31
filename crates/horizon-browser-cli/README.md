@@ -133,30 +133,36 @@ and never copies tool arguments into its report. Plans are limited to 1 MiB and
 
 The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,
 `completed_steps`, and ordered step results. Every invocation stages its
-validated plan and initial `running` state in an owner-only directory, flushes
+validated plan and initial `prepared` state in an owner-only directory, flushes
 both artifacts, and atomically publishes the complete job under
-`~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. Runs that
-reach plan execution also save a final report. A state left as `running` is
-durable evidence that the runner stopped before recording a terminal outcome;
-automatic continuation is not enabled yet.
+`~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. The prepared
+state records an absolute deadline and acts as a lease: it may represent a live
+runner before the deadline, and must be treated as `timed_out` at or after the
+deadline without relying on another write. Runs that reach plan execution also
+save a final report. Legacy `running` states remain readable. Automatic
+continuation is not enabled yet.
 
-Every deterministic run gives its MCP execution phase a deadline. The default
-is 1800 seconds; `--timeout` accepts 1 through 86400 whole seconds. The budget
-starts after plan input, validation, and initial durable-job setup. It covers
-MCP initialization, tool discovery, calls, and client/server shutdown. Plan
-input plus durable state, report, and requested-output writes are preparatory or
-post-processing I/O and can add wall-clock time outside that budget.
+Every deterministic run gets one action deadline. The default is 1800 seconds;
+`--timeout` accepts 1 through 86400 whole seconds. The budget is selected after
+plan input and validation, before durable preparation, and covers whether MCP
+initialization, tool discovery, calls, and client/server shutdown may continue.
+If preparation returns after the deadline, no MCP action starts and its
+prepared lease resolves to `timed_out`. Plan input and the blocking preparation
+write are not yet interruptible. Terminal state, report, and requested-output
+writes happen after browser work stops so timeout evidence can still be
+preserved; this post-processing I/O can add wall-clock time after the deadline.
 
 A deadline during a tool call saves the completed prefix as a partial report
 and records `timed_out` in `state.json`; the state also records the configured
-`execution_timeout_seconds`. An already-dispatched browser mutation may still
-complete, so inspect the browser audit before retrying it; automatic replay
-remains disabled.
+`execution_timeout_seconds` and absolute `deadline_at_millis`. If durable
+preparation consumes the deadline, no MCP action starts. An already-dispatched
+browser mutation may still complete, so inspect the browser audit before
+retrying it; automatic replay remains disabled.
 
 Stdout contains only the report; diagnostics use stderr. A file report is
 created with owner-only permissions on Unix. Stable exit codes are 0 for
 success, 1 for execution failure, 2 for invalid CLI or plan input, and 124 for
-an execution deadline.
+a job deadline.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the

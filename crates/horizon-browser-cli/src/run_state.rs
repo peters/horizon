@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{ExecutionReport, Plan, execution_control::ExecutionStopReason};
 
-const STATE_VERSION: u32 = 1;
+const STATE_VERSION: u32 = 2;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
@@ -32,9 +32,12 @@ pub struct RunState {
     pub status: RunStatus,
     /// Unix timestamp in milliseconds when the job was created.
     pub created_at_millis: u64,
-    /// Configured MCP execution budget, excluding plan input and durable setup.
+    /// Configured action budget spanning durable setup and MCP work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeout_seconds: Option<u64>,
+    /// Absolute wall-clock expiry paired with the monotonic job deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at_millis: Option<u64>,
     /// Unix timestamp in milliseconds when this state was last persisted.
     pub updated_at_millis: u64,
     /// Process that initially executed the job. This is diagnostic only.
@@ -55,15 +58,34 @@ pub struct RunState {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
-    /// The runner may still be active. A later resume slice will distinguish
-    /// a live owner from an interrupted process before taking control.
+    /// Legacy state written before durable preparation became deadline-aware.
     Running,
+    /// Initial artifacts are durable and MCP work may run until the recorded
+    /// deadline. Once it expires, this state resolves conservatively to
+    /// [`Self::TimedOut`] without another write.
+    Prepared,
     /// Every plan step and MCP shutdown completed successfully.
     Succeeded,
     /// A plan step, MCP connection, or runner operation failed.
     Failed,
-    /// The configured MCP execution deadline elapsed.
+    /// The configured job deadline elapsed.
     TimedOut,
+}
+
+impl RunState {
+    /// Resolve a durable snapshot at a wall-clock instant.
+    ///
+    /// Prepared state acts as a bounded lease: it may represent an active
+    /// runner before expiry, but it is always timed out at or after expiry.
+    #[must_use]
+    pub fn effective_status_at(&self, unix_millis: u64) -> RunStatus {
+        match (self.status, self.deadline_at_millis) {
+            (RunStatus::Prepared, Some(deadline)) if unix_millis >= deadline => RunStatus::TimedOut,
+            (RunStatus::Prepared, Some(_)) => RunStatus::Running,
+            (RunStatus::Prepared, None) => RunStatus::TimedOut,
+            (status, _) => status,
+        }
+    }
 }
 
 /// CLI report envelope that makes the durable job discoverable to callers.
@@ -105,15 +127,19 @@ pub enum RunStateError {
 }
 
 impl DurableRun {
-    /// Create a private job directory and persist the validated plan plus its
-    /// initial running state before any MCP action is attempted.
+    /// Create a private job directory and persist a deadline-bound prepared
+    /// state plus the validated plan before any MCP action is attempted.
     ///
     /// # Errors
     /// Returns when the private directory or either initial artifact cannot be
     /// created durably.
-    pub fn start(plan: &Plan, execution_timeout_seconds: u64) -> Result<Self, RunStateError> {
+    pub fn prepare(
+        plan: &Plan,
+        execution_timeout_seconds: u64,
+        deadline_at_millis: u64,
+    ) -> Result<Self, RunStateError> {
         let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::start_in(&root, plan, Some(execution_timeout_seconds))
+        Self::prepare_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
     }
 
     /// Stable id of this durable run.
@@ -128,7 +154,12 @@ impl DurableRun {
         &self.state_path
     }
 
-    fn start_in(root: &Path, plan: &Plan, execution_timeout_seconds: Option<u64>) -> Result<Self, RunStateError> {
+    fn prepare_in(
+        root: &Path,
+        plan: &Plan,
+        execution_timeout_seconds: Option<u64>,
+        deadline_at_millis: Option<u64>,
+    ) -> Result<Self, RunStateError> {
         ensure_private_directory(root)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
@@ -141,9 +172,10 @@ impl DurableRun {
         let state = RunState {
             version: STATE_VERSION,
             job_id,
-            status: RunStatus::Running,
+            status: RunStatus::Prepared,
             created_at_millis,
             execution_timeout_seconds,
+            deadline_at_millis,
             updated_at_millis: created_at_millis,
             runner_pid: std::process::id(),
             plan_file: PLAN_FILE.to_string(),
@@ -354,16 +386,22 @@ mod tests {
     }
 
     #[test]
-    fn state_is_running_before_execution_and_terminal_after_report() {
+    fn prepared_state_is_a_bounded_lease_before_terminal_report() {
         let home = tempfile::tempdir().expect("temporary home");
         let root = home.path().join(".horizon/browser-jobs");
-        let mut run = DurableRun::start_in(&root, &plan(), Some(30)).expect("start durable run");
-        let running: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("running state"))
-            .expect("decode running state");
-        assert_eq!(running.status, RunStatus::Running);
-        assert_eq!(running.completed_steps, 0);
-        assert_eq!(running.execution_timeout_seconds, Some(30));
-        assert_eq!(running.plan_file, PLAN_FILE);
+        let deadline_at_millis = now_millis().saturating_add(30_000);
+        let mut run =
+            DurableRun::prepare_in(&root, &plan(), Some(30), Some(deadline_at_millis)).expect("prepare durable run");
+        let prepared: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("prepared state"))
+            .expect("decode prepared state");
+        assert_eq!(prepared.version, STATE_VERSION);
+        assert_eq!(prepared.status, RunStatus::Prepared);
+        assert_eq!(prepared.effective_status_at(deadline_at_millis - 1), RunStatus::Running);
+        assert_eq!(prepared.effective_status_at(deadline_at_millis), RunStatus::TimedOut);
+        assert_eq!(prepared.completed_steps, 0);
+        assert_eq!(prepared.execution_timeout_seconds, Some(30));
+        assert_eq!(prepared.deadline_at_millis, Some(deadline_at_millis));
+        assert_eq!(prepared.plan_file, PLAN_FILE);
         assert_eq!(
             Plan::from_slice(&std::fs::read(run.directory.join(PLAN_FILE)).expect("saved plan"))
                 .expect("decode saved plan"),
@@ -440,12 +478,33 @@ mod tests {
         .expect("decode existing durable state");
 
         assert_eq!(state.execution_timeout_seconds, None);
+        assert_eq!(state.deadline_at_millis, None);
+        assert_eq!(state.effective_status_at(u64::MAX), RunStatus::Running);
+
+        let prepared_without_deadline: RunState = serde_json::from_value(json!({
+            "version": 2,
+            "job_id": "job-incomplete",
+            "status": "prepared",
+            "created_at_millis": 1,
+            "updated_at_millis": 1,
+            "runner_pid": 42,
+            "plan_file": "plan.json",
+            "completed_steps": 0
+        }))
+        .expect("decode incomplete prepared state");
+        assert_eq!(prepared_without_deadline.effective_status_at(1), RunStatus::TimedOut);
     }
 
     #[test]
     fn initialization_failure_is_durable() {
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
+        let mut run = DurableRun::prepare_in(
+            root.path(),
+            &plan(),
+            Some(30),
+            Some(now_millis().saturating_add(30_000)),
+        )
+        .expect("prepare durable run");
         run.fail("adapter unavailable").expect("persist failure");
         let failed: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("failed state"))
             .expect("decode failed state");
@@ -528,7 +587,13 @@ mod tests {
         use std::os::unix::ffi::OsStringExt as _;
 
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
+        let mut run = DurableRun::prepare_in(
+            root.path(),
+            &plan(),
+            Some(30),
+            Some(now_millis().saturating_add(30_000)),
+        )
+        .expect("prepare durable run");
         run.directory = PathBuf::from(OsString::from_vec(b"home-\xff/.horizon/browser-jobs/job".to_vec()));
         run.state_path = run.directory.join(STATE_FILE);
 

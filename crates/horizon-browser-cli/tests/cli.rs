@@ -31,6 +31,7 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert_eq!(state["job_id"], stdout_report["job_id"]);
     assert_eq!(state["status"], "succeeded");
     assert_eq!(state["execution_timeout_seconds"], 1800);
+    assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
     assert_eq!(
@@ -138,8 +139,9 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     assert!(job_dir.join("plan.json").is_file());
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
         .expect("decode job state");
-    assert_eq!(state["version"], 1);
+    assert_eq!(state["version"], 2);
     assert_eq!(state["status"], "succeeded");
+    assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["report_file"], "report.json");
 }
 
@@ -194,11 +196,17 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
     assert_eq!(report["completed_steps"], 1);
     assert_eq!(report["stop_reason"], "deadline_exceeded");
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("in-flight browser action may still complete"))
+    );
     let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
         .expect("decode deadline state");
     assert_eq!(state["status"], "timed_out");
     assert_eq!(state["execution_timeout_seconds"], 1);
+    assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
     let output_dir = root.path().to_str().expect("UTF-8 root");

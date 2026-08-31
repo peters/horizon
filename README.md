@@ -504,7 +504,7 @@ Horizon-launched Codex and Claude agents receive the bundled `horizon-browser` M
 
 MCP is the only agent-facing browser contract. Audit journals live under `~/.horizon/audit/browsers/` and redact credentials, query values, and typed text (stored as a character count). See the [browser crate README](crates/horizon-browser/README.md) for backend and embedding details.
 
-For scripts, [`horizon-browser-cli`](crates/horizon-browser-cli/README.md) exposes the same MCP tools three ways: a quoted goal, a deterministic `run` plan, or `mcp` as a standalone stdio server. Deterministic `run` jobs remain model-free and atomically publish a private job id, validated plan, and initial lifecycle state together; runs that reach plan execution also persist a final report. Their MCP execution phase defaults to a 30-minute timeout, accepts an explicit `--timeout`, and preserves completed steps in timed-out partial reports. An in-flight mutation is never claimed safe to replay.
+For scripts, [`horizon-browser-cli`](crates/horizon-browser-cli/README.md) exposes the same MCP tools three ways: a quoted goal, a deterministic `run` plan, or `mcp` as a standalone stdio server. Deterministic `run` jobs remain model-free and atomically publish a private job id, validated plan, and deadline-bound prepared lifecycle state together; runs that reach plan execution also persist a final report. After plan validation, durable preparation and MCP execution share a 30-minute default action deadline that can be changed with `--timeout`; timed-out reports preserve completed steps. An in-flight mutation is never claimed safe to replay.
 
 ```bash
 cargo build -p horizon-browser-cli

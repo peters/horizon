@@ -42,7 +42,7 @@ OPTIONS:
     --visible             Show a native browser window; jobs default headless.
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
-    --timeout <SECONDS>    Bound MCP execution (default 1800, max 86400).
+    --timeout <SECONDS>    Bound durable activation and MCP work (default 1800, max 86400).
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
@@ -137,14 +137,15 @@ async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) 
             return ExitCode::from(2);
         }
     };
-    let mut durable = match DurableRun::start(&plan, timeout.as_secs()) {
+    let mut control = ExecutionControl::with_timeout(timeout);
+    let deadline_at_millis = control.deadline_at_millis().unwrap_or_default();
+    let mut durable = match DurableRun::prepare(&plan, timeout.as_secs(), deadline_at_millis) {
         Ok(durable) => durable,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let mut control = ExecutionControl::with_timeout(timeout);
     let report = match horizon_browser_cli::execute_plan_with_control(&plan, &mut control).await {
         Ok(report) => report,
         Err(horizon_browser_cli::RunError::Stopped(reason)) => {
