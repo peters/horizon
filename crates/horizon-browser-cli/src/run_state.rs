@@ -7,7 +7,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atomicwrites::{AllowOverwrite, AtomicFile, replace_atomic};
+use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, replace_atomic};
 use horizon_core::HorizonHome;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -186,6 +186,8 @@ impl DurableRun {
                 std::io::Error::other("activation already consumed"),
             )
         })?;
+        // `replace_atomic` fsyncs parent directories on Unix and requests a
+        // write-through replacement on Windows.
         replace_atomic(activation_path, &self.state_path)
             .map_err(|source| io_error(format!("could not activate {}", self.state_path.display()), source))?;
         self.activation_path = None;
@@ -319,14 +321,12 @@ fn write_private_staged_json(path: &Path, value: &impl Serialize, artifact: &'st
     options.create_new(true).write(true);
     #[cfg(unix)]
     options.mode(0o600);
-    let result = options
-        .open(path)
-        .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
-        .map_err(|source| io_error(format!("could not stage {}", path.display()), source));
-    if result.is_err() {
-        let _ = std::fs::remove_file(path);
-    }
-    result
+    // The no-overwrite commit persists both the file and its directory entry
+    // before preparation can return it to the caller for activation.
+    AtomicFile::new(path, DisallowOverwrite)
+        .write_with_options(|file| file.write_all(&bytes), options)
+        .map_err(std::io::Error::from)
+        .map_err(|source| io_error(format!("could not stage {}", path.display()), source))
 }
 
 fn io_error(operation: String, source: std::io::Error) -> RunStateError {
