@@ -43,7 +43,7 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
-    pub(super) fn process_pending_detached_reattach(&mut self, ctx: &Context) {
+    pub(in crate::app) fn process_pending_detached_reattach(&mut self, ctx: &Context) {
         if self.pending_detached_reattach.is_empty() {
             return;
         }

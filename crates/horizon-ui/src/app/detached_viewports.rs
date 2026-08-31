@@ -106,8 +106,6 @@ impl HorizonApp {
     }
 
     pub(super) fn render_detached_viewports(&mut self, ctx: &Context) {
-        self.process_pending_detached_reattach(ctx);
-
         let local_ids: Vec<_> = self.detached_workspaces.keys().cloned().collect();
         let mut stale_local_ids = Vec::new();
 
@@ -584,7 +582,9 @@ fn detached_viewport_builder(
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::app::test_support::{editor_workspace_state, test_app, test_app_with_config_and_startup};
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app, test_app_with_config_and_startup,
+    };
     use crate::app::{WS_BG_PAD, WS_TITLE_HEIGHT};
     use crate::test_egui::DiscardTextures;
     use egui::{Event, RawInput};
@@ -780,6 +780,45 @@ mod tests {
         assert!(!app.workspace_is_detached(detached));
         assert_attached_workspaces_form_organized_row(&mut app);
         assert!(app.runtime_dirty_since.is_some());
+    }
+
+    #[test]
+    fn pending_reattach_is_rendered_in_the_root_processing_frame() {
+        let config = Config::default();
+        let runtime_state = RuntimeState {
+            canvas_view: Some(CanvasViewState::default()),
+            detached_workspaces: vec![DetachedWorkspaceState {
+                workspace_local_id: "detached".to_string(),
+                window: WindowConfig::default(),
+            }],
+            workspaces: vec![
+                editor_workspace_state("left", [0.0, 40.0]),
+                editor_workspace_state("detached", [500.0, 40.0]),
+            ],
+            ..RuntimeState::default()
+        };
+        let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+            &config,
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(runtime_state),
+            },
+        );
+        let detached = workspace_id(&app, "detached");
+        app.theme_applied = true;
+        app.initial_pan_done = true;
+        app.root_viewport_stabilizer = None;
+        app.pending_detached_reattach.insert("detached".to_string());
+        let size = [app.window_config.width, app.window_config.height];
+
+        run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
+
+        assert!(!app.workspace_is_detached(detached));
+        assert!(
+            app.workspace_screen_rects
+                .iter()
+                .any(|(workspace_id, _)| *workspace_id == detached),
+            "the returning workspace must render in the root frame that removes its child viewport"
+        );
     }
 
     #[test]

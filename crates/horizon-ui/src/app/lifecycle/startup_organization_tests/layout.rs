@@ -49,6 +49,48 @@ fn startup_frame_reuses_manual_organization_view() {
 }
 
 #[test]
+fn settled_manual_view_wins_over_pre_alignment_visible_anchor() {
+    let mut runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        active_workspace_local_id: Some("focused".to_string()),
+        focused_panel_local_id: Some("focused-panel".to_string()),
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            editor_workspace_state("second", [105.0, 305.0]),
+            editor_workspace_state("third", [110.0, 310.0]),
+            editor_workspace_state("focused", [115.0, 315.0]),
+        ],
+        ..RuntimeState::default()
+    };
+    let (_manual_temp, manual_ctx, mut manual_app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state.clone()),
+    });
+    manual_app.theme_applied = true;
+    run_frame_at_configured_size(&manual_ctx, &mut manual_app);
+    manual_app.execute_command(&manual_ctx, &CommandId::AlignWorkspacesHorizontally);
+    let manual_target = manual_app.pan_target.take().expect("manual organization view target");
+    let mut settled_view = manual_app.canvas_view;
+    settled_view.set_pan_offset([manual_target.x, manual_target.y]);
+    manual_app.canvas_view = settled_view;
+
+    runtime_state.canvas_view = Some(settled_view);
+    let (_startup_temp, startup_ctx, mut startup_app) = enabled_test_app(runtime_state);
+    startup_app.theme_applied = true;
+    run_frame_at_configured_size(&startup_ctx, &mut startup_app);
+
+    for local_id in ["left", "second", "third", "focused"] {
+        assert_position_near(
+            workspace_position(&startup_app, local_id),
+            workspace_position(&manual_app, local_id),
+        );
+    }
+    assert_position_near(startup_app.canvas_view.pan_offset, settled_view.pan_offset);
+    assert_eq!(focused_panel_local_id(&startup_app), Some("focused-panel"));
+    assert_eq!(active_workspace_local_id(&startup_app), Some("focused"));
+    assert!(startup_app.pan_target.is_none());
+}
+
+#[test]
 fn startup_frame_preserves_selection_while_showing_the_organized_row_head() {
     let saved_view = CanvasViewState::new([-4_700.0, -250.0], 1.0);
     let runtime_state = RuntimeState {

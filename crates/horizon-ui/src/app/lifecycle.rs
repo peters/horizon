@@ -261,6 +261,8 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
+        self.process_pending_detached_reattach(ui.ctx());
+
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ui);
             // Detached windows are immediate viewports: egui closes any child

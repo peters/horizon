@@ -15,6 +15,7 @@ impl HorizonApp {
             tracing::debug!("startup workspace organization skipped: no valid multi-workspace alignment");
             return None;
         };
+        let row_head_has_bounds = self.board.workspace_bounds(alignment.leftmost_workspace).is_some();
 
         tracing::debug!(
             leftmost_workspace_id = alignment.leftmost_workspace.0,
@@ -28,7 +29,8 @@ impl HorizonApp {
         if let Some(target) = self.pan_target.take() {
             self.canvas_view.set_pan_offset([target.x, target.y]);
             self.mark_runtime_dirty();
-        } else if alignment.positions_changed
+        } else if !row_head_has_bounds
+            && alignment.positions_changed
             && let Some((workspace_id, screen_anchor)) = visible_anchor
         {
             // An empty row head has no bounds from which the shared action can
