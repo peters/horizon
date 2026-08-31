@@ -132,12 +132,13 @@ and never copies tool arguments into its report. Plans are limited to 1 MiB and
 256 steps.
 
 The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,
-`completed_steps`, and ordered step results. Every invocation saves its
-validated plan and atomic lifecycle state in a private directory under
-`~/.horizon/browser-jobs/`; runs that reach plan execution also save a final
-report. A state left as `running` is durable evidence that the runner stopped
-before recording a terminal outcome; automatic continuation is not enabled
-yet.
+`completed_steps`, and ordered step results. Every invocation stages its
+validated plan and initial `running` state in an owner-only directory, flushes
+both artifacts, and atomically publishes the complete job under
+`~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. Runs that
+reach plan execution also save a final report. A state left as `running` is
+durable evidence that the runner stopped before recording a terminal outcome;
+automatic continuation is not enabled yet.
 
 Every deterministic run gives its MCP execution phase a deadline. The default
 is 1800 seconds; `--timeout` accepts 1 through 86400 whole seconds. The budget
