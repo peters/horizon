@@ -22,6 +22,7 @@ use super::util::primary_shortcut_label;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
 mod interaction;
+pub(super) use interaction::ArrangedPanelDrag;
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
@@ -47,9 +48,16 @@ struct PanelSnapshot {
 }
 
 #[derive(Default)]
+struct PanelDragOutcome {
+    started: bool,
+    delta: Vec2,
+    stopped: bool,
+}
+
+#[derive(Default)]
 struct PanelUiOutcome {
     focus_requested: bool,
-    drag_delta: Vec2,
+    drag: PanelDragOutcome,
     resize_delta: Vec2,
     commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
@@ -283,7 +291,11 @@ impl HorizonApp {
     }
 
     fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
-        let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+        let canvas_position = self.arranged_panel_position(
+            panel.id,
+            panel.workspace_id,
+            Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+        );
         let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
         let screen_rect = clip_screen_rect_to_canvas(
             Rect::from_min_size(
@@ -484,6 +496,7 @@ impl HorizonApp {
         browser_events: &[egui::Event],
         scope: PanelRenderScope,
     ) -> bool {
+        self.clear_released_arranged_panel_drag(ctx, panel_id);
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };
@@ -499,7 +512,11 @@ impl HorizonApp {
             .and_then(|panel| {
                 let geometry = self.panel_screen_geometry(panel, canvas_rect)?;
                 let terminal = panel.terminal();
-                let canvas_position = Pos2::new(panel.layout.position[0], panel.layout.position[1]);
+                let canvas_position = self.arranged_panel_position(
+                    panel.id,
+                    panel.workspace_id,
+                    Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+                );
                 let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
 
                 let workspace_accent = self

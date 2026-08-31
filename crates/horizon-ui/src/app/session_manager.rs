@@ -366,6 +366,7 @@ impl HorizonApp {
         let _ = self.auto_save_runtime_state();
         self.finish_session_switch();
         self.board = Board::new();
+        self.arranged_panel_drag = None;
         self.board.attention_enabled = self.template_config.features.attention_feed;
     }
 

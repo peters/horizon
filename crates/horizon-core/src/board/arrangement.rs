@@ -8,6 +8,7 @@ use crate::workspace::{Workspace, WorkspaceId};
 use super::{Board, WorkspaceLayout, vec2_eq};
 
 mod alignment;
+mod reordering;
 
 pub use alignment::WorkspaceAlignment;
 
@@ -225,8 +226,9 @@ impl Board {
     /// area so the arrangement fills the workspace frame instead of jumping
     /// elsewhere. Fitted sizes are clamped to the default panel size, so an
     /// arrangement can grow the frame; neighboring workspaces are pushed out
-    /// of the way like on panel resize. Dragging a panel by hand returns the
-    /// workspace to manual placement.
+    /// of the way like on panel resize. The UI keeps presets selected while
+    /// dragging by swapping occupied slots; direct manual moves return the
+    /// workspace to freeform placement.
     pub fn arrange_workspace(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
         let previous_frame = self.workspace_frame_rect(id);
         self.apply_workspace_layout(id, layout);
