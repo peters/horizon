@@ -82,7 +82,7 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
-    pub(super) fn reattach_workspace(&mut self, workspace_id: WorkspaceId) {
+    pub(super) fn reattach_workspace(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
         let Some(workspace_local_id) = self
             .board
             .workspace(workspace_id)
@@ -90,7 +90,7 @@ impl HorizonApp {
         else {
             return;
         };
-        self.schedule_detached_workspace_reattach(&workspace_local_id);
+        self.schedule_detached_workspace_reattach(ctx, &workspace_local_id);
     }
 
     pub(super) fn focus_workspace_window(&self, ctx: &Context, workspace_id: WorkspaceId) -> bool {
@@ -163,8 +163,7 @@ impl HorizonApp {
             // Dropping the viewport immediately can make winit query a dead X11
             // handle before the backend prunes the child viewport on the next pass.
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.schedule_detached_workspace_reattach(workspace_local_id);
-            ctx.request_repaint_of(ViewportId::ROOT);
+            self.schedule_detached_workspace_reattach(ctx, workspace_local_id);
             return;
         }
         self.sync_detached_window_config(ctx, workspace_local_id);
@@ -331,8 +330,7 @@ impl HorizonApp {
                         )
                         .clicked()
                     {
-                        self.schedule_detached_workspace_reattach(workspace_local_id);
-                        ctx.request_repaint_of(ViewportId::ROOT);
+                        self.schedule_detached_workspace_reattach(ctx, workspace_local_id);
                     }
 
                     if ui
@@ -527,9 +525,10 @@ impl HorizonApp {
         }
     }
 
-    fn schedule_detached_workspace_reattach(&mut self, workspace_local_id: &str) {
+    fn schedule_detached_workspace_reattach(&mut self, ctx: &Context, workspace_local_id: &str) {
         if self.pending_detached_reattach.insert(workspace_local_id.to_string()) {
             self.mark_runtime_dirty();
+            ctx.request_repaint_of(ViewportId::ROOT);
         }
     }
 }
@@ -581,6 +580,8 @@ fn detached_viewport_builder(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::app::test_support::{
         editor_workspace_state, raw_input, run_app_frame_with_input, test_app, test_app_with_config_and_startup,
@@ -755,7 +756,7 @@ mod tests {
         app.canvas_view = CanvasViewState::new([4_000.0, -2_000.0], 1.0);
         app.pan_target = None;
 
-        app.reattach_workspace(detached);
+        app.reattach_workspace(&ctx, detached);
         app.process_pending_detached_reattach(&ctx);
 
         assert!(!app.workspace_is_detached(detached));
@@ -765,6 +766,24 @@ mod tests {
             "reattachment should reuse the shortcut's view target"
         );
         assert!(app.runtime_dirty_since.is_some());
+    }
+
+    #[test]
+    fn direct_reattach_requests_a_root_repaint_when_newly_queued() {
+        let (_temp, ctx, mut app) = reattach_test_app(false);
+        let detached = workspace_id(&app, "detached");
+        let repaint_requests = Arc::new(AtomicUsize::new(0));
+        let repaint_requests_for_callback = Arc::clone(&repaint_requests);
+        ctx.set_request_repaint_callback(move |info| {
+            if info.viewport_id == egui::ViewportId::ROOT && info.delay.is_zero() {
+                repaint_requests_for_callback.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        app.reattach_workspace(&ctx, detached);
+
+        assert!(app.pending_detached_reattach.contains("detached"));
+        assert!(repaint_requests.load(Ordering::Relaxed) > 0);
     }
 
     #[test]
@@ -830,7 +849,7 @@ mod tests {
         let left_before = app.board.workspace(left).expect("left workspace").position;
         let right_before = app.board.workspace(right).expect("right workspace").position;
 
-        app.reattach_workspace(detached);
+        app.reattach_workspace(&ctx, detached);
         app.process_pending_detached_reattach(&ctx);
 
         assert!(!app.workspace_is_detached(detached));
