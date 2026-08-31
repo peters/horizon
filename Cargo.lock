@@ -1685,7 +1685,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "transcribe-cpp",
- "url",
  "wgpu",
  "winit",
 ]
