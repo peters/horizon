@@ -101,6 +101,49 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
 }
 
 #[test]
+fn run_publishes_a_complete_relative_job_when_home_is_unset() {
+    let current_dir = tempfile::tempdir().expect("isolated working directory");
+    let plan = current_dir.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}]}"#,
+    )
+    .expect("write plan");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().expect("UTF-8 path")])
+        .current_dir(current_dir.path())
+        .env_remove("HOME")
+        .env_remove("HORIZON")
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("run horizon-browser without HOME");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout report");
+    let relative_job_dir = std::path::PathBuf::from(report["job_dir"].as_str().expect("job directory"));
+    assert!(relative_job_dir.starts_with(".horizon/browser-jobs"));
+    let job_dir = current_dir.path().join(&relative_job_dir);
+    let entries = std::fs::read_dir(current_dir.path().join(".horizon/browser-jobs"))
+        .expect("job root")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path(), job_dir);
+    assert!(job_dir.join("plan.json").is_file());
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
+        .expect("decode job state");
+    assert_eq!(state["version"], 1);
+    assert_eq!(state["status"], "succeeded");
+    assert_eq!(state["report_file"], "report.json");
+}
+
+#[test]
 fn run_persists_preflight_failure_before_any_browser_action() {
     let root = tempfile::tempdir().expect("isolated root");
     let plan = root.path().join("unknown-tool.json");

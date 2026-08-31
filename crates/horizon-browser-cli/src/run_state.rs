@@ -132,7 +132,11 @@ impl DurableRun {
         ensure_private_directory(root)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
-        create_private_job_directory(&directory)?;
+        let staging = tempfile::Builder::new()
+            .prefix(".preparing-")
+            .tempdir_in(root)
+            .map_err(|source| io_error(format!("could not stage {job_id}"), source))?;
+        secure_directory(staging.path())?;
         let created_at_millis = now_millis();
         let state = RunState {
             version: STATE_VERSION,
@@ -147,14 +151,15 @@ impl DurableRun {
             completed_steps: 0,
             error: None,
         };
-        let run = Self {
+        write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")?;
+        write_private_json(&staging.path().join(STATE_FILE), &state, "state")?;
+        sync_directory(staging.path())?;
+        publish_job_directory(staging, &directory, root)?;
+        Ok(Self {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
-        };
-        run.write_json(PLAN_FILE, plan, "plan")?;
-        run.persist_state()?;
-        Ok(run)
+        })
     }
 
     /// Return the report envelope exposed on stdout or through `--output`.
@@ -219,13 +224,67 @@ impl DurableRun {
 }
 
 fn ensure_private_directory(path: &Path) -> Result<(), RunStateError> {
-    std::fs::create_dir_all(path).map_err(|source| io_error(format!("could not create {}", path.display()), source))?;
+    let missing: Vec<_> = path
+        .ancestors()
+        .take_while(|candidate| !candidate.as_os_str().is_empty() && !candidate.exists())
+        .collect();
+    for directory in missing.iter().rev() {
+        match std::fs::create_dir(directory) {
+            Ok(()) => {
+                secure_directory(directory)?;
+                sync_directory(parent_for_sync(directory))?;
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(source) => return Err(io_error(format!("could not create {}", directory.display()), source)),
+        }
+    }
+    let metadata =
+        std::fs::metadata(path).map_err(|source| io_error(format!("could not inspect {}", path.display()), source))?;
+    if !metadata.is_dir() {
+        return Err(io_error(
+            format!("{} is not a directory", path.display()),
+            std::io::Error::from(std::io::ErrorKind::NotADirectory),
+        ));
+    }
     secure_directory(path)
 }
 
-fn create_private_job_directory(path: &Path) -> Result<(), RunStateError> {
-    std::fs::create_dir(path).map_err(|source| io_error(format!("could not create {}", path.display()), source))?;
-    secure_directory(path)
+fn parent_for_sync(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &Path) -> Result<(), RunStateError> {
+    std::fs::rename(staging.path(), destination).map_err(|source| {
+        io_error(
+            format!("could not publish durable job {}", destination.display()),
+            source,
+        )
+    })?;
+    let _published_path = staging.keep();
+    sync_directory(root)
+}
+
+fn sync_directory(path: &Path) -> Result<(), RunStateError> {
+    #[cfg(unix)]
+    let sync_result = std::fs::File::open(path).and_then(|directory| directory.sync_all());
+    #[cfg(windows)]
+    let sync_result = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        OpenOptions::new()
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .and_then(|directory| directory.sync_all())
+    };
+    #[cfg(any(unix, windows))]
+    sync_result.map_err(|source| io_error(format!("could not sync {}", path.display()), source))?;
+    #[cfg(not(any(unix, windows)))]
+    let _ = path;
+    Ok(())
 }
 
 fn secure_directory(path: &Path) -> Result<(), RunStateError> {
@@ -296,8 +355,9 @@ mod tests {
 
     #[test]
     fn state_is_running_before_execution_and_terminal_after_report() {
-        let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::start_in(root.path(), &plan(), Some(30)).expect("start durable run");
+        let home = tempfile::tempdir().expect("temporary home");
+        let root = home.path().join(".horizon/browser-jobs");
+        let mut run = DurableRun::start_in(&root, &plan(), Some(30)).expect("start durable run");
         let running: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("running state"))
             .expect("decode running state");
         assert_eq!(running.status, RunStatus::Running);
@@ -309,6 +369,12 @@ mod tests {
                 .expect("decode saved plan"),
             plan()
         );
+        let published = std::fs::read_dir(&root)
+            .expect("list job root")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read job entries");
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].path(), run.directory);
 
         let report = ExecutionReport {
             version: 1,
@@ -386,6 +452,73 @@ mod tests {
         assert_eq!(failed.status, RunStatus::Failed);
         assert_eq!(failed.error.as_deref(), Some("adapter unavailable"));
         assert!(failed.report_file.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_traversal_does_not_resecure_an_existing_directory() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).expect("create existing directory");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).expect("set existing permissions");
+
+        ensure_private_directory(&existing.join("missing/../browser-jobs")).expect("create private directory");
+
+        assert_eq!(
+            std::fs::metadata(&existing)
+                .expect("existing directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
+    fn existing_file_is_rejected_without_mutation() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let file = root.path().join("browser-jobs");
+        std::fs::write(&file, b"keep me").expect("write existing file");
+        #[cfg(unix)]
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("set existing file permissions");
+
+        let error = ensure_private_directory(&file).expect_err("reject file job root");
+
+        assert!(matches!(
+            error,
+            RunStateError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotADirectory
+        ));
+        assert_eq!(std::fs::read(&file).expect("read existing file"), b"keep me");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&file)
+                .expect("existing file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn published_staging_name_can_be_reused_without_cleanup() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let staging = tempfile::Builder::new()
+            .prefix(".preparing-")
+            .tempdir_in(root.path())
+            .expect("stage job");
+        let staging_path = staging.path().to_path_buf();
+        let destination = root.path().join("job-published");
+
+        publish_job_directory(staging, &destination, root.path()).expect("publish job");
+        std::fs::create_dir(&staging_path).expect("reuse staging name");
+        std::fs::write(staging_path.join("sentinel"), b"keep me").expect("write sentinel");
+
+        assert!(destination.is_dir());
+        assert_eq!(
+            std::fs::read(staging_path.join("sentinel")).expect("read sentinel"),
+            b"keep me"
+        );
     }
 
     #[cfg(unix)]

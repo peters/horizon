@@ -139,6 +139,8 @@ jobs:
         with:
           key: windows-test-build
       - run: cargo test --workspace --no-run
+      - name: Execute durable publication regression
+        run: cargo test -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Compiling the
       # vendored C++ tree here is the point — tests are not run.
