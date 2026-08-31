@@ -68,6 +68,8 @@ pub enum RunStatus {
     Succeeded,
     /// A plan step, MCP connection, or runner operation failed.
     Failed,
+    /// The runner received an explicit cancellation request.
+    Cancelled,
     /// The configured job deadline elapsed.
     TimedOut,
 }
@@ -103,10 +105,17 @@ pub struct DurableExecutionReport<'a> {
 }
 
 /// Owner of the private files for one deterministic plan run.
+#[derive(Debug)]
 pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
     state: RunState,
+}
+
+/// Detached finalization view of an already published durable run.
+#[derive(Debug)]
+pub struct DurablePostProcessor {
+    run: DurableRun,
 }
 
 /// Failure to create or atomically update durable plan-run state.
@@ -126,6 +135,34 @@ pub enum RunStateError {
     },
 }
 
+/// Preparation failure that retains a job published before its final barrier.
+#[derive(Debug, Error)]
+#[error("{source}")]
+pub struct DurablePreparationError {
+    run: Option<Box<DurableRun>>,
+    #[source]
+    source: RunStateError,
+}
+
+impl DurablePreparationError {
+    fn unpublished(source: RunStateError) -> Self {
+        Self { run: None, source }
+    }
+
+    fn published(run: DurableRun, source: RunStateError) -> Self {
+        Self {
+            run: Some(Box::new(run)),
+            source,
+        }
+    }
+
+    /// Split the recoverable run handle from the underlying failure.
+    #[must_use]
+    pub fn into_parts(self) -> (Option<DurableRun>, RunStateError) {
+        (self.run.map(|run| *run), self.source)
+    }
+}
+
 impl DurableRun {
     /// Create a private job directory and persist a deadline-bound prepared
     /// state plus the validated plan before any MCP action is attempted.
@@ -138,8 +175,22 @@ impl DurableRun {
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
     ) -> Result<Self, RunStateError> {
+        Self::prepare_cancellable(plan, execution_timeout_seconds, deadline_at_millis)
+            .map_err(|error| error.into_parts().1)
+    }
+
+    /// Prepare a run while retaining a handle if the final publication barrier
+    /// fails after the atomic directory rename.
+    ///
+    /// # Errors
+    /// Returns the underlying preparation error and any already published run.
+    pub fn prepare_cancellable(
+        plan: &Plan,
+        execution_timeout_seconds: u64,
+        deadline_at_millis: u64,
+    ) -> Result<Self, DurablePreparationError> {
         let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::prepare_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
+        Self::prepare_cancellable_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
     }
 
     /// Stable id of this durable run.
@@ -154,20 +205,44 @@ impl DurableRun {
         &self.state_path
     }
 
+    /// Clone only the published state needed for detached persistence.
+    #[must_use]
+    pub fn postprocessor(&self) -> DurablePostProcessor {
+        DurablePostProcessor {
+            run: Self {
+                directory: self.directory.clone(),
+                state_path: self.state_path.clone(),
+                state: self.state.clone(),
+            },
+        }
+    }
+
+    #[cfg(test)]
     fn prepare_in(
         root: &Path,
         plan: &Plan,
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
     ) -> Result<Self, RunStateError> {
-        ensure_private_directory(root)?;
+        Self::prepare_cancellable_in(root, plan, execution_timeout_seconds, deadline_at_millis)
+            .map_err(|error| error.into_parts().1)
+    }
+
+    fn prepare_cancellable_in(
+        root: &Path,
+        plan: &Plan,
+        execution_timeout_seconds: Option<u64>,
+        deadline_at_millis: Option<u64>,
+    ) -> Result<Self, DurablePreparationError> {
+        ensure_private_directory(root).map_err(DurablePreparationError::unpublished)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
         let staging = tempfile::Builder::new()
             .prefix(".preparing-")
             .tempdir_in(root)
-            .map_err(|source| io_error(format!("could not stage {job_id}"), source))?;
-        secure_directory(staging.path())?;
+            .map_err(|source| io_error(format!("could not stage {job_id}"), source))
+            .map_err(DurablePreparationError::unpublished)?;
+        secure_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
         let created_at_millis = now_millis();
         let state = RunState {
             version: STATE_VERSION,
@@ -183,15 +258,21 @@ impl DurableRun {
             completed_steps: 0,
             error: None,
         };
-        write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")?;
-        write_private_json(&staging.path().join(STATE_FILE), &state, "state")?;
-        sync_directory(staging.path())?;
-        publish_job_directory(staging, &directory, root)?;
-        Ok(Self {
+        write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")
+            .map_err(DurablePreparationError::unpublished)?;
+        write_private_json(&staging.path().join(STATE_FILE), &state, "state")
+            .map_err(DurablePreparationError::unpublished)?;
+        sync_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
+        publish_job_directory(staging, &directory).map_err(DurablePreparationError::unpublished)?;
+        let run = Self {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
-        })
+        };
+        if let Err(source) = sync_directory(root) {
+            return Err(DurablePreparationError::published(run, source));
+        }
+        Ok(run)
     }
 
     /// Return the report envelope exposed on stdout or through `--output`.
@@ -212,6 +293,7 @@ impl DurableRun {
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
         self.write_json(REPORT_FILE, &self.report(execution), "report")?;
         self.state.status = match execution.stop_reason {
+            Some(ExecutionStopReason::Cancelled) => RunStatus::Cancelled,
             Some(ExecutionStopReason::DeadlineExceeded) => RunStatus::TimedOut,
             None if execution.ok => RunStatus::Succeeded,
             None => RunStatus::Failed,
@@ -239,10 +321,13 @@ impl DurableRun {
     ///
     /// # Errors
     /// Returns when the stopped state cannot be atomically persisted.
-    pub fn stop(&mut self, _reason: ExecutionStopReason) -> Result<(), RunStateError> {
-        self.state.status = RunStatus::TimedOut;
+    pub fn stop(&mut self, reason: ExecutionStopReason) -> Result<(), RunStateError> {
+        self.state.status = match reason {
+            ExecutionStopReason::Cancelled => RunStatus::Cancelled,
+            ExecutionStopReason::DeadlineExceeded => RunStatus::TimedOut,
+        };
         self.state.updated_at_millis = now_millis();
-        self.state.error = Some(ExecutionStopReason::MESSAGE.to_string());
+        self.state.error = Some(reason.message().to_string());
         self.persist_state()
     }
 
@@ -252,6 +337,38 @@ impl DurableRun {
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+}
+
+impl DurablePostProcessor {
+    /// Persist the private report and terminal lifecycle state.
+    ///
+    /// # Errors
+    /// Returns when either artifact cannot be atomically persisted.
+    pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
+        self.run.finish(execution)
+    }
+
+    /// Return the report envelope exposed on stdout or through `--output`.
+    #[must_use]
+    pub fn report<'a>(&'a self, execution: &'a ExecutionReport) -> DurableExecutionReport<'a> {
+        self.run.report(execution)
+    }
+
+    /// Persist a terminal stop while detached I/O is in progress.
+    ///
+    /// # Errors
+    /// Returns when the stopped state cannot be atomically persisted.
+    pub fn stop(&mut self, reason: ExecutionStopReason) -> Result<(), RunStateError> {
+        self.run.stop(reason)
+    }
+
+    /// Persist a terminal failure while detached I/O is in progress.
+    ///
+    /// # Errors
+    /// Returns when the failed state cannot be atomically persisted.
+    pub fn fail(&mut self, error: &str) -> Result<(), RunStateError> {
+        self.run.fail(error)
     }
 }
 
@@ -287,7 +404,7 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &Path) -> Result<(), RunStateError> {
+fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Result<(), RunStateError> {
     std::fs::rename(staging.path(), destination).map_err(|source| {
         io_error(
             format!("could not publish durable job {}", destination.display()),
@@ -295,7 +412,7 @@ fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &
         )
     })?;
     let _published_path = staging.keep();
-    sync_directory(root)
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> Result<(), RunStateError> {
@@ -513,6 +630,21 @@ mod tests {
         assert!(failed.report_file.is_none());
     }
 
+    #[test]
+    fn cancellation_is_a_distinct_terminal_state() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare durable run");
+        run.stop(ExecutionStopReason::Cancelled).expect("persist cancellation");
+
+        let cancelled: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("cancelled state"))
+            .expect("decode cancelled state");
+        assert_eq!(cancelled.status, RunStatus::Cancelled);
+        assert_eq!(
+            cancelled.error.as_deref(),
+            Some(ExecutionStopReason::Cancelled.message())
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn parent_traversal_does_not_resecure_an_existing_directory() {
@@ -569,7 +701,8 @@ mod tests {
         let staging_path = staging.path().to_path_buf();
         let destination = root.path().join("job-published");
 
-        publish_job_directory(staging, &destination, root.path()).expect("publish job");
+        publish_job_directory(staging, &destination).expect("publish job");
+        sync_directory(root.path()).expect("sync job root");
         std::fs::create_dir(&staging_path).expect("reuse staging name");
         std::fs::write(staging_path.join("sentinel"), b"keep me").expect("write sentinel");
 

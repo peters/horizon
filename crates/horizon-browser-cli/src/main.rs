@@ -1,7 +1,12 @@
 #![forbid(unsafe_code)]
 
+mod run_finalization;
+mod run_preparation;
+
+use std::convert::Infallible;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
+use std::future::pending;
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -10,16 +15,19 @@ use std::time::Duration;
 use horizon_browser::BackendKind;
 use horizon_browser_cli::{
     Plan,
-    execution_control::{ExecutionControl, ExecutionStopReason},
+    execution_control::{CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason},
     job::JobOptions,
-    run_state::{DurableExecutionReport, DurableRun},
+    run_state::{DurableExecutionReport, DurablePreparationError, DurableRun},
     standalone::StandaloneOptions,
 };
+use run_preparation::PreparationCompletion;
 
 const MAX_PLAN_BYTES: u64 = 1024 * 1024;
 const DEFAULT_RUN_TIMEOUT_SECONDS: u64 = 30 * 60;
 const MAX_RUN_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 const EXIT_TIMED_OUT: u8 = 124;
+const EXIT_CANCELLED: u8 = 130;
+const CANCELLATION_FLUSH_GRACE: Duration = Duration::from_secs(1);
 const HELP: &str = r#"horizon-browser — run browser jobs through one MCP contract
 
 USAGE:
@@ -33,7 +41,7 @@ COMMANDS:
            This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
            Saves durable job state; reads stdin when PLAN is '-' and writes
-           JSON to stdout by default.
+           JSON to stdout by default. Ctrl-C preserves progress and exits 130.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
 
@@ -42,7 +50,7 @@ OPTIONS:
     --visible             Show a native browser window; jobs default headless.
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
-    --timeout <SECONDS>    Bound durable activation and MCP work (default 1800, max 86400).
+    --timeout <SECONDS>    Bound durable preparation and MCP work (default 1800, max 86400).
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
@@ -122,80 +130,269 @@ async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
     }
 }
 
-async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
-    let bytes = match read_bounded(&plan_path) {
-        Ok(bytes) => bytes,
+struct PreparedRun {
+    plan: Plan,
+    durable: DurableRun,
+    control: ExecutionControl,
+}
+
+enum BlockingCompletion<T> {
+    Completed(T),
+    InfrastructureFailed(String),
+}
+
+async fn controlled_blocking<T>(
+    control: &mut ExecutionControl,
+    worker_name: &'static str,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Result<BlockingCompletion<T>, ExecutionStopReason>
+where
+    T: Send + 'static,
+{
+    control.check()?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _worker = match std::thread::Builder::new()
+        .name(worker_name.to_string())
+        .spawn(move || {
+            let _ = sender.send(operation());
+        }) {
+        Ok(worker) => worker,
         Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::from(2);
+            control.check()?;
+            return Ok(BlockingCompletion::InfrastructureFailed(format!(
+                "could not start {worker_name}: {error}"
+            )));
         }
     };
-    let plan = match Plan::from_slice(&bytes) {
-        Ok(plan) => plan,
-        Err(error) => {
+    control
+        .wait(async move {
+            match receiver.await {
+                Ok(result) => BlockingCompletion::Completed(result),
+                Err(error) => {
+                    BlockingCompletion::InfrastructureFailed(format!("{worker_name} stopped without a result: {error}"))
+                }
+            }
+        })
+        .await
+}
+
+async fn prepare_run(
+    plan_path: PathBuf,
+    timeout: Duration,
+    mut control: ExecutionControl,
+    cancellation: &mut CancellationProbe,
+) -> Result<PreparedRun, ExitCode> {
+    let plan = match controlled_blocking(&mut control, "horizon-browser-plan-load", move || {
+        let bytes = read_bounded(&plan_path)?;
+        Plan::from_slice(&bytes).map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(BlockingCompletion::Completed(Ok(plan))) => plan,
+        Ok(BlockingCompletion::Completed(Err(error))) => {
             eprintln!("error: {error}");
-            return ExitCode::from(2);
+            return Err(ExitCode::from(2));
+        }
+        Ok(BlockingCompletion::InfrastructureFailed(error)) => {
+            eprintln!("error: {error}");
+            return Err(ExitCode::FAILURE);
+        }
+        Err(reason) => {
+            eprintln!("error: {}", reason.message());
+            return Err(stop_exit_code(reason));
         }
     };
-    let mut control = ExecutionControl::with_timeout(timeout);
-    let deadline_at_millis = control.deadline_at_millis().unwrap_or_default();
-    let mut durable = match DurableRun::prepare(&plan, timeout.as_secs(), deadline_at_millis) {
+
+    let deadline = control.start_timeout(timeout);
+    let prepared = match run_preparation::prepare_durable(
+        &mut control,
+        cancellation,
+        plan.clone(),
+        timeout.as_secs(),
+        deadline.unix_millis(),
+    )
+    .await
+    {
+        Ok(PreparationCompletion::Completed(prepared)) => prepared,
+        Ok(PreparationCompletion::InfrastructureFailed(error)) => {
+            eprintln!("error: {error}");
+            return Err(ExitCode::FAILURE);
+        }
+        Err(reason) => {
+            eprintln!("error: {}", reason.message());
+            return Err(stop_exit_code(reason));
+        }
+    };
+    let durable = match prepared {
         Ok(durable) => durable,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
+        Err(error) => return Err(persist_preparation_failure(error, cancellation).await),
+    };
+    if let Err(reason) = control.check() {
+        return Err(persist_stopped(&durable, reason, cancellation).await);
+    }
+
+    Ok(PreparedRun { plan, durable, control })
+}
+
+async fn run_controlled(
+    plan_path: PathBuf,
+    output_path: Option<&Path>,
+    timeout: Duration,
+    control: ExecutionControl,
+    mut preparation_cancellation: CancellationProbe,
+    mut finalization_cancellation: CancellationProbe,
+) -> ExitCode {
+    let PreparedRun {
+        plan,
+        durable,
+        mut control,
+    } = match prepare_run(plan_path, timeout, control, &mut preparation_cancellation).await {
+        Ok(prepared) => prepared,
+        Err(exit) => return exit,
     };
     let report = match horizon_browser_cli::execute_plan_with_control(&plan, &mut control).await {
         Ok(report) => report,
         Err(horizon_browser_cli::RunError::Stopped(reason)) => {
-            if let Err(state_error) = durable.stop(reason) {
-                eprintln!(
-                    "error: {}; additionally could not persist stopped state: {state_error}",
-                    ExecutionStopReason::MESSAGE
-                );
-                return ExitCode::from(EXIT_TIMED_OUT);
-            }
-            eprintln!(
-                "error: {}; durable job {}: {}",
-                ExecutionStopReason::MESSAGE,
-                durable.job_id(),
-                durable.state_path().display()
-            );
-            return ExitCode::from(EXIT_TIMED_OUT);
+            return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
         }
         Err(error) => {
-            if let Err(state_error) = durable.fail(&error.to_string()) {
-                eprintln!("error: {error}; additionally could not persist failure state: {state_error}");
-                return ExitCode::FAILURE;
-            }
-            eprintln!(
-                "error: {error}; durable job {}: {}",
-                durable.job_id(),
-                durable.state_path().display()
-            );
-            return ExitCode::FAILURE;
+            return persist_failed(&durable, error.to_string(), &mut finalization_cancellation).await;
         }
     };
-    let post_process_error_exit = report
-        .stop_reason
-        .map_or(ExitCode::FAILURE, |_| ExitCode::from(EXIT_TIMED_OUT));
-    if let Err(error) = durable.finish(&report) {
+    let post_process_error_exit = report.stop_reason.map_or(ExitCode::FAILURE, stop_exit_code);
+    let finalization =
+        run_finalization::finalize_report(&durable, &report, output_path, &mut finalization_cancellation).await;
+    if let Err(error) = finalization.result {
         eprintln!("error: {error}");
-        return post_process_error_exit;
+        return if finalization.interrupted {
+            ExitCode::from(EXIT_CANCELLED)
+        } else {
+            post_process_error_exit
+        };
     }
-    let report = durable.report(&report);
-    if let Err(error) = write_report(&report, output_path) {
-        eprintln!("error: {error}");
-        return post_process_error_exit;
+    if finalization.interrupted {
+        return ExitCode::from(EXIT_CANCELLED);
     }
-    if report.execution.stop_reason.is_some() {
-        ExitCode::from(EXIT_TIMED_OUT)
-    } else if report.execution.ok {
+    if let Some(reason) = report.stop_reason {
+        stop_exit_code(reason)
+    } else if report.ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
+    let (control, cancellation) = ExecutionControl::cancellable();
+    let preparation_cancellation = cancellation.probe();
+    let finalization_cancellation = cancellation.probe();
+    let execution = run_controlled(
+        plan_path,
+        output_path,
+        timeout,
+        control,
+        preparation_cancellation,
+        finalization_cancellation,
+    );
+    let interrupts = forward_interrupts(cancellation);
+    tokio::pin!(execution);
+    tokio::pin!(interrupts);
+    tokio::select! {
+        biased;
+        never = &mut interrupts => match never {},
+        result = &mut execution => result,
+    }
+}
+
+async fn forward_interrupts(cancellation: CancellationHandle) -> Infallible {
+    loop {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => cancellation.cancel(),
+            Err(error) => {
+                tracing::warn!(%error, "could not listen for browser-job cancellation");
+                pending::<()>().await;
+            }
+        }
+    }
+}
+
+async fn persist_stopped(
+    durable: &DurableRun,
+    reason: ExecutionStopReason,
+    cancellation: &mut CancellationProbe,
+) -> ExitCode {
+    let persistence = run_finalization::persist_stop(durable, reason, cancellation).await;
+    if let Err(state_error) = persistence.result {
+        eprintln!(
+            "error: {}; additionally could not persist stopped state: {state_error}",
+            reason.message()
+        );
+    } else {
+        eprintln!(
+            "error: {}; durable job {}: {}",
+            reason.message(),
+            durable.job_id(),
+            durable.state_path().display()
+        );
+    }
+    if persistence.interrupted {
+        ExitCode::from(EXIT_CANCELLED)
+    } else {
+        stop_exit_code(reason)
+    }
+}
+
+async fn persist_failed(durable: &DurableRun, error: String, cancellation: &mut CancellationProbe) -> ExitCode {
+    let persistence = run_finalization::persist_failure(durable, error.clone(), cancellation).await;
+    if let Err(state_error) = persistence.result {
+        eprintln!("error: {error}; additionally could not persist failure state: {state_error}");
+    } else {
+        eprintln!(
+            "error: {error}; durable job {}: {}",
+            durable.job_id(),
+            durable.state_path().display()
+        );
+    }
+    if persistence.interrupted {
+        ExitCode::from(EXIT_CANCELLED)
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+async fn persist_preparation_failure(error: DurablePreparationError, cancellation: &mut CancellationProbe) -> ExitCode {
+    let (durable, source) = error.into_parts();
+    let message = source.to_string();
+    let Some(durable) = durable else {
+        if cancellation.is_cancelled() {
+            eprintln!("error: {}", ExecutionStopReason::Cancelled.message());
+            return ExitCode::from(EXIT_CANCELLED);
+        }
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    };
+    let persistence = run_finalization::persist_failure(&durable, message.clone(), cancellation).await;
+    if let Err(state_error) = persistence.result {
+        eprintln!("error: {message}; additionally could not persist failure state: {state_error}");
+    } else {
+        eprintln!(
+            "error: {message}; durable job {}: {}",
+            durable.job_id(),
+            durable.state_path().display()
+        );
+    }
+    if persistence.interrupted {
+        ExitCode::from(EXIT_CANCELLED)
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn stop_exit_code(reason: ExecutionStopReason) -> ExitCode {
+    ExitCode::from(match reason {
+        ExecutionStopReason::Cancelled => EXIT_CANCELLED,
+        ExecutionStopReason::DeadlineExceeded => EXIT_TIMED_OUT,
+    })
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, String> {

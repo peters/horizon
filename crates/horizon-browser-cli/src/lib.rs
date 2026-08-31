@@ -69,7 +69,7 @@ pub struct ExecutionReport {
     /// Connection-level failure or execution-deadline description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Explicit stop condition when the job deadline won.
+    /// Explicit cancellation or deadline stop condition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<ExecutionStopReason>,
 }
@@ -136,7 +136,7 @@ pub enum RunError {
     #[error("plan step `{step}` names unavailable MCP tool `{tool}`")]
     UnknownTool { step: String, tool: String },
     /// The job stopped before step execution produced a report.
-    #[error("{}", ExecutionStopReason::MESSAGE)]
+    #[error("{}", .0.message())]
     Stopped(ExecutionStopReason),
 }
 
@@ -182,7 +182,7 @@ pub async fn execute_plan(plan: &Plan) -> Result<ExecutionReport, RunError> {
     execute_plan_with_control(plan, &mut ExecutionControl::unbounded()).await
 }
 
-/// Execute a plan under the caller's shared job deadline.
+/// Execute a plan with shared cancellation and a job deadline.
 ///
 /// A stop during tool execution returns a partial report containing only
 /// completed calls. A stop during initialization returns [`RunError::Stopped`]
@@ -372,16 +372,16 @@ impl ExecutionReport {
 
     fn stop(&mut self, reason: ExecutionStopReason) {
         self.ok = false;
-        self.error = Some(ExecutionStopReason::MESSAGE.to_string());
+        self.error = Some(reason.message().to_string());
         self.stop_reason = Some(reason);
     }
 }
 
 fn stopped_report(steps: Vec<StepReport>, stopped: &ActionWaitStopped) -> ExecutionReport {
     let message = if stopped.request_started {
-        ExecutionStopReason::IN_FLIGHT_MESSAGE
+        stopped.reason.in_flight_message()
     } else {
-        ExecutionStopReason::MESSAGE
+        stopped.reason.message()
     };
     ExecutionReport {
         version: PLAN_VERSION,
@@ -637,7 +637,7 @@ mod tests {
             RunError::Stopped(ExecutionStopReason::DeadlineExceeded)
         ));
         let message = error.to_string();
-        assert_eq!(message, ExecutionStopReason::MESSAGE);
+        assert_eq!(message, ExecutionStopReason::DeadlineExceeded.message());
         assert!(!message.contains("in-flight browser action"));
     }
 
@@ -652,7 +652,10 @@ mod tests {
         assert!(!stopped.request_started);
         let report = stopped_report(Vec::new(), &stopped);
 
-        assert_eq!(report.error.as_deref(), Some(ExecutionStopReason::MESSAGE));
+        assert_eq!(
+            report.error.as_deref(),
+            Some(ExecutionStopReason::DeadlineExceeded.message())
+        );
         assert_eq!(report.stop_reason, Some(ExecutionStopReason::DeadlineExceeded));
     }
 
