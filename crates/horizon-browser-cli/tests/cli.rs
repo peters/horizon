@@ -305,27 +305,65 @@ fn interrupt_persists_cancelled_partial_report_and_exit_130() {
 
 #[cfg(unix)]
 #[test]
-fn interrupt_bounds_open_stdin_before_durable_setup() {
+fn interrupt_bounds_blocked_plan_input_before_durable_setup() {
     let root = tempfile::tempdir().expect("isolated root");
+    let plan_pipe = root.path().join("plan.pipe");
+    let writer_ready = root.path().join("writer-ready");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&plan_pipe)
+            .status()
+            .expect("create plan FIFO")
+            .success()
+    );
     let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
-        .args(["run", "-", "--timeout", "30"])
+        .args(["run", plan_pipe.to_str().expect("UTF-8 FIFO path"), "--timeout", "30"])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn stdin browser job");
-    let stdin = child.stdin.take().expect("open child stdin");
-    // Give the Tokio runtime enough time to install its first process-wide
-    // signal listener before testing cooperative handling. A shorter delay is
-    // racy on cold macOS arm64 runners and tests OS default delivery instead.
-    std::thread::sleep(Duration::from_secs(1));
+        .expect("spawn blocked-input browser job");
+    let mut writer = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exec 3>\"$1\"\n: >\"$2\"\nexec sleep 30")
+        .arg("fifo-writer")
+        .arg(&plan_pipe)
+        .arg(&writer_ready)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn plan FIFO writer");
+    let readiness_deadline = Instant::now() + Duration::from_secs(5);
+    while !writer_ready.exists() {
+        let failure = if child.try_wait().expect("poll blocked-input browser job").is_some() {
+            Some("browser job exited before blocking on plan input")
+        } else if writer.try_wait().expect("poll plan FIFO writer").is_some() {
+            Some("plan FIFO writer exited before its reader was ready")
+        } else if Instant::now() >= readiness_deadline {
+            Some("browser job did not begin reading its plan before the readiness deadline")
+        } else {
+            None
+        };
+        if let Some(message) = failure {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = writer.kill();
+            let _ = writer.wait();
+            panic!("{message}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     send_interrupt(child.id());
-    wait_for_exit(&mut child, "cancelled stdin browser job");
-    let output = child.wait_with_output().expect("collect cancelled stdin browser job");
-    drop(stdin);
+    wait_for_exit(&mut child, "cancelled blocked-input browser job");
+    let output = child
+        .wait_with_output()
+        .expect("collect cancelled blocked-input browser job");
+    let _ = writer.kill();
+    writer.wait().expect("reap plan FIFO writer");
 
     assert_eq!(output.status.code(), Some(130));
     assert!(output.stdout.is_empty());
