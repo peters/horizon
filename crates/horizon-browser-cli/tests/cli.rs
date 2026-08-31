@@ -1,8 +1,11 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
+
+const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
 
 #[test]
 fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
@@ -183,9 +186,8 @@ fn run_persists_preflight_failure_before_any_browser_action() {
 #[test]
 fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let root = tempfile::tempdir().expect("isolated root");
-    let (plan, _manifest_path) = write_blocking_plan(root.path());
-    let plan = plan.to_str().expect("UTF-8 path");
-    let output = run_command(root.path(), ["run", plan, "--timeout", "1"]);
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
 
     assert_eq!(output.status.code(), Some(124));
     assert!(
@@ -205,14 +207,175 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
         .expect("decode deadline state");
     assert_eq!(state["status"], "timed_out");
-    assert_eq!(state["execution_timeout_seconds"], 1);
+    assert_eq!(state["execution_timeout_seconds"], DEADLINE_TEST_TIMEOUT_SECONDS);
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
-    let output_dir = root.path().to_str().expect("UTF-8 root");
-    let failed_output = run_command(root.path(), ["run", plan, "--timeout", "1", "--output", output_dir]);
+    let failed_root = tempfile::tempdir().expect("isolated failed-output root");
+    let (failed_plan, failed_manifest_path) = write_blocking_plan(failed_root.path());
+    let failed_output = run_deadline_after_action(
+        failed_root.path(),
+        &failed_plan,
+        &failed_manifest_path,
+        Some(failed_root.path()),
+    );
     assert_eq!(failed_output.status.code(), Some(124));
     assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+}
+
+#[test]
+fn run_timeout_starts_after_stdin_plan_validation() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", "-", "--timeout", "1"])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdin browser job");
+    let mut stdin = child.stdin.take().expect("open child stdin");
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert!(
+        child.try_wait().expect("poll stdin browser job").is_none(),
+        "action timeout elapsed while plan stdin was still open"
+    );
+    stdin
+        .write_all(br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}]}"#)
+        .expect("write delayed plan");
+    drop(stdin);
+    wait_for_exit(&mut child, "delayed stdin browser job");
+    let output = child.wait_with_output().expect("collect delayed-plan browser job");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("delayed-plan report");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["completed_steps"], 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupt_persists_cancelled_partial_report_and_exit_130() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "30"])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn cancellable browser job");
+    wait_for_manifest_action(&mut child, &manifest_path);
+    send_interrupt(child.id());
+    wait_for_exit(&mut child, "cancelled browser job");
+    let output = child.wait_with_output().expect("collect cancelled browser job");
+
+    assert_eq!(output.status.code(), Some(130));
+    assert!(
+        output.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("cancelled report");
+    assert_eq!(report["completed_steps"], 1);
+    assert_eq!(report["stop_reason"], "cancelled");
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("in-flight browser action may still complete"))
+    );
+    let state: Value = serde_json::from_slice(
+        &std::fs::read(std::path::Path::new(report["state_path"].as_str().expect("state path")))
+            .expect("cancelled state"),
+    )
+    .expect("decode cancelled state");
+    assert_eq!(state["status"], "cancelled");
+    assert_eq!(state["completed_steps"], 1);
+    assert_eq!(state["report_file"], "report.json");
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupt_bounds_open_stdin_before_durable_setup() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", "-", "--timeout", "30"])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdin browser job");
+    let stdin = child.stdin.take().expect("open child stdin");
+    std::thread::sleep(Duration::from_millis(100));
+    send_interrupt(child.id());
+    wait_for_exit(&mut child, "cancelled stdin browser job");
+    let output = child.wait_with_output().expect("collect cancelled stdin browser job");
+    drop(stdin);
+
+    assert_eq!(output.status.code(), Some(130));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("job cancelled by interrupt"));
+    assert!(!stderr.contains("in-flight browser action"));
+    assert!(!root.path().join(".horizon/browser-jobs").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupt_terminates_blocked_report_finalization() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let plan = root.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}]}"#,
+    )
+    .expect("write plan");
+    let report_pipe = root.path().join("report.pipe");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&report_pipe)
+            .status()
+            .expect("create report FIFO")
+            .success()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args([
+            "run",
+            plan.to_str().expect("UTF-8 plan"),
+            "--output",
+            report_pipe.to_str().expect("UTF-8 FIFO"),
+        ])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn browser job with blocked report output");
+    let jobs = root.path().join(".horizon/browser-jobs");
+    let state_path = wait_for_job_status(&mut child, &jobs, "succeeded");
+
+    send_interrupt(child.id());
+    wait_for_exit(&mut child, "blocked report finalization");
+    let output = child.wait_with_output().expect("collect blocked finalization output");
+
+    assert_eq!(output.status.code(), Some(130));
+    let state: Value =
+        serde_json::from_slice(&std::fs::read(state_path).expect("final job state")).expect("decode final job state");
+    assert_eq!(state["status"], "succeeded");
 }
 
 #[test]
@@ -305,6 +468,31 @@ fn run_process_local_command<const N: usize>(home: &std::path::Path, arguments: 
         .expect("run process-local horizon-browser")
 }
 
+fn run_deadline_after_action(
+    home: &std::path::Path,
+    plan: &std::path::Path,
+    manifest_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser"));
+    let timeout = DEADLINE_TEST_TIMEOUT_SECONDS.to_string();
+    command
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", &timeout])
+        .env("HOME", home)
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(output) = output {
+        command.args(["--output", output.to_str().expect("UTF-8 output path")]);
+    }
+    let mut child = command.spawn().expect("spawn deadline browser job");
+    wait_for_manifest_action(&mut child, manifest_path);
+    wait_for_exit(&mut child, "deadline browser job");
+    child.wait_with_output().expect("collect deadline browser job")
+}
+
 fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let panel_id = "blocked-panel";
     let manifest_path = manifest::manifest_path_for_root(&home.join(".horizon"), panel_id);
@@ -325,6 +513,79 @@ fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path
     )
     .expect("write blocking plan");
     (plan, manifest_path)
+}
+
+fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(bytes) = std::fs::read(manifest_path)
+            && let Ok(manifest) = serde_json::from_slice::<BrowserManifest>(&bytes)
+            && !manifest.actions.is_empty()
+        {
+            return;
+        }
+        assert!(
+            child.try_wait().expect("poll browser job").is_none(),
+            "browser job exited before queueing its blocking action"
+        );
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled task-owned browser job");
+            child.wait().expect("reap stalled task-owned browser job");
+            panic!("browser job did not queue its blocking action");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_job_status(child: &mut Child, jobs: &std::path::Path, expected: &str) -> std::path::PathBuf {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(entries) = std::fs::read_dir(jobs) {
+            for path in entries.flatten().map(|entry| entry.path().join("state.json")) {
+                if let Ok(bytes) = std::fs::read(&path)
+                    && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
+                    && state["status"] == expected
+                {
+                    return path;
+                }
+            }
+        }
+        assert!(
+            child.try_wait().expect("poll browser job").is_none(),
+            "browser job exited before finalization"
+        );
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled task-owned browser job");
+            child.wait().expect("reap stalled task-owned browser job");
+            panic!("browser job did not reach {expected} before finalization blocked");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+fn send_interrupt(pid: u32) {
+    let status = Command::new("kill")
+        .args(["-INT", &pid.to_string()])
+        .status()
+        .expect("send interrupt to task-owned browser job");
+    assert!(status.success(), "could not interrupt task-owned browser job");
+}
+
+fn wait_for_exit(child: &mut Child, description: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().expect("poll task-owned browser job").is_some() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled task-owned browser job");
+            child.wait().expect("reap stalled task-owned browser job");
+            panic!("{description} did not exit cooperatively");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 struct McpProcess {

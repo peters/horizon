@@ -147,10 +147,20 @@ Every deterministic run gets one action deadline. The default is 1800 seconds;
 plan input and validation, before durable preparation, and covers whether MCP
 initialization, tool discovery, calls, and client/server shutdown may continue.
 If preparation returns after the deadline, no MCP action starts and its
-prepared lease resolves to `timed_out`. Plan input and the blocking preparation
-write are not yet interruptible. Terminal state, report, and requested-output
-writes happen after browser work stops so timeout evidence can still be
-preserved; this post-processing I/O can add wall-clock time after the deadline.
+prepared lease resolves to `timed_out`. Terminal state, report, and
+requested-output writes happen after browser work stops so timeout evidence can
+still be preserved; this post-processing I/O can add wall-clock time after the
+deadline.
+
+Ctrl-C is separate from that action budget and remains active while stdin is
+open, during durable preparation and MCP work, and while the final report is
+being saved or delivered. Cancellation before a validated plan exits without
+creating a job. During preparation the runner gives its task-owned filesystem
+worker one shared second to finish and marks any published job `cancelled`.
+Final persistence gets the same bounded grace; the process then exits 130
+instead of hanging on blocked output. A cancellation during a tool call saves
+the completed prefix when it can flush within that grace and records
+`stop_reason: "cancelled"`.
 
 A deadline during a tool call saves the completed prefix as a partial report
 and records `timed_out` in `state.json`; the state also records the configured
@@ -161,8 +171,8 @@ retrying it; automatic replay remains disabled.
 
 Stdout contains only the report; diagnostics use stderr. A file report is
 created with owner-only permissions on Unix. Stable exit codes are 0 for
-success, 1 for execution failure, 2 for invalid CLI or plan input, and 124 for
-a job deadline.
+success, 1 for execution failure, 2 for invalid CLI or plan input, 124 for a
+job deadline, and 130 for Ctrl-C cancellation.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
 runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the
