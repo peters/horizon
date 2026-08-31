@@ -496,7 +496,7 @@ impl HorizonApp {
         browser_events: &[egui::Event],
         scope: PanelRenderScope,
     ) -> bool {
-        self.clear_released_arranged_panel_drag(ctx, panel_id);
+        self.clear_inactive_arranged_panel_drag(ctx, panel_id);
         let Some(snapshot) = self.panel_snapshot(panel_id, canvas_rect) else {
             return false;
         };

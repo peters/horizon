@@ -44,11 +44,11 @@ impl ArrangedPanelDrag {
 }
 
 impl HorizonApp {
-    pub(super) fn clear_released_arranged_panel_drag(&mut self, ctx: &Context, panel_id: PanelId) {
-        let should_clear = self
-            .arranged_panel_drag
-            .is_some_and(|drag| drag.panel_id == panel_id && drag.viewport_id == ctx.viewport_id())
-            && !ctx.input(|input| input.pointer.primary_down());
+    pub(super) fn clear_inactive_arranged_panel_drag(&mut self, ctx: &Context, panel_id: PanelId) {
+        let should_clear = self.arranged_panel_drag.is_some_and(|drag| {
+            drag.panel_id == panel_id
+                && (drag.viewport_id != ctx.viewport_id() || !ctx.input(|input| input.pointer.primary_down()))
+        });
         if should_clear {
             self.arranged_panel_drag = None;
             ctx.request_repaint();
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn pointer_release_clears_only_the_drag_from_its_viewport() {
+    fn stale_viewport_or_pointer_release_clears_only_the_source_panel_drag() {
         let (_temp, mut app) = test_app();
         let panel_id = PanelId(7);
         let workspace_id = WorkspaceId(11);
@@ -421,8 +421,8 @@ mod tests {
             Pos2::ZERO,
         ));
 
-        app.clear_released_arranged_panel_drag(&root_ctx, panel_id);
-        assert!(app.arranged_panel_drag.is_some());
+        app.clear_inactive_arranged_panel_drag(&root_ctx, panel_id);
+        assert!(app.arranged_panel_drag.is_none());
 
         app.arranged_panel_drag = Some(ArrangedPanelDrag::new(
             panel_id,
@@ -430,10 +430,10 @@ mod tests {
             ViewportId::ROOT,
             Pos2::ZERO,
         ));
-        app.clear_released_arranged_panel_drag(&root_ctx, PanelId(8));
+        app.clear_inactive_arranged_panel_drag(&root_ctx, PanelId(8));
         assert!(app.arranged_panel_drag.is_some());
 
-        app.clear_released_arranged_panel_drag(&root_ctx, panel_id);
+        app.clear_inactive_arranged_panel_drag(&root_ctx, panel_id);
         assert!(app.arranged_panel_drag.is_none());
     }
 
