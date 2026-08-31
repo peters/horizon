@@ -379,10 +379,16 @@ fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     use serde_json::json;
 
     use super::*;
-    use crate::{PlanStep, StepReport};
+    use crate::{
+        PlanStep, StepReport,
+        execution_control::{ExecutionControl, JobDeadline},
+    };
 
     fn plan() -> Plan {
         Plan {
@@ -505,6 +511,66 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(directory.join(PLAN_FILE).exists());
         assert!(directory.join(STATE_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn deadline_abandons_active_preparation_without_publishing_running() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let worker_root = root.path().to_path_buf();
+        let worker_plan = plan();
+        let (prepared_sender, prepared_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let (finished_sender, finished_receiver) = mpsc::sync_channel(0);
+        let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || {
+            let run = DurableRun::prepare_in(
+                &worker_root,
+                &worker_plan,
+                Some(1),
+                Some(now_millis().saturating_add(1_000)),
+            )
+            .expect("prepare durable run");
+            prepared_sender
+                .send(run.state_path.clone())
+                .expect("publish prepared state path");
+            release_receiver.recv().expect("release preparation worker");
+            let _ = result_sender.send(run);
+            finished_sender.send(()).expect("publish worker completion");
+        });
+
+        let state_path = prepared_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("prepared state path");
+        let directory = state_path.parent().expect("job directory");
+        assert_eq!(activation_files(directory).len(), 1);
+
+        let mut control = ExecutionControl::until(JobDeadline::after(Duration::ZERO));
+        assert!(matches!(
+            control.wait(result_receiver).await,
+            Err(ExecutionStopReason::DeadlineExceeded)
+        ));
+        release_sender.send(()).expect("release preparation worker");
+        finished_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("late preparation cleanup");
+        worker.join().expect("preparation worker");
+
+        let state: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("timed-out state"))
+            .expect("decode timed-out state");
+        assert_eq!(state.status, RunStatus::TimedOut);
+        assert!(activation_files(directory).is_empty());
+    }
+
+    fn activation_files(directory: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(directory)
+            .expect("job artifacts")
+            .map(|entry| entry.expect("job artifact").path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".state-activation-"))
+            })
+            .collect()
     }
 
     #[test]
