@@ -318,7 +318,10 @@ fn interrupt_bounds_open_stdin_before_durable_setup() {
         .spawn()
         .expect("spawn stdin browser job");
     let stdin = child.stdin.take().expect("open child stdin");
-    std::thread::sleep(Duration::from_millis(100));
+    // Give the Tokio runtime enough time to install its first process-wide
+    // signal listener before testing cooperative handling. A shorter delay is
+    // racy on cold macOS arm64 runners and tests OS default delivery instead.
+    std::thread::sleep(Duration::from_secs(1));
     send_interrupt(child.id());
     wait_for_exit(&mut child, "cancelled stdin browser job");
     let output = child.wait_with_output().expect("collect cancelled stdin browser job");
