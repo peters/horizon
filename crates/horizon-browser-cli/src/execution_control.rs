@@ -96,6 +96,9 @@ impl ExecutionControl {
     /// # Errors
     /// Returns [`ExecutionStopReason::DeadlineExceeded`] when the deadline wins.
     pub async fn wait<T>(&mut self, future: impl Future<Output = T>) -> Result<T, ExecutionStopReason> {
+        if let Some(deadline) = self.deadline {
+            deadline.check()?;
+        }
         let deadline = self.deadline;
         tokio::select! {
             biased;

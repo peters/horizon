@@ -11,7 +11,9 @@ pub mod job;
 pub mod run_state;
 pub mod standalone;
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::{Future, poll_fn};
 use std::time::Duration;
 
 use rmcp::{
@@ -287,13 +289,14 @@ async fn execute_steps(
             }
         };
         let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match control.wait(client.call_tool(params)).await {
+        let call = wait_for_action(control, client.call_tool(params)).await;
+        let result = match call.result {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => {
                 steps.push(failed_step(step, format!("MCP call failed: {error}")));
                 break;
             }
-            Err(reason) => return stopped_report(steps, reason),
+            Err(reason) => return stopped_report(steps, reason, call.dispatched),
         };
         let structured = result.structured_content;
         if result.is_error.unwrap_or(false) {
@@ -331,6 +334,26 @@ async fn execute_steps(
     }
 }
 
+struct ControlledAction<T> {
+    result: Result<T, ExecutionStopReason>,
+    dispatched: bool,
+}
+
+async fn wait_for_action<T>(control: &mut ExecutionControl, future: impl Future<Output = T>) -> ControlledAction<T> {
+    let dispatched = Cell::new(false);
+    tokio::pin!(future);
+    let result = control
+        .wait(poll_fn(|context| {
+            dispatched.set(true);
+            future.as_mut().poll(context)
+        }))
+        .await;
+    ControlledAction {
+        result,
+        dispatched: dispatched.get(),
+    }
+}
+
 impl ExecutionReport {
     fn fail_connection(&mut self, error: String) {
         self.ok = false;
@@ -346,13 +369,18 @@ impl ExecutionReport {
     }
 }
 
-fn stopped_report(steps: Vec<StepReport>, reason: ExecutionStopReason) -> ExecutionReport {
+fn stopped_report(steps: Vec<StepReport>, reason: ExecutionStopReason, action_dispatched: bool) -> ExecutionReport {
+    let message = if action_dispatched {
+        reason.in_flight_message()
+    } else {
+        reason.message()
+    };
     ExecutionReport {
         version: PLAN_VERSION,
         ok: false,
         completed_steps: steps.len(),
         steps,
-        error: Some(reason.in_flight_message().to_string()),
+        error: Some(message.to_string()),
         stop_reason: Some(reason),
     }
 }
@@ -533,9 +561,12 @@ fn invalid_reference(step: &PlanStep, reason: &str) -> PlanError {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+
     use serde_json::json;
 
     use super::*;
+    use crate::execution_control::JobDeadline;
 
     fn plan(bytes: &[u8]) -> Plan {
         Plan::from_slice(bytes).expect("valid plan")
@@ -585,6 +616,18 @@ mod tests {
         let indexes = BTreeMap::from([("list".to_string(), 0)]);
         let error = resolve_arguments(&plan.steps[1], &results, &indexes).expect_err("missing pointer");
         assert!(error.contains("did not match"));
+    }
+
+    #[tokio::test]
+    async fn pre_dispatch_deadline_uses_the_phase_neutral_message() {
+        let mut control = ExecutionControl::until(JobDeadline::after(Duration::ZERO));
+
+        let call = wait_for_action(&mut control, pending::<()>()).await;
+        let reason = call.result.expect_err("ready deadline must stop the call");
+        let report = stopped_report(Vec::new(), reason, call.dispatched);
+
+        assert!(!call.dispatched);
+        assert_eq!(report.error.as_deref(), Some(reason.message()));
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {

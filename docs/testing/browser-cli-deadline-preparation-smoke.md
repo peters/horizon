@@ -73,12 +73,14 @@ Run the partial-report deadline test as a second independent lane:
 
 ```bash
 cargo test -p horizon-browser-cli --test cli run_deadline_persists_a_partial_report_and_stable_exit_code -- --exact --nocapture
+cargo test -p horizon-browser-cli --lib tests::pre_dispatch_deadline_uses_the_phase_neutral_message -- --exact --nocapture
 ```
 
 It must prove exit `124`, one completed step, `stop_reason=deadline_exceeded`,
 an in-flight-action warning in the partial report, and terminal `timed_out`
-state even when the requested output cannot be written. The open-stdin lane
-must use the phase-neutral deadline message without that warning.
+state even when the requested output cannot be written. The open-stdin and
+pre-dispatch lanes must use the phase-neutral deadline message without that
+warning; the latter also proves the MCP action future was never polled.
 
 ## Preparation handoff and compatibility
 
