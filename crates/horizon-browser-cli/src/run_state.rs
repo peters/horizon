@@ -230,12 +230,13 @@ fn ensure_private_directory(path: &Path) -> Result<(), RunStateError> {
         .collect();
     for directory in missing.iter().rev() {
         match std::fs::create_dir(directory) {
-            Ok(()) => {}
+            Ok(()) => {
+                secure_directory(directory)?;
+                sync_directory(parent_for_sync(directory))?;
+            }
             Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(source) => return Err(io_error(format!("could not create {}", directory.display()), source)),
         }
-        secure_directory(directory)?;
-        sync_directory(parent_for_sync(directory))?;
     }
     secure_directory(path)
 }
@@ -442,6 +443,26 @@ mod tests {
         assert_eq!(failed.status, RunStatus::Failed);
         assert_eq!(failed.error.as_deref(), Some("adapter unavailable"));
         assert!(failed.report_file.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_traversal_does_not_resecure_an_existing_directory() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).expect("create existing directory");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).expect("set existing permissions");
+
+        ensure_private_directory(&existing.join("missing/../browser-jobs")).expect("create private directory");
+
+        assert_eq!(
+            std::fs::metadata(&existing)
+                .expect("existing directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
     }
 
     #[cfg(unix)]

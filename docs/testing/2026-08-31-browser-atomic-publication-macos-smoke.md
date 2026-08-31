@@ -124,8 +124,9 @@ Confirm from the exact diff that:
 - the staged directory and final job-root rename are synchronized;
 - every newly created parent is synchronized into its parent, with `.` used
   for an empty relative parent;
-- macOS uses the Unix directory-sync path and the Windows implementation uses
-  a safe directory handle with backup semantics;
+- macOS uses the Unix directory-sync path, while the focused Windows CI
+  regression executes publication through the safe backup-semantics directory
+  handle;
 - deadline start time and lifecycle-state semantics are unchanged in this
   prerequisite.
 
