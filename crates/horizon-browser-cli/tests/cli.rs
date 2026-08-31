@@ -1,5 +1,6 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
@@ -31,6 +32,7 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert_eq!(state["job_id"], stdout_report["job_id"]);
     assert_eq!(state["status"], "succeeded");
     assert_eq!(state["execution_timeout_seconds"], 1800);
+    assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
     assert_eq!(
@@ -156,12 +158,51 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
         .expect("decode deadline state");
     assert_eq!(state["status"], "timed_out");
     assert_eq!(state["execution_timeout_seconds"], 1);
+    assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
     let output_dir = root.path().to_str().expect("UTF-8 root");
     let failed_output = run_command(root.path(), ["run", plan, "--timeout", "1", "--output", output_dir]);
     assert_eq!(failed_output.status.code(), Some(124));
     assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+}
+
+#[test]
+fn run_deadline_bounds_open_stdin_before_durable_setup() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", "-", "--timeout", "1"])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdin browser job");
+    let stdin = child.stdin.take().expect("open child stdin");
+
+    let started = Instant::now();
+    let wait_deadline = started + Duration::from_secs(5);
+    loop {
+        if child.try_wait().expect("poll stdin browser job").is_some() {
+            break;
+        }
+        if Instant::now() >= wait_deadline {
+            drop(stdin);
+            child.kill().expect("kill stalled task-owned browser job");
+            child.wait().expect("reap stalled task-owned browser job");
+            panic!("browser job did not enforce its deadline while stdin remained open");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().expect("collect stdin browser job output");
+
+    assert_eq!(output.status.code(), Some(124));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("job deadline exceeded"));
+    assert!(!root.path().join(".horizon/browser-jobs").exists());
 }
 
 #[test]
