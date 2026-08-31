@@ -161,6 +161,7 @@ struct Driver {
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
+    challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
@@ -252,6 +253,9 @@ pub(crate) fn run_webdriver(
             driver.disable_optional_bidi(frame_slot, event_tx);
         }
         driver.tick_firefox_http_response_bodies(event_tx);
+        if let Some(message) = driver.challenge_loop.take_rejection() {
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        }
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
@@ -324,7 +328,7 @@ impl Driver {
             ));
         }
         if let Some(link) = bidi.as_mut()
-            && let Err(error) = subscribe(link)
+            && let Err(error) = subscribe(link, config.browser.backend)
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
                 let path = format!("/session/{session_id}");
@@ -362,6 +366,7 @@ impl Driver {
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
+            challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
@@ -606,6 +611,9 @@ impl Driver {
         {
             self.context_id = Some(context.to_string());
         }
+        if !bidi_event_targets_context(method, params, self.context_id.as_deref()) {
+            return;
+        }
         if method.ends_with("navigationStarted") {
             if consume_pending_history_start(
                 &mut self.pending_classic_history_start,
@@ -846,25 +854,33 @@ fn connect_bidi_with_startup_retry(url: &str, stop_requested: &AtomicBool) -> Re
     }
 }
 
-fn subscribe(link: &mut JsonWsLink) -> Result<(), String> {
+fn subscribe(link: &mut JsonWsLink, backend: BackendKind) -> Result<(), String> {
     link.call(
         COMMAND_TIMEOUT,
         "session.subscribe",
         &json!({
-            "events": [
-                "browsingContext.contextCreated",
-                "browsingContext.contextDestroyed",
-                "browsingContext.navigationStarted",
-                "browsingContext.navigationFailed",
-                "browsingContext.fragmentNavigated",
-                "browsingContext.domContentLoaded",
-                "browsingContext.load"
-            ]
+            "events": base_bidi_events(backend)
         }),
     )
     .result
     .map(|_| ())
     .map_err(|error| error.to_string())
+}
+
+fn base_bidi_events(backend: BackendKind) -> Vec<&'static str> {
+    let mut events = vec![
+        "browsingContext.contextCreated",
+        "browsingContext.contextDestroyed",
+        "browsingContext.navigationStarted",
+        "browsingContext.navigationFailed",
+        "browsingContext.fragmentNavigated",
+        "browsingContext.domContentLoaded",
+        "browsingContext.load",
+    ];
+    if backend == BackendKind::FirefoxBidi {
+        events.push("network.responseStarted");
+    }
+    events
 }
 
 fn install_common_signal_preload(link: &mut JsonWsLink) -> Result<(), String> {
@@ -937,6 +953,14 @@ fn bidi_navigation_failed(method: &str) -> bool {
     method.ends_with("navigationFailed")
 }
 
+fn bidi_event_targets_context(method: &str, params: &Value, context_id: Option<&str>) -> bool {
+    let context_scoped = method.ends_with("navigationStarted")
+        || bidi_navigation_failed(method)
+        || bidi_navigation_complete(method)
+        || method.ends_with("contextDestroyed");
+    !context_scoped || params.get("context").and_then(Value::as_str) == context_id
+}
+
 fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url: Option<&str>, now: Instant) -> bool {
     let Some(pending) = pending.take() else {
         return false;
@@ -947,9 +971,10 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, bidi_navigation_complete,
-        bidi_navigation_failed, capture_is_current, classic_navigation_committed, consume_pending_history_start,
-        new_session_capabilities, parse_new_session_response, safe_session_id, validate_firefox_args,
+        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
+        bidi_navigation_complete, bidi_navigation_failed, capture_is_current, classic_navigation_committed,
+        consume_pending_history_start, new_session_capabilities, parse_new_session_response, safe_session_id,
+        validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -1050,6 +1075,32 @@ mod tests {
         assert!(bidi_navigation_complete("browsingContext.domContentLoaded"));
         assert!(bidi_navigation_complete("browsingContext.fragmentNavigated"));
         assert!(!bidi_navigation_complete("browsingContext.navigationStarted"));
+    }
+
+    #[test]
+    fn bidi_navigation_events_only_mutate_the_bound_top_level_context() {
+        let top = Some("top");
+        assert!(bidi_event_targets_context(
+            "browsingContext.navigationStarted",
+            &serde_json::json!({ "context": "top" }),
+            top,
+        ));
+        assert!(!bidi_event_targets_context(
+            "browsingContext.domContentLoaded",
+            &serde_json::json!({ "context": "challenge-iframe" }),
+            top,
+        ));
+        assert!(bidi_event_targets_context(
+            "network.responseStarted",
+            &serde_json::json!({ "context": "challenge-iframe" }),
+            top,
+        ));
+    }
+
+    #[test]
+    fn firefox_baseline_observes_responses_without_enabling_safari_network_events() {
+        assert!(base_bidi_events(BackendKind::FirefoxBidi).contains(&"network.responseStarted"));
+        assert!(!base_bidi_events(BackendKind::SafariWebDriver).contains(&"network.responseStarted"));
     }
 
     #[test]

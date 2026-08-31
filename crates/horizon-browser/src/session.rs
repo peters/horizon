@@ -313,6 +313,9 @@ fn run_loop(
         // loading-finished event. Keep each pass bounded so network traffic
         // cannot starve input, frames, or coordination.
         state.tick_http_response_bodies(link, event_tx, frame_slot);
+        if let Some(message) = state.challenge_loop.take_rejection() {
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        }
 
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).
@@ -462,6 +465,7 @@ struct DriverState {
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
+    challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
     pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
     http_body_evidence: http_bodies::HttpBodyEvidenceTable,
@@ -517,6 +521,7 @@ impl DriverState {
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
+            challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
             pending_http_bodies: VecDeque::new(),
             http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),

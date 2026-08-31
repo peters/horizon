@@ -31,6 +31,7 @@ impl DriverState {
         match coordination.acknowledge_handoff(&self.config.panel_local_id, request_id) {
             Ok(true) => {
                 self.handoff_seen = None;
+                self.challenge_loop.handoff_completed();
                 let _ = event_tx.send(BrowserEvent::HandoffCleared);
             }
             Ok(false) => {

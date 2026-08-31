@@ -68,19 +68,6 @@ impl DriverState {
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
                 self.flush_http_response_bodies(link, event_tx, frame_slot);
-                if self.network.is_active()
-                    && let Some(session) = self.session_id.clone()
-                    && let Err(error) = self.call_and_ack(
-                        link,
-                        event_tx,
-                        frame_slot,
-                        "Network.disable",
-                        &serde_json::json!({}),
-                        Some(session.as_str()),
-                    )
-                {
-                    tracing::warn!(target: "browser", "Chromium network disable failed before capture flush: {error}");
-                }
                 self.network.stop()?
             }
         };
@@ -117,6 +104,7 @@ impl DriverState {
     }
 
     pub(super) fn handle_network_event(&mut self, event: &CdpEvent<'_>) {
+        self.observe_challenge_response(event);
         if !self.network.is_active() {
             return;
         }
@@ -162,6 +150,28 @@ impl DriverState {
             }
             _ => {}
         }
+    }
+
+    fn observe_challenge_response(&mut self, event: &CdpEvent<'_>) {
+        if event.method != "Network.responseReceived"
+            || string_at(event.params, "/type") != Some("Document")
+            || self.main_frame_id.as_deref().is_some_and(|frame_id| {
+                string_at(event.params, "/frameId").is_some_and(|response_frame| response_frame != frame_id)
+            })
+        {
+            return;
+        }
+        let Some(url) = string_at(event.params, "/response/url") else {
+            return;
+        };
+        self.challenge_loop.observe_document_response(
+            url,
+            u16_at(event.params, "/response/status"),
+            event
+                .params
+                .pointer("/response/headers")
+                .unwrap_or(&serde_json::Value::Null),
+        );
     }
 
     fn handle_http_network_event(&mut self, event: &CdpEvent<'_>) -> bool {

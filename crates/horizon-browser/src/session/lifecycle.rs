@@ -49,6 +49,10 @@ impl DriverState {
                 serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
             ),
             ("Page.enable", serde_json::json!({})),
+            // Observe only top-level response metadata so a completed user
+            // handoff can report a repeated Cloudflare challenge. No headers
+            // or bodies leave the browser engine through this path.
+            ("Network.enable", serde_json::json!({})),
             ("Runtime.enable", serde_json::json!({})),
         ];
         for (method, params) in initial_setup_commands {

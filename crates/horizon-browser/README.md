@@ -42,12 +42,14 @@ before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Firefox installs the same narrow value shim with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation; startup fails instead
 of silently downgrading when that required BiDi command is rejected.
+Chromium panels also use a reserved nonzero loopback DevTools port so Chromium
+does not enable its port-zero `AutomationControlled` behavior. Callers that
+need the browser's unmodified behavior can select
+`AutomationDisclosurePolicy::BrowserDefault` on any backend.
 
 Safari's public automation surface cannot currently establish the same
 pre-document contract, so an active Safari session reports
-`AutomationDisclosureStatus::UnsupportedByBackend`. Callers that need the
-browser's unmodified behavior can select
-`AutomationDisclosurePolicy::BrowserDefault` on any backend.
+`AutomationDisclosureStatus::UnsupportedByBackend`.
 
 This policy minimizes a small set of common script-visible disclosures; it is
 not an undetectability or anti-bot guarantee. Pages can still infer automation

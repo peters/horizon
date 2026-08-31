@@ -4,6 +4,7 @@ mod control;
 
 #[cfg(any(windows, test))]
 use std::ffi::OsString;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::Child;
@@ -91,7 +92,16 @@ impl ChromeProcess {
     pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
         let command = resolve_binary(&launch.command)?;
         prepare_profile_dir(&launch.profile_dir)?;
-        let args = launch_args(launch)?;
+        // Chromium treats `--remote-debugging-port=0` as an automation signal.
+        // Reserve a concrete loopback port so visible panels avoid that
+        // additional port-zero marker.
+        let devtools_listener =
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| devtools_port_error(&error))?;
+        let devtools_port = devtools_listener
+            .local_addr()
+            .map_err(|error| devtools_port_error(&error))?
+            .port();
+        let args = launch_args(launch, devtools_port)?;
 
         let mut command = Command::new(command);
         command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -103,6 +113,7 @@ impl ChromeProcess {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
+        drop(devtools_listener);
         let mut child = spawn_process(command)?;
         let Some(stderr) = take_stderr(&mut child) else {
             let _ = kill_and_reap(&mut child, Duration::from_secs(3));
@@ -243,11 +254,17 @@ fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn launch_args(launch: &ChromeLaunch) -> Result<Vec<String>> {
+fn devtools_port_error(error: &std::io::Error) -> ChromeError {
+    ChromeError::Spawn(std::io::Error::new(
+        error.kind(),
+        format!("failed to reserve a loopback Chrome DevTools port: {error}"),
+    ))
+}
+
+fn launch_args(launch: &ChromeLaunch, devtools_port: u16) -> Result<Vec<String>> {
     validate_extra_args(&launch.extra_args, launch.automation_disclosure)?;
     let mut args = vec![
-        // Port 0: the OS picks a free port; we learn it from stderr.
-        "--remote-debugging-port=0".to_string(),
+        format!("--remote-debugging-port={devtools_port}"),
         "--remote-debugging-address=127.0.0.1".to_string(),
         format!("--user-data-dir={}", launch.profile_dir.display()),
         "--no-first-run".to_string(),
@@ -841,7 +858,7 @@ mod tests {
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::MinimizeCommonSignals,
         };
-        let args = launch_args(&launch).unwrap_or_default();
+        let args = launch_args(&launch, 49_152).unwrap_or_default();
 
         assert!(args.iter().any(|argument| argument == "--headless=new"));
         assert!(!args.iter().any(|argument| argument == "--disable-gpu"));
@@ -853,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_launch_omits_the_headless_switch() {
+    fn visible_launch_omits_headless_and_uses_an_explicit_devtools_port() {
         let launch = ChromeLaunch {
             command: "chrome".to_string(),
             profile_dir: PathBuf::from("profile"),
@@ -863,13 +880,11 @@ mod tests {
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };
+        let args = launch_args(&launch, 49_152).unwrap_or_default();
 
-        assert!(
-            !launch_args(&launch)
-                .unwrap_or_default()
-                .iter()
-                .any(|argument| argument == "--headless=new")
-        );
+        assert!(!args.iter().any(|argument| argument == "--headless=new"));
+        assert!(args.iter().any(|argument| argument == "--remote-debugging-port=49152"));
+        assert!(!args.iter().any(|argument| argument == "--remote-debugging-port=0"));
     }
 
     #[test]
@@ -883,7 +898,7 @@ mod tests {
             extra_args: vec!["--enable-blink-features=ExperimentalFoo".to_string()],
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };
-        let args = launch_args(&launch).unwrap_or_default();
+        let args = launch_args(&launch, 49_152).unwrap_or_default();
 
         assert!(
             args.iter()
