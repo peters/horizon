@@ -154,7 +154,7 @@ impl DurableRun {
         write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")?;
         write_private_json(&staging.path().join(STATE_FILE), &state, "state")?;
         sync_directory(staging.path())?;
-        publish_job_directory(staging.path(), &directory, root)?;
+        publish_job_directory(staging, &directory, root)?;
         Ok(Self {
             state_path: directory.join(STATE_FILE),
             directory,
@@ -238,6 +238,14 @@ fn ensure_private_directory(path: &Path) -> Result<(), RunStateError> {
             Err(source) => return Err(io_error(format!("could not create {}", directory.display()), source)),
         }
     }
+    let metadata =
+        std::fs::metadata(path).map_err(|source| io_error(format!("could not inspect {}", path.display()), source))?;
+    if !metadata.is_dir() {
+        return Err(io_error(
+            format!("{} is not a directory", path.display()),
+            std::io::Error::from(std::io::ErrorKind::NotADirectory),
+        ));
+    }
     secure_directory(path)
 }
 
@@ -247,13 +255,14 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn publish_job_directory(staging: &Path, destination: &Path, root: &Path) -> Result<(), RunStateError> {
-    std::fs::rename(staging, destination).map_err(|source| {
+fn publish_job_directory(staging: tempfile::TempDir, destination: &Path, root: &Path) -> Result<(), RunStateError> {
+    std::fs::rename(staging.path(), destination).map_err(|source| {
         io_error(
             format!("could not publish durable job {}", destination.display()),
             source,
         )
     })?;
+    let _published_path = staging.keep();
     sync_directory(root)
 }
 
@@ -462,6 +471,53 @@ mod tests {
                 .mode()
                 & 0o777,
             0o755
+        );
+    }
+
+    #[test]
+    fn existing_file_is_rejected_without_mutation() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let file = root.path().join("browser-jobs");
+        std::fs::write(&file, b"keep me").expect("write existing file");
+        #[cfg(unix)]
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("set existing file permissions");
+
+        let error = ensure_private_directory(&file).expect_err("reject file job root");
+
+        assert!(matches!(
+            error,
+            RunStateError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotADirectory
+        ));
+        assert_eq!(std::fs::read(&file).expect("read existing file"), b"keep me");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&file)
+                .expect("existing file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn published_staging_name_can_be_reused_without_cleanup() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let staging = tempfile::Builder::new()
+            .prefix(".preparing-")
+            .tempdir_in(root.path())
+            .expect("stage job");
+        let staging_path = staging.path().to_path_buf();
+        let destination = root.path().join("job-published");
+
+        publish_job_directory(staging, &destination, root.path()).expect("publish job");
+        std::fs::create_dir(&staging_path).expect("reuse staging name");
+        std::fs::write(staging_path.join("sentinel"), b"keep me").expect("write sentinel");
+
+        assert!(destination.is_dir());
+        assert_eq!(
+            std::fs::read(staging_path.join("sentinel")).expect("read sentinel"),
+            b"keep me"
         );
     }
 
