@@ -689,7 +689,7 @@ impl HorizonApp {
             self.detach_workspace(workspace_id);
         }
         if let Some(workspace_id) = actions.reattach_workspace {
-            self.reattach_workspace(workspace_id);
+            self.reattach_workspace(ctx, workspace_id);
         }
 
         if let Some(panel_id) = actions.close_panel {

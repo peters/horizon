@@ -88,10 +88,11 @@ pub(super) fn align_attached_workspaces(
 }
 
 impl HorizonApp {
-    pub(in crate::app) fn align_attached_workspaces_horizontally(&mut self, ctx: &egui::Context) {
-        let Some(alignment) = align_attached_workspaces(&mut self.board, &self.detached_workspaces) else {
-            return;
-        };
+    pub(in crate::app) fn align_attached_workspaces_horizontally(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Option<WorkspaceAlignment> {
+        let alignment = align_attached_workspaces(&mut self.board, &self.detached_workspaces)?;
 
         if let Some((min, max)) = self.board.workspace_bounds(alignment.leftmost_workspace) {
             self.focus_workspace_bounds(ctx, min, max, true);
@@ -99,6 +100,7 @@ impl HorizonApp {
         if alignment.positions_changed {
             self.mark_runtime_dirty();
         }
+        Some(alignment)
     }
 }
 
