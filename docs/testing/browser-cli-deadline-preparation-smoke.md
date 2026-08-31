@@ -76,7 +76,9 @@ cargo test -p horizon-browser-cli --test cli run_deadline_persists_a_partial_rep
 ```
 
 It must prove exit `124`, one completed step, `stop_reason=deadline_exceeded`,
-and terminal `timed_out` state even when the requested output cannot be written.
+an in-flight-action warning in the partial report, and terminal `timed_out`
+state even when the requested output cannot be written. The open-stdin lane
+must use the phase-neutral deadline message without that warning.
 
 ## Preparation handoff and compatibility
 

@@ -84,6 +84,7 @@ pub struct DurableExecutionReport<'a> {
 }
 
 /// Owner of the private files for one deterministic plan run.
+#[derive(Debug)]
 pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
@@ -108,18 +109,49 @@ pub enum RunStateError {
     },
 }
 
+/// A setup failure that may retain a conservative run for caller-owned failure publication.
+#[derive(Debug, Error)]
+#[error("{source}")]
+pub struct DurablePreparationError {
+    #[source]
+    source: RunStateError,
+    run: Option<Box<DurableRun>>,
+}
+
+impl DurablePreparationError {
+    fn with_run(run: DurableRun, source: RunStateError) -> Self {
+        Self {
+            source,
+            run: Some(Box::new(run)),
+        }
+    }
+
+    /// Separate the partial durable run from its setup failure.
+    #[must_use]
+    pub fn into_parts(self) -> (Option<DurableRun>, RunStateError) {
+        (self.run.map(|run| *run), self.source)
+    }
+}
+
+impl From<RunStateError> for DurablePreparationError {
+    fn from(source: RunStateError) -> Self {
+        Self { source, run: None }
+    }
+}
+
 impl DurableRun {
     /// Prepare a private job directory with a conservative timed-out state and
     /// a fully synced running state that only the caller can activate.
     ///
     /// # Errors
-    /// Returns when the private directory or either initial artifact cannot be
-    /// created durably.
+    /// Returns when the private directory or an initial artifact cannot be
+    /// created durably. Failures after job creation retain the partial run so
+    /// the deadline-owning caller can publish `failed`.
     pub fn prepare(
         plan: &Plan,
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
-    ) -> Result<Self, RunStateError> {
+    ) -> Result<Self, DurablePreparationError> {
         let root = HorizonHome::resolve().root().join("browser-jobs");
         Self::prepare_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
     }
@@ -141,7 +173,7 @@ impl DurableRun {
         plan: &Plan,
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
-    ) -> Result<Self, RunStateError> {
+    ) -> Result<Self, DurablePreparationError> {
         ensure_private_directory(root)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
@@ -163,7 +195,7 @@ impl DurableRun {
             plan_file: PLAN_FILE.to_string(),
             report_file: None,
             completed_steps: 0,
-            error: Some(ExecutionStopReason::MESSAGE.to_string()),
+            error: Some(ExecutionStopReason::DeadlineExceeded.message().to_string()),
         };
         let mut run = Self {
             directory: staging.path().to_path_buf(),
@@ -175,15 +207,24 @@ impl DurableRun {
         run.persist_state()?;
         run.stage_activation()?;
         sync_directory(staging.path())?;
-        publish_job_directory(staging, &directory)?;
-        run.directory = directory;
-        run.state_path = run.directory.join(STATE_FILE);
-        run.activation_path = run
+        let activation_name = run
             .activation_path
             .as_ref()
             .and_then(|path| path.file_name())
-            .map(|name| run.directory.join(name));
-        sync_directory(root)?;
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                io_error(
+                    "durable job has no staged activation".to_string(),
+                    std::io::Error::other("activation staging did not return a path"),
+                )
+            })?;
+        publish_job_directory(staging, &directory)?;
+        run.directory = directory;
+        run.state_path = run.directory.join(STATE_FILE);
+        run.activation_path = Some(run.directory.join(activation_name));
+        if let Err(source) = sync_directory(root) {
+            return Err(DurablePreparationError::with_run(run, source));
+        }
         Ok(run)
     }
 
@@ -258,7 +299,7 @@ impl DurableRun {
     pub fn stop(&mut self, _reason: ExecutionStopReason) -> Result<(), RunStateError> {
         self.state.status = RunStatus::TimedOut;
         self.state.updated_at_millis = now_millis();
-        self.state.error = Some(ExecutionStopReason::MESSAGE.to_string());
+        self.state.error = Some(ExecutionStopReason::DeadlineExceeded.message().to_string());
         self.persist_state()
     }
 
@@ -446,7 +487,10 @@ mod tests {
         let prepared: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("prepared state"))
             .expect("decode prepared state");
         assert_eq!(prepared.status, RunStatus::TimedOut);
-        assert_eq!(prepared.error.as_deref(), Some(ExecutionStopReason::MESSAGE));
+        assert_eq!(
+            prepared.error.as_deref(),
+            Some(ExecutionStopReason::DeadlineExceeded.message())
+        );
 
         run.activate().expect("activate durable run");
         let running: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("running state"))
@@ -569,6 +613,32 @@ mod tests {
         assert_eq!(failed.status, RunStatus::Failed);
         assert_eq!(failed.error.as_deref(), Some("adapter unavailable"));
         assert!(failed.report_file.is_none());
+    }
+
+    #[test]
+    fn known_preparation_failure_retains_a_run_for_failed_publication() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare durable run");
+        let failure = DurablePreparationError::with_run(
+            run,
+            io_error(
+                "could not finish preparation".to_string(),
+                std::io::Error::other("synthetic setup failure"),
+            ),
+        );
+        let (run, source) = failure.into_parts();
+        let mut run = run.expect("partial durable run");
+        run.fail(&source.to_string()).expect("publish failed state");
+
+        let failed: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("failed state"))
+            .expect("decode failed state");
+        assert_eq!(failed.status, RunStatus::Failed);
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("synthetic setup failure"))
+        );
     }
 
     #[cfg(unix)]

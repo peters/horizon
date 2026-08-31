@@ -14,8 +14,21 @@ pub enum ExecutionStopReason {
 }
 
 impl ExecutionStopReason {
-    /// Stable operator-facing description of this stop condition.
-    pub const MESSAGE: &'static str = "job deadline exceeded; an in-flight browser action may still complete";
+    /// Stable phase-neutral description of this stop condition.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::DeadlineExceeded => "job deadline exceeded",
+        }
+    }
+
+    /// Description used only after a browser action has been dispatched.
+    #[must_use]
+    pub const fn in_flight_message(self) -> &'static str {
+        match self {
+            Self::DeadlineExceeded => "job deadline exceeded; an in-flight browser action may still complete",
+        }
+    }
 }
 
 /// One deadline represented for monotonic enforcement and durable diagnostics.
