@@ -9,7 +9,6 @@ use egui::{
 use horizon_core::browser::{
     BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState, normalize_navigation_target,
 };
-use url::Url;
 
 use crate::browser_widget::BrowserUiState;
 use crate::theme;
@@ -176,12 +175,8 @@ fn url_bar(
 ) -> (bool, bool) {
     let id = ui.make_persistent_id(("browser-url-bar", panel_id));
     let was_focused = ui.memory(|memory| memory.focused() == Some(id));
-    refresh_compact_url(state, browser.display_url());
     // Keep the buffer in sync with the live URL while unfocused.
-    if !was_focused && state.url_buffer != state.compact_url {
-        state.url_buffer.clear();
-        state.url_buffer.push_str(&state.compact_url);
-    }
+    sync_url_buffer(&mut state.url_buffer, browser.display_url(), was_focused);
     let response = ui.add_enabled(
         interactive,
         TextEdit::singleline(&mut state.url_buffer)
@@ -190,12 +185,10 @@ fn url_bar(
             .desired_width(max_width)
             .font(egui::FontId::monospace(11.5)),
     );
-    // Match native browser chrome: the compact, scheme-less form is for
-    // passive display only. Reveal the canonical URL when the user focuses
-    // the field so security-sensitive details remain directly inspectable.
+    // Focusing selects the stable canonical URL without rewriting it. Page
+    // interaction can move focus away from the field, and that transition
+    // must not make scrolling look like navigation.
     if response.gained_focus() && !response.changed() {
-        state.url_buffer.clear();
-        state.url_buffer.push_str(browser.display_url());
         let mut edit_state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         edit_state.cursor.set_char_range(Some(CCursorRange::two(
             CCursor::default(),
@@ -224,37 +217,14 @@ fn url_bar(
     (response.has_focus() || submitted, response.clicked())
 }
 
-fn refresh_compact_url(state: &mut BrowserUiState, canonical_url: &str) -> bool {
-    if state.compact_url_source == canonical_url {
+fn sync_url_buffer(url_buffer: &mut String, canonical_url: &str, was_focused: bool) -> bool {
+    if was_focused || url_buffer == canonical_url {
         return false;
     }
 
-    state.compact_url.clear();
-    state.compact_url.push_str(compact_address_bar_url(canonical_url));
-    state.compact_url_source.clear();
-    state.compact_url_source.push_str(canonical_url);
+    url_buffer.clear();
+    url_buffer.push_str(canonical_url);
     true
-}
-
-fn compact_address_bar_url(url: &str) -> &str {
-    let Some(compact) = url.strip_prefix("https://") else {
-        return url;
-    };
-    let authority_end = compact.find(['/', '?', '#']).unwrap_or(compact.len());
-    if authority_end == 0 {
-        return url;
-    }
-    let Ok(parsed) = Url::parse(url) else {
-        return url;
-    };
-    if parsed.host_str().is_none_or(str::is_empty) {
-        return url;
-    }
-    if parsed.path() == "/" && parsed.query().is_none() && parsed.fragment().is_none() {
-        compact.strip_suffix('/').unwrap_or(compact)
-    } else {
-        compact
-    }
 }
 
 /// The chip's label and color, or `None` when neither an agent owner nor a
@@ -326,57 +296,22 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_address_bar_url, nav_widget_info, refresh_compact_url};
-    use crate::browser_widget::BrowserUiState;
+    use super::{nav_widget_info, sync_url_buffer};
 
     #[test]
-    fn unfocused_address_bar_compacts_secure_urls() {
-        assert_eq!(
-            compact_address_bar_url("https://example.com/path?q=1#result"),
-            "example.com/path?q=1#result"
-        );
-        assert_eq!(compact_address_bar_url("https://example.com/"), "example.com");
-        assert_eq!(
-            compact_address_bar_url("https://example.com/path/"),
-            "example.com/path/"
-        );
-        assert_eq!(compact_address_bar_url("https://example.com?q=/"), "example.com?q=/");
-        assert_eq!(compact_address_bar_url("https://example.com#/"), "example.com#/");
-        assert_eq!(compact_address_bar_url("https://example.com/?q=1"), "example.com/?q=1");
-        assert_eq!(
-            compact_address_bar_url("http://example.com/path"),
-            "http://example.com/path"
-        );
-        assert_eq!(compact_address_bar_url("about:blank"), "about:blank");
-        assert_eq!(
-            compact_address_bar_url("file:///tmp/page.html"),
-            "file:///tmp/page.html"
-        );
-        assert_eq!(compact_address_bar_url(""), "");
-        assert_eq!(
-            compact_address_bar_url("https:///missing-host"),
-            "https:///missing-host"
-        );
-        assert_eq!(compact_address_bar_url("https://user@/"), "https://user@/");
-        assert_eq!(compact_address_bar_url("https://:443/"), "https://:443/");
-        assert_eq!(
-            compact_address_bar_url("https://?q=missing-host"),
-            "https://?q=missing-host"
-        );
-    }
+    fn address_bar_focus_transition_preserves_the_displayed_url() {
+        let mut buffer = String::new();
+        let original = "https://example.com/path?q=1#result";
 
-    #[test]
-    fn compact_url_cache_refreshes_only_when_the_canonical_url_changes() {
-        let mut state = BrowserUiState::default();
+        assert!(sync_url_buffer(&mut buffer, original, false));
+        assert_eq!(buffer, original);
+        assert!(!sync_url_buffer(&mut buffer, original, true));
+        assert!(!sync_url_buffer(&mut buffer, original, false));
+        assert_eq!(buffer, original);
 
-        assert!(refresh_compact_url(&mut state, "https://example.com/"));
-        assert_eq!(state.compact_url_source, "https://example.com/");
-        assert_eq!(state.compact_url, "example.com");
-        assert!(!refresh_compact_url(&mut state, "https://example.com/"));
-
-        assert!(refresh_compact_url(&mut state, "http://example.com/"));
-        assert_eq!(state.compact_url_source, "http://example.com/");
-        assert_eq!(state.compact_url, "http://example.com/");
+        let navigated = "https://example.com/next";
+        assert!(sync_url_buffer(&mut buffer, navigated, false));
+        assert_eq!(buffer, navigated);
     }
 
     #[test]

@@ -55,13 +55,8 @@ pub struct BrowserUiState {
     captured_clicks: [Option<BrowserPointerClick>; 3],
     /// Most recent completed click, used to identify double/triple clicks.
     last_click: Option<BrowserPointerClick>,
-    /// URL bar buffer (follows the panel URL while unfocused).
+    /// Canonical URL bar buffer (follows the panel URL while unfocused).
     url_buffer: String,
-    /// Canonical URL that produced `compact_url`. Comparing this stable key on
-    /// each frame keeps URL parsing out of pointer-only redraws.
-    compact_url_source: String,
-    /// Validated scheme-less HTTPS form for passive address-bar display.
-    compact_url: String,
     /// Enter submitted in the URL bar; its later key-up must not leak to the
     /// previously focused page element after the text edit drops focus.
     url_submit_enter_pending: bool,
