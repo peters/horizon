@@ -20,7 +20,8 @@ use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, now_millis, read_at, update_at,
+    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis,
+    read_at, update_at,
 };
 use crate::horizon_home::HorizonHome;
 
@@ -228,12 +229,16 @@ fn publish_requested_panel_at(
     super::agent::validate_actor(owner.actor)?;
     let now = now_millis();
     let mut outcome = Ok(());
-    update_at(path, panel_local_id, |manifest| {
+    mutate_at(path, panel_local_id, false, |manifest| {
         outcome = stamp_and_claim(manifest, !visible, workspace, owner, now);
+        outcome.is_ok()
     })?;
     outcome
 }
 
+/// Validate the driver host, the requester's membership in the proposed
+/// stamp, and the lease before mutating anything, so a refused request leaves
+/// presentation, placement, and ownership untouched.
 fn stamp_and_claim(
     manifest: &mut BrowserManifest,
     hidden: bool,
@@ -242,8 +247,22 @@ fn stamp_and_claim(
     now: i64,
 ) -> std::io::Result<()> {
     require_driver_host(manifest, workspace)?;
+    if owner.workspace_scoped() && !workspace.authorizes(owner) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            OUTSIDE_WORKSPACE_MESSAGE,
+        ));
+    }
+    if manifest
+        .live_owner(now)
+        .is_some_and(|current| current.name != owner.actor)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panel already has another live owner",
+        ));
+    }
     stamp(manifest, hidden, workspace, now);
-    permit(manifest, owner)?;
     if super::agent::try_claim_owner(manifest, owner.actor, None, now) {
         Ok(())
     } else {

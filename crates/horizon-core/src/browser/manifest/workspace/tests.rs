@@ -213,7 +213,13 @@ fn requested_panels_are_stamped_and_claimed_in_one_transaction() {
         .to_string(),
         OUTSIDE_WORKSPACE_MESSAGE
     );
-    assert!(read_at(&path).expect("read").owner.is_none());
+    let untouched = read_at(&path).expect("read");
+    assert!(untouched.owner.is_none());
+    assert!(
+        untouched.workspace.is_none(),
+        "a refused request must not stamp the panel"
+    );
+    assert!(!untouched.hidden, "a refused request must not change visibility");
 
     publish_requested_panel_at(&path, "panel", false, &workspace, member()).expect("stamp and claim");
     let published = read_at(&path).expect("read published");
@@ -236,6 +242,16 @@ fn requested_panels_are_stamped_and_claimed_in_one_transaction() {
         .expect_err("a live owner blocks a second requester")
         .to_string(),
         "browser panel already has another live owner"
+    );
+    let still_published = read_at(&path).expect("read after refusal");
+    assert!(
+        still_published.hidden,
+        "a refused second requester must not change visibility"
+    );
+    assert_eq!(still_published.workspace.as_ref(), Some(&workspace));
+    assert_eq!(
+        still_published.owner.as_ref().map(|owner| owner.name.as_str()),
+        Some("horizon:agent-a")
     );
     assert_eq!(
         publish_requested_panel_at(

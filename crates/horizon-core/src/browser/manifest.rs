@@ -475,8 +475,11 @@ fn remove_owned_at_with_timeout(
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
-    if read_at(path).is_some_and(|manifest| manifest.host.is_some_and(|owner| owner != host)) {
-        tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest adopted by another host");
+    // Only a present manifest that names this host proves ownership; a
+    // missing file or a host-less manifest written by an older Horizon that
+    // adopted the id is left untouched, results included.
+    if !read_at(path).is_some_and(|manifest| manifest.host.as_deref() == Some(host)) {
+        tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
         return Ok(false);
     }
     prune_owned_storage()?;
@@ -1148,7 +1151,10 @@ mod tests {
         );
         assert_eq!(pruned, 1, "the owning host prunes under the same lock");
         assert!(!path.exists());
-        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), || Ok(())).unwrap());
+        assert!(
+            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), || Ok(())).unwrap(),
+            "a missing manifest proves nothing, so teardown prunes nothing"
+        );
         assert_eq!(
             with_owned_manifest_at(&path, "host-a", || Ok(()))
                 .expect_err("a missing manifest is not proof of ownership")
@@ -1158,10 +1164,10 @@ mod tests {
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
-        assert!(remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), || Ok(())).unwrap());
+        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), || Ok(())).unwrap());
         assert!(
-            !legacy.exists(),
-            "a manifest without a recorded host is removable at teardown"
+            legacy.exists(),
+            "a host-less manifest may belong to an older Horizon that adopted the id, so teardown leaves it"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
