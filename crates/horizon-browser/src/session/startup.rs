@@ -17,6 +17,8 @@ use super::{
 };
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
+const DEVTOOLS_PORT_REAP_FAILURE: &str =
+    "failed to reap Chromium after a DevTools-port conflict; aborting retry to preserve exact process ownership";
 
 /// Settles process registration and resolves the driver's teardown signal
 /// exactly once, on thread exit.
@@ -122,12 +124,12 @@ fn start_chrome(
                 return Ok(None);
             }
             Err(error) if error.is_devtools_port_conflict() && attempt < DEVTOOLS_PORT_STARTUP_ATTEMPTS => {
+                require_reaped_before_port_retry(chrome.kill())?;
                 tracing::warn!(
                     attempt,
                     max_attempts = DEVTOOLS_PORT_STARTUP_ATTEMPTS,
                     "Chromium DevTools port handoff collided; retrying with a fresh reservation"
                 );
-                let _ = chrome.kill();
             }
             Err(error) => {
                 let _ = chrome.kill();
@@ -136,6 +138,14 @@ fn start_chrome(
         }
     }
     Err("Chromium exhausted its bounded DevTools-port startup attempts".to_string())
+}
+
+fn require_reaped_before_port_retry(reaped: bool) -> Result<(), &'static str> {
+    if reaped {
+        Ok(())
+    } else {
+        Err(DEVTOOLS_PORT_REAP_FAILURE)
+    }
 }
 
 fn initialize_target(
@@ -451,7 +461,9 @@ mod tests {
     use crate::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::{first_available_page_target_id, profile_dir};
+    use super::{
+        DEVTOOLS_PORT_REAP_FAILURE, first_available_page_target_id, profile_dir, require_reaped_before_port_retry,
+    };
 
     #[test]
     fn target_selection_skips_attached_pages() {
@@ -465,6 +477,12 @@ mod tests {
             first_available_page_target_id(targets.as_array().expect("target list")),
             Some("available")
         );
+    }
+
+    #[test]
+    fn devtools_port_retry_requires_the_conflicted_child_to_be_reaped() {
+        assert!(require_reaped_before_port_retry(true).is_ok());
+        assert_eq!(require_reaped_before_port_retry(false), Err(DEVTOOLS_PORT_REAP_FAILURE));
     }
 
     #[test]
