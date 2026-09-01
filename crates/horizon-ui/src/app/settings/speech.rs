@@ -92,8 +92,6 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     if !config.features.speech.enabled {
         return changed;
     }
-    let grid_columns = speech_grid_columns(ui.available_width());
-
     ui.add_space(6.0);
     changed |= ui
         .checkbox(
@@ -115,7 +113,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     // them here only for the profiles layout, which returns early.
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_shared_grid")
-        .num_columns(grid_columns)
+        .num_columns(2)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             changed |= speech_microphone_row(ui, config);
@@ -131,11 +129,12 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     // and validates on save).
     if !config.features.speech.profiles.is_empty() {
         egui::Grid::new("settings_speech_profiles_grid")
-            .num_columns(grid_columns)
+            .num_columns(2)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
                 for index in 0..config.features.speech.profiles.len() {
                     changed |= render_hotkey_binder_slot(ui, config, Some(index));
+                    stack_speech_field(ui);
                     let profile = &config.features.speech.profiles[index];
                     let model_name = std::path::Path::new(&profile.model)
                         .file_name()
@@ -169,7 +168,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
 
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_grid")
-        .num_columns(grid_columns)
+        .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
             changed |= speech_model_rows(ui, config, &model_info_state);
@@ -178,6 +177,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             changed |= speech_backend_row(ui, config);
 
             ui.label(egui::RichText::new("Push-to-talk").color(theme::FG_SOFT()).size(12.0));
+            stack_speech_field(ui);
             changed |= render_hotkey_binder(ui, config);
             ui.end_row();
 
@@ -187,8 +187,18 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     changed
 }
 
-fn speech_grid_columns(available_width: f32) -> usize {
-    usize::from(available_width >= STACKED_SPEECH_GRID_MAX_WIDTH) + 1
+fn visible_available_width(ui: &Ui) -> f32 {
+    (ui.clip_rect().right() - ui.cursor().left()).max(0.0)
+}
+
+fn speech_settings_stacked(visible_width: f32) -> bool {
+    visible_width < STACKED_SPEECH_GRID_MAX_WIDTH
+}
+
+fn stack_speech_field(ui: &mut Ui) {
+    if speech_settings_stacked(ui.clip_rect().width()) {
+        ui.end_row();
+    }
 }
 
 const fn desktop_injection_copy() -> &'static str {
@@ -224,6 +234,7 @@ fn speech_hotkey_mode_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     let speech = &mut config.features.speech;
     ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
         .selected_text(match speech.hotkey_mode {
             SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
@@ -290,8 +301,9 @@ fn input_device_names_equal(left: &str, right: &str) -> bool {
 fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Microphone").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     ui.horizontal(|ui| {
-        let picker_width = (ui.available_width() - 36.0).clamp(120.0, 240.0);
+        let picker_width = (visible_available_width(ui) - 36.0).clamp(120.0, 240.0);
         let devices = input_device_list(ui);
         let current = config.features.speech.input_device.trim().to_string();
         let selected = if current.is_empty() {
@@ -344,15 +356,17 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
 fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: &SpeechModelInfoState) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     changed |= ui
         .add(
             egui::TextEdit::singleline(&mut config.features.speech.model)
-                .desired_width(ui.available_width().min(260.0)),
+                .desired_width(visible_available_width(ui).min(260.0)),
         )
         .changed();
     ui.end_row();
 
     ui.label(String::new());
+    stack_speech_field(ui);
     match model_info {
         SpeechModelInfoState::Available(info) => super::dim_label(
             ui,
@@ -382,6 +396,7 @@ fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Spe
             .color(theme::FG_SOFT())
             .size(12.0),
     );
+    stack_speech_field(ui);
     match model_info {
         Some(info) if !info.languages.is_empty() => {
             // A model that forbids auto-detect needs an explicit source; if
@@ -430,6 +445,7 @@ fn speech_output_row(
 ) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     let targets: Vec<String> = if model_info_pending {
         match config.features.speech.task {
             SpeechTask::Transcribe => Vec::new(),
@@ -465,7 +481,7 @@ fn speech_output_row(
         SpeechTask::Translate => format!("Translate to {}", config.features.speech.target_language),
     };
     egui::ComboBox::from_id_salt("settings_speech_output")
-        .width(ui.available_width().min(260.0))
+        .width(visible_available_width(ui).min(260.0))
         .selected_text(selected)
         .show_ui(ui, |ui| {
             changed |= ui
@@ -497,6 +513,7 @@ fn speech_output_row(
     if !model_info_pending && matches!(model_info, Some(info) if info.supports_translate == Some(false)) {
         ui.end_row();
         ui.label(String::new());
+        stack_speech_field(ui);
         super::dim_label(ui, "⚠ this model does not support the translate task");
     }
     ui.end_row();
@@ -506,6 +523,7 @@ fn speech_output_row(
 fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Backend").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     ui.horizontal(|ui| {
         // Explicit backends are required, not best-effort: offering one this
         // binary did not compile guarantees a load failure. Auto/CPU always
@@ -840,7 +858,7 @@ mod tests {
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
         desktop_injection_copy, hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder,
-        speech_grid_columns, speech_output_row,
+        speech_output_row, speech_settings_stacked,
     };
 
     #[test]
@@ -852,8 +870,8 @@ mod tests {
 
     #[test]
     fn speech_fields_stack_before_their_two_column_layout_would_clip() {
-        assert_eq!(speech_grid_columns(399.0), 1);
-        assert_eq!(speech_grid_columns(400.0), 2);
+        assert!(speech_settings_stacked(399.0));
+        assert!(!speech_settings_stacked(400.0));
     }
 
     #[test]
