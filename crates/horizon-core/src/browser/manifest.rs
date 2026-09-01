@@ -309,7 +309,10 @@ fn initialize_at(
     panel_local_id: &str,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, true, update)
+    mutate_at(path, panel_local_id, true, |manifest| {
+        update(manifest);
+        true
+    })
 }
 
 /// Atomically read, mutate, and replace one manifest while holding the
@@ -326,14 +329,19 @@ fn update_at(
     panel_local_id: &str,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, false, update)
+    mutate_at(path, panel_local_id, false, |manifest| {
+        update(manifest);
+        true
+    })
 }
 
+/// Locked read-modify-write; the closure returns whether the manifest must
+/// be written back, so a refused transaction leaves the file untouched.
 fn mutate_at(
     path: &Path,
     panel_local_id: &str,
     create_missing: bool,
-    update: impl FnOnce(&mut BrowserManifest),
+    update: impl FnOnce(&mut BrowserManifest) -> bool,
 ) -> std::io::Result<BrowserManifest> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -352,8 +360,9 @@ fn mutate_at(
                 format!("browser manifest no longer exists: {}", path.display()),
             )
         })?;
-    update(&mut manifest);
-    write_at_locked(path, &manifest)?;
+    if update(&mut manifest) {
+        write_at_locked(path, &manifest)?;
+    }
     Ok(manifest)
 }
 
@@ -534,11 +543,15 @@ fn driver_update_at(
     apply: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
     let mut superseded = false;
-    let manifest = update_at(path, panel_local_id, |manifest| {
+    // A refused transaction must not rewrite the adopting host's file: the
+    // engine retries dirty updates every few hundred milliseconds.
+    let manifest = mutate_at(path, panel_local_id, false, |manifest| {
         if manifest.host.as_deref() == Some(host) {
             apply(manifest);
+            true
         } else {
             superseded = true;
+            false
         }
     })?;
     if superseded {
@@ -1069,12 +1082,25 @@ mod tests {
         adopted.host = Some("host-b".to_string());
         write_at(&path, &adopted).unwrap();
 
+        let before = std::fs::read(&path).unwrap();
+        let modified_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         let denied = driver_update_at(&path, "adopted", "host-a", |manifest| {
             manifest.title = "from the superseded driver".to_string();
         })
         .unwrap_err();
         assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(read_at(&path).unwrap().title, "Example");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a refused update must not rewrite the file"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified_before,
+            "a refused update must not touch the adopting host's manifest"
+        );
         driver_update_at(&path, "adopted", "host-b", |manifest| {
             manifest.title = "from the adopting driver".to_string();
         })
