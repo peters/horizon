@@ -702,7 +702,7 @@ mod tests {
         // persisted ids differ, so its fingerprint must differ too.
         let mut replacement = Board::new();
         let other_alpha = replacement.create_workspace("alpha");
-        replacement.create_workspace("beta");
+        let _beta = replacement.create_workspace("beta");
         replacement
             .create_panel(agent_options(), other_alpha)
             .expect("agent panel in the replacement board");
