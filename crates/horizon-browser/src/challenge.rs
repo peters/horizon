@@ -81,6 +81,10 @@ impl ChallengeLoopDetector {
         self.pending_document = None;
     }
 
+    pub(crate) fn rejection_is_reported(&self) -> bool {
+        self.rejection_reported
+    }
+
     pub(crate) fn document_committed(&mut self, url: &str, navigation_id: Option<&str>) -> DocumentCommit {
         let response = if self
             .pending_document
