@@ -300,7 +300,11 @@ def wait_for_fingerprint(
     panel_id: str,
     action_ids: list[str],
 ) -> dict[str, Any]:
-    expression = "({fingerprint: window.__fingerprint ?? null, iframe: window.__iframeWebdriver ?? null})"
+    expression = (
+        "({fingerprint: window.__fingerprint ?? null, "
+        "iframeReady: window.__iframeProbeReady === true, "
+        "crossOriginReady: window.__crossOriginProbeReady === true})"
+    )
     deadline = time.monotonic() + 10
     value: Any = None
     while time.monotonic() < deadline:
@@ -311,10 +315,29 @@ def wait_for_fingerprint(
             action_ids,
         )
         value = result["value"]
-        if isinstance(value, dict) and isinstance(value.get("fingerprint"), dict) and value.get("iframe") is not None:
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("fingerprint"), dict)
+            and value.get("iframeReady") is True
+            and value.get("crossOriginReady") is True
+        ):
             return value["fingerprint"]
         time.sleep(0.1)
     raise AssertionError(f"fingerprint did not settle: {value}")
+
+
+def _webdriver_hidden(value: Any) -> bool:
+    return value in {False, None}
+
+
+def _positive_pair(value: Any, name: str, fingerprint: dict[str, Any]) -> tuple[float, float]:
+    if not (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) and item > 0 for item in value)
+    ):
+        raise AssertionError(f"{name} geometry was missing or invalid: {fingerprint}")
+    return float(value[0]), float(value[1])
 
 
 def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) -> None:
@@ -322,15 +345,40 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
         fingerprint.get("earlyWebdriver"),
         fingerprint.get("currentWebdriver"),
         fingerprint.get("iframeWebdriver"),
+        fingerprint.get("crossOriginWebdriver"),
     ]
     if policy == "browser_default":
-        if observed != [True, True, True]:
+        if observed != [True, True, True, True]:
             raise AssertionError(f"browser-default disclosure mismatch: {fingerprint}")
-    elif backend in {"chromium", "firefox"} and observed != [False, False, False]:
-        raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "firefox":
+        if observed != [False, False, False, False]:
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "chromium":
+        if not all(_webdriver_hidden(value) for value in observed):
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    horizon_names = fingerprint.get("horizonNames") or []
+    if horizon_names:
+        raise AssertionError(f"page advertised Horizon identifiers: {fingerprint}")
+    viewport = _positive_pair(fingerprint.get("viewport"), "viewport", fingerprint)
+    screen = _positive_pair(fingerprint.get("screen"), "screen", fingerprint)
+    dpr = fingerprint.get("dpr")
+    if not isinstance(dpr, (int, float)) or isinstance(dpr, bool) or dpr <= 0:
+        raise AssertionError(f"device pixel ratio was missing or invalid: {fingerprint}")
+    if viewport == screen:
+        raise AssertionError(f"viewport claimed the display size: {fingerprint}")
     if policy == "minimize_common_signals" and backend == "chromium":
         if "HeadlessChrome" in str(fingerprint.get("userAgent")):
             raise AssertionError(f"headless token remained: {fingerprint}")
+        brands = list(fingerprint.get("brands") or []) + list(
+            (fingerprint.get("high") or {}).get("fullVersionList") or []
+        )
+        brand_names = [entry.get("brand") for entry in brands if isinstance(entry, dict)]
+        if "HeadlessChrome" in brand_names:
+            raise AssertionError(f"headless client-hint brand remained: {fingerprint}")
+        if not any(name in {"Chrome", "Chromium"} for name in brand_names):
+            raise AssertionError(f"client-hint brands omitted Chrome/Chromium: {fingerprint}")
+        if fingerprint.get("webdriverDescriptorPresent") is True and fingerprint.get("webdriverGetterNative") is not True:
+            raise AssertionError(f"chromium webdriver getter was not native: {fingerprint}")
 
 
 def failed_action_id(error: str) -> str:

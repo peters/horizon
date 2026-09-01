@@ -223,6 +223,7 @@ impl DriverState {
     }
 
     fn scroll_page_to(&mut self, link: &mut CdpLink, target: f64) {
+        self.request_runtime_for_sessions(link);
         let expression = format!("window.scrollTo(window.scrollX, {target:.3})");
         let Some(session) = self.session_id.clone() else {
             return;
@@ -244,6 +245,15 @@ impl DriverState {
             }
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
+    }
+
+    pub(super) fn viewport_override_params(width: u32, height: u32) -> serde_json::Value {
+        serde_json::json!({
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 0,
+            "mobile": false,
+        })
     }
 
     pub(super) fn invalidate_scrollbar_layout(&mut self) {
@@ -382,14 +392,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Emulation.setDeviceMetricsOverride",
-            &serde_json::json!({
-                "width": width,
-                "height": height,
-                "screenWidth": width,
-                "screenHeight": height,
-                "deviceScaleFactor": 1,
-                "mobile": false,
-            }),
+            &Self::viewport_override_params(width, height),
         ) {
             Ok(_) => {
                 self.commit_viewport(width, height);
@@ -627,6 +630,18 @@ mod tests {
             panic!("test metrics should describe a valid layout");
         };
         layout
+    }
+
+    #[test]
+    fn viewport_override_does_not_claim_the_panel_is_the_display() {
+        let params = DriverState::viewport_override_params(1280, 800);
+
+        assert_eq!(params["width"], 1280);
+        assert_eq!(params["height"], 800);
+        assert_eq!(params["deviceScaleFactor"], 0);
+        assert_eq!(params["mobile"], serde_json::Value::Bool(false));
+        assert!(params.get("screenWidth").is_none());
+        assert!(params.get("screenHeight").is_none());
     }
 
     #[test]

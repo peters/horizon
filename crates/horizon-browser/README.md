@@ -34,20 +34,23 @@ multiple concurrent sessions.
 `BrowserConfig::default()` uses
 `AutomationDisclosurePolicy::MinimizeCommonSignals`. Chromium avoids
 automation-only launch switches, suppresses Blink's standard automation flag,
-installs a pre-document `navigator.webdriver` compatibility shim, and removes
-only the `HeadlessChrome` user-agent token while preserving Chromium-owned
-Client Hint brands, platform, architecture, and versions. The engine reads
-those native values on a network-free temporary target and closes that target
+and removes only the `HeadlessChrome` user-agent token and Client Hint brand
+while preserving Chromium-owned platform, architecture, versions, and GREASE
+brands. It does not install a script-defined `navigator.webdriver` getter,
+because that accessor is itself a detection signal. The engine reads native
+Client Hint values on a network-free temporary target and closes that target
 before attaching the caller's `about:blank` page, so it cannot enter caller
-history or frames. Firefox installs the same narrow value shim with WebDriver BiDi
-`script.addPreloadScript` before the initial navigation; startup fails instead
-of silently downgrading when that required BiDi command is rejected.
-Chromium panels minimizing common signals also use a reserved nonzero loopback
-DevTools port so Chromium does not enable its port-zero `AutomationControlled`
-behavior. Startup retries with a fresh reservation when another local process
-wins the required socket handoff. Callers that need the browser's unmodified
-behavior can select `AutomationDisclosurePolicy::BrowserDefault` on any
-backend; Chromium then retains its native port-zero automation signal.
+history or frames. Title updates use protocol target metadata rather than a
+page-JS binding. Firefox installs a narrow `navigator.webdriver` value shim
+with WebDriver BiDi `script.addPreloadScript` before the initial navigation;
+startup fails instead of silently downgrading when that required BiDi command
+is rejected. Chromium panels minimizing common signals also use a reserved
+nonzero loopback DevTools port so Chromium does not enable its port-zero
+`AutomationControlled` behavior. Startup retries with a fresh reservation when
+another local process wins the required socket handoff. Callers that need the
+browser's unmodified behavior can select
+`AutomationDisclosurePolicy::BrowserDefault` on any backend; Chromium then
+retains its native port-zero automation signal.
 
 Safari's public automation surface cannot currently establish the same
 pre-document contract, so an active Safari session reports

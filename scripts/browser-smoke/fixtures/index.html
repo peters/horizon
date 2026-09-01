@@ -127,10 +127,11 @@
     });
 
     const frame = document.querySelector('#probe-frame');
-    frame.srcdoc = '<!doctype html><script>parent.__iframeWebdriver = navigator.webdriver; parent.postMessage({kind:"probe-ready"}, "*");<\/script>';
+    frame.srcdoc = '<!doctype html><script>parent.__iframeWebdriver = navigator.webdriver; parent.__iframeProbeReady = true; parent.postMessage({kind:"probe-ready"}, "*");<\/script>';
     const consentFrame = document.querySelector('#consent-frame');
     const consentUrl = new URL('/next.html', location.href);
     consentUrl.hostname = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+    const consentOrigin = consentUrl.origin;
     consentFrame.src = consentUrl.href;
 
     async function collectFingerprint() {
@@ -142,10 +143,12 @@
       const high = await Promise.resolve(
         uaData?.getHighEntropyValues?.(['architecture', 'bitness', 'platformVersion', 'fullVersionList']) || {}
       );
+      const webdriverDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
       window.__fingerprint = {
-        earlyWebdriver: window.__earlyWebdriver,
-        currentWebdriver: navigator.webdriver,
-        iframeWebdriver: window.__iframeWebdriver,
+        earlyWebdriver: window.__earlyWebdriver === true ? true : (window.__earlyWebdriver === false ? false : null),
+        currentWebdriver: navigator.webdriver === true ? true : (navigator.webdriver === false ? false : null),
+        iframeWebdriver: window.__iframeWebdriver === true ? true : (window.__iframeWebdriver === false ? false : null),
+        crossOriginWebdriver: window.__crossOriginWebdriver === true ? true : (window.__crossOriginWebdriver === false ? false : null),
         userAgent: navigator.userAgent,
         brands: uaData?.brands || [],
         high,
@@ -154,13 +157,22 @@
         viewport: [innerWidth, innerHeight],
         screen: [screen.width, screen.height],
         dpr: devicePixelRatio,
-        renderer
+        renderer,
+        horizonNames: Object.getOwnPropertyNames(window).filter((name) => /horizon/i.test(name)),
+        webdriverDescriptorPresent: Boolean(webdriverDescriptor),
+        webdriverGetterNative: typeof webdriverDescriptor?.get === 'function'
+          && Function.prototype.toString.call(webdriverDescriptor.get).includes('[native code]')
       };
       document.querySelector('#fingerprint').textContent = JSON.stringify(window.__fingerprint, null, 2);
     }
 
     addEventListener('message', (event) => {
       if (event.data?.kind === 'probe-ready') collectFingerprint();
+      if (event.origin === consentOrigin && event.data?.kind === 'cross-origin-probe') {
+        window.__crossOriginWebdriver = event.data.webdriver;
+        window.__crossOriginProbeReady = true;
+        collectFingerprint();
+      }
     });
     collectFingerprint();
     publishStatus();

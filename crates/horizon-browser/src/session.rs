@@ -46,7 +46,7 @@ pub use horizon_browser_protocol::BrowserCommand;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -159,28 +159,6 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
-const TITLE_BINDING_NAME: &str = "__horizonBrowserTitleChanged";
-const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
-    if (window !== top || window.__horizonBrowserTitleObserver) return;
-    let lastTitle;
-    const publish = () => {
-        const title = document.title;
-        if (title === lastTitle) return;
-        lastTitle = title;
-        window.__horizonBrowserTitleChanged(JSON.stringify({ title, href: location.href }));
-    };
-    const install = () => {
-        if (window.__horizonBrowserTitleObserver) return;
-        const root = document.head || document.documentElement;
-        if (!root) return;
-        const observer = new MutationObserver(publish);
-        observer.observe(root, { childList: true, characterData: true, subtree: true });
-        window.__horizonBrowserTitleObserver = observer;
-        publish();
-    };
-    if (document.documentElement) install();
-    else addEventListener('DOMContentLoaded', install, { once: true });
-})()";
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -439,18 +417,14 @@ struct DriverState {
     initial_navigated: bool,
     screencast_on: bool,
     pending_restart_at: Option<Instant>,
-    /// Default execution context of the current document. After a
-    /// navigation, `Runtime.evaluate` without an explicit `contextId` can
-    /// still hit the old document's context for a while, so the title
-    /// fetch targets the latest default context explicitly.
-    title_context_id: Option<u64>,
-    /// `executionContextCreated` for the new document can land after
-    /// `loadEventFired`, so the post-load fetch is slightly delayed to let
-    /// the context tracking catch up first.
+    /// Delayed `Target.getTargetInfo` read after navigation. Title updates
+    /// come from protocol target metadata, not a page-JS binding.
     title_fetch_at: Option<Instant>,
-    /// Retries for a title fetch that still evaluated in the previous
-    /// document's execution context (detected via `location.href`).
-    title_fetch_retries: u32,
+    /// `Runtime.enable` is deferred until snapshot, evaluate, clipboard, or
+    /// scrollbar scrolling actually needs it. Enabling it at attach is a
+    /// script-visible CDP signal.
+    runtime_enable_requested: HashSet<String>,
+    runtime_enable_inflight: HashMap<u64, String>,
     restart_attempts: u32,
     pending_reattach: bool,
     reattach_in_flight: bool,
@@ -506,9 +480,9 @@ impl DriverState {
             initial_navigated: false,
             screencast_on: false,
             pending_restart_at: None,
-            title_context_id: None,
             title_fetch_at: None,
-            title_fetch_retries: 0,
+            runtime_enable_requested: HashSet::new(),
+            runtime_enable_inflight: HashMap::new(),
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
@@ -615,7 +589,73 @@ impl DriverState {
                 method: method.to_string(),
             });
         };
+        if method.starts_with("Runtime.") {
+            self.ensure_page_runtime(link)?;
+        }
         self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
+    }
+
+    fn ensure_page_runtime(&mut self, link: &mut CdpLink) -> Result<(), CdpError> {
+        if self.session_id.is_none() {
+            return Err(CdpError::NoPageSession {
+                method: "Runtime.enable".to_string(),
+            });
+        }
+        self.request_runtime_for_sessions(link);
+        Ok(())
+    }
+
+    fn request_runtime_for_sessions(&mut self, link: &mut CdpLink) {
+        let Some(page_session) = self.session_id.clone() else {
+            return;
+        };
+        self.queue_runtime_enable(link, &page_session);
+        let iframe_sessions: Vec<String> = self.clipboard.iframe_sessions.iter().cloned().collect();
+        for session in iframe_sessions {
+            self.queue_runtime_enable(link, &session);
+        }
+    }
+
+    fn queue_runtime_enable(&mut self, link: &mut CdpLink, session: &str) {
+        if self.runtime_enable_requested.contains(session) {
+            return;
+        }
+        match link.send_request("Runtime.enable", &serde_json::json!({}), Some(session)) {
+            Ok(request_id) => {
+                self.runtime_enable_requested.insert(session.to_string());
+                self.runtime_enable_inflight.insert(request_id, session.to_string());
+            }
+            Err(error) => tracing::debug!(
+                target: "browser",
+                session,
+                "Runtime.enable request failed: {error}"
+            ),
+        }
+    }
+
+    fn handle_runtime_enable_response(&mut self, id: u64, error: Option<&crate::cdp::CdpErrorInfo>) -> bool {
+        let Some(session) = self.runtime_enable_inflight.remove(&id) else {
+            return false;
+        };
+        if error.is_some() {
+            self.runtime_enable_requested.remove(&session);
+            return true;
+        }
+        true
+    }
+
+    fn forget_runtime_session(&mut self, session: &str) {
+        forget_tracked_runtime_session(
+            &mut self.runtime_enable_requested,
+            &mut self.runtime_enable_inflight,
+            session,
+        );
+    }
+
+    fn reset_runtime_enable_state(&mut self) {
+        self.runtime_enable_requested.clear();
+        self.runtime_enable_inflight.clear();
+        self.clipboard.pending_capture = false;
     }
 
     fn navigate_to(
@@ -691,6 +731,11 @@ fn normalized_committed_url(url: &str) -> &str {
     }
 }
 
+fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mut HashMap<u64, String>, session: &str) {
+    requested.remove(session);
+    inflight.retain(|_, tracked| tracked != session);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +762,16 @@ mod tests {
         }));
         assert!(!is_user_activity(&BrowserCommand::HandoffDone));
         assert!(!is_user_activity(&BrowserCommand::Stop));
+    }
+
+    #[test]
+    fn forgetting_a_runtime_session_drops_requested_and_inflight_entries() {
+        let mut requested = HashSet::from(["page".to_string(), "oopif".to_string()]);
+        let mut inflight = HashMap::from([(7, "oopif".to_string()), (8, "page".to_string())]);
+
+        forget_tracked_runtime_session(&mut requested, &mut inflight, "oopif");
+
+        assert_eq!(requested, HashSet::from(["page".to_string()]));
+        assert_eq!(inflight, HashMap::from([(8, "page".to_string())]));
     }
 }
