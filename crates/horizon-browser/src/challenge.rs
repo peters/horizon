@@ -54,7 +54,8 @@ pub(crate) struct ChallengeLoopDetector {
     last_challenge: Option<Observation>,
     armed: Option<Observation>,
     rejection_due: Option<Instant>,
-    reported_url: Option<String>,
+    rejection_url: Option<String>,
+    rejection_reported: bool,
     pending_document: Option<DocumentResponse>,
     handoff_active: bool,
 }
@@ -91,7 +92,7 @@ impl ChallengeLoopDetector {
             None
         };
         if self
-            .reported_url
+            .rejection_url
             .as_deref()
             .is_some_and(|reported| same_document_url(reported, url))
         {
@@ -102,13 +103,17 @@ impl ChallengeLoopDetector {
                 self.clear_challenge_state();
                 return DocumentCommit::Recovered;
             }
-            return DocumentCommit::Rejected;
+            return if self.rejection_reported {
+                DocumentCommit::Rejected
+            } else {
+                DocumentCommit::Normal
+            };
         }
         if response
             .as_ref()
             .is_some_and(|response| response.kind == DocumentResponseKind::Success)
             || self
-                .reported_url
+                .rejection_url
                 .as_deref()
                 .is_some_and(|reported| !same_document_url(reported, url))
         {
@@ -132,6 +137,11 @@ impl ChallengeLoopDetector {
     #[cfg(test)]
     fn observe_document_response_at(&mut self, now: Instant, url: &str, status: Option<u16>, is_challenge: bool) {
         self.observe_document_response_with_navigation_at(now, url, status, is_challenge, None);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_rejection_after_delay_for_test(&mut self) -> Option<&'static str> {
+        self.take_rejection_at(Instant::now() + REJECTION_REPORT_DELAY)
     }
 
     fn observe_document_response_with_navigation_at(
@@ -158,9 +168,10 @@ impl ChallengeLoopDetector {
             let repeated_after_handoff = self.armed.as_ref().is_some_and(|armed| {
                 armed.url == url && now.saturating_duration_since(armed.observed_at) <= HANDOFF_WINDOW
             });
-            if repeated_after_handoff && self.reported_url.as_deref() != Some(url) {
+            if repeated_after_handoff && self.rejection_url.as_deref() != Some(url) {
                 self.rejection_due = Some(now + REJECTION_REPORT_DELAY);
-                self.reported_url = Some(url.to_string());
+                self.rejection_url = Some(url.to_string());
+                self.rejection_reported = false;
             }
             if self.armed.as_ref().is_some_and(|armed| armed.url != url) {
                 self.armed = None;
@@ -179,14 +190,16 @@ impl ChallengeLoopDetector {
         self.last_challenge = None;
         self.armed = None;
         self.rejection_due = None;
-        self.reported_url = None;
+        self.rejection_url = None;
+        self.rejection_reported = false;
         self.pending_document = None;
     }
 
     fn handoff_started_at(&mut self, now: Instant) {
         self.handoff_active = true;
         self.rejection_due = None;
-        self.reported_url = None;
+        self.rejection_url = None;
+        self.rejection_reported = false;
         self.arm_latest_challenge(now);
     }
 
@@ -215,7 +228,8 @@ impl ChallengeLoopDetector {
         self.handoff_active = false;
         self.armed = None;
         self.rejection_due = None;
-        self.reported_url = None;
+        self.rejection_url = None;
+        self.rejection_reported = false;
     }
 
     fn arm_latest_challenge(&mut self, now: Instant) {
@@ -234,6 +248,7 @@ impl ChallengeLoopDetector {
         let due = self.rejection_due.filter(|due| now >= *due)?;
         debug_assert!(now >= due);
         self.rejection_due = None;
+        self.rejection_reported = true;
         Some(REJECTION_MESSAGE)
     }
 }
@@ -293,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_challenge_during_handoff_reports_after_hand_back() {
+    fn repeated_challenge_during_handoff_reports_once_after_hand_back() {
         let started = Instant::now();
         let mut detector = ChallengeLoopDetector::default();
         detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true);
@@ -305,12 +320,27 @@ mod tests {
             true,
         );
 
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", None),
+            DocumentCommit::Normal
+        );
         assert_eq!(detector.take_rejection_at(started + Duration::from_secs(4)), None);
         detector.handoff_completed_at(started + Duration::from_secs(5));
         assert_eq!(
             detector.take_rejection_at(started + Duration::from_secs(5)),
             Some(REJECTION_MESSAGE)
         );
+        detector.observe_document_response_at(
+            started + Duration::from_secs(6),
+            "https://example.test/protected",
+            Some(403),
+            true,
+        );
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", None),
+            DocumentCommit::Rejected
+        );
+        assert_eq!(detector.take_rejection_at(started + Duration::from_secs(7)), None);
     }
 
     #[test]

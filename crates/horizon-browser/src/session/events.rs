@@ -755,6 +755,10 @@ mod tests {
         state
             .challenge_loop
             .observe_document_response(URL, Some(403), &challenge_headers, Some("challenge-reload"));
+        assert_eq!(
+            state.challenge_loop.take_rejection_after_delay_for_test(),
+            Some(crate::challenge::REJECTION_MESSAGE)
+        );
         let (tx, rx) = mpsc::channel();
         let events = BrowserEventSender {
             tx,
