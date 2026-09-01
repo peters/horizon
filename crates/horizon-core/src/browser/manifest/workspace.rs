@@ -13,9 +13,17 @@
 
 use std::path::Path;
 
+use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
 
-use super::{default_manifest_path, now_millis, read_at, update_at};
+use super::{
+    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, now_millis, read_at, update_at,
+};
+use crate::horizon_home::HorizonHome;
+
+/// Error text shared by every locked transaction that refuses an identity
+/// outside the panel's workspace.
+pub const OUTSIDE_WORKSPACE_MESSAGE: &str = "agent is outside this browser panel's workspace";
 
 /// The workspace a browser panel currently belongs to, as its host sees it.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,6 +35,52 @@ pub struct ManifestWorkspace {
     /// control the panel.
     #[serde(default)]
     pub actors: Vec<String>,
+}
+
+/// Whether `actor` is a Horizon agent identity whose access the host decides
+/// through the workspace stamp. Other identities (standalone hosts, the
+/// process-local fallback) are not placed anywhere and stay unscoped.
+#[must_use]
+pub fn actor_is_workspace_scoped(actor: &str) -> bool {
+    actor
+        .strip_prefix("horizon:")
+        .is_some_and(|identity| !identity.is_empty())
+}
+
+/// The guard every privileged manifest transaction evaluates while holding
+/// the manifest lock, so a concurrent host re-stamp cannot slip an operation
+/// past the workspace boundary.
+///
+/// # Errors
+/// Returns `PermissionDenied` when the manifest does not permit `actor`.
+pub(super) fn permit_actor(manifest: &BrowserManifest, actor: &str) -> std::io::Result<()> {
+    if manifest.permits_actor(actor) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            OUTSIDE_WORKSPACE_MESSAGE,
+        ))
+    }
+}
+
+/// Read a panel's audit journal only when `actor` may control the panel,
+/// checking membership and reading under the manifest lock.
+///
+/// # Errors
+/// Returns `NotFound` for a panel that is not live, `PermissionDenied` for an
+/// identity outside its workspace, or an audit storage failure.
+pub fn read_audit_for_actor(panel_local_id: &str, actor: &str) -> std::io::Result<Vec<BrowserAuditEntry>> {
+    read_audit_for_actor_at(HorizonHome::resolve().root(), panel_local_id, actor)
+}
+
+fn read_audit_for_actor_at(root: &Path, panel_local_id: &str, actor: &str) -> std::io::Result<Vec<BrowserAuditEntry>> {
+    let manifest_path = manifest_path_for_root(root, panel_local_id);
+    let _lock = ManifestLock::acquire(&manifest_path)?;
+    let manifest = read_at(&manifest_path)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
+    permit_actor(&manifest, actor)?;
+    audit::read_at(&audit::audit_path_for_root(root, panel_local_id))
 }
 
 impl ManifestWorkspace {
@@ -88,7 +142,83 @@ fn sync_host_state_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::manifest::{BrowserManifest, manifest_path_for_root, write_at};
+    use crate::browser::manifest::write_at;
+
+    #[test]
+    fn only_horizon_agent_identities_are_workspace_scoped() {
+        assert!(actor_is_workspace_scoped("horizon:agent-a"));
+        assert!(!actor_is_workspace_scoped("horizon:"));
+        assert!(!actor_is_workspace_scoped("horizon-mcp:4242"));
+        assert!(!actor_is_workspace_scoped("browser-cli-test"));
+
+        let mut manifest = BrowserManifest::default();
+        assert!(
+            manifest.permits_actor("browser-cli-test"),
+            "unscoped identities need no stamp"
+        );
+        assert!(
+            !manifest.permits_actor("horizon:agent-a"),
+            "unstamped manifests fail closed"
+        );
+        assert_eq!(
+            permit_actor(&manifest, "horizon:agent-a")
+                .expect_err("outside workspace")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        manifest.workspace = Some(ManifestWorkspace::new("ws-a", vec!["horizon:agent-a".to_string()]));
+        assert!(manifest.permits_actor("horizon:agent-a"));
+        assert!(!manifest.permits_actor("horizon:agent-b"));
+        permit_actor(&manifest, "horizon:agent-a").expect("member is permitted");
+    }
+
+    #[test]
+    fn audit_reads_are_gated_by_workspace_membership_under_the_manifest_lock() {
+        let root = tempfile::tempdir().expect("isolated root");
+        let panel = "panel";
+        write_at(
+            &manifest_path_for_root(root.path(), panel),
+            &BrowserManifest {
+                panel_local_id: panel.to_string(),
+                workspace: Some(ManifestWorkspace::new("ws-a", vec!["horizon:agent-a".to_string()])),
+                ..BrowserManifest::default()
+            },
+        )
+        .expect("write manifest");
+        audit::append_at_path(
+            &audit::audit_path_for_root(root.path(), panel),
+            &BrowserAuditEntry::new(
+                "action-1".to_string(),
+                horizon_browser::BrowserAuditActor::Agent {
+                    name: "horizon:agent-a".to_string(),
+                },
+                horizon_browser::BrowserAuditStatus::Completed,
+                horizon_browser::BrowserAuditAction::Reload,
+            ),
+        )
+        .expect("append audit");
+
+        let entries = read_audit_for_actor_at(root.path(), panel, "horizon:agent-a").expect("member reads audit");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            read_audit_for_actor_at(root.path(), panel, "horizon:agent-b")
+                .expect_err("non-member is refused")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            read_audit_for_actor_at(root.path(), panel, "browser-cli-test")
+                .expect("unscoped identity reads audit")
+                .len(),
+            1
+        );
+        assert_eq!(
+            read_audit_for_actor_at(root.path(), "missing", "horizon:agent-a")
+                .expect_err("missing panel")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
 
     #[test]
     fn membership_is_exact_and_an_unstamped_manifest_authorizes_nobody() {

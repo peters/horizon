@@ -364,10 +364,6 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
     if manifest::read(&pending.panel_local_id).is_none() {
         return BrowserCreateCompletion::Waiting;
     }
-    // Stamp the panel's current workspace, not the requesting agent's: if the
-    // user moved either panel while the browser started, the agent's own
-    // post-create authorization reports that instead of Horizon closing a
-    // panel the user just placed.
     let Some(workspace) = board
         .panel(pending.panel_id)
         .and_then(|panel| browser_workspace(board, panel.workspace_id))
@@ -379,21 +375,38 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
         );
         return BrowserCreateCompletion::Failed;
     };
-    if let Err(error) = manifest::claim(&pending.panel_local_id, &pending.request.actor, None) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
+    if !workspace.authorizes(&pending.request.actor) {
+        // The user moved a panel while the browser started. Keep the panel
+        // where they put it and report the lost workspace instead of closing
+        // it or handing an uncontrollable panel back as ready.
+        if let Err(error) = publish_manifest_host_state(&pending.panel_local_id, pending.request.visible, &workspace) {
+            tracing::warn!(request_id = %pending.request.request_id, %error, "could not stamp a moved browser panel");
+        }
         record_and_complete_failure(
             pending,
-            "ownership_failed",
-            "Horizon could not assign the new browser panel to the requesting agent",
+            "workspace_changed",
+            "the browser panel left the requesting agent's workspace during creation and was left in place",
         );
-        return BrowserCreateCompletion::Failed;
+        return BrowserCreateCompletion::Completed;
     }
+    // Stamp workspace membership before claiming: the claim itself refuses an
+    // unstamped manifest, and the agent's first authorized call needs the
+    // stamp in place.
     if let Err(error) = publish_manifest_host_state(&pending.panel_local_id, pending.request.visible, &workspace) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser host state");
         record_and_complete_failure(
             pending,
             "manifest_update_failed",
             "Horizon could not publish the new browser panel's visibility and workspace",
+        );
+        return BrowserCreateCompletion::Failed;
+    }
+    if let Err(error) = manifest::claim(&pending.panel_local_id, &pending.request.actor, None) {
+        tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
+        record_and_complete_failure(
+            pending,
+            "ownership_failed",
+            "Horizon could not assign the new browser panel to the requesting agent",
         );
         return BrowserCreateCompletion::Failed;
     }

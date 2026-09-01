@@ -74,7 +74,9 @@ and later actions share the redacted audit identity.
 The Horizon host stamps every live browser manifest with the agent identities
 that currently share the panel's workspace and refreshes the stamp when either
 panel moves, so authorization follows workspace membership without restarting
-the browser session or the agent. Identities are per-panel UUIDs, so separate
+the browser session or the agent. Membership is evaluated inside the same
+locked manifest transaction as each claim, heartbeat, queued action, handoff,
+and audit read, so a move cannot race past the boundary. Identities are per-panel UUIDs, so separate
 Horizon processes sharing one home never authorize each other's panels even
 when their workspace ids collide, and manifests without a stamp (older hosts,
 or a panel whose host has not stamped it yet) fail closed for Horizon agents.

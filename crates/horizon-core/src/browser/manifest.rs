@@ -60,7 +60,9 @@ pub use visibility::{
     claim_visibility_request, complete_visibility_request, enqueue_visibility, list_visibility_requests,
     record_visibility_status, take_visibility_result,
 };
-pub use workspace::{ManifestWorkspace, sync_host_state};
+pub use workspace::{
+    ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE, actor_is_workspace_scoped, read_audit_for_actor, sync_host_state,
+};
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
@@ -163,6 +165,14 @@ impl BrowserManifest {
         self.workspace
             .as_ref()
             .is_some_and(|workspace| workspace.authorizes(actor))
+    }
+
+    /// Whether `actor` may discover or control this panel: identities from
+    /// outside Horizon always may, Horizon agents only through the host's
+    /// workspace stamp.
+    #[must_use]
+    pub fn permits_actor(&self, actor: &str) -> bool {
+        !actor_is_workspace_scoped(actor) || self.authorizes_actor(actor)
     }
 }
 

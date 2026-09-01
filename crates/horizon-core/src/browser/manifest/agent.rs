@@ -7,6 +7,7 @@ use horizon_browser::{
     new_action_id,
 };
 
+use super::workspace::{OUTSIDE_WORKSPACE_MESSAGE, permit_actor};
 use super::{BrowserManifest, ManifestHandoff, ManifestOwner, new_handoff_request_id, now_millis, update, update_at};
 
 const MAX_PENDING_ACTIONS: usize = 128;
@@ -15,20 +16,28 @@ const MAX_HANDOFF_REASON_BYTES: usize = 2 * 1024;
 
 /// Claim or refresh ownership of a live panel for an external agent.
 ///
+/// Workspace membership is checked inside the same locked transaction as
+/// the claim, so a host re-stamp during a panel move cannot race past it.
+///
 /// # Errors
-/// Returns an error for invalid identity, a missing live manifest, or a
-/// filesystem failure.
+/// Returns an error for invalid identity, a missing live manifest, an
+/// identity outside the panel's workspace, or a filesystem failure.
 pub fn claim(panel_local_id: &str, agent_name: &str, tty: Option<&str>) -> std::io::Result<()> {
     validate_actor(agent_name)?;
     if let Some(tty) = tty {
         validate_tty(tty)?;
     }
     let now = now_millis();
-    let mut claimed = false;
+    let mut outcome = Ok(());
     update(panel_local_id, |manifest| {
-        claimed = try_claim_owner(manifest, agent_name, tty, now);
+        outcome = claim_locked(manifest, agent_name, tty, now);
     })?;
-    if claimed {
+    outcome
+}
+
+fn claim_locked(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) -> std::io::Result<()> {
+    permit_actor(manifest, agent_name)?;
+    if try_claim_owner(manifest, agent_name, tty, now) {
         Ok(())
     } else {
         Err(std::io::Error::new(
@@ -41,21 +50,24 @@ pub fn claim(panel_local_id: &str, agent_name: &str, tty: Option<&str>) -> std::
 /// Refresh an existing ownership claim without taking it from another agent.
 ///
 /// # Errors
-/// Returns `PermissionDenied` when this agent is not the current owner.
+/// Returns `PermissionDenied` when this agent is not the current owner or is
+/// outside the panel's workspace.
 pub fn heartbeat(panel_local_id: &str, agent_name: &str) -> std::io::Result<()> {
     validate_actor(agent_name)?;
-    let mut matched = false;
+    let mut outcome = Ok(());
     update(panel_local_id, |manifest| {
-        let now = now_millis();
-        if manifest.live_owner(now).is_some_and(|owner| owner.name == agent_name) {
-            if let Some(owner) = manifest.owner.as_mut() {
-                owner.updated_at = now;
-            }
-            manifest.updated_at = now;
-            matched = true;
-        }
+        outcome = heartbeat_locked(manifest, agent_name, now_millis());
     })?;
-    if matched {
+    outcome
+}
+
+fn heartbeat_locked(manifest: &mut BrowserManifest, agent_name: &str, now: i64) -> std::io::Result<()> {
+    permit_actor(manifest, agent_name)?;
+    if manifest.live_owner(now).is_some_and(|owner| owner.name == agent_name) {
+        if let Some(owner) = manifest.owner.as_mut() {
+            owner.updated_at = now;
+        }
+        manifest.updated_at = now;
         Ok(())
     } else {
         Err(std::io::Error::new(
@@ -105,28 +117,11 @@ pub fn request_handoff(panel_local_id: &str, agent_name: &str, reason: &str) -> 
     validate_actor(agent_name)?;
     validate_reason(reason)?;
     let request_id = new_handoff_request_id();
-    let mut authorized = false;
+    let mut outcome = Ok(());
     update(panel_local_id, |manifest| {
-        if manifest
-            .live_owner(now_millis())
-            .is_some_and(|owner| owner.name == agent_name)
-        {
-            manifest.handoff = Some(ManifestHandoff {
-                request_id: request_id.clone(),
-                reason: reason.to_string(),
-                requested_at: now_millis(),
-                done: false,
-            });
-            manifest.updated_at = now_millis();
-            authorized = true;
-        }
+        outcome = request_handoff_locked(manifest, agent_name, &request_id, reason, now_millis());
     })?;
-    if !authorized {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "agent does not have a live ownership claim",
-        ));
-    }
+    outcome?;
     if let Err(error) = super::audit::append(
         &BrowserAuditEntry::new(
             request_id.clone(),
@@ -169,7 +164,9 @@ pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserCon
     let mut audit_failure = None;
     update(panel_local_id, |manifest| {
         let now = now_millis();
-        if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
+        if !manifest.permits_actor(agent_name) {
+            failure = Some((std::io::ErrorKind::PermissionDenied, OUTSIDE_WORKSPACE_MESSAGE));
+        } else if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
             failure = Some((
                 std::io::ErrorKind::PermissionDenied,
                 "agent does not have a live ownership claim",
@@ -216,6 +213,31 @@ pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserCon
         Err(std::io::Error::new(kind, message))
     } else {
         Ok(action_id)
+    }
+}
+
+fn request_handoff_locked(
+    manifest: &mut BrowserManifest,
+    agent_name: &str,
+    request_id: &str,
+    reason: &str,
+    now: i64,
+) -> std::io::Result<()> {
+    permit_actor(manifest, agent_name)?;
+    if manifest.live_owner(now).is_some_and(|owner| owner.name == agent_name) {
+        manifest.handoff = Some(ManifestHandoff {
+            request_id: request_id.to_string(),
+            reason: reason.to_string(),
+            requested_at: now,
+            done: false,
+        });
+        manifest.updated_at = now;
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "agent does not have a live ownership claim",
+        ))
     }
 }
 
@@ -417,6 +439,66 @@ mod tests {
             manifest.owner.as_ref().map(|owner| owner.name.as_str()),
             Some("agent-b")
         );
+    }
+
+    #[test]
+    fn locked_transactions_refuse_identities_outside_the_workspace() {
+        let now = now_millis();
+        let member = "horizon:agent-a";
+        let outsider = "horizon:agent-b";
+        let mut manifest = BrowserManifest {
+            panel_local_id: "panel".to_string(),
+            workspace: Some(super::super::ManifestWorkspace::new("ws-a", vec![member.to_string()])),
+            ..BrowserManifest::default()
+        };
+
+        let denied = claim_locked(&mut manifest, outsider, None, now).expect_err("outsider cannot claim");
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(denied.to_string(), OUTSIDE_WORKSPACE_MESSAGE);
+        assert!(manifest.owner.is_none(), "a refused claim leaves the panel unowned");
+        claim_locked(&mut manifest, member, None, now).expect("member claims");
+        heartbeat_locked(&mut manifest, member, now + 1).expect("member heartbeats");
+        request_handoff_locked(&mut manifest, member, "request-1", "sign in", now + 2).expect("member hands off");
+        manifest.handoff = None;
+
+        // The host moved the panel away while the member still holds the lease.
+        manifest.workspace = Some(super::super::ManifestWorkspace::new("ws-b", vec![outsider.to_string()]));
+        assert_eq!(
+            heartbeat_locked(&mut manifest, member, now + 3)
+                .expect_err("moved panel refuses the old member")
+                .to_string(),
+            OUTSIDE_WORKSPACE_MESSAGE
+        );
+        assert_eq!(
+            request_handoff_locked(&mut manifest, member, "request-2", "sign in", now + 3)
+                .expect_err("moved panel refuses handoff")
+                .to_string(),
+            OUTSIDE_WORKSPACE_MESSAGE
+        );
+        assert!(manifest.handoff.is_none());
+        assert_eq!(
+            claim_locked(&mut manifest, outsider, None, now + 3)
+                .expect_err("fresh lease still blocks the new member")
+                .to_string(),
+            "browser panel already has another live owner"
+        );
+        claim_locked(&mut manifest, outsider, None, now + super::super::OWNER_TTL_MILLIS + 4)
+            .expect("new member claims after the lease expires");
+
+        manifest.workspace = None;
+        assert_eq!(
+            heartbeat_locked(&mut manifest, outsider, now + super::super::OWNER_TTL_MILLIS + 5)
+                .expect_err("an unstamped manifest refuses every Horizon agent")
+                .to_string(),
+            OUTSIDE_WORKSPACE_MESSAGE
+        );
+        claim_locked(
+            &mut manifest,
+            "browser-cli-test",
+            None,
+            now + 2 * super::super::OWNER_TTL_MILLIS + 6,
+        )
+        .expect("unscoped identities keep the unscoped behavior");
     }
 
     #[test]
