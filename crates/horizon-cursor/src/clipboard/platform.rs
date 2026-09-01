@@ -90,6 +90,9 @@ fn paste_worker(transcript: &str, result_tx: &mpsc::SyncSender<Result<(), Inject
         session.wait_for_target_request();
     }
     session.staged = None;
+    if session.owns_clipboard && session.snapshot.is_empty() {
+        return;
+    }
     if session.owns_clipboard {
         session.request_manager_handover();
     }
@@ -363,14 +366,11 @@ impl ClipboardSession {
     }
 
     fn request_manager_handover(&self) {
-        if self.snapshot.is_empty() {
-            return;
-        }
         let _ = self.conn.convert_selection(
             self.window,
             self.atoms.CLIPBOARD_MANAGER,
             self.atoms.SAVE_TARGETS,
-            self.atoms.HORIZON_CLIPBOARD_DATA,
+            NONE,
             Time::CURRENT_TIME,
         );
         let _ = self.conn.flush();
