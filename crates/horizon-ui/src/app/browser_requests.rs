@@ -46,8 +46,6 @@ impl HorizonApp {
     pub(super) fn poll_browser_create_requests(&mut self) -> bool {
         let mut changed = self.finish_pending_browser_creates();
         let now = Instant::now();
-        let placement = placement_fingerprint(&self.board);
-        let placement_changed = self.browser_create_host.stamped_placement != Some(placement);
         let poll_due = self
             .browser_create_host
             .last_request_poll
@@ -55,14 +53,26 @@ impl HorizonApp {
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.poll_host_requests();
-        }
-        // Moving or hiding a panel must revoke the old workspace's access
-        // now, not up to one tick later.
-        if poll_due || placement_changed {
-            self.browser_create_host.stamped_placement = Some(placement);
+            self.browser_create_host.stamped_placement = Some(placement_fingerprint(&self.board));
             changed |= self.sync_browser_manifest_host_state();
+        } else {
+            changed |= self.restamp_browser_manifests_for_placement();
         }
         changed
+    }
+
+    /// Re-stamp the manifests as soon as the board placement they depend on
+    /// changes. This runs at the end of every frame, after queued workspace
+    /// changes and the moves made while rendering, so moving or hiding a
+    /// panel revokes the old workspace's access before the frame ends rather
+    /// than on a later tick.
+    pub(super) fn restamp_browser_manifests_for_placement(&mut self) -> bool {
+        let placement = placement_fingerprint(&self.board);
+        if self.browser_create_host.stamped_placement == Some(placement) {
+            return false;
+        }
+        self.browser_create_host.stamped_placement = Some(placement);
+        self.sync_browser_manifest_host_state()
     }
 
     fn poll_host_requests(&mut self) -> bool {
@@ -651,17 +661,25 @@ mod tests {
         assert_eq!(app.browser_create_host.stamped_placement, Some(stamped));
 
         app.board.assign_panel_to_workspace(agent_id, beta);
-        app.poll_browser_create_requests();
+        app.restamp_browser_manifests_for_placement();
         assert_eq!(
             app.browser_create_host.last_request_poll,
             Some(first_poll),
-            "a placement change does not advance the request poll cadence"
+            "the end-of-frame re-stamp does not advance the request poll cadence"
         );
+        let after_move = app.browser_create_host.stamped_placement;
         assert_ne!(
-            app.browser_create_host.stamped_placement,
+            after_move,
             Some(stamped),
             "a placement change re-stamps on the same frame"
         );
+
+        app.poll_browser_create_requests();
+        assert_eq!(
+            app.browser_create_host.stamped_placement, after_move,
+            "the next frame's poll finds the placement already stamped"
+        );
+        assert_eq!(app.browser_create_host.last_request_poll, Some(first_poll));
     }
 
     #[test]
