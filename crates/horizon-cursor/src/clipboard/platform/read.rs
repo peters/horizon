@@ -19,18 +19,14 @@ impl ClipboardSession {
         }
         let deadline = Instant::now() + super::SNAPSHOT_TIMEOUT;
         let targets_reply = self.request_selection_target(self.atoms.TARGETS, timestamp, deadline)?;
-        if targets_reply.property_type != AtomEnum::ATOM.into() || targets_reply.value.as_u32_slice().is_none() {
-            return Err(InjectError::Clipboard(
-                "clipboard target list has an unsupported format",
-            ));
+        if targets_reply.property_type != AtomEnum::ATOM.into() {
+            return Err(InjectError::Clipboard("unsupported clipboard target list"));
         }
-        let targets = targets_reply.value.as_u32_slice().ok_or(InjectError::Clipboard(
-            "clipboard target list has an unsupported format",
-        ))?;
+        let StoredValue::Bytes32(targets) = &targets_reply.value else {
+            return Err(InjectError::Clipboard("invalid clipboard targets"));
+        };
         if targets.len() > MAX_TARGETS {
-            return Err(InjectError::Clipboard(
-                "clipboard exposes too many formats to preserve safely",
-            ));
+            return Err(InjectError::Clipboard("too many clipboard formats to preserve safely"));
         }
         if targets.contains(&self.atoms.X_KDE_PASSWORDMANAGERHINT) {
             return Err(InjectError::Clipboard(

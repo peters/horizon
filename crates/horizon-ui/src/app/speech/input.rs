@@ -17,6 +17,7 @@ use crate::theme;
 
 pub(crate) const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
+const DESKTOP_PASTE_ERROR_ID: &str = "speech_desktop_paste_error";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
@@ -499,7 +500,7 @@ impl HorizonApp {
     pub(in crate::app) fn poll_speech_runtime(&mut self, ctx: &Context, mut events: Vec<SpeechEvent>) {
         let Some(speech) = self.speech.as_mut() else {
             ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
-            self.inject_speech_events(events);
+            self.inject_speech_events(ctx, events);
             return;
         };
 
@@ -526,12 +527,15 @@ impl HorizonApp {
         if recording_finished {
             self.speech_engaged_profile = None;
         }
-        self.inject_speech_events(events);
+        self.inject_speech_events(ctx, events);
     }
 
     /// Deliver transcripts into their target panels (mirrors
     /// `poll_primary_selection_paste`); errors are logged.
-    fn inject_speech_events(&mut self, events: Vec<SpeechEvent>) {
+    fn inject_speech_events(&mut self, ctx: &Context, mut events: Vec<SpeechEvent>) {
+        if let Some(message) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new(DESKTOP_PASTE_ERROR_ID))) {
+            events.push(SpeechEvent::Error(message));
+        }
         for event in events {
             match event {
                 SpeechEvent::Text { target, text } => match target {
@@ -549,17 +553,30 @@ impl HorizonApp {
                     }
                     SpeechSink::Desktop => {
                         let payload = format!("{text} ");
-                        match inject_desktop_transcript(&payload) {
-                            Ok(()) => {}
-                            Err(error) => {
-                                tracing::warn!(%error, "desktop speech inject failed");
-                                self.show_speech_notice(
-                                    format!(
-                                        "Speech input error: could not paste transcript ({error}); clipboard unchanged"
-                                    ),
-                                    true,
-                                );
-                            }
+                        let result_ctx = ctx.clone();
+                        if std::thread::Builder::new()
+                            .name("horizon-speech-paste-wait".to_owned())
+                            .spawn(move || {
+                                if let Err(error) = inject_desktop_transcript(&payload) {
+                                    result_ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            egui::Id::new(DESKTOP_PASTE_ERROR_ID),
+                                            format!("could not paste transcript ({error}); clipboard unchanged"),
+                                        );
+                                    });
+                                    result_ctx.request_repaint();
+                                }
+                            })
+                            .is_err()
+                        {
+                            let error = horizon_cursor::InjectError::Failed("failed to start desktop paste");
+                            tracing::warn!(%error, "desktop speech inject failed");
+                            self.show_speech_notice(
+                                format!(
+                                    "Speech input error: could not paste transcript ({error}); clipboard unchanged"
+                                ),
+                                true,
+                            );
                         }
                     }
                 },

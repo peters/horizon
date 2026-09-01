@@ -91,7 +91,7 @@ fn paste_worker(transcript: &str, result_tx: &mpsc::SyncSender<Result<(), Inject
         session.wait_for_target_request();
     }
     session.staged = None;
-    if session.owns_clipboard && session.snapshot.is_empty() {
+    if session.owns_clipboard && session.snapshot.targets.is_empty() {
         return;
     }
     if session.owns_clipboard {
@@ -278,11 +278,12 @@ impl ClipboardSession {
                 .map_err(|_| InjectError::Clipboard("failed to serve clipboard timestamp"))?;
             Ok(Some(false))
         } else if serve_staged {
-            let staged = self.staged.as_ref().ok_or(InjectError::Clipboard(
-                "speech transcript was not available for the target request",
-            ))?;
+            let staged = self
+                .staged
+                .as_ref()
+                .ok_or(InjectError::Clipboard("speech transcript is unavailable"))?;
             self.write_staged_text(requestor, property, target, staged)
-        } else if let Some(stored) = self.snapshot.find(target) {
+        } else if let Some(stored) = self.snapshot.targets.iter().find(|stored| stored.target == target) {
             self.write_stored_target(requestor, property, stored)?;
             Ok(Some(false))
         } else {
@@ -312,12 +313,12 @@ impl ClipboardSession {
         let mut wrote_transcript = false;
         for pair in pairs.as_chunks_mut::<2>().0 {
             if pair[1] == NONE || pair[0] == self.atoms.MULTIPLE {
-                pair[0] = NONE;
+                pair[1] = NONE;
                 continue;
             }
             match self.write_requested_target(requestor, pair[1], pair[0], serve_staged) {
                 Ok(Some(wrote)) => wrote_transcript |= wrote,
-                Ok(None) | Err(_) => pair[0] = NONE,
+                Ok(None) | Err(_) => pair[1] = NONE,
             }
         }
         self.conn
@@ -346,7 +347,7 @@ impl ClipboardSession {
             self.snapshot.targets.iter().map(|target| target.target).collect()
         };
         targets.extend([self.atoms.TARGETS, self.atoms.MULTIPLE, self.atoms.TIMESTAMP]);
-        if self.staged.is_none() && !self.snapshot.is_empty() {
+        if self.staged.is_none() && !self.snapshot.targets.is_empty() {
             targets.push(self.atoms.SAVE_TARGETS);
         }
         targets
@@ -473,9 +474,8 @@ impl ClipboardSession {
             .reply()
             .map_err(|_| InjectError::Failed("failed to identify focused application"))?
             .focus;
-        self.client_identity(focus).ok_or(InjectError::Failed(
-            "no focused application is available for speech paste",
-        ))
+        self.client_identity(focus)
+            .ok_or(InjectError::Failed("no focused application for speech paste"))
     }
 
     fn client_identity(&self, window: Window) -> Option<ClientIdentity> {
@@ -523,21 +523,20 @@ impl ClipboardSession {
     }
 
     fn request_matches_target(&self, requestor: Window) -> bool {
-        let Some(requestor) = self.client_identity(requestor) else {
-            return false;
-        };
-        self.target_identity.is_some_and(|target| target.matches(requestor))
+        self.client_identity(requestor)
+            .zip(self.target_identity)
+            .is_some_and(|(requestor, target)| target.matches(requestor))
     }
 
     fn is_protocol_target(&self, target: Atom) -> bool {
-        matches!(
-            target,
-            target if target == self.atoms.TARGETS
-                || target == self.atoms.MULTIPLE
-                || target == self.atoms.TIMESTAMP
-                || target == self.atoms.SAVE_TARGETS
-                || target == self.atoms.INCR
-        )
+        [
+            self.atoms.TARGETS,
+            self.atoms.MULTIPLE,
+            self.atoms.TIMESTAMP,
+            self.atoms.SAVE_TARGETS,
+            self.atoms.INCR,
+        ]
+        .contains(&target)
     }
 
     fn is_utf8_target(&self, target: Atom) -> bool {
@@ -573,8 +572,6 @@ impl ClipboardSession {
                 return Ok(event);
             }
         }
-        Err(InjectError::Clipboard(
-            "timed out while preserving the existing clipboard",
-        ))
+        Err(InjectError::Clipboard("clipboard preservation timed out"))
     }
 }

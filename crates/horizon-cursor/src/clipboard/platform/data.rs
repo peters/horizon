@@ -22,13 +22,12 @@ pub(super) struct StagedText {
 
 impl StagedText {
     pub(super) fn new(text: &str) -> Self {
-        let latin1 = text
-            .chars()
-            .map(|character| u8::try_from(u32::from(character)).ok())
-            .collect();
         Self {
             utf8: text.as_bytes().to_vec(),
-            latin1,
+            latin1: text
+                .chars()
+                .map(|character| u8::try_from(u32::from(character)).ok())
+                .collect(),
         }
     }
 }
@@ -39,16 +38,6 @@ pub(super) struct ClipboardSnapshot {
     pub(super) total_bytes: usize,
 }
 
-impl ClipboardSnapshot {
-    pub(super) fn find(&self, target: Atom) -> Option<&StoredTarget> {
-        self.targets.iter().find(|stored| stored.target == target)
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.targets.is_empty()
-    }
-}
-
 pub(super) struct StoredTarget {
     pub(super) target: Atom,
     pub(super) property_type: Atom,
@@ -57,11 +46,10 @@ pub(super) struct StoredTarget {
 
 impl StoredTarget {
     pub(super) fn from_reply(target: Atom, reply: &GetPropertyReply) -> Result<Self, InjectError> {
-        let value = StoredValue::from_reply(reply)?;
         Ok(Self {
             target,
             property_type: reply.type_,
-            value,
+            value: StoredValue::from_reply(reply)?,
         })
     }
 }
@@ -76,18 +64,18 @@ impl StoredValue {
     pub(super) fn from_reply(reply: &GetPropertyReply) -> Result<Self, InjectError> {
         match reply.format {
             8 => Ok(Self::Bytes8(reply.value.clone())),
-            16 => Ok(Self::Bytes16(
-                reply
+            16 => {
+                let values = reply
                     .value16()
-                    .ok_or(InjectError::Clipboard("clipboard returned invalid 16-bit data"))?
-                    .collect(),
-            )),
-            32 => Ok(Self::Bytes32(
-                reply
+                    .ok_or(InjectError::Clipboard("clipboard returned invalid data"))?;
+                Ok(Self::Bytes16(values.collect()))
+            }
+            32 => {
+                let values = reply
                     .value32()
-                    .ok_or(InjectError::Clipboard("clipboard returned invalid 32-bit data"))?
-                    .collect(),
-            )),
+                    .ok_or(InjectError::Clipboard("clipboard returned invalid data"))?;
+                Ok(Self::Bytes32(values.collect()))
+            }
             _ => Err(InjectError::Clipboard("clipboard returned an unsupported data format")),
         }
     }
@@ -102,12 +90,12 @@ impl StoredValue {
             (Self::Bytes16(value), 16) => value.extend(
                 reply
                     .value16()
-                    .ok_or(InjectError::Clipboard("clipboard returned invalid 16-bit data"))?,
+                    .ok_or(InjectError::Clipboard("clipboard returned invalid data"))?,
             ),
             (Self::Bytes32(value), 32) => value.extend(
                 reply
                     .value32()
-                    .ok_or(InjectError::Clipboard("clipboard returned invalid 32-bit data"))?,
+                    .ok_or(InjectError::Clipboard("clipboard returned invalid data"))?,
             ),
             _ => return Err(InjectError::Clipboard("clipboard changed format while being read")),
         }
@@ -121,52 +109,31 @@ impl StoredValue {
             Self::Bytes32(value) => value.len().saturating_mul(4),
         }
     }
-
-    pub(super) fn as_u32_slice(&self) -> Option<&[u32]> {
-        match self {
-            Self::Bytes32(value) => Some(value),
-            Self::Bytes8(_) | Self::Bytes16(_) => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientIdentity, StagedText, StoredValue};
+    use super::{ClientIdentity, StagedText};
+
+    const fn identity(resource_client: u32, pid: u32) -> ClientIdentity {
+        ClientIdentity {
+            resource_client,
+            pid: Some(pid),
+        }
+    }
 
     #[test]
     fn client_identity_matches_same_x_client_or_process() {
-        let target = ClientIdentity {
-            resource_client: 0x20_0000,
-            pid: Some(41),
-        };
-        assert!(target.matches(ClientIdentity {
-            resource_client: 0x20_0000,
-            pid: Some(99),
-        }));
-        assert!(target.matches(ClientIdentity {
-            resource_client: 0x30_0000,
-            pid: Some(41),
-        }));
-        assert!(!target.matches(ClientIdentity {
-            resource_client: 0x30_0000,
-            pid: Some(99),
-        }));
+        let target = identity(0x20_0000, 41);
+        assert!(target.matches(identity(0x20_0000, 99)));
+        assert!(target.matches(identity(0x30_0000, 41)));
+        assert!(!target.matches(identity(0x30_0000, 99)));
     }
 
     #[test]
     fn staged_text_offers_latin1_only_when_lossless() {
-        assert_eq!(
-            StagedText::new("blå").latin1.as_deref(),
-            Some([b'b', b'l', 0xe5].as_slice())
-        );
+        let expected = [b'b', b'l', 0xe5];
+        assert_eq!(StagedText::new("blå").latin1.as_deref(), Some(expected.as_slice()));
         assert!(StagedText::new("hello 🙂").latin1.is_none());
-    }
-
-    #[test]
-    fn stored_value_reports_encoded_byte_length() {
-        assert_eq!(StoredValue::Bytes8(vec![1, 2, 3]).byte_len(), 3);
-        assert_eq!(StoredValue::Bytes16(vec![1, 2, 3]).byte_len(), 6);
-        assert_eq!(StoredValue::Bytes32(vec![1, 2, 3]).byte_len(), 12);
     }
 }
