@@ -11,7 +11,7 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
-env_vars = ["HORIZON_BROWSER_ACTOR"]
+env_vars = ["HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE"]
 default_tools_approval_mode = "approve"
 ```
 
@@ -66,20 +66,27 @@ shell commands, files, or other MCP servers.
 - `browser_audit` returns redacted ordered action records.
 
 The server automatically claims and heartbeats a panel using
-`HORIZON_BROWSER_ACTOR`. Horizon injects that identity into the agent process
-and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
+`HORIZON_BROWSER_ACTOR`. Horizon injects that identity, together with the
+`HORIZON_BROWSER_HOST_INSTANCE` of the host process that launched the agent,
+into the agent process and explicitly forwards both to the bundled stdio MCP
+subprocess. A Horizon identity that reaches the server without its host
+instance receives an explicit error instead of an empty workspace. Creation and
 visibility requests are accepted only from an identity belonging to a live
 Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
-The Horizon host stamps every live browser manifest with the agent identities
-that currently share the panel's workspace and refreshes the stamp when either
-panel moves, so authorization follows workspace membership without restarting
-the browser session or the agent. Membership is evaluated inside the same
-locked manifest transaction as each claim, heartbeat, queued action, handoff,
-and audit read, so a move cannot race past the boundary. Identities are per-panel UUIDs, so separate
-Horizon processes sharing one home never authorize each other's panels even
-when their workspace ids collide, and manifests without a stamp (older hosts,
-or a panel whose host has not stamped it yet) fail closed for Horizon agents.
+The Horizon host stamps every live browser manifest with its own host
+instance and the agent identities that currently share the panel's workspace,
+and refreshes the stamp when either panel moves, so authorization follows
+workspace membership without restarting the browser session or the agent.
+Membership is evaluated inside the same locked manifest transaction as each
+claim, heartbeat, queued action, handoff, and audit read, so a move cannot
+race past the boundary. Because the stamp names the host and every agent
+carries the host that launched it, separate Horizon processes sharing one
+home never authorize each other's panels, even when duplicated or copied
+sessions reuse the same persisted panel ids or their workspace ids collide;
+create and visibility requests are likewise claimed only by the launching
+host. Manifests without a stamp (older hosts, or a panel whose host has not
+stamped it yet) fail closed for Horizon agents.
 Identities from outside Horizon (a standalone host or the process-local
 fallback) are not placed in any workspace and keep unscoped discovery.
 When no valid actor is injected, the server uses a process-local identity and

@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
-    self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult, BrowserVisibilityAuditStatus,
-    BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspace,
+    self, AgentIdentity, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult,
+    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspace,
 };
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
@@ -59,6 +59,9 @@ impl HorizonApp {
             }
         };
         for request in requests {
+            if !launched_by_this_host(request.host_instance.as_deref()) {
+                continue;
+            }
             let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
                 continue;
             };
@@ -163,6 +166,9 @@ impl HorizonApp {
         };
         let mut changed = false;
         for request in requests {
+            if !launched_by_this_host(request.host_instance.as_deref()) {
+                continue;
+            }
             let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
                 continue;
             };
@@ -334,8 +340,8 @@ fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
         })
 }
 
-/// The workspace stamp for browser panels in `workspace_id`: the identities of
-/// every agent panel currently sharing that workspace.
+/// The workspace stamp for browser panels in `workspace_id`: this host plus
+/// the identities of every agent panel currently sharing that workspace.
 fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspace> {
     let workspace = board.workspace(workspace_id)?;
     let actors = board
@@ -344,7 +350,21 @@ fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<Manifes
         .filter(|panel| panel.kind.is_agent() && panel.workspace_id == workspace_id)
         .map(|panel| browser_actor(&panel.local_id))
         .collect();
-    Some(ManifestWorkspace::new(&workspace.local_id, actors))
+    Some(ManifestWorkspace::new(
+        manifest::host_instance(),
+        &workspace.local_id,
+        actors,
+    ))
+}
+
+/// Requests name the host that launched the agent; a second Horizon process
+/// hosting a copy of the same session must leave them alone.
+fn launched_by_this_host(host_instance: Option<&str>) -> bool {
+    host_instance == Some(manifest::host_instance())
+}
+
+fn host_identity(actor: &str) -> AgentIdentity<'_> {
+    AgentIdentity::new(actor, Some(manifest::host_instance()))
 }
 
 fn backend_session_limit_reached(board: &Board, backend: BackendKind) -> bool {
@@ -375,7 +395,7 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
         );
         return BrowserCreateCompletion::Failed;
     };
-    if !workspace.authorizes(&pending.request.actor) {
+    if !workspace.authorizes(host_identity(&pending.request.actor)) {
         // The user moved a panel while the browser started. Keep the panel
         // where they put it and report the lost workspace instead of closing
         // it or handing an uncontrollable panel back as ready.
@@ -401,7 +421,7 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
         );
         return BrowserCreateCompletion::Failed;
     }
-    if let Err(error) = manifest::claim(&pending.panel_local_id, &pending.request.actor, None) {
+    if let Err(error) = manifest::claim(&pending.panel_local_id, host_identity(&pending.request.actor), None) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
         record_and_complete_failure(
             pending,
@@ -549,27 +569,36 @@ mod tests {
             )
             .expect("agent panel");
         let actor = browser_actor(&board.panel(agent_id).expect("agent panel").local_id);
+        let identity = host_identity(&actor);
 
         let alpha_stamp = browser_workspace(&board, alpha).expect("alpha workspace");
         assert_eq!(alpha_stamp.local_id, board.workspace(alpha).expect("alpha").local_id);
-        assert!(alpha_stamp.authorizes(&actor));
+        assert_eq!(alpha_stamp.host_instance, manifest::host_instance());
+        assert!(alpha_stamp.authorizes(identity));
+        assert!(
+            !alpha_stamp.authorizes(AgentIdentity::new(&actor, Some("another-live-host"))),
+            "a copied session in another process never matches this host's stamp"
+        );
         assert!(
             !browser_workspace(&board, beta)
                 .expect("beta workspace")
-                .authorizes(&actor)
+                .authorizes(identity)
         );
+        assert!(launched_by_this_host(Some(manifest::host_instance())));
+        assert!(!launched_by_this_host(Some("another-live-host")));
+        assert!(!launched_by_this_host(None));
 
         board.assign_panel_to_workspace(agent_id, beta);
 
         assert!(
             !browser_workspace(&board, alpha)
                 .expect("alpha workspace")
-                .authorizes(&actor)
+                .authorizes(identity)
         );
         assert!(
             browser_workspace(&board, beta)
                 .expect("beta workspace")
-                .authorizes(&actor)
+                .authorizes(identity)
         );
     }
 }

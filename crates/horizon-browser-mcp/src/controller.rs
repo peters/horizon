@@ -7,7 +7,9 @@ use horizon_browser::{
     AgentActionResult, BackendKind, BrowserActionOutcome, BrowserControlAction, BrowserControlValue,
 };
 use horizon_core::browser::manifest;
-use horizon_core::browser::manifest::{BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome};
+use horizon_core::browser::manifest::{
+    AgentIdentity, BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome, HOST_INSTANCE_ENV,
+};
 use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
@@ -22,6 +24,9 @@ const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
     actor: String,
+    /// The Horizon host process that injected `actor`, when its launcher
+    /// forwarded it. Workspace stamps only match identities from that host.
+    host_instance: Option<String>,
     process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
 }
 
@@ -106,6 +111,10 @@ pub(crate) enum ControlError {
     )]
     PanelOutsideWorkspace { panel_id: String },
     #[error(
+        "the calling agent's Horizon host instance is unknown; Horizon injects {HOST_INSTANCE_ENV} next to HORIZON_BROWSER_ACTOR and both must reach this MCP server"
+    )]
+    HostInstanceUnavailable,
+    #[error(
         "browser panel {panel_id} is already owned by this agent; reuse it, or set allow_additional=true only when the user explicitly requested an independent browser session"
     )]
     AdditionalPanelRequiresOptIn { panel_id: String },
@@ -129,13 +138,18 @@ impl BrowserController {
         let actor = std::env::var("HORIZON_BROWSER_ACTOR")
             .ok()
             .filter(|value| valid_actor(value));
+        let host_instance = std::env::var(HOST_INSTANCE_ENV)
+            .ok()
+            .filter(|value| manifest::valid_host_instance(value));
         actor.map_or_else(
             || Self {
                 actor: fallback.clone(),
+                host_instance: None,
                 process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(fallback))),
             },
             |actor| Self {
                 actor,
+                host_instance,
                 process_local_ownership: None,
             },
         )
@@ -145,19 +159,34 @@ impl BrowserController {
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
         Self {
             actor: actor.into(),
+            host_instance: None,
             process_local_ownership: None,
         }
     }
 
+    fn identity(&self) -> AgentIdentity<'_> {
+        AgentIdentity::new(&self.actor, self.host_instance.as_deref())
+    }
+
+    /// A Horizon agent whose launcher dropped the host instance can never
+    /// match a stamp; say so instead of reporting every panel as foreign.
+    fn require_host_instance(&self) -> Result<(), ControlError> {
+        if self.identity().workspace_scoped() && self.host_instance.is_none() {
+            return Err(ControlError::HostInstanceUnavailable);
+        }
+        Ok(())
+    }
+
     /// Live panels the calling identity may control: for a Horizon agent,
     /// exactly the panels its host placed in the agent's current workspace.
-    pub(crate) fn list_panels(&self) -> Vec<BrowserPanel> {
+    pub(crate) fn list_panels(&self) -> Result<Vec<BrowserPanel>, ControlError> {
+        self.require_host_instance()?;
         let mut panels = self
             .workspace_manifests()
             .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
-        panels
+        Ok(panels)
     }
 
     pub(crate) fn panel(&self, panel_id: &str) -> Result<BrowserPanel, ControlError> {
@@ -170,7 +199,7 @@ impl BrowserController {
         manifest::list_panels_in(&directory)
             .into_iter()
             .filter_map(|panel_id| manifest::read(&panel_id))
-            .filter(|manifest| manifest.permits_actor(&self.actor))
+            .filter(|manifest| manifest.permits(self.identity()))
     }
 
     /// Every control path starts here, so an out-of-workspace panel is
@@ -178,13 +207,14 @@ impl BrowserController {
     /// locked manifest transactions repeat the check, so this early read is
     /// only a fast path with a clear error, never the boundary itself.
     fn authorized_manifest(&self, panel_id: &str) -> Result<BrowserManifest, ControlError> {
+        self.require_host_instance()?;
         let manifest = manifest::read(panel_id).ok_or_else(|| {
             ControlError::internal_io(
                 "could not read browser panel",
                 io::Error::new(io::ErrorKind::NotFound, "browser manifest missing"),
             )
         })?;
-        if manifest.permits_actor(&self.actor) {
+        if manifest.permits(self.identity()) {
             Ok(manifest)
         } else {
             Err(ControlError::PanelOutsideWorkspace {
@@ -198,7 +228,7 @@ impl BrowserController {
     /// which deserves the workspace error rather than an ownership one.
     fn denied(&self, panel_id: &str, operation: &'static str, source: io::Error) -> ControlError {
         if source.kind() == io::ErrorKind::PermissionDenied
-            && manifest::read(panel_id).is_some_and(|manifest| !manifest.permits_actor(&self.actor))
+            && manifest::read(panel_id).is_some_and(|manifest| !manifest.permits(self.identity()))
         {
             return ControlError::PanelOutsideWorkspace {
                 panel_id: panel_id.to_string(),
@@ -218,12 +248,13 @@ impl BrowserController {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CreateUnavailable);
         }
+        self.require_host_instance()?;
         if !allow_additional && let Some(panel_id) = self.existing_actor_panel_id() {
             return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
         }
         let timeout_millis = bounded_create_timeout(timeout_millis);
         let action_id = manifest::enqueue_create(
-            &self.actor,
+            self.identity(),
             url,
             backend,
             visible,
@@ -283,9 +314,13 @@ impl BrowserController {
         }
         let timeout_millis = bounded_timeout(timeout_millis);
         self.ensure_claim(panel_id)?;
-        let action_id =
-            manifest::enqueue_visibility(&self.actor, panel_id, visible, Duration::from_millis(timeout_millis))
-                .map_err(|source| ControlError::internal_io("could not queue browser visibility change", source))?;
+        let action_id = manifest::enqueue_visibility(
+            self.identity(),
+            panel_id,
+            visible,
+            Duration::from_millis(timeout_millis),
+        )
+        .map_err(|source| self.denied(panel_id, "could not queue browser visibility change", source))?;
         let started = Instant::now();
         let mut last_heartbeat = started;
         loop {
@@ -340,30 +375,30 @@ impl BrowserController {
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
         self.ensure_claim(panel_id)?;
-        let action_id = manifest::enqueue_action(panel_id, &self.actor, action)
+        let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
             .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
         self.wait_for_result(panel_id, action_id, timeout_millis).await
     }
 
     pub(crate) fn request_handoff(&self, panel_id: &str, reason: &str) -> Result<String, ControlError> {
         self.ensure_claim(panel_id)?;
-        manifest::request_handoff(panel_id, &self.actor, reason)
+        manifest::request_handoff(panel_id, self.identity(), reason)
             .map_err(|source| self.denied(panel_id, "could not request browser handoff", source))
     }
 
     pub(crate) fn read_audit(&self, panel_id: &str) -> Result<Vec<horizon_browser::BrowserAuditEntry>, ControlError> {
         self.authorized_manifest(panel_id)?;
         tracing::debug!(actor = %self.actor, panel_id, "reading browser action audit");
-        manifest::read_audit_for_actor(panel_id, &self.actor)
+        manifest::read_audit_for(panel_id, self.identity())
             .map_err(|source| self.denied(panel_id, "could not read browser audit", source))
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
         self.authorized_manifest(panel_id)?;
-        let result = match manifest::heartbeat(panel_id, &self.actor) {
+        let result = match manifest::heartbeat(panel_id, self.identity()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                manifest::claim(panel_id, &self.actor, None)
+                manifest::claim(panel_id, self.identity(), None)
                     .map_err(|source| self.denied(panel_id, "could not claim browser panel", source))
             }
             Err(source) => Err(ControlError::internal_io("could not refresh browser ownership", source)),
@@ -377,7 +412,7 @@ impl BrowserController {
     }
 
     pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
-        manifest::heartbeat(panel_id, &self.actor)
+        manifest::heartbeat(panel_id, self.identity())
             .map_err(|source| self.denied(panel_id, "lost browser ownership while waiting", source))
     }
 
@@ -520,6 +555,15 @@ mod tests {
         assert!(!is_horizon_actor("agent"));
         let controller = BrowserController::with_actor("agent");
         assert_eq!(controller.actor, "agent");
+        assert!(controller.host_instance.is_none());
+        assert!(
+            controller.require_host_instance().is_ok(),
+            "external identities need no host"
+        );
+        assert!(matches!(
+            BrowserController::with_actor("horizon:agent-a").require_host_instance(),
+            Err(ControlError::HostInstanceUnavailable)
+        ));
     }
 
     #[test]
@@ -533,26 +577,29 @@ mod tests {
             }),
             ..BrowserManifest::default()
         };
+        let member = AgentIdentity::new("horizon:agent-a", Some("host-a"));
+        assert!(!panel.permits(member), "unstamped manifests fail closed");
         assert!(
-            !panel.permits_actor("horizon:agent-a"),
-            "unstamped manifests fail closed"
-        );
-        assert!(
-            panel.permits_actor("horizon-mcp:4242"),
+            panel.permits(AgentIdentity::new("horizon-mcp:4242", None)),
             "external identities stay unscoped"
         );
 
         panel.workspace = Some(manifest::ManifestWorkspace::new(
+            "host-a",
             "workspace-a",
             vec!["horizon:agent-a".to_string()],
         ));
-        assert!(panel.permits_actor("horizon:agent-a"));
+        assert!(panel.permits(member));
         assert!(
-            !panel.permits_actor("horizon:agent-b"),
+            !panel.permits(AgentIdentity::new("horizon:agent-b", Some("host-a"))),
             "a stale owner does not open the panel to another workspace"
         );
-        assert!(!panel.permits_actor("horizon:stale-owner"));
-        let controller = BrowserController::with_actor("horizon:agent-b");
+        assert!(
+            !panel.permits(AgentIdentity::new("horizon:agent-a", Some("host-b"))),
+            "the same persisted agent id in another live host is a different agent"
+        );
+        assert!(!panel.permits(AgentIdentity::new("horizon:stale-owner", Some("host-a"))));
+        let controller = BrowserController::with_actor("horizon-mcp:4242");
         assert!(matches!(
             controller.denied(
                 "missing-panel",

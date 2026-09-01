@@ -60,10 +60,9 @@ impl HorizonBrowserMcp {
         name = "browser_list",
         description = "List live Horizon browser panels with their safe capabilities. For an agent identity injected by Horizon, only panels in that agent's current workspace are listed; identities from outside Horizon keep unscoped discovery. A panel's visible field is host presentation state, not workspace membership. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
     )]
-    fn browser_list(&self) -> Json<BrowserListOutput> {
-        Json(BrowserListOutput {
-            panels: self.controller.list_panels(),
-        })
+    fn browser_list(&self) -> Result<Json<BrowserListOutput>, String> {
+        let panels = self.controller.list_panels().map_err(|error| error.to_string())?;
+        Ok(Json(BrowserListOutput { panels }))
     }
 
     #[tool(

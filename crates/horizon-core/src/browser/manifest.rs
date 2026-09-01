@@ -61,7 +61,8 @@ pub use visibility::{
     record_visibility_status, take_visibility_result,
 };
 pub use workspace::{
-    ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE, actor_is_workspace_scoped, read_audit_for_actor, sync_host_state,
+    AgentIdentity, HOST_INSTANCE_ENV, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE, actor_is_workspace_scoped,
+    host_instance, read_audit_for, sync_host_state, valid_host_instance,
 };
 
 /// How long an agent owner heartbeat stays fresh.
@@ -158,21 +159,21 @@ impl BrowserManifest {
         self.user_active && timestamp_is_fresh(now_millis, self.user_active_at, ttl_millis)
     }
 
-    /// Whether the host has placed `actor` in this panel's workspace. An
-    /// unstamped manifest authorizes nobody.
+    /// Whether the stamping host launched `identity` and placed it in this
+    /// panel's workspace. An unstamped manifest authorizes nobody.
     #[must_use]
-    pub fn authorizes_actor(&self, actor: &str) -> bool {
+    pub fn authorizes(&self, identity: AgentIdentity<'_>) -> bool {
         self.workspace
             .as_ref()
-            .is_some_and(|workspace| workspace.authorizes(actor))
+            .is_some_and(|workspace| workspace.authorizes(identity))
     }
 
-    /// Whether `actor` may discover or control this panel: identities from
-    /// outside Horizon always may, Horizon agents only through the host's
-    /// workspace stamp.
+    /// Whether `identity` may discover or control this panel: identities
+    /// from outside Horizon always may, Horizon agents only through the
+    /// host's workspace stamp.
     #[must_use]
-    pub fn permits_actor(&self, actor: &str) -> bool {
-        !actor_is_workspace_scoped(actor) || self.authorizes_actor(actor)
+    pub fn permits(&self, identity: AgentIdentity<'_>) -> bool {
+        !identity.workspace_scoped() || self.authorizes(identity)
     }
 }
 

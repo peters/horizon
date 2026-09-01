@@ -879,6 +879,10 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
         env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
+        env.insert(
+            crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
+            crate::browser::manifest::host_instance().to_string(),
+        );
     }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
@@ -914,7 +918,8 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]".to_string(),
+        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+            .to_string(),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
     ]
@@ -993,6 +998,10 @@ mod tests {
             env.get("HORIZON_BROWSER_ACTOR").map(String::as_str),
             Some("horizon:panel-42")
         );
+        assert_eq!(
+            env.get(crate::browser::manifest::HOST_INSTANCE_ENV).map(String::as_str),
+            Some(crate::browser::manifest::host_instance())
+        );
         assert!(agent_env(PanelKind::Shell, "panel-42").is_empty());
         assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
     }
@@ -1009,7 +1018,9 @@ mod tests {
         let command = args.join(" ");
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
-        assert!(command.contains("mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]"));
+        assert!(command.contains(
+            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+        ));
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("--browser-mcp"));
         assert!(!command.contains("browser-cli"));

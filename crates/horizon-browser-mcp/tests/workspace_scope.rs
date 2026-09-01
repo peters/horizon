@@ -5,7 +5,9 @@
 //! way the host would and prove that a Horizon agent identity can only see
 //! and control the panels stamped with it, that the stamp is re-read on every
 //! call (so panel moves apply without restarting the server), and that
-//! identities from outside Horizon keep the unscoped behavior.
+//! identities from outside Horizon keep the unscoped behavior. Stamps also
+//! name the host process, so a second Horizon process running a duplicated
+//! session (same persisted agent id, different host instance) is refused.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +19,8 @@ use horizon_core::browser::manifest::{
 use serde_json::{Value, json};
 
 const AGENT_A: &str = "horizon:agent-a";
+const HOST_A: &str = "host-a";
+const HOST_B: &str = "host-b";
 const SAME_WORKSPACE_PANEL: &str = "same-workspace";
 const OTHER_WORKSPACE_PANEL: &str = "other-workspace";
 const OTHER_HOST_PANEL: &str = "other-host";
@@ -30,11 +34,17 @@ struct McpProcess {
 }
 
 impl McpProcess {
-    fn start(home: &Path, actor: &str) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"))
+    fn start(home: &Path, actor: &str, host_instance: Option<&str>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"));
+        command
             .env("HOME", home)
             .env("HORIZON_BROWSER_ACTOR", actor)
-            .env("RUST_LOG", "off")
+            .env_remove("HORIZON_BROWSER_HOST_INSTANCE")
+            .env("RUST_LOG", "off");
+        if let Some(host_instance) = host_instance {
+            command.env("HORIZON_BROWSER_HOST_INSTANCE", host_instance);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -162,14 +172,16 @@ fn stale_owner(actor: &str) -> ManifestOwner {
 
 /// Seed the manifests one Horizon home can hold at the same time: a panel in
 /// the caller's workspace, an unowned panel with a stale owner in another
-/// workspace, a panel from a second host whose workspace local id collides,
-/// and a legacy manifest from a host that never stamped workspaces.
+/// workspace, a panel stamped by a second live host for a duplicated session
+/// that reuses the caller's persisted agent id and workspace local id, and a
+/// legacy manifest from a host that never stamped workspaces.
 fn seed_home(home: &Path) {
     write_manifest(
         home,
         &manifest(
             SAME_WORKSPACE_PANEL,
             Some(ManifestWorkspace::new(
+                HOST_A,
                 "workspace-a",
                 vec![AGENT_A.to_string(), "horizon:agent-c".to_string()],
             )),
@@ -181,6 +193,7 @@ fn seed_home(home: &Path) {
         &manifest(
             OTHER_WORKSPACE_PANEL,
             Some(ManifestWorkspace::new(
+                HOST_A,
                 "workspace-b",
                 vec!["horizon:agent-b".to_string()],
             )),
@@ -191,10 +204,7 @@ fn seed_home(home: &Path) {
         home,
         &manifest(
             OTHER_HOST_PANEL,
-            Some(ManifestWorkspace::new(
-                "workspace-a",
-                vec!["horizon:agent-x".to_string()],
-            )),
+            Some(ManifestWorkspace::new(HOST_B, "workspace-a", vec![AGENT_A.to_string()])),
             None,
         ),
     );
@@ -216,7 +226,7 @@ fn assert_outside_workspace(result: &Value, panel_id: &str) {
 fn horizon_agents_only_see_and_control_their_own_workspace() {
     let home = tempfile::tempdir().expect("isolated home");
     seed_home(home.path());
-    let mut agent = McpProcess::start(home.path(), AGENT_A);
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
 
     assert_eq!(agent.listed_panel_ids(), [SAME_WORKSPACE_PANEL]);
     let listed = agent.call("browser_list", &json!({}));
@@ -283,13 +293,14 @@ fn horizon_agents_only_see_and_control_their_own_workspace() {
 fn panel_moves_change_authorization_without_restarting_the_server() {
     let home = tempfile::tempdir().expect("isolated home");
     seed_home(home.path());
-    let mut agent = McpProcess::start(home.path(), AGENT_A);
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
     assert_eq!(agent.listed_panel_ids(), [SAME_WORKSPACE_PANEL]);
 
     // The host moved the other workspace's browser panel (or this agent) so
     // that both now share a workspace, and re-stamped the manifest.
     let mut moved_in = read_manifest(home.path(), OTHER_WORKSPACE_PANEL);
     moved_in.workspace = Some(ManifestWorkspace::new(
+        HOST_A,
         "workspace-a",
         vec![AGENT_A.to_string(), "horizon:agent-b".to_string()],
     ));
@@ -297,6 +308,7 @@ fn panel_moves_change_authorization_without_restarting_the_server() {
     // The host moved the original panel out of this agent's workspace.
     let mut moved_out = read_manifest(home.path(), SAME_WORKSPACE_PANEL);
     moved_out.workspace = Some(ManifestWorkspace::new(
+        HOST_A,
         "workspace-c",
         vec!["horizon:agent-c".to_string()],
     ));
@@ -342,7 +354,7 @@ fn panel_moves_change_authorization_without_restarting_the_server() {
 fn identities_from_outside_horizon_are_not_workspace_scoped() {
     let home = tempfile::tempdir().expect("isolated home");
     seed_home(home.path());
-    let mut external = McpProcess::start(home.path(), "browser-cli-test");
+    let mut external = McpProcess::start(home.path(), "browser-cli-test", None);
 
     let mut listed = external.listed_panel_ids();
     listed.sort();
@@ -366,4 +378,32 @@ fn identities_from_outside_horizon_are_not_workspace_scoped() {
     );
 
     external.close();
+}
+
+#[test]
+fn a_horizon_identity_without_a_host_instance_fails_closed_with_a_clear_error() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut unbound = McpProcess::start(home.path(), AGENT_A, None);
+
+    for (tool, arguments) in [
+        ("browser_list", json!({})),
+        ("browser_panel", json!({ "panel_id": SAME_WORKSPACE_PANEL })),
+        ("browser_create", json!({})),
+        (
+            "browser_handoff",
+            json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "no host" }),
+        ),
+    ] {
+        let result = unbound.call(tool, &arguments);
+        assert_eq!(result["isError"], true, "{tool} must fail closed: {result}");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("host instance is unknown") && text.contains("HORIZON_BROWSER_HOST_INSTANCE"),
+            "{tool} must explain the missing host instance: {text}"
+        );
+    }
+    assert!(read_manifest(home.path(), SAME_WORKSPACE_PANEL).owner.is_none());
+
+    unbound.close();
 }

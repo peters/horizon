@@ -7,11 +7,14 @@
 //! panel's workspace. The MCP adapter authorizes a workspace-scoped caller by
 //! that membership on every call: moving either panel between workspaces
 //! changes the stamp on the host's next sync without restarting the browser
-//! session or the agent. Agent identities are per-panel UUIDs, so two hosts
-//! sharing one home never stamp each other's identities even when their
-//! workspace ids collide. A manifest without a stamp fails closed.
+//! session or the agent. The stamp also names the host process, and Horizon
+//! injects that same host instance into every agent it launches, so two live
+//! hosts sharing one home never authorize each other even when persisted
+//! panel ids collide (duplicated, copied, or taken-over sessions). A manifest
+//! without a stamp fails closed.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
@@ -24,10 +27,51 @@ use crate::horizon_home::HorizonHome;
 /// Error text shared by every locked transaction that refuses an identity
 /// outside the panel's workspace.
 pub const OUTSIDE_WORKSPACE_MESSAGE: &str = "agent is outside this browser panel's workspace";
+/// Environment variable through which Horizon tells an agent process, and
+/// the MCP server it starts, which host process injected its identity.
+pub const HOST_INSTANCE_ENV: &str = "HORIZON_BROWSER_HOST_INSTANCE";
+static HOST_INSTANCE: OnceLock<String> = OnceLock::new();
+
+/// Identity of this Horizon host process, generated once per process.
+#[must_use]
+pub fn host_instance() -> &'static str {
+    HOST_INSTANCE.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
+#[must_use]
+pub fn valid_host_instance(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+}
+
+/// Who is asking: the injected actor and the host process that injected it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentIdentity<'a> {
+    pub actor: &'a str,
+    /// `None` when the caller was not launched by a Horizon host or its
+    /// launcher did not forward [`HOST_INSTANCE_ENV`]; a workspace-scoped
+    /// identity without it can never satisfy a stamp.
+    pub host_instance: Option<&'a str>,
+}
+
+impl<'a> AgentIdentity<'a> {
+    #[must_use]
+    pub const fn new(actor: &'a str, host_instance: Option<&'a str>) -> Self {
+        Self { actor, host_instance }
+    }
+
+    #[must_use]
+    pub fn workspace_scoped(&self) -> bool {
+        actor_is_workspace_scoped(self.actor)
+    }
+}
 
 /// The workspace a browser panel currently belongs to, as its host sees it.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ManifestWorkspace {
+    /// The host process that stamped the panel; only agents that process
+    /// launched can match.
+    #[serde(default)]
+    pub host_instance: String,
     /// Persisted local id of the workspace, for diagnostics only.
     pub local_id: String,
     /// Sorted, de-duplicated identities of the agent panels in that
@@ -52,9 +96,9 @@ pub fn actor_is_workspace_scoped(actor: &str) -> bool {
 /// past the workspace boundary.
 ///
 /// # Errors
-/// Returns `PermissionDenied` when the manifest does not permit `actor`.
-pub(super) fn permit_actor(manifest: &BrowserManifest, actor: &str) -> std::io::Result<()> {
-    if manifest.permits_actor(actor) {
+/// Returns `PermissionDenied` when the manifest does not permit `identity`.
+pub(super) fn permit(manifest: &BrowserManifest, identity: AgentIdentity<'_>) -> std::io::Result<()> {
+    if manifest.permits(identity) {
         Ok(())
     } else {
         Err(std::io::Error::new(
@@ -64,39 +108,48 @@ pub(super) fn permit_actor(manifest: &BrowserManifest, actor: &str) -> std::io::
     }
 }
 
-/// Read a panel's audit journal only when `actor` may control the panel,
+/// Read a panel's audit journal only when `identity` may control the panel,
 /// checking membership and reading under the manifest lock.
 ///
 /// # Errors
 /// Returns `NotFound` for a panel that is not live, `PermissionDenied` for an
 /// identity outside its workspace, or an audit storage failure.
-pub fn read_audit_for_actor(panel_local_id: &str, actor: &str) -> std::io::Result<Vec<BrowserAuditEntry>> {
-    read_audit_for_actor_at(HorizonHome::resolve().root(), panel_local_id, actor)
+pub fn read_audit_for(panel_local_id: &str, identity: AgentIdentity<'_>) -> std::io::Result<Vec<BrowserAuditEntry>> {
+    read_audit_for_at(HorizonHome::resolve().root(), panel_local_id, identity)
 }
 
-fn read_audit_for_actor_at(root: &Path, panel_local_id: &str, actor: &str) -> std::io::Result<Vec<BrowserAuditEntry>> {
+fn read_audit_for_at(
+    root: &Path,
+    panel_local_id: &str,
+    identity: AgentIdentity<'_>,
+) -> std::io::Result<Vec<BrowserAuditEntry>> {
     let manifest_path = manifest_path_for_root(root, panel_local_id);
     let _lock = ManifestLock::acquire(&manifest_path)?;
     let manifest = read_at(&manifest_path)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
-    permit_actor(&manifest, actor)?;
+    permit(&manifest, identity)?;
     audit::read_at(&audit::audit_path_for_root(root, panel_local_id))
 }
 
 impl ManifestWorkspace {
     #[must_use]
-    pub fn new(local_id: &str, mut actors: Vec<String>) -> Self {
+    pub fn new(host_instance: &str, local_id: &str, mut actors: Vec<String>) -> Self {
         actors.sort();
         actors.dedup();
         Self {
+            host_instance: host_instance.to_string(),
             local_id: local_id.to_string(),
             actors,
         }
     }
 
+    /// Whether `identity` was launched by the stamping host and sits in this
+    /// workspace. The host check makes identical persisted panel ids in two
+    /// live hosts (duplicated or copied sessions) mutually invisible.
     #[must_use]
-    pub fn authorizes(&self, actor: &str) -> bool {
-        self.actors.iter().any(|candidate| candidate == actor)
+    pub fn authorizes(&self, identity: AgentIdentity<'_>) -> bool {
+        identity.host_instance == Some(self.host_instance.as_str())
+            && self.actors.iter().any(|candidate| candidate == identity.actor)
     }
 }
 
@@ -144,32 +197,48 @@ mod tests {
     use super::*;
     use crate::browser::manifest::write_at;
 
+    const HOST_A: &str = "host-a";
+    const HOST_B: &str = "host-b";
+
+    fn member() -> AgentIdentity<'static> {
+        AgentIdentity::new("horizon:agent-a", Some(HOST_A))
+    }
+
+    fn stamp(host: &str, actors: &[&str]) -> ManifestWorkspace {
+        ManifestWorkspace::new(host, "ws-a", actors.iter().map(|actor| (*actor).to_string()).collect())
+    }
+
     #[test]
     fn only_horizon_agent_identities_are_workspace_scoped() {
         assert!(actor_is_workspace_scoped("horizon:agent-a"));
         assert!(!actor_is_workspace_scoped("horizon:"));
         assert!(!actor_is_workspace_scoped("horizon-mcp:4242"));
         assert!(!actor_is_workspace_scoped("browser-cli-test"));
+        assert!(valid_host_instance(host_instance()));
+        assert_eq!(host_instance(), host_instance(), "one identity per process");
+        assert!(!valid_host_instance(""));
+        assert!(!valid_host_instance("bad\ninstance"));
 
         let mut manifest = BrowserManifest::default();
-        assert!(
-            manifest.permits_actor("browser-cli-test"),
-            "unscoped identities need no stamp"
-        );
-        assert!(
-            !manifest.permits_actor("horizon:agent-a"),
-            "unstamped manifests fail closed"
-        );
+        let external = AgentIdentity::new("browser-cli-test", None);
+        assert!(manifest.permits(external), "unscoped identities need no stamp");
+        assert!(!manifest.permits(member()), "unstamped manifests fail closed");
         assert_eq!(
-            permit_actor(&manifest, "horizon:agent-a")
-                .expect_err("outside workspace")
-                .kind(),
+            permit(&manifest, member()).expect_err("outside workspace").kind(),
             std::io::ErrorKind::PermissionDenied
         );
-        manifest.workspace = Some(ManifestWorkspace::new("ws-a", vec!["horizon:agent-a".to_string()]));
-        assert!(manifest.permits_actor("horizon:agent-a"));
-        assert!(!manifest.permits_actor("horizon:agent-b"));
-        permit_actor(&manifest, "horizon:agent-a").expect("member is permitted");
+        manifest.workspace = Some(stamp(HOST_A, &["horizon:agent-a"]));
+        assert!(manifest.permits(member()));
+        assert!(!manifest.permits(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
+        assert!(
+            !manifest.permits(AgentIdentity::new("horizon:agent-a", Some(HOST_B))),
+            "the same persisted actor id under another live host is a different agent"
+        );
+        assert!(
+            !manifest.permits(AgentIdentity::new("horizon:agent-a", None)),
+            "a Horizon agent without a forwarded host instance never matches"
+        );
+        permit(&manifest, member()).expect("member is permitted");
     }
 
     #[test]
@@ -180,7 +249,7 @@ mod tests {
             &manifest_path_for_root(root.path(), panel),
             &BrowserManifest {
                 panel_local_id: panel.to_string(),
-                workspace: Some(ManifestWorkspace::new("ws-a", vec!["horizon:agent-a".to_string()])),
+                workspace: Some(stamp(HOST_A, &["horizon:agent-a"])),
                 ..BrowserManifest::default()
             },
         )
@@ -198,22 +267,28 @@ mod tests {
         )
         .expect("append audit");
 
-        let entries = read_audit_for_actor_at(root.path(), panel, "horizon:agent-a").expect("member reads audit");
+        let entries = read_audit_for_at(root.path(), panel, member()).expect("member reads audit");
         assert_eq!(entries.len(), 1);
+        for outsider in [
+            AgentIdentity::new("horizon:agent-b", Some(HOST_A)),
+            AgentIdentity::new("horizon:agent-a", Some(HOST_B)),
+            AgentIdentity::new("horizon:agent-a", None),
+        ] {
+            assert_eq!(
+                read_audit_for_at(root.path(), panel, outsider)
+                    .expect_err("non-member is refused")
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
         assert_eq!(
-            read_audit_for_actor_at(root.path(), panel, "horizon:agent-b")
-                .expect_err("non-member is refused")
-                .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            read_audit_for_actor_at(root.path(), panel, "browser-cli-test")
+            read_audit_for_at(root.path(), panel, AgentIdentity::new("browser-cli-test", None))
                 .expect("unscoped identity reads audit")
                 .len(),
             1
         );
         assert_eq!(
-            read_audit_for_actor_at(root.path(), "missing", "horizon:agent-a")
+            read_audit_for_at(root.path(), "missing", member())
                 .expect_err("missing panel")
                 .kind(),
             std::io::ErrorKind::NotFound
@@ -223,6 +298,7 @@ mod tests {
     #[test]
     fn membership_is_exact_and_an_unstamped_manifest_authorizes_nobody() {
         let workspace = ManifestWorkspace::new(
+            HOST_A,
             "ws-a",
             vec![
                 "horizon:agent-b".to_string(),
@@ -231,15 +307,15 @@ mod tests {
             ],
         );
         assert_eq!(workspace.actors, ["horizon:agent-a", "horizon:agent-b"]);
-        assert!(workspace.authorizes("horizon:agent-a"));
-        assert!(!workspace.authorizes("horizon:agent-c"));
-        assert!(!workspace.authorizes("horizon:agent"));
+        assert!(workspace.authorizes(member()));
+        assert!(!workspace.authorizes(AgentIdentity::new("horizon:agent-c", Some(HOST_A))));
+        assert!(!workspace.authorizes(AgentIdentity::new("horizon:agent", Some(HOST_A))));
 
         let mut manifest = BrowserManifest::default();
-        assert!(!manifest.authorizes_actor("horizon:agent-a"));
+        assert!(!manifest.authorizes(member()));
         manifest.workspace = Some(workspace);
-        assert!(manifest.authorizes_actor("horizon:agent-a"));
-        assert!(!manifest.authorizes_actor("horizon:agent-c"));
+        assert!(manifest.authorizes(member()));
+        assert!(!manifest.authorizes(AgentIdentity::new("horizon:agent-c", Some(HOST_A))));
     }
 
     #[test]
@@ -254,7 +330,7 @@ mod tests {
             },
         )
         .expect("write manifest");
-        let workspace = ManifestWorkspace::new("ws-a", vec!["horizon:agent-a".to_string()]);
+        let workspace = stamp(HOST_A, &["horizon:agent-a"]);
 
         assert!(sync_host_state_at(&path, "panel", true, &workspace).expect("stamp"));
         let stamped = read_at(&path).expect("read stamped");
@@ -265,11 +341,18 @@ mod tests {
         assert!(sync_host_state_at(&path, "panel", false, &workspace).expect("hide"));
         assert!(read_at(&path).expect("read hidden").hidden);
 
-        let moved = ManifestWorkspace::new("ws-b", vec!["horizon:agent-b".to_string()]);
+        let moved = ManifestWorkspace::new(HOST_A, "ws-b", vec!["horizon:agent-b".to_string()]);
         assert!(sync_host_state_at(&path, "panel", false, &moved).expect("move"));
         let after_move = read_at(&path).expect("read moved");
-        assert!(after_move.authorizes_actor("horizon:agent-b"));
-        assert!(!after_move.authorizes_actor("horizon:agent-a"));
+        assert!(after_move.authorizes(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
+        assert!(!after_move.authorizes(member()));
+
+        let restarted = stamp(HOST_B, &["horizon:agent-a"]);
+        assert!(
+            sync_host_state_at(&path, "panel", false, &restarted).expect("new host re-stamps"),
+            "a host restart with the same persisted ids changes the stamp"
+        );
+        assert!(!read_at(&path).expect("read re-stamped").authorizes(member()));
 
         let missing = manifest_path_for_root(root.path(), "missing");
         assert_eq!(
@@ -295,8 +378,26 @@ mod tests {
             }"#,
         )
         .expect("legacy manifest parses");
-
         assert!(manifest.workspace.is_none());
-        assert!(!manifest.authorizes_actor("horizon:agent-a"));
+        assert!(!manifest.authorizes(member()));
+
+        let stamped_without_host: BrowserManifest = serde_json::from_str(
+            r#"{
+                "panel_local_id": "old-stamp",
+                "browser_ws": "",
+                "target_id": "",
+                "url": "",
+                "title": "",
+                "workspace": { "local_id": "ws-a", "actors": ["horizon:agent-a"] },
+                "user_active": false,
+                "user_active_at": 0,
+                "updated_at": 0
+            }"#,
+        )
+        .expect("host-less stamp parses");
+        assert!(
+            !stamped_without_host.permits(member()),
+            "a stamp without a host instance never matches a live host"
+        );
     }
 }
