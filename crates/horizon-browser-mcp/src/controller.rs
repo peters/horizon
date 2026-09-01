@@ -182,14 +182,41 @@ impl BrowserController {
 
     pub(crate) fn list_panels(&self) -> Vec<BrowserPanel> {
         let directory = manifest::default_manifest_dir();
-        let mut panels = manifest::list_panels_in(&directory)
+        self.panels_from(
+            manifest::list_panels_in(&directory)
+                .into_iter()
+                .filter_map(|panel_id| manifest::read(&panel_id)),
+        )
+    }
+
+    fn panels_from(&self, manifests: impl IntoIterator<Item = manifest::BrowserManifest>) -> Vec<BrowserPanel> {
+        let mut panels = manifests
             .into_iter()
-            .filter_map(|panel_id| manifest::read(&panel_id))
             .filter(|panel| self.can_access_manifest(panel))
-            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
+            .map(|panel| BrowserPanel::from_manifest(panel, &self.actor))
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
         panels
+    }
+
+    pub(crate) fn panel(&self, panel_id: &str) -> Result<BrowserPanel, ControlError> {
+        let panel = manifest::read(panel_id).ok_or_else(|| {
+            ControlError::internal_io(
+                "could not read browser panel",
+                io::Error::new(io::ErrorKind::NotFound, "browser panel is not live"),
+            )
+        })?;
+        self.panel_from_manifest(panel)
+    }
+
+    fn panel_from_manifest(&self, panel: manifest::BrowserManifest) -> Result<BrowserPanel, ControlError> {
+        if self.can_access_manifest(&panel) {
+            Ok(BrowserPanel::from_manifest(panel, &self.actor))
+        } else {
+            Err(ControlError::PanelOutsideWorkspace {
+                panel_id: panel.panel_local_id,
+            })
+        }
     }
 
     pub(crate) async fn create(
@@ -330,30 +357,30 @@ impl BrowserController {
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
         self.ensure_claim(panel_id)?;
-        let action_id = manifest::enqueue_action(panel_id, &self.actor, action)
+        let action_id = manifest::enqueue_action(panel_id, &self.actor, action, self.host_instance_id.as_deref())
             .map_err(|source| ControlError::internal_io("could not queue browser action", source))?;
         self.wait_for_result(panel_id, action_id, timeout_millis).await
     }
 
     pub(crate) fn request_handoff(&self, panel_id: &str, reason: &str) -> Result<String, ControlError> {
         self.ensure_claim(panel_id)?;
-        manifest::request_handoff(panel_id, &self.actor, reason)
+        manifest::request_handoff(panel_id, &self.actor, reason, self.host_instance_id.as_deref())
             .map_err(|source| ControlError::internal_io("could not request browser handoff", source))
     }
 
     pub(crate) fn read_audit(&self, panel_id: &str) -> Result<Vec<horizon_browser::BrowserAuditEntry>, ControlError> {
         self.ensure_panel_in_workspace(panel_id)?;
         tracing::debug!(actor = %self.actor, panel_id, "reading browser action audit");
-        manifest::read_audit(panel_id)
+        manifest::read_audit_for_actor(panel_id, &self.actor, self.host_instance_id.as_deref())
             .map_err(|source| ControlError::internal_io("could not read browser audit", source))
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
         self.ensure_panel_in_workspace(panel_id)?;
-        let result = match manifest::heartbeat(panel_id, &self.actor) {
+        let result = match manifest::heartbeat(panel_id, &self.actor, self.host_instance_id.as_deref()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                manifest::claim(panel_id, &self.actor, None)
+                manifest::claim(panel_id, &self.actor, None, self.host_instance_id.as_deref())
                     .map_err(|source| ControlError::internal_io("could not claim browser panel", source))
             }
             Err(source) => Err(ControlError::internal_io("could not refresh browser ownership", source)),
@@ -368,7 +395,7 @@ impl BrowserController {
 
     pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
         self.ensure_panel_in_workspace(panel_id)?;
-        manifest::heartbeat(panel_id, &self.actor)
+        manifest::heartbeat(panel_id, &self.actor, self.host_instance_id.as_deref())
             .map_err(|source| ControlError::internal_io("lost browser ownership while waiting", source))
     }
 
@@ -379,7 +406,7 @@ impl BrowserController {
         Ok(())
     }
 
-    fn ensure_panel_in_workspace(&self, panel_id: &str) -> Result<(), ControlError> {
+    pub(crate) fn ensure_panel_in_workspace(&self, panel_id: &str) -> Result<(), ControlError> {
         if !is_horizon_actor(&self.actor) {
             return Ok(());
         }
@@ -403,7 +430,7 @@ impl BrowserController {
         if !is_horizon_actor(&self.actor) {
             return true;
         }
-        panel_is_in_actor_workspace(panel, &self.actor, self.host_instance_id.as_deref())
+        panel.permits_actor(&self.actor, self.host_instance_id.as_deref())
     }
 
     async fn wait_for_result(
@@ -519,15 +546,6 @@ fn panel_belongs_to_actor(panel: &manifest::BrowserManifest, actor: &str) -> boo
     panel.owner.as_ref().is_some_and(|owner| owner.name == actor)
 }
 
-fn panel_is_in_actor_workspace(panel: &manifest::BrowserManifest, actor: &str, host_instance_id: Option<&str>) -> bool {
-    let Some(host_instance_id) = host_instance_id else {
-        return false;
-    };
-    panel.workspace_scope.as_ref().is_some_and(|scope| {
-        scope.host_instance_id == host_instance_id && scope.actors.iter().any(|candidate| candidate == actor)
-    })
-}
-
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
     match backend {
         BackendKind::ChromiumCdp => ProtocolKind::Cdp,
@@ -581,31 +599,62 @@ mod tests {
     }
 
     #[test]
-    fn workspace_scope_requires_the_exact_host_and_actor() {
-        let mut panel = manifest::BrowserManifest {
-            panel_local_id: "browser-panel".to_string(),
+    fn discovery_and_panel_control_follow_host_workspace_and_moves() {
+        let actor = "horizon:host-a:agent-a";
+        let controller = BrowserController {
+            actor: actor.to_string(),
+            host_instance_id: Some("host-a".to_string()),
+            process_local_ownership: None,
+        };
+        let scoped = |panel: &str, host: &str, actors: Vec<&str>| manifest::BrowserManifest {
+            panel_local_id: panel.to_string(),
             workspace_scope: Some(manifest::ManifestWorkspaceScope {
-                host_instance_id: "host-a".to_string(),
-                workspace_local_id: "workspace-a".to_string(),
-                actors: vec!["horizon:agent-a".to_string()],
+                host_instance_id: host.to_string(),
+                workspace_local_id: "same-local-id".to_string(),
+                actors: actors.into_iter().map(str::to_string).collect(),
             }),
             ..manifest::BrowserManifest::default()
         };
-
-        assert!(panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-a")));
-        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-b", Some("host-a")));
-        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-b")));
-        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", None));
-
-        panel.owner = Some(manifest::ManifestOwner {
-            name: "horizon:agent-b".to_string(),
+        let mut same_workspace = scoped("same", "host-a", vec![actor]);
+        same_workspace.owner = Some(manifest::ManifestOwner {
+            name: "horizon:host-a:stale".to_string(),
             tty: None,
-            updated_at: manifest::now_millis(),
+            updated_at: 1,
         });
-        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-b", Some("host-a")));
+        let other_workspace = scoped("other-workspace", "host-a", vec!["horizon:host-a:agent-b"]);
+        let other_host = scoped("other-host", "host-b", vec![actor]);
+        let legacy = manifest::BrowserManifest {
+            panel_local_id: "legacy".to_string(),
+            ..manifest::BrowserManifest::default()
+        };
 
-        panel.workspace_scope = None;
-        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-a")));
+        assert_eq!(
+            controller
+                .panels_from([
+                    same_workspace.clone(),
+                    other_workspace.clone(),
+                    other_host.clone(),
+                    legacy.clone()
+                ])
+                .into_iter()
+                .map(|panel| panel.panel_id)
+                .collect::<Vec<_>>(),
+            ["same"]
+        );
+        assert!(controller.panel_from_manifest(same_workspace.clone()).is_ok());
+        for panel in [other_workspace, other_host, legacy] {
+            assert!(matches!(
+                controller.panel_from_manifest(panel),
+                Err(ControlError::PanelOutsideWorkspace { .. })
+            ));
+        }
+
+        same_workspace.workspace_scope.as_mut().unwrap().actors = vec!["horizon:host-a:agent-b".to_string()];
+        assert!(controller.panels_from([same_workspace.clone()]).is_empty());
+        assert!(matches!(
+            controller.panel_from_manifest(same_workspace),
+            Err(ControlError::PanelOutsideWorkspace { .. })
+        ));
     }
 
     #[test]

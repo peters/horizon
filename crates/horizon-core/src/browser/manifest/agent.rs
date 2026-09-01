@@ -18,7 +18,12 @@ const MAX_HANDOFF_REASON_BYTES: usize = 2 * 1024;
 /// # Errors
 /// Returns an error for invalid identity, a missing live manifest, or a
 /// filesystem failure.
-pub fn claim(panel_local_id: &str, agent_name: &str, tty: Option<&str>) -> std::io::Result<()> {
+pub fn claim(
+    panel_local_id: &str,
+    agent_name: &str,
+    tty: Option<&str>,
+    host_instance_id: Option<&str>,
+) -> std::io::Result<()> {
     validate_actor(agent_name)?;
     if let Some(tty) = tty {
         validate_tty(tty)?;
@@ -26,7 +31,7 @@ pub fn claim(panel_local_id: &str, agent_name: &str, tty: Option<&str>) -> std::
     let now = now_millis();
     let mut claimed = false;
     update(panel_local_id, |manifest| {
-        claimed = try_claim_owner(manifest, agent_name, tty, now);
+        claimed = try_claim_owner(manifest, agent_name, tty, host_instance_id, now);
     })?;
     if claimed {
         Ok(())
@@ -42,12 +47,12 @@ pub fn claim(panel_local_id: &str, agent_name: &str, tty: Option<&str>) -> std::
 ///
 /// # Errors
 /// Returns `PermissionDenied` when this agent is not the current owner.
-pub fn heartbeat(panel_local_id: &str, agent_name: &str) -> std::io::Result<()> {
+pub fn heartbeat(panel_local_id: &str, agent_name: &str, host_instance_id: Option<&str>) -> std::io::Result<()> {
     validate_actor(agent_name)?;
     let mut matched = false;
     update(panel_local_id, |manifest| {
         let now = now_millis();
-        if manifest.live_owner(now).is_some_and(|owner| owner.name == agent_name) {
+        if actor_owns_panel(manifest, agent_name, host_instance_id, now) {
             if let Some(owner) = manifest.owner.as_mut() {
                 owner.updated_at = now;
             }
@@ -101,16 +106,18 @@ fn release_at(path: &Path, panel_local_id: &str, agent_name: &str) -> std::io::R
 ///
 /// # Errors
 /// Returns an error for an invalid request, stale ownership, or I/O failure.
-pub fn request_handoff(panel_local_id: &str, agent_name: &str, reason: &str) -> std::io::Result<String> {
+pub fn request_handoff(
+    panel_local_id: &str,
+    agent_name: &str,
+    reason: &str,
+    host_instance_id: Option<&str>,
+) -> std::io::Result<String> {
     validate_actor(agent_name)?;
     validate_reason(reason)?;
     let request_id = new_handoff_request_id();
     let mut authorized = false;
     update(panel_local_id, |manifest| {
-        if manifest
-            .live_owner(now_millis())
-            .is_some_and(|owner| owner.name == agent_name)
-        {
+        if actor_owns_panel(manifest, agent_name, host_instance_id, now_millis()) {
             manifest.handoff = Some(ManifestHandoff {
                 request_id: request_id.clone(),
                 reason: reason.to_string(),
@@ -152,7 +159,12 @@ pub fn request_handoff(panel_local_id: &str, agent_name: &str, reason: &str) -> 
 /// # Errors
 /// Returns `WouldBlock` while the user owns the wheel, `PermissionDenied` for
 /// stale ownership, or another error for invalid input/I/O.
-pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserControlAction) -> std::io::Result<String> {
+pub fn enqueue_action(
+    panel_local_id: &str,
+    agent_name: &str,
+    action: BrowserControlAction,
+    host_instance_id: Option<&str>,
+) -> std::io::Result<String> {
     validate_actor(agent_name)?;
     action
         .validate()
@@ -169,7 +181,7 @@ pub fn enqueue_action(panel_local_id: &str, agent_name: &str, action: BrowserCon
     let mut audit_failure = None;
     update(panel_local_id, |manifest| {
         let now = now_millis();
-        if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
+        if !actor_owns_panel(manifest, agent_name, host_instance_id, now) {
             failure = Some((
                 std::io::ErrorKind::PermissionDenied,
                 "agent does not have a live ownership claim",
@@ -261,12 +273,25 @@ fn set_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>
     manifest.updated_at = now;
 }
 
-fn try_claim_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) -> bool {
-    if manifest.live_owner(now).is_some_and(|owner| owner.name != agent_name) {
+fn try_claim_owner(
+    manifest: &mut BrowserManifest,
+    agent_name: &str,
+    tty: Option<&str>,
+    host_instance_id: Option<&str>,
+    now: i64,
+) -> bool {
+    if !manifest.permits_actor(agent_name, host_instance_id)
+        || manifest.live_owner(now).is_some_and(|owner| owner.name != agent_name)
+    {
         return false;
     }
     set_owner(manifest, agent_name, tty, now);
     true
+}
+
+fn actor_owns_panel(manifest: &BrowserManifest, agent_name: &str, host_instance_id: Option<&str>, now: i64) -> bool {
+    manifest.permits_actor(agent_name, host_instance_id)
+        && manifest.live_owner(now).is_some_and(|owner| owner.name == agent_name)
 }
 
 fn validate_tty(tty: &str) -> std::io::Result<()> {
@@ -397,12 +422,12 @@ mod tests {
             ..BrowserManifest::default()
         };
 
-        assert!(!try_claim_owner(&mut manifest, "agent-b", None, now));
+        assert!(!try_claim_owner(&mut manifest, "agent-b", None, None, now));
         assert_eq!(
             manifest.owner.as_ref().map(|owner| owner.name.as_str()),
             Some("agent-a")
         );
-        assert!(try_claim_owner(&mut manifest, "agent-a", Some("pts/2"), now));
+        assert!(try_claim_owner(&mut manifest, "agent-a", Some("pts/2"), None, now));
         assert_eq!(
             manifest.owner.as_ref().and_then(|owner| owner.tty.as_deref()),
             Some("pts/2")
@@ -411,12 +436,26 @@ mod tests {
             &mut manifest,
             "agent-b",
             None,
+            None,
             now + super::super::OWNER_TTL_MILLIS + 1,
         ));
         assert_eq!(
             manifest.owner.as_ref().map(|owner| owner.name.as_str()),
             Some("agent-b")
         );
+
+        manifest.workspace_scope = Some(super::super::ManifestWorkspaceScope {
+            host_instance_id: "host-a".to_string(),
+            workspace_local_id: "workspace-a".to_string(),
+            actors: vec!["horizon:host-a:agent-a".to_string()],
+        });
+        assert!(!try_claim_owner(
+            &mut manifest,
+            "horizon:host-a:agent-b",
+            None,
+            Some("host-a"),
+            now + 2 * super::super::OWNER_TTL_MILLIS,
+        ));
     }
 
     #[test]

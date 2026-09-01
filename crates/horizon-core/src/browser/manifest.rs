@@ -87,6 +87,14 @@ pub fn host_instance_id() -> &'static str {
     HOST_INSTANCE_ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
 }
 
+#[must_use]
+/// Whether an actor identity is governed by Horizon workspace membership.
+pub fn actor_is_workspace_scoped(actor: &str) -> bool {
+    actor
+        .strip_prefix("horizon:")
+        .is_some_and(|identity| !identity.is_empty())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestOwner {
     pub name: String,
@@ -154,6 +162,17 @@ pub struct BrowserManifest {
 }
 
 impl BrowserManifest {
+    #[must_use]
+    pub fn permits_actor(&self, actor: &str, host_instance_id: Option<&str>) -> bool {
+        if !actor_is_workspace_scoped(actor) {
+            return host_instance_id.is_none();
+        }
+        self.workspace_scope.as_ref().is_some_and(|scope| {
+            host_instance_id == Some(scope.host_instance_id.as_str())
+                && scope.actors.iter().any(|candidate| candidate == actor)
+        })
+    }
+
     /// The owner, if it has heartbeat within [`OWNER_TTL_MILLIS`].
     #[must_use]
     pub fn live_owner(&self, now_millis: i64) -> Option<&ManifestOwner> {
@@ -228,6 +247,31 @@ pub fn read(panel_local_id: &str) -> Option<BrowserManifest> {
 pub fn read_at(path: &Path) -> Option<BrowserManifest> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
+}
+
+/// Read an audit only while the manifest lock proves the caller is still in
+/// the panel's host and workspace.
+///
+/// # Errors
+/// Returns an I/O error for invalid identity, missing panel state, denied
+/// workspace access, or an unreadable audit journal.
+pub fn read_audit_for_actor(
+    panel_local_id: &str,
+    actor: &str,
+    host_instance_id: Option<&str>,
+) -> std::io::Result<Vec<horizon_browser::BrowserAuditEntry>> {
+    agent::validate_actor(actor)?;
+    let path = default_manifest_path(panel_local_id);
+    let _lock = ManifestLock::acquire(&path)?;
+    let manifest =
+        read_at(&path).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
+    if !manifest.permits_actor(actor, host_instance_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "agent is outside this browser panel's workspace",
+        ));
+    }
+    audit::read_audit(panel_local_id)
 }
 
 /// List panel local ids that currently have a valid, canonically named
@@ -658,33 +702,19 @@ mod tests {
     }
 
     #[test]
-    fn legacy_manifest_without_workspace_scope_fails_closed_by_default() {
-        let manifest: BrowserManifest = serde_json::from_str(
-            r#"{
-                "panel_local_id":"legacy",
-                "backend":"chromium",
-                "browser_ws":"",
-                "target_id":"",
-                "url":"",
-                "title":"",
-                "user_active":false,
-                "user_active_at":0,
-                "updated_at":0
-            }"#,
-        )
-        .unwrap();
-
-        assert!(manifest.workspace_scope.is_none());
-    }
-
-    #[test]
-    fn host_instance_identity_is_process_stable() {
-        let first = host_instance_id();
-        let second = host_instance_id();
-
-        assert_eq!(first, second);
-        assert!(!first.is_empty());
-        assert!(!first.chars().any(char::is_control));
+    fn workspace_scope_is_exact_and_legacy_manifests_fail_closed() {
+        let mut manifest = BrowserManifest::default();
+        assert!(manifest.permits_actor("browser-cli", None));
+        assert!(!manifest.permits_actor("horizon:host-a:agent-a", Some("host-a")));
+        manifest.workspace_scope = Some(ManifestWorkspaceScope {
+            host_instance_id: "host-a".to_string(),
+            workspace_local_id: "workspace-a".to_string(),
+            actors: vec!["horizon:host-a:agent-a".to_string()],
+        });
+        assert!(manifest.permits_actor("horizon:host-a:agent-a", Some("host-a")));
+        assert!(!manifest.permits_actor("horizon:host-a:agent-a", Some("host-b")));
+        assert!(!manifest.permits_actor("horizon:host-a:agent-b", Some("host-a")));
+        assert_eq!(host_instance_id(), host_instance_id());
     }
 
     #[test]

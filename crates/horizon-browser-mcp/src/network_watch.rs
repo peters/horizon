@@ -120,6 +120,7 @@ impl NetworkWatchState {
         };
 
         loop {
+            authorize_watch(controller, &request.panel_id)?;
             let (start_offset, cache_reset, connection_urls) = self.start_cursor(&cache_key, next_sequence, &path);
             let scan_request = ScanRequest {
                 path: path.clone(),
@@ -137,6 +138,7 @@ impl NetworkWatchState {
                 .await
                 .map_err(|error| format!("browser network watch reader failed: {error}"))?
                 .map_err(|error| format!("could not read browser network capture: {error}"))?;
+            authorize_watch(controller, &request.panel_id)?;
             next_sequence = scan.next_sequence;
             self.store_cursor(
                 &cache_key,
@@ -177,6 +179,7 @@ impl NetworkWatchState {
             && aggregate.records.is_empty()
             && !aggregate.capture_stopped
             && capture.active;
+        authorize_watch(controller, &request.panel_id)?;
         Ok(NetworkWatchOutput {
             panel_id: request.panel_id,
             action_id,
@@ -232,6 +235,12 @@ impl NetworkWatchState {
             },
         );
     }
+}
+
+fn authorize_watch(controller: &BrowserController, panel_id: &str) -> Result<(), String> {
+    controller
+        .ensure_panel_in_workspace(panel_id)
+        .map_err(|error| error.to_string())
 }
 
 impl ValidatedWatch {

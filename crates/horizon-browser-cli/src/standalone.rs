@@ -245,7 +245,7 @@ impl Drop for OwnedHostProcess {
 /// owned browser cannot be stopped within its bounded cleanup deadline.
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     let session = OwnedSession::start(options, &HorizonHome::resolve())?;
-    let mcp_result = horizon_browser_mcp::serve_stdio_standalone().await;
+    let mcp_result = serve_standalone_mcp().await;
     let stopped = session.shutdown();
     mcp_result?;
     if stopped {
@@ -253,6 +253,17 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     } else {
         Err(StandaloneError::Shutdown)
     }
+}
+
+async fn serve_standalone_mcp() -> Result<(), horizon_browser_mcp::StdioServerError> {
+    use rmcp::ServiceExt as _;
+
+    let service = horizon_browser_mcp::HorizonBrowserMcp::standalone()
+        .serve(rmcp::transport::stdio())
+        .await
+        .map_err(|error| horizon_browser_mcp::StdioServerError::Initialize(error.to_string()))?;
+    service.waiting().await?;
+    Ok(())
 }
 
 fn start(

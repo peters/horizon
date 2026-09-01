@@ -447,7 +447,11 @@ fn parse_job(prompt: String, mut args: impl Iterator<Item = OsString>) -> Result
 }
 
 fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
-    let mut standalone = std::env::var_os("HORIZON_BROWSER_ACTOR").is_none();
+    let mut standalone = default_mcp_standalone(
+        std::env::var_os("HORIZON_BROWSER_ACTOR").is_some(),
+        std::env::var_os("HORIZON").is_some(),
+        std::env::var_os(horizon_core::browser::manifest::HOST_INSTANCE_ENV).is_some(),
+    );
     let mut mode_seen = false;
     let mut backend = None;
     let mut backend_seen = false;
@@ -482,6 +486,10 @@ fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
         standalone,
         options: StandaloneOptions { backend, visible },
     })
+}
+
+const fn default_mcp_standalone(actor_present: bool, horizon_present: bool, host_present: bool) -> bool {
+    !actor_present && !horizon_present && !host_present
 }
 
 fn parse_backend(value: Option<&OsString>) -> Result<Option<BackendKind>, String> {
@@ -643,6 +651,9 @@ mod tests {
         assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
         assert!(options.visible);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
+        assert!(default_mcp_standalone(false, false, false));
+        assert!(!default_mcp_standalone(false, true, false));
+        assert!(!default_mcp_standalone(false, false, true));
     }
 
     #[test]

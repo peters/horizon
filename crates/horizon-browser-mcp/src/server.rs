@@ -337,11 +337,9 @@ impl HorizonBrowserMcp {
         Parameters(input): Parameters<PanelInput>,
     ) -> Result<Json<crate::model::BrowserPanel>, String> {
         self.controller
-            .list_panels()
-            .into_iter()
-            .find(|panel| panel.panel_id == input.panel_id)
+            .panel(&input.panel_id)
             .map(Json)
-            .ok_or_else(|| format!("browser panel {} is not live", input.panel_id))
+            .map_err(|error| error.to_string())
     }
 }
 

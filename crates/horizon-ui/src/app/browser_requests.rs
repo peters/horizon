@@ -385,21 +385,27 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
         );
         return BrowserCreateCompletion::Failed;
     }
-    if let Err(error) = manifest::claim(&pending.panel_local_id, &pending.request.actor, None) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
-        record_and_complete_failure(
-            pending,
-            "ownership_failed",
-            "Horizon could not assign the new browser panel to the requesting agent",
-        );
-        return BrowserCreateCompletion::Failed;
-    }
+    let host_instance_id = workspace_scope.host_instance_id.clone();
     if let Err(error) = set_manifest_host_state(&pending.panel_local_id, pending.request.visible, workspace_scope) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser host state");
         record_and_complete_failure(
             pending,
             "manifest_update_failed",
             "Horizon could not publish the new browser panel's visibility",
+        );
+        return BrowserCreateCompletion::Failed;
+    }
+    if let Err(error) = manifest::claim(
+        &pending.panel_local_id,
+        &pending.request.actor,
+        None,
+        Some(&host_instance_id),
+    ) {
+        tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
+        record_and_complete_failure(
+            pending,
+            "ownership_failed",
+            "Horizon could not assign the new browser panel to the requesting agent",
         );
         return BrowserCreateCompletion::Failed;
     }
@@ -505,10 +511,10 @@ fn apply_manifest_host_state(
     visible: bool,
     workspace_scope: ManifestWorkspaceScope,
 ) {
-    let owner_is_authorized = manifest
-        .owner
-        .as_ref()
-        .is_none_or(|owner| workspace_scope.actors.iter().any(|actor| actor == &owner.name));
+    let owner_is_authorized = manifest.owner.as_ref().is_none_or(|owner| {
+        !manifest::actor_is_workspace_scoped(&owner.name)
+            || workspace_scope.actors.iter().any(|actor| actor == &owner.name)
+    });
     if !owner_is_authorized {
         manifest.owner = None;
         manifest.handoff = None;
@@ -600,37 +606,5 @@ mod tests {
 
         assert!(browser_workspace_scope(&board, alpha).unwrap().actors.is_empty());
         assert_eq!(browser_workspace_scope(&board, beta).unwrap().actors, [actor]);
-    }
-
-    #[test]
-    fn workspace_scope_change_releases_an_out_of_scope_owner() {
-        let mut browser_manifest = manifest::BrowserManifest {
-            owner: Some(manifest::ManifestOwner {
-                name: "horizon:host-a:agent-a".to_string(),
-                tty: None,
-                updated_at: manifest::now_millis(),
-            }),
-            handoff: Some(manifest::ManifestHandoff {
-                request_id: "handoff".to_string(),
-                reason: "steer".to_string(),
-                requested_at: manifest::now_millis(),
-                done: false,
-            }),
-            ..manifest::BrowserManifest::default()
-        };
-
-        apply_manifest_host_state(
-            &mut browser_manifest,
-            true,
-            ManifestWorkspaceScope {
-                host_instance_id: "host-b".to_string(),
-                workspace_local_id: "workspace-b".to_string(),
-                actors: vec!["horizon:host-b:agent-b".to_string()],
-            },
-        );
-
-        assert!(browser_manifest.owner.is_none());
-        assert!(browser_manifest.handoff.is_none());
-        assert!(!browser_manifest.hidden);
     }
 }

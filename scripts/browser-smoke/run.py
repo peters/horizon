@@ -123,12 +123,9 @@ def browser_config(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 def write_config(args: argparse.Namespace, root: Path) -> Path:
     actor_path = root / "agent-actor"
-    host_instance_path = root / "agent-host-instance"
     actor_probe = (
         "import os,pathlib,time;"
         f"pathlib.Path({str(actor_path)!r}).write_text(os.environ['HORIZON_BROWSER_ACTOR'],encoding='utf-8');"
-        f"pathlib.Path({str(host_instance_path)!r}).write_text("
-        "os.environ['HORIZON_BROWSER_HOST_INSTANCE'],encoding='utf-8');"
         "time.sleep(3600)"
     )
     config = {
@@ -188,7 +185,6 @@ def smoke_environment(root: Path) -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("HORIZON", None)
     environment.pop("HORIZON_BROWSER_ACTOR", None)
-    environment.pop("HORIZON_BROWSER_HOST_INSTANCE", None)
     environment["HOME"] = str(root / "home")
     environment["XDG_CACHE_HOME"] = str(root / "cache")
     environment["XDG_CONFIG_HOME"] = str(root / "xdg-config")
@@ -206,22 +202,18 @@ def run_mcp_gate(
     environment: dict[str, str],
 ) -> int:
     actor_path = root / "agent-actor"
-    host_instance_path = root / "agent-host-instance"
     deadline = time.monotonic() + 30
     actor = ""
-    host_instance = ""
     while time.monotonic() < deadline:
         try:
             actor = actor_path.read_text(encoding="utf-8").strip()
-            host_instance = host_instance_path.read_text(encoding="utf-8").strip()
         except OSError:
             actor = ""
-            host_instance = ""
-        if actor.startswith("horizon:") and host_instance:
+        if actor.startswith("horizon:"):
             break
         time.sleep(0.1)
     else:
-        print("agent panel did not publish its Horizon browser scope", file=sys.stderr, flush=True)
+        print("agent panel did not publish its Horizon browser actor", file=sys.stderr, flush=True)
         return 1
     script = Path(__file__).resolve().parent / "mcp_gate.py"
     invocation = [
@@ -239,8 +231,6 @@ def run_mcp_gate(
         str(root / "logs" / f"{args.backend}-mcp.log"),
         "--actor",
         actor,
-        "--host-instance",
-        host_instance,
     ]
     if not args.skip_handoff:
         invocation.append("--handoff")
