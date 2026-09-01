@@ -43,19 +43,29 @@ impl DriverState {
         // Browser-level auto-attach does not recurse into site-isolated child
         // targets. Enable it on the bound page session as well so OOPIF
         // execution contexts remain available to frame-aware input bridges.
-        let initial_setup_commands = [
+        let pre_observation_setup_commands = [
             (
                 "Target.setAutoAttach",
                 serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
             ),
             ("Page.enable", serde_json::json!({})),
+        ];
+        for (method, params) in pre_observation_setup_commands {
+            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
+                return false;
+            }
+        }
+        if !self.resolve_main_frame_id(link, event_tx, frame_slot, session) {
+            return false;
+        }
+        let observation_setup_commands = [
             // Observe only top-level response metadata so a completed user
             // handoff can report a repeated Cloudflare challenge. No headers
             // or bodies leave the browser engine through this path.
             ("Network.enable", serde_json::json!({})),
             ("Runtime.enable", serde_json::json!({})),
         ];
-        for (method, params) in initial_setup_commands {
+        for (method, params) in observation_setup_commands {
             if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
                 return false;
             }
@@ -122,6 +132,35 @@ impl DriverState {
         let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
         let _ = event_tx.send(BrowserEvent::Ready);
         !self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn resolve_main_frame_id(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+    ) -> bool {
+        let Some(frame_tree) = self.setup_command_result(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.getFrameTree",
+            &serde_json::json!({}),
+            Some(session),
+        ) else {
+            return false;
+        };
+        let Some(frame_id) = main_frame_id_from_tree(&frame_tree).map(str::to_string) else {
+            return self.setup_failure(
+                event_tx,
+                frame_slot,
+                "Page.getFrameTree",
+                "response omitted the top-level frame id",
+            );
+        };
+        self.main_frame_id = Some(frame_id);
+        true
     }
 
     fn navigate_initial_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
@@ -369,5 +408,27 @@ impl DriverState {
         if self.session_id.is_some() {
             self.start_screencast(link, event_tx, frame_slot);
         }
+    }
+}
+
+fn main_frame_id_from_tree(frame_tree: &serde_json::Value) -> Option<&str> {
+    frame_tree.pointer("/frameTree/frame/id")?.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::main_frame_id_from_tree;
+
+    #[test]
+    fn frame_tree_requires_a_top_level_frame_id() {
+        let frame_tree = serde_json::json!({
+            "frameTree": {
+                "frame": { "id": "main", "url": "about:blank" },
+                "childFrames": [{ "frame": { "id": "child" } }]
+            }
+        });
+
+        assert_eq!(main_frame_id_from_tree(&frame_tree), Some("main"));
+        assert_eq!(main_frame_id_from_tree(&serde_json::json!({ "frameTree": {} })), None);
     }
 }

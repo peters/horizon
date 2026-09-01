@@ -153,12 +153,7 @@ impl DriverState {
     }
 
     fn observe_challenge_response(&mut self, event: &CdpEvent<'_>) {
-        if event.method != "Network.responseReceived"
-            || string_at(event.params, "/type") != Some("Document")
-            || self.main_frame_id.as_deref().is_some_and(|frame_id| {
-                string_at(event.params, "/frameId").is_some_and(|response_frame| response_frame != frame_id)
-            })
-        {
+        if !is_main_document_response(event, self.main_frame_id.as_deref()) {
             return;
         }
         let Some(url) = string_at(event.params, "/response/url") else {
@@ -417,6 +412,12 @@ fn string_at<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str>
     value.pointer(pointer).and_then(serde_json::Value::as_str)
 }
 
+fn is_main_document_response(event: &CdpEvent<'_>, main_frame_id: Option<&str>) -> bool {
+    event.method == "Network.responseReceived"
+        && string_at(event.params, "/type") == Some("Document")
+        && main_frame_id.is_some_and(|frame_id| string_at(event.params, "/frameId") == Some(frame_id))
+}
+
 fn u64_at(value: &serde_json::Value, pointer: &str) -> Option<u64> {
     value.pointer(pointer).and_then(serde_json::Value::as_u64)
 }
@@ -443,5 +444,40 @@ mod tests {
         assert_eq!(u64_at(&value, "/negative"), None);
         assert_eq!(u64_at(&value, "/fractional"), None);
         assert_eq!(u8_at(&value, "/opcode"), Some(2));
+    }
+
+    #[test]
+    fn challenge_observation_requires_the_known_main_document_frame() {
+        let main_document = serde_json::json!({ "type": "Document", "frameId": "main" });
+        let child_document = serde_json::json!({ "type": "Document", "frameId": "child" });
+        let missing_frame = serde_json::json!({ "type": "Document" });
+        let main_script = serde_json::json!({ "type": "Script", "frameId": "main" });
+
+        assert!(is_main_document_response(
+            &CdpEvent {
+                method: "Network.responseReceived",
+                params: &main_document,
+                session_id: Some("session"),
+            },
+            Some("main"),
+        ));
+        assert!(!is_main_document_response(
+            &CdpEvent {
+                method: "Network.responseReceived",
+                params: &main_document,
+                session_id: Some("session"),
+            },
+            None,
+        ));
+        for params in [&child_document, &missing_frame, &main_script] {
+            assert!(!is_main_document_response(
+                &CdpEvent {
+                    method: "Network.responseReceived",
+                    params,
+                    session_id: Some("session"),
+                },
+                Some("main"),
+            ));
+        }
     }
 }
