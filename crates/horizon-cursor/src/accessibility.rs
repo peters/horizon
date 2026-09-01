@@ -236,7 +236,12 @@ mod platform {
             };
             let discovered = match collection_candidates(&root).await {
                 Some(candidates) if !candidates.is_empty() => candidates,
-                Some(_) | None => traversal_candidates(application, connection.connection()).await?,
+                Some(_) | None => {
+                    let Some(candidates) = traversal_candidates(application, connection.connection()).await else {
+                        continue;
+                    };
+                    candidates
+                }
             };
             for candidate in discovered {
                 if !candidates.contains(&candidate) {
@@ -264,7 +269,7 @@ mod platform {
     async fn traversal_candidates(
         root: ObjectRefOwned,
         connection: &atspi::zbus::Connection,
-    ) -> Result<Vec<ObjectRefOwned>, InjectError> {
+    ) -> Option<Vec<ObjectRefOwned>> {
         let mut queue = VecDeque::from([root]);
         let mut visited = HashSet::new();
         let mut candidates = Vec::new();
@@ -273,9 +278,10 @@ mod platform {
                 continue;
             }
             if visited.len() > MAX_TRAVERSED_OBJECTS {
-                return Err(InjectError::Target(
-                    "focused accessibility tree is too large to inspect safely",
-                ));
+                // The bound is per application. Discard the partial result so
+                // it cannot hide a second candidate, then let the registry
+                // search continue with other applications.
+                return None;
             }
             let Ok(accessible) = object.as_accessible_proxy(connection).await else {
                 continue;
@@ -289,7 +295,7 @@ mod platform {
             if TargetFacts::new(interfaces, states, Role::Invalid).is_focused_text_target() {
                 candidates.push(object.clone());
                 if candidates.len() > 1 {
-                    return Ok(candidates);
+                    return Some(candidates);
                 }
             }
             if states.intersects(State::Defunct | State::Stale) {
@@ -299,7 +305,7 @@ mod platform {
                 queue.extend(children);
             }
         }
-        Ok(candidates)
+        Some(candidates)
     }
 
     fn unique_candidate_index(candidate_count: usize) -> Result<usize, InjectError> {
