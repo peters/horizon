@@ -227,6 +227,24 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
         "a manifest without a recorded host is never stamped"
     );
 
+    let corrupt = manifest_path_for_root(root.path(), "corrupt");
+    std::fs::write(&corrupt, b"{ not json").expect("write corrupt manifest");
+    assert_eq!(
+        sync_host_state_at(&corrupt, "corrupt", true, &workspace)
+            .expect_err("a corrupt manifest is a read failure, not a missing panel")
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    let unreadable = manifest_path_for_root(root.path(), "unreadable");
+    std::fs::create_dir_all(&unreadable).expect("directory where a manifest is expected");
+    assert_ne!(
+        sync_host_state_at(&unreadable, "unreadable", true, &workspace)
+            .expect_err("an unreadable manifest path is a read failure")
+            .kind(),
+        std::io::ErrorKind::NotFound,
+        "only an absent file is reported as not live"
+    );
+
     let missing = manifest_path_for_root(root.path(), "missing");
     assert_eq!(
         sync_host_state_at(&missing, "missing", true, &workspace)

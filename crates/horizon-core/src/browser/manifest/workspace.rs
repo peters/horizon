@@ -20,7 +20,8 @@ use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis, read_at,
+    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis,
+    read_at, try_read_at,
 };
 use crate::horizon_home::HorizonHome;
 
@@ -212,7 +213,9 @@ fn sync_host_state_at(
     workspace: &ManifestWorkspace,
 ) -> std::io::Result<HostStampOutcome> {
     let hidden = !visible;
-    let current = read_at(path).ok_or_else(|| {
+    // Only an absent file is "not live"; a read or parse failure propagates
+    // so callers that retry later do not mistake it for a missing panel.
+    let current = try_read_at(path)?.ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("browser manifest is not live: {}", path.display()),
