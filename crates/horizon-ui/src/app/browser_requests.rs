@@ -67,12 +67,13 @@ impl HorizonApp {
             .browser_create_host
             .last_request_poll
             .is_none_or(|last| now.saturating_duration_since(last) >= CREATE_REQUEST_POLL_INTERVAL);
+        // Placement changes are handled once per frame, after rendering, by
+        // `restamp_browser_manifests_for_placement`; the tick only keeps the
+        // cadence-based stamp.
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.poll_host_requests();
             changed |= self.stamp_current_placement();
-        } else {
-            changed |= self.restamp_browser_manifests_for_placement();
         }
         changed
     }
@@ -440,9 +441,12 @@ fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> Hos
     sync
 }
 
-/// Everything the workspace stamps depend on: which workspace each browser
-/// and agent panel sits in, and whether each browser panel is shown. Cheap
-/// enough to compute every frame; it hashes no strings and touches no files.
+/// Everything the workspace stamps depend on: the persisted identity of each
+/// browser and agent panel, the persisted identity of the workspace it sits
+/// in, and whether each browser panel is shown. Persisted ids rather than
+/// board ids, because activating another session replaces the board and
+/// restarts its numeric ids. Cheap enough to compute once per frame; it
+/// touches no files.
 fn placement_fingerprint(board: &Board) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for panel in &board.panels {
@@ -450,8 +454,11 @@ fn placement_fingerprint(board: &Board) -> u64 {
         if !browser && !panel.kind.is_agent() {
             continue;
         }
-        panel.id.hash(&mut hasher);
-        panel.workspace_id.hash(&mut hasher);
+        panel.local_id.hash(&mut hasher);
+        board
+            .workspace(panel.workspace_id)
+            .map(|workspace| workspace.local_id.as_str())
+            .hash(&mut hasher);
         browser.hash(&mut hasher);
         (browser && panel.visible).hash(&mut hasher);
     }
@@ -690,6 +697,20 @@ mod tests {
             with_agent,
             "moving back restores the fingerprint"
         );
+
+        // A replacement board (another session) restarts numeric ids; its
+        // persisted ids differ, so its fingerprint must differ too.
+        let mut replacement = Board::new();
+        let other_alpha = replacement.create_workspace("alpha");
+        replacement.create_workspace("beta");
+        replacement
+            .create_panel(agent_options(), other_alpha)
+            .expect("agent panel in the replacement board");
+        assert_ne!(
+            placement_fingerprint(&replacement),
+            with_agent,
+            "identically shaped boards with different persisted ids never share a fingerprint"
+        );
     }
 
     #[test]
@@ -788,9 +809,13 @@ mod tests {
         app.poll_browser_create_requests();
         assert_eq!(
             app.browser_create_host.stamped_placement, after_move,
-            "the next frame's poll finds the placement already stamped"
+            "the next frame's poll leaves the placement to the end-of-frame check"
         );
         assert_eq!(app.browser_create_host.last_request_poll, Some(first_poll));
+        assert!(
+            !app.restamp_browser_manifests_for_placement(),
+            "an unchanged placement is not re-stamped again"
+        );
     }
 
     #[test]
