@@ -21,6 +21,7 @@ pub fn insert_text_into_focused_accessible(text: &str) -> Result<(), InjectError
 #[cfg(target_os = "linux")]
 mod platform {
     use std::collections::{HashSet, VecDeque};
+    use std::future::Future;
     use std::sync::{Mutex, TryLockError};
     use std::time::Duration;
 
@@ -34,7 +35,7 @@ mod platform {
 
     use super::InjectError;
 
-    const INSERT_TIMEOUT: Duration = Duration::from_secs(5);
+    const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
     const MAX_TRAVERSED_OBJECTS: usize = 2_048;
     static INSERT_LOCK: Mutex<()> = Mutex::new(());
 
@@ -135,52 +136,68 @@ mod platform {
             .enable_all()
             .build()
             .map_err(|_| InjectError::Failed("failed to start accessibility runtime"))?;
-        runtime.block_on(async {
-            tokio::time::timeout(INSERT_TIMEOUT, insert_text_async(text))
-                .await
-                .map_err(|_| InjectError::Failed("accessibility insertion timed out"))?
-        })
+        runtime.block_on(insert_text_async(text))
     }
 
     async fn insert_text_async(text: &str) -> Result<(), InjectError> {
-        let connection = AccessibilityConnection::new()
-            .await
-            .map_err(|_| InjectError::Unsupported)?;
-        let target = find_focused_target(&connection).await?;
-        let accessible = target
-            .as_accessible_proxy(connection.connection())
-            .await
-            .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))?;
-        let initial_target = read_target_facts(&accessible).await?;
+        let deadline = tokio::time::Instant::now() + PREFLIGHT_TIMEOUT;
+        let connection = bounded_preflight(deadline, async {
+            AccessibilityConnection::new()
+                .await
+                .map_err(|_| InjectError::Unsupported)
+        })
+        .await?;
+        let target = bounded_preflight(deadline, find_focused_target(&connection)).await?;
+        let accessible = bounded_preflight(deadline, async {
+            target
+                .as_accessible_proxy(connection.connection())
+                .await
+                .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
+        })
+        .await?;
+        let initial_target = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
         initial_target.validate()?;
 
-        let proxies = accessible
-            .proxies()
-            .await
-            .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))?;
-        let text_proxy = proxies
-            .text()
-            .await
-            .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
-        let editable_proxy = proxies
-            .editable_text()
-            .await
-            .map_err(|_| InjectError::Target("focused field does not support direct text insertion"))?;
+        let proxies = bounded_preflight(deadline, async {
+            accessible
+                .proxies()
+                .await
+                .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))
+        })
+        .await?;
+        let text_proxy = bounded_preflight(deadline, async {
+            proxies
+                .text()
+                .await
+                .map_err(|_| InjectError::Target("focused field does not expose readable text state"))
+        })
+        .await?;
+        let editable_proxy = bounded_preflight(deadline, async {
+            proxies
+                .editable_text()
+                .await
+                .map_err(|_| InjectError::Target("focused field does not support direct text insertion"))
+        })
+        .await?;
 
-        let initial_text = read_text_snapshot(&text_proxy).await?;
+        let initial_text = bounded_preflight(deadline, read_text_snapshot(&text_proxy)).await?;
         let request = initial_text.request(text)?;
 
-        let checked_target = read_target_facts(&accessible).await?;
-        checked_target.validate()?;
-        let checked_text = read_text_snapshot(&text_proxy).await?;
+        let checked_text = bounded_preflight(deadline, read_text_snapshot(&text_proxy)).await?;
         let checked_request = checked_text.request(text)?;
-        if checked_target != initial_target || checked_text != initial_text || checked_request != request {
+        if checked_text != initial_text || checked_request != request {
             return Err(InjectError::Target("focused field changed before transcript insertion"));
         }
 
-        // AT-SPI has no conditional "insert only while focused" call. Recheck
-        // immediately before addressing the exact object, and never delete or
-        // replace text, so a focus race cannot erase existing field contents.
+        let final_target = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
+        final_target.validate()?;
+        if final_target != initial_target {
+            return Err(InjectError::Target("focused field changed before transcript insertion"));
+        }
+
+        // Once this mutating call is sent, keep INSERT_LOCK until its reply.
+        // Timing out locally could report failure while a late insertion still
+        // completes, allowing a later transcript to overtake or duplicate it.
         let inserted = editable_proxy
             .insert_text(request.position, text, request.length)
             .await
@@ -189,6 +206,15 @@ mod platform {
             return Err(InjectError::Target("focused field rejected transcript insertion"));
         }
         Ok(())
+    }
+
+    async fn bounded_preflight<T, F>(deadline: tokio::time::Instant, operation: F) -> Result<T, InjectError>
+    where
+        F: Future<Output = Result<T, InjectError>>,
+    {
+        tokio::time::timeout_at(deadline, operation)
+            .await
+            .map_err(|_| InjectError::Failed("accessibility preflight timed out"))?
     }
 
     async fn find_focused_target(connection: &AccessibilityConnection) -> Result<ObjectRefOwned, InjectError> {
@@ -293,14 +319,16 @@ mod platform {
             .get_interfaces()
             .await
             .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))?;
-        let states = accessible
-            .get_state()
-            .await
-            .map_err(|_| InjectError::Failed("failed to inspect focused field state"))?;
         let role = accessible
             .get_role()
             .await
             .map_err(|_| InjectError::Failed("failed to inspect focused field role"))?;
+        // Read state last so the focus observation is the final D-Bus round
+        // trip when this helper guards the mutation boundary.
+        let states = accessible
+            .get_state()
+            .await
+            .map_err(|_| InjectError::Failed("failed to inspect focused field state"))?;
         Ok(TargetFacts::new(interfaces, states, role))
     }
 
