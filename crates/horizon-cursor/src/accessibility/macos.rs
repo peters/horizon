@@ -42,7 +42,7 @@ impl TargetFacts {
         if self.secure {
             return Err(InjectError::Target("dictation into password fields is disabled"));
         }
-        if self.enabled != Some(true) {
+        if self.enabled == Some(false) {
             return Err(InjectError::Target("focused field is not enabled"));
         }
         if self.editable == Some(false) || !self.selected_text_settable {
@@ -322,9 +322,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_editable_hint_is_allowed_only_with_settable_selected_text() {
+    fn missing_enabled_and_editable_hints_are_allowed_only_with_settable_selected_text() {
         assert_eq!(
             TargetFacts {
+                enabled: None,
                 editable: None,
                 ..safe_target()
             }
