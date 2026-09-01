@@ -76,7 +76,11 @@ Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
 The Horizon host stamps every live browser manifest with its own host
 instance and the agent identities that currently share the panel's workspace,
-and refreshes the stamp when either panel moves, so authorization follows
+and refreshes the stamp when either panel moves; the driver records its host
+at start and only that host may stamp the manifest, so a second host whose
+board carries the same persisted panel id cannot rewrite it. The stamp and
+the requested owner of a newly created panel are written in one locked
+transaction, so authorization follows
 workspace membership without restarting the browser session or the agent.
 Membership is evaluated inside the same locked manifest transaction as each
 claim, heartbeat, queued action, handoff, and audit read, so a move cannot

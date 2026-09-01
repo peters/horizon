@@ -62,7 +62,7 @@ pub use visibility::{
 };
 pub use workspace::{
     AgentIdentity, HOST_INSTANCE_ENV, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE, actor_is_workspace_scoped,
-    host_instance, read_audit_for, sync_host_state, valid_host_instance,
+    host_instance, publish_requested_panel, read_audit_for, sync_host_state, valid_host_instance,
 };
 
 /// How long an agent owner heartbeat stays fresh.
@@ -123,6 +123,13 @@ pub struct BrowserManifest {
     /// older hosts; workspace-scoped callers must treat both as out of scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<ManifestWorkspace>,
+    /// The Horizon process running this panel's browser driver, recorded at
+    /// driver start. Only that host may stamp `hidden` and `workspace`, so a
+    /// second host whose board carries the same persisted panel id (a copied
+    /// or taken-over session, or a failed restore placeholder) can never
+    /// rewrite the authorization stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Private append-only JSONL action journal for this panel identity.
     #[serde(default)]
     pub audit_path: String,
@@ -485,6 +492,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         initialize(panel_local_id, |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
+            manifest.host = Some(host_instance().to_string());
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -637,6 +645,7 @@ mod tests {
             title: "Example".to_string(),
             hidden: false,
             workspace: None,
+            host: None,
             audit_path: String::new(),
             owner: None,
             user_active: false,

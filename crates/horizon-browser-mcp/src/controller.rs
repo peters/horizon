@@ -329,6 +329,7 @@ impl BrowserController {
             {
                 return match result.outcome {
                     BrowserVisibilityOutcome::Ready { visible: actual } => {
+                        self.refresh_claim(panel_id)?;
                         let manifest = manifest::read(panel_id).ok_or_else(|| {
                             ControlError::internal_io(
                                 "could not read updated browser panel",
@@ -429,6 +430,9 @@ impl BrowserController {
             if let Some(result) = manifest::take_action_result(panel_id, &action_id)
                 .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
             {
+                // The result may have arrived after the host moved the panel;
+                // re-check membership under the lock before disclosing it.
+                self.refresh_claim(panel_id)?;
                 return outcome(result);
             }
             if started.elapsed() >= timeout {

@@ -27,6 +27,7 @@ use crate::horizon_home::HorizonHome;
 /// Error text shared by every locked transaction that refuses an identity
 /// outside the panel's workspace.
 pub const OUTSIDE_WORKSPACE_MESSAGE: &str = "agent is outside this browser panel's workspace";
+const OTHER_HOST_MESSAGE: &str = "browser panel's driver runs in another Horizon host";
 /// Environment variable through which Horizon tells an agent process, and
 /// the MCP server it starts, which host process injected its identity.
 pub const HOST_INSTANCE_ENV: &str = "HORIZON_BROWSER_HOST_INSTANCE";
@@ -181,15 +182,95 @@ fn sync_host_state_at(
             format!("browser manifest is not live: {}", path.display()),
         )
     })?;
+    require_driver_host(&current, workspace)?;
     if current.hidden == hidden && current.workspace.as_ref() == Some(workspace) {
         return Ok(false);
     }
+    let mut outcome = Ok(());
     update_at(path, panel_local_id, |manifest| {
-        manifest.hidden = hidden;
-        manifest.workspace = Some(workspace.clone());
-        manifest.updated_at = now_millis();
+        outcome = require_driver_host(manifest, workspace);
+        if outcome.is_ok() {
+            stamp(manifest, hidden, workspace, now_millis());
+        }
     })?;
-    Ok(true)
+    outcome.map(|()| true)
+}
+
+/// Stamp a freshly created panel and assign its requested owner in one locked
+/// transaction, so no other same-workspace agent can claim it in between.
+///
+/// # Errors
+/// Returns `NotFound` when the panel is not live, `PermissionDenied` when the
+/// driver runs in another host, the owner is outside the stamped workspace,
+/// or another live owner already holds the panel.
+pub fn publish_requested_panel(
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+    owner: AgentIdentity<'_>,
+) -> std::io::Result<()> {
+    publish_requested_panel_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        visible,
+        workspace,
+        owner,
+    )
+}
+
+fn publish_requested_panel_at(
+    path: &Path,
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+    owner: AgentIdentity<'_>,
+) -> std::io::Result<()> {
+    super::agent::validate_actor(owner.actor)?;
+    let now = now_millis();
+    let mut outcome = Ok(());
+    update_at(path, panel_local_id, |manifest| {
+        outcome = stamp_and_claim(manifest, !visible, workspace, owner, now);
+    })?;
+    outcome
+}
+
+fn stamp_and_claim(
+    manifest: &mut BrowserManifest,
+    hidden: bool,
+    workspace: &ManifestWorkspace,
+    owner: AgentIdentity<'_>,
+    now: i64,
+) -> std::io::Result<()> {
+    require_driver_host(manifest, workspace)?;
+    stamp(manifest, hidden, workspace, now);
+    permit(manifest, owner)?;
+    if super::agent::try_claim_owner(manifest, owner.actor, None, now) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panel already has another live owner",
+        ))
+    }
+}
+
+fn stamp(manifest: &mut BrowserManifest, hidden: bool, workspace: &ManifestWorkspace, now: i64) {
+    manifest.hidden = hidden;
+    manifest.workspace = Some(workspace.clone());
+    manifest.updated_at = now;
+}
+
+/// Only the process running the panel's driver may stamp it; a manifest
+/// without a recorded host (older driver) is never stamped.
+fn require_driver_host(manifest: &BrowserManifest, workspace: &ManifestWorkspace) -> std::io::Result<()> {
+    if manifest.host.as_deref() == Some(workspace.host_instance.as_str()) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            OTHER_HOST_MESSAGE,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -318,18 +399,19 @@ mod tests {
         assert!(!manifest.authorizes(AgentIdentity::new("horizon:agent-c", Some(HOST_A))));
     }
 
+    fn driver_manifest(host: Option<&str>) -> BrowserManifest {
+        BrowserManifest {
+            panel_local_id: "panel".to_string(),
+            host: host.map(str::to_string),
+            ..BrowserManifest::default()
+        }
+    }
+
     #[test]
     fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
         let root = tempfile::tempdir().expect("isolated root");
         let path = manifest_path_for_root(root.path(), "panel");
-        write_at(
-            &path,
-            &BrowserManifest {
-                panel_local_id: "panel".to_string(),
-                ..BrowserManifest::default()
-            },
-        )
-        .expect("write manifest");
+        write_at(&path, &driver_manifest(Some(HOST_A))).expect("write manifest");
         let workspace = stamp(HOST_A, &["horizon:agent-a"]);
 
         assert!(sync_host_state_at(&path, "panel", true, &workspace).expect("stamp"));
@@ -347,18 +429,103 @@ mod tests {
         assert!(after_move.authorizes(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
         assert!(!after_move.authorizes(member()));
 
-        let restarted = stamp(HOST_B, &["horizon:agent-a"]);
-        assert!(
-            sync_host_state_at(&path, "panel", false, &restarted).expect("new host re-stamps"),
-            "a host restart with the same persisted ids changes the stamp"
+        let other_host = stamp(HOST_B, &["horizon:agent-a"]);
+        assert_eq!(
+            sync_host_state_at(&path, "panel", false, &other_host)
+                .expect_err("another live host must not rewrite the stamp")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
         );
-        assert!(!read_at(&path).expect("read re-stamped").authorizes(member()));
+        assert!(
+            read_at(&path)
+                .expect("read unchanged")
+                .authorizes(AgentIdentity::new("horizon:agent-b", Some(HOST_A))),
+            "the driver host's stamp survives a foreign sync"
+        );
+
+        let legacy = manifest_path_for_root(root.path(), "legacy");
+        write_at(&legacy, &driver_manifest(None)).expect("write legacy manifest");
+        assert_eq!(
+            sync_host_state_at(&legacy, "legacy", true, &workspace)
+                .expect_err("a manifest without a recorded host is never stamped")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
 
         let missing = manifest_path_for_root(root.path(), "missing");
         assert_eq!(
             sync_host_state_at(&missing, "missing", true, &workspace)
                 .expect_err("missing manifest must fail")
                 .kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn requested_panels_are_stamped_and_claimed_in_one_transaction() {
+        let root = tempfile::tempdir().expect("isolated root");
+        let path = manifest_path_for_root(root.path(), "panel");
+        write_at(&path, &driver_manifest(Some(HOST_A))).expect("write manifest");
+        let workspace = stamp(HOST_A, &["horizon:agent-a", "horizon:agent-b"]);
+
+        assert_eq!(
+            publish_requested_panel_at(
+                &path,
+                "panel",
+                false,
+                &workspace,
+                AgentIdentity::new("horizon:agent-c", Some(HOST_A))
+            )
+            .expect_err("an owner outside the workspace is refused")
+            .to_string(),
+            OUTSIDE_WORKSPACE_MESSAGE
+        );
+        assert!(read_at(&path).expect("read").owner.is_none());
+
+        publish_requested_panel_at(&path, "panel", false, &workspace, member()).expect("stamp and claim");
+        let published = read_at(&path).expect("read published");
+        assert!(published.hidden);
+        assert_eq!(published.workspace.as_ref(), Some(&workspace));
+        assert_eq!(
+            published.owner.as_ref().map(|owner| owner.name.as_str()),
+            Some("horizon:agent-a")
+        );
+        assert!(published.authorizes(member()));
+
+        assert_eq!(
+            publish_requested_panel_at(
+                &path,
+                "panel",
+                true,
+                &workspace,
+                AgentIdentity::new("horizon:agent-b", Some(HOST_A))
+            )
+            .expect_err("a live owner blocks a second requester")
+            .to_string(),
+            "browser panel already has another live owner"
+        );
+        assert_eq!(
+            publish_requested_panel_at(
+                &path,
+                "panel",
+                true,
+                &stamp(HOST_B, &["horizon:agent-a"]),
+                AgentIdentity::new("horizon:agent-a", Some(HOST_B))
+            )
+            .expect_err("another host cannot publish this panel")
+            .to_string(),
+            OTHER_HOST_MESSAGE
+        );
+        assert_eq!(
+            publish_requested_panel_at(
+                &manifest_path_for_root(root.path(), "missing"),
+                "missing",
+                true,
+                &workspace,
+                member()
+            )
+            .expect_err("missing manifest")
+            .kind(),
             std::io::ErrorKind::NotFound
         );
     }

@@ -300,7 +300,7 @@ fn set_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>
     manifest.updated_at = now;
 }
 
-fn try_claim_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) -> bool {
+pub(super) fn try_claim_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) -> bool {
     if manifest.live_owner(now).is_some_and(|owner| owner.name != agent_name) {
         return false;
     }

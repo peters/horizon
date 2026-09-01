@@ -301,6 +301,9 @@ impl HorizonApp {
                 Ok(true) => changed = true,
                 Ok(false) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    tracing::debug!(panel_id = %panel.local_id, %error, "browser manifest belongs to another Horizon host");
+                }
                 Err(error) => {
                     tracing::warn!(panel_id = %panel.local_id, %error, "could not synchronize browser host state");
                 }
@@ -414,25 +417,27 @@ fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) ->
         );
         return BrowserCreateCompletion::Completed;
     }
-    // Stamp workspace membership before claiming: the claim itself refuses an
-    // unstamped manifest, and the agent's first authorized call needs the
-    // stamp in place.
-    if let Err(error) = publish_manifest_host_state(&pending.panel_local_id, pending.request.visible, &workspace) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser host state");
-        record_and_complete_failure(
-            pending,
-            "manifest_update_failed",
-            "Horizon could not publish the new browser panel's visibility and workspace",
-        );
-        return BrowserCreateCompletion::Failed;
-    }
-    if let Err(error) = manifest::claim(&pending.panel_local_id, host_identity(&pending.request.actor), None) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
-        record_and_complete_failure(
-            pending,
-            "ownership_failed",
-            "Horizon could not assign the new browser panel to the requesting agent",
-        );
+    // Stamp and assign ownership in one locked transaction so no other
+    // same-workspace agent can claim the new panel in between.
+    if let Err(error) = manifest::publish_requested_panel(
+        &pending.panel_local_id,
+        pending.request.visible,
+        &workspace,
+        host_identity(&pending.request.actor),
+    ) {
+        tracing::error!(request_id = %pending.request.request_id, %error, "could not publish requested browser panel");
+        let (code, message) = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            (
+                "ownership_failed",
+                "Horizon could not assign the new browser panel to the requesting agent",
+            )
+        } else {
+            (
+                "manifest_update_failed",
+                "Horizon could not publish the new browser panel's visibility and workspace",
+            )
+        };
+        record_and_complete_failure(pending, code, message);
         return BrowserCreateCompletion::Failed;
     }
     if let Err(error) = manifest::record_create_status(
