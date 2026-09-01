@@ -29,8 +29,6 @@ impl DriverState {
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let capture = match operation {
             BrowserNetworkOperation::Start => {
-                self.pending_http_bodies.clear();
-                self.http_body_evidence.clear();
                 let session = self.session_id.clone().ok_or_else(|| {
                     BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
                 })?;
@@ -45,6 +43,12 @@ impl DriverState {
                     "cdp",
                     options.unwrap_or_default(),
                 )?;
+                // A rejected start (capture already active, session detached)
+                // must not disturb the capture that is still running, so the
+                // previous capture's leftovers are dropped only once the new
+                // one has been accepted.
+                self.pending_http_bodies.clear();
+                self.http_body_evidence.clear();
                 if let Err(error) = self.call_and_ack(
                     link,
                     event_tx,
