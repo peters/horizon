@@ -72,6 +72,8 @@ regex = "1.13.1"
 arboard = "3.6.1"
 atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+axuielement = { version = "0.9.1", default-features = false, features = ["async"] }
+global-hotkey = "0.8.0"
 surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.55", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —

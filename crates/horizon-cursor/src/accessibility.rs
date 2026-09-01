@@ -1,6 +1,42 @@
-//! Direct insertion into the focused Linux accessibility object.
+//! Direct insertion into focused platform accessibility objects.
 
 use crate::InjectError;
+
+/// Capture and validate the focused editable target before recording starts.
+///
+/// macOS retains the exact Accessibility object and observes focus changes
+/// until insertion. Linux performs its existing bounded preflight when the
+/// transcript is ready.
+///
+/// # Errors
+///
+/// Returns a privacy-preserving reason when the focused target cannot safely
+/// receive a future transcript.
+pub fn capture_focused_accessible_target() -> Result<(), InjectError> {
+    platform::capture_target()
+}
+
+/// Discard a previously captured target without inserting text.
+pub fn release_focused_accessible_target() {
+    platform::release_target();
+}
+
+/// Whether macOS currently trusts Horizon for Accessibility access.
+///
+/// `None` means this platform does not use macOS Accessibility permission.
+#[must_use]
+pub fn accessibility_permission_granted() -> Option<bool> {
+    platform::permission_granted()
+}
+
+/// Ask macOS to show its standard Accessibility permission prompt.
+///
+/// Returns the trust state reported immediately after the request. Other
+/// platforms return `None` and never prompt.
+#[must_use]
+pub fn request_accessibility_permission() -> Option<bool> {
+    platform::request_permission()
+}
 
 /// Insert text at the caret of the focused editable accessibility object.
 ///
@@ -38,6 +74,30 @@ mod platform {
     const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
     const MAX_TRAVERSED_OBJECTS: usize = 2_048;
     static INSERT_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) fn capture_target() -> Result<(), InjectError> {
+        match INSERT_LOCK.try_lock() {
+            Ok(guard) => {
+                drop(guard);
+                Ok(())
+            }
+            Err(TryLockError::Poisoned(error)) => {
+                drop(error.into_inner());
+                Ok(())
+            }
+            Err(TryLockError::WouldBlock) => Err(InjectError::Target("another desktop insertion is still pending")),
+        }
+    }
+
+    pub(super) const fn release_target() {}
+
+    pub(super) const fn permission_granted() -> Option<bool> {
+        None
+    }
+
+    pub(super) const fn request_permission() -> Option<bool> {
+        None
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TargetFacts {
@@ -519,9 +579,27 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+#[path = "accessibility/macos.rs"]
+mod platform;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
     use super::InjectError;
+
+    pub(super) const fn capture_target() -> Result<(), InjectError> {
+        Err(InjectError::Unsupported)
+    }
+
+    pub(super) const fn release_target() {}
+
+    pub(super) const fn permission_granted() -> Option<bool> {
+        None
+    }
+
+    pub(super) const fn request_permission() -> Option<bool> {
+        None
+    }
 
     pub(super) fn insert_text(_text: &str) -> Result<(), InjectError> {
         Err(InjectError::Unsupported)

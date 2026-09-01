@@ -2,7 +2,8 @@
 
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
 use horizon_cursor::{
-    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, insert_text_into_focused_accessible,
+    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, capture_focused_accessible_target,
+    insert_text_into_focused_accessible, release_focused_accessible_target,
 };
 
 use super::super::HorizonApp;
@@ -32,6 +33,17 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
         return result;
     }
     insert_text_into_focused_accessible(text)
+}
+
+pub(crate) fn prepare_desktop_target() -> Result<(), InjectError> {
+    if let Some(result) = test_prepare_result() {
+        return result;
+    }
+    capture_focused_accessible_target()
+}
+
+pub(crate) fn release_desktop_target() {
+    release_focused_accessible_target();
 }
 
 /// Keep the X11 grab while a hold is in flight so a surface opening cannot
@@ -71,17 +83,28 @@ pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
         ShortcutKey::Plus => HotkeyKey::Plus,
         ShortcutKey::Escape => return None,
     };
+    let ctrl = if cfg!(target_os = "macos") {
+        binding.modifiers.ctrl()
+    } else {
+        binding.modifiers.command() || binding.modifiers.ctrl()
+    };
+    let super_ = if cfg!(target_os = "macos") {
+        binding.modifiers.command() || binding.modifiers.mac_cmd()
+    } else {
+        binding.modifiers.mac_cmd()
+    };
     Some(Hotkey {
-        ctrl: binding.modifiers.command() || binding.modifiers.ctrl(),
+        ctrl,
         shift: binding.modifiers.shift(),
         alt: binding.modifiers.alt(),
-        super_: binding.modifiers.mac_cmd(),
+        super_,
         key,
     })
 }
 
 impl HorizonApp {
     pub(in crate::app) fn reset_speech_global_hotkeys(&mut self) {
+        release_desktop_target();
         self.speech_global_hotkeys = None;
         self.speech_global_hotkeys_tried = false;
         self.speech_global_hotkeys_suspended = false;
@@ -172,6 +195,12 @@ type InjectHook = fn(&str) -> Result<(), InjectError>;
 #[cfg(test)]
 static TEST_INJECT: std::sync::OnceLock<std::sync::Mutex<Option<InjectHook>>> = std::sync::OnceLock::new();
 
+#[cfg(all(test, feature = "speech"))]
+type PrepareHook = fn() -> Result<(), InjectError>;
+
+#[cfg(all(test, feature = "speech"))]
+static TEST_PREPARE: std::sync::OnceLock<std::sync::Mutex<Option<PrepareHook>>> = std::sync::OnceLock::new();
+
 #[cfg(test)]
 fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
     TEST_INJECT
@@ -179,6 +208,20 @@ fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
         .lock()
         .ok()?
         .map(|hook| hook(text))
+}
+
+#[cfg(all(test, feature = "speech"))]
+fn test_prepare_result() -> Option<Result<(), InjectError>> {
+    TEST_PREPARE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .ok()?
+        .map(|hook| hook())
+}
+
+#[cfg(not(all(test, feature = "speech")))]
+fn test_prepare_result() -> Option<Result<(), InjectError>> {
+    None
 }
 
 #[cfg(not(test))]
@@ -189,6 +232,14 @@ fn take_test_inject_result(_text: &str) -> Option<Result<(), InjectError>> {
 #[cfg(test)]
 pub(crate) fn set_test_inject_hook(hook: Option<InjectHook>) {
     *TEST_INJECT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "speech"))]
+pub(crate) fn set_test_prepare_hook(hook: Option<PrepareHook>) {
+    *TEST_PREPARE
         .get_or_init(|| std::sync::Mutex::new(None))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;

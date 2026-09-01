@@ -108,7 +108,7 @@ fi
 SPEECH_FIELDS=""
 if [[ "$SPEECH" -eq 1 ]]; then
   SPEECH_FIELDS="  <key>NSMicrophoneUsageDescription</key>
-  <string>Horizon uses the microphone for push-to-talk speech input into terminal panels.</string>
+  <string>Horizon uses the microphone for push-to-talk speech input into terminal panels and focused fields in other apps.</string>
 "
 fi
 

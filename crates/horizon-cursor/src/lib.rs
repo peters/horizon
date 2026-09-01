@@ -8,7 +8,10 @@ mod accessibility;
 mod hotkey;
 mod inject;
 
-pub use accessibility::insert_text_into_focused_accessible;
+pub use accessibility::{
+    accessibility_permission_granted, capture_focused_accessible_target, insert_text_into_focused_accessible,
+    release_focused_accessible_target, request_accessibility_permission,
+};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
 pub use inject::InjectError;
 

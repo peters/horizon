@@ -101,10 +101,11 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
                 .size(12.0),
         )
         .changed();
-    super::dim_label(
-        ui,
-        "When no Horizon window is focused, push-to-talk inserts directly into its focused editable field through Linux accessibility. The clipboard is never used. Background dictation currently requires X11; unsupported or protected fields are left unchanged.",
-    );
+    super::dim_label(ui, desktop_injection_copy());
+    #[cfg(target_os = "macos")]
+    if config.features.speech.desktop_injection {
+        render_accessibility_status(ui);
+    }
 
     // The microphone applies to every profile, so it renders in both the
     // profiles and the flat single-model layout. Backend and hotkey mode
@@ -182,6 +183,33 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         });
 
     changed
+}
+
+const fn desktop_injection_copy() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "With Horizon in the background, push-to-talk inserts directly into the exact editable field captured when you press it. Any focus change discards the transcript. macOS Accessibility is used; the clipboard is never used."
+    } else if cfg!(target_os = "linux") {
+        "When no Horizon window is focused, push-to-talk inserts directly into its focused editable field through Linux accessibility. The clipboard is never used. Background dictation currently requires X11; unsupported or protected fields are left unchanged."
+    } else {
+        "Insertion into other apps is not supported on this platform. Horizon never uses the clipboard for speech input."
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_accessibility_status(ui: &mut Ui) {
+    let granted = horizon_cursor::accessibility_permission_granted().unwrap_or(false);
+    ui.horizontal_wrapped(|ui| {
+        let (label, color) = if granted {
+            ("Accessibility granted", theme::PALETTE_GREEN())
+        } else {
+            ("Accessibility permission required", theme::PALETTE_YELLOW())
+        };
+        ui.label(egui::RichText::new("●").color(color).size(9.0));
+        ui.label(egui::RichText::new(label).color(theme::FG_SOFT()).size(11.0));
+        if !granted && ui.small_button("Grant Accessibility…").clicked() {
+            let _ = horizon_cursor::request_accessibility_permission();
+        }
+    });
 }
 
 /// Global hold/toggle picker; rendered in both the flat and the profiles
@@ -800,8 +828,16 @@ mod tests {
 
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
-        hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder, speech_output_row,
+        desktop_injection_copy, hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder,
+        speech_output_row,
     };
+
+    #[test]
+    fn desktop_injection_copy_promises_direct_insertion_without_clipboard() {
+        let copy = desktop_injection_copy();
+        assert!(copy.contains("clipboard"));
+        assert!(!copy.contains("paste"));
+    }
 
     #[test]
     fn input_device_selection_uses_case_insensitive_name_matching() {
