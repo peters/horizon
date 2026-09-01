@@ -300,7 +300,7 @@ def wait_for_fingerprint(
     panel_id: str,
     action_ids: list[str],
 ) -> dict[str, Any]:
-    expression = "({fingerprint: window.__fingerprint ?? null, iframe: window.__iframeWebdriver ?? null})"
+    expression = "({fingerprint: window.__fingerprint ?? null, iframeReady: window.__iframeProbeReady === true})"
     deadline = time.monotonic() + 10
     value: Any = None
     while time.monotonic() < deadline:
@@ -311,10 +311,18 @@ def wait_for_fingerprint(
             action_ids,
         )
         value = result["value"]
-        if isinstance(value, dict) and isinstance(value.get("fingerprint"), dict) and value.get("iframe") is not None:
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("fingerprint"), dict)
+            and value.get("iframeReady") is True
+        ):
             return value["fingerprint"]
         time.sleep(0.1)
     raise AssertionError(f"fingerprint did not settle: {value}")
+
+
+def _webdriver_hidden(value: Any) -> bool:
+    return value in {False, None}
 
 
 def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) -> None:
@@ -326,11 +334,25 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
     if policy == "browser_default":
         if observed != [True, True, True]:
             raise AssertionError(f"browser-default disclosure mismatch: {fingerprint}")
-    elif backend in {"chromium", "firefox"} and observed != [False, False, False]:
-        raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "firefox":
+        if observed != [False, False, False]:
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "chromium":
+        if not all(_webdriver_hidden(value) for value in observed):
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    horizon_names = fingerprint.get("horizonNames") or []
+    if horizon_names:
+        raise AssertionError(f"page advertised Horizon identifiers: {fingerprint}")
     if policy == "minimize_common_signals" and backend == "chromium":
         if "HeadlessChrome" in str(fingerprint.get("userAgent")):
             raise AssertionError(f"headless token remained: {fingerprint}")
+        brands = list(fingerprint.get("brands") or []) + list(
+            (fingerprint.get("high") or {}).get("fullVersionList") or []
+        )
+        if any(isinstance(entry, dict) and entry.get("brand") == "HeadlessChrome" for entry in brands):
+            raise AssertionError(f"headless client-hint brand remained: {fingerprint}")
+        if any(value is False for value in observed) and fingerprint.get("webdriverGetterNative") is not True:
+            raise AssertionError(f"chromium webdriver getter was not native: {fingerprint}")
 
 
 def failed_action_id(error: str) -> str:

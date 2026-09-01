@@ -125,13 +125,13 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Input(input) => {
-                if self.handle_vertical_scrollbar_input(link, &input) {
+                if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
                     return Ok(false);
                 }
                 // Input cannot block on a roundtrip: a detaching session
                 // would otherwise stall every frame for the call timeout.
                 if input.copies_selection() {
-                    self.request_clipboard_text(link);
+                    self.request_clipboard_text(link, event_tx, frame_slot);
                 }
                 let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
                 let (method, params) = input.cdp();
@@ -167,7 +167,13 @@ impl DriverState {
         BrowserControlFailure::new(code, message)
     }
 
-    fn handle_vertical_scrollbar_input(&mut self, link: &mut CdpLink, input: &BrowserInput) -> bool {
+    fn handle_vertical_scrollbar_input(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        input: &BrowserInput,
+    ) -> bool {
         match input {
             BrowserInput::MousePress {
                 x,
@@ -192,7 +198,7 @@ impl DriverState {
                         self.vertical_scrollbar_drag = Some(drag);
                     }
                     Some(ScrollbarPress::PageTo(target)) => {
-                        self.scroll_page_to(link, target);
+                        self.scroll_page_to(link, event_tx, frame_slot, target);
                     }
                     None => return false,
                 }
@@ -205,7 +211,7 @@ impl DriverState {
                     .vertical_scrollbar_drag
                     .map(|drag| drag.target_scroll_y(*y))
                     .unwrap_or_default();
-                self.scroll_page_to(link, target);
+                self.scroll_page_to(link, event_tx, frame_slot, target);
                 true
             }
             BrowserInput::MouseRelease {
@@ -215,14 +221,23 @@ impl DriverState {
             } if self.vertical_scrollbar_drag.is_some() => {
                 let drag = self.vertical_scrollbar_drag.take();
                 let target = drag.map(|drag| drag.target_scroll_y(*y)).unwrap_or_default();
-                self.scroll_page_to(link, target);
+                self.scroll_page_to(link, event_tx, frame_slot, target);
                 true
             }
             _ => false,
         }
     }
 
-    fn scroll_page_to(&mut self, link: &mut CdpLink, target: f64) {
+    fn scroll_page_to(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        target: f64,
+    ) {
+        if self.ensure_page_runtime(link, event_tx, frame_slot).is_err() {
+            return;
+        }
         let expression = format!("window.scrollTo(window.scrollX, {target:.3})");
         let Some(session) = self.session_id.clone() else {
             return;
@@ -244,6 +259,15 @@ impl DriverState {
             }
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
+    }
+
+    pub(super) fn viewport_override_params(width: u32, height: u32) -> serde_json::Value {
+        serde_json::json!({
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 0,
+            "mobile": false,
+        })
     }
 
     pub(super) fn invalidate_scrollbar_layout(&mut self) {
@@ -382,14 +406,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Emulation.setDeviceMetricsOverride",
-            &serde_json::json!({
-                "width": width,
-                "height": height,
-                "screenWidth": width,
-                "screenHeight": height,
-                "deviceScaleFactor": 1,
-                "mobile": false,
-            }),
+            &Self::viewport_override_params(width, height),
         ) {
             Ok(_) => {
                 self.commit_viewport(width, height);
@@ -627,6 +644,18 @@ mod tests {
             panic!("test metrics should describe a valid layout");
         };
         layout
+    }
+
+    #[test]
+    fn viewport_override_does_not_claim_the_panel_is_the_display() {
+        let params = DriverState::viewport_override_params(1280, 800);
+
+        assert_eq!(params["width"], 1280);
+        assert_eq!(params["height"], 800);
+        assert_eq!(params["deviceScaleFactor"], 0);
+        assert_eq!(params["mobile"], serde_json::Value::Bool(false));
+        assert!(params.get("screenWidth").is_none());
+        assert!(params.get("screenHeight").is_none());
     }
 
     #[test]

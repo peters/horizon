@@ -432,7 +432,6 @@ impl Driver {
                 &json!({
                     "context": self.context_id,
                     "viewport": { "width": width, "height": height },
-                    "devicePixelRatio": 1.0,
                 }),
                 event_tx,
             )

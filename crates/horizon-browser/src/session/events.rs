@@ -14,9 +14,7 @@ use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::frames::FrameSlot;
 
 use super::clipboard::target_event_session_id;
-use super::{
-    BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, normalized_committed_url, publish_frame,
-};
+use super::{BrowserEvent, BrowserEventSender, DriverState, normalized_committed_url, publish_frame};
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -43,57 +41,29 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) {
-        let Some(session) = self.session_id.clone() else {
+        let Some(target_id) = self.target_id.clone() else {
             return;
-        };
-        // Fetch title and href together: after a navigation the session's
-        // execution context can still be the *previous* document's, so a
-        // bare `document.title` read can return the old page's title. The
-        // href check detects that and schedules a retry.
-        let params = match self.title_context_id {
-            Some(context_id) => serde_json::json!({
-                "expression": "JSON.stringify({ t: document.title, h: location.href })",
-                "returnByValue": true,
-                "contextId": context_id,
-            }),
-            None => serde_json::json!({
-                "expression": "JSON.stringify({ t: document.title, h: location.href })",
-                "returnByValue": true,
-            }),
         };
         let Ok(result) = self.call_and_ack(
             link,
             event_tx,
             frame_slot,
-            "Runtime.evaluate",
-            &params,
-            Some(session.as_str()),
+            "Target.getTargetInfo",
+            &serde_json::json!({ "targetId": target_id }),
+            None,
         ) else {
             return;
         };
-        let Some(payload) = result.pointer("/result/value").and_then(|v| v.as_str()) else {
-            return;
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(payload) else {
-            return;
-        };
-        let Some(href) = parsed.pointer("/h").and_then(|v| v.as_str()) else {
-            return;
-        };
-        if !href_matches_url(href, &self.url) {
-            if self.title_fetch_retries < 10 {
-                self.title_fetch_retries += 1;
-                self.title_fetch_at = Some(Instant::now() + Duration::from_millis(500));
-            }
+        if self.retain_frame_during_navigation {
             return;
         }
-        self.update_url_from_page(event_tx, href);
-        let Some(title) = parsed.pointer("/t").and_then(|v| v.as_str()) else {
+        let Some(title) = result.pointer("/targetInfo/title").and_then(serde_json::Value::as_str) else {
             return;
         };
         self.update_title(event_tx, title);
     }
 
+    #[cfg(test)]
     fn update_url_from_page(&mut self, event_tx: &BrowserEventSender, href: &str) {
         let href = normalized_committed_url(href);
         if href == self.url {
@@ -120,26 +90,6 @@ impl DriverState {
         self.manifest_dirty = true;
         self.write_manifest(false);
         let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
-    }
-
-    /// Track the top-level document's default execution context for the
-    /// title fetch. Iframes also publish `isDefault` contexts, so their
-    /// `frameId` must not replace the context used for page metadata.
-    fn note_execution_context(&mut self, event: &CdpEvent<'_>) {
-        if event.method == "Runtime.executionContextCreated"
-            && let Some(id) = default_context_id_for_frame(event.params, self.main_frame_id.as_deref())
-        {
-            self.title_context_id = Some(id);
-        } else if event.method == "Runtime.executionContextsCleared" {
-            self.title_context_id = None;
-        } else if let Some(id) = event
-            .params
-            .get("executionContextId")
-            .and_then(serde_json::Value::as_u64)
-            && self.title_context_id == Some(id)
-        {
-            self.title_context_id = None;
-        }
     }
 
     pub(super) fn handle_message(
@@ -255,12 +205,9 @@ impl DriverState {
                     self.viewport_capture_request_id = None;
                     self.invalidate_scrollbar_layout();
                     self.reset_clipboard_tracking();
-                    // Drop the tracked context: the next title fetch must
-                    // use a fresh default context, not a dead contextId.
-                    self.title_context_id = None;
                     self.main_frame_id = None;
                     self.title_fetch_at = None;
-                    self.title_fetch_retries = 0;
+                    self.runtime_enabled = false;
                     // Unexpected detach (the driver never detaches its own
                     // page session): the target usually still exists —
                     // re-bind instead of freezing. `pending_restart_tick`
@@ -293,16 +240,6 @@ impl DriverState {
                     self.update_title(event_tx, title);
                 }
             }
-            "Runtime.bindingCalled" => {
-                if !self.retain_frame_during_navigation
-                    && on_page_session
-                    && let Some((title, href)) = title_from_binding(event.params)
-                    && href_matches_url(&href, &self.url)
-                {
-                    self.update_url_from_page(event_tx, &href);
-                    self.update_title(event_tx, &title);
-                }
-            }
             "Page.frameNavigated" => self.handle_frame_navigated(event_tx, event, on_page_session),
             "Page.navigatedWithinDocument" => {
                 self.handle_same_document_navigation(event_tx, event, on_page_session);
@@ -310,16 +247,12 @@ impl DriverState {
             "Page.loadEventFired" => {
                 if on_page_session {
                     let _ = event_tx.send(BrowserEvent::Loading(false));
-                    self.title_fetch_retries = 0;
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
                 }
             }
             "Runtime.executionContextCreated"
             | "Runtime.executionContextDestroyed"
             | "Runtime.executionContextsCleared" => {
-                if on_page_session {
-                    self.note_execution_context(&event);
-                }
                 self.note_clipboard_execution_context(&event);
             }
             "Page.screencastFrame" => self.handle_screencast_frame(link, event_tx, frame_slot, event),
@@ -343,6 +276,7 @@ impl DriverState {
         self.invalidate_scrollbar_layout();
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
+        self.runtime_enabled = false;
         self.manifest_dirty = true;
         true
     }
@@ -396,9 +330,7 @@ impl DriverState {
         // A back/forward-cache restore can commit `frameNavigated` without a
         // later `loadEventFired`. Always schedule the title read here so the
         // panel cannot retain the destination page's title after history
-        // navigation. The href guard in `fetch_title` retries if the new
-        // execution context is not ready yet.
-        self.title_fetch_retries = 0;
+        // navigation.
         self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
         self.write_manifest(true);
         match document_commit {
@@ -553,27 +485,6 @@ fn attached_bound_page_target<'a>(params: &'a serde_json::Value, bound_target_id
     (Some(attached_target_id) == bound_target_id).then_some(attached_target_id)
 }
 
-fn title_from_binding(params: &serde_json::Value) -> Option<(String, String)> {
-    if params.get("name")?.as_str()? != TITLE_BINDING_NAME {
-        return None;
-    }
-    let payload = params.get("payload")?.as_str()?;
-    let payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-    let title = payload.get("title")?.as_str()?.to_string();
-    let href = payload.get("href")?.as_str()?.to_string();
-    Some((title, href))
-}
-
-fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Option<&str>) -> Option<u64> {
-    let context = params.get("context")?;
-    let is_default = context.pointer("/auxData/isDefault")?.as_bool()?;
-    let frame_id = context.pointer("/auxData/frameId")?.as_str()?;
-    if !is_default || Some(frame_id) != main_frame_id {
-        return None;
-    }
-    context.get("id")?.as_u64()
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -584,10 +495,7 @@ mod tests {
     use crate::session::{BrowserEvent, BrowserEventSender, BrowserEventWake, CommittedUrl};
     use crate::{BrowserConfig, session::BrowserSessionConfig};
 
-    use super::{
-        DriverState, attached_bound_page_target, default_context_id_for_frame, href_matches_url,
-        title_for_bound_target, title_from_binding,
-    };
+    use super::{DriverState, attached_bound_page_target, href_matches_url, title_for_bound_target};
 
     fn driver_state() -> DriverState {
         DriverState::new(
@@ -605,24 +513,6 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
         )
-    }
-
-    #[test]
-    fn title_context_accepts_only_the_main_frames_default_context() {
-        let main = serde_json::json!({
-            "context": { "id": 7, "auxData": { "isDefault": true, "frameId": "main" } }
-        });
-        let iframe = serde_json::json!({
-            "context": { "id": 8, "auxData": { "isDefault": true, "frameId": "child" } }
-        });
-        let isolated = serde_json::json!({
-            "context": { "id": 9, "auxData": { "isDefault": false, "frameId": "main" } }
-        });
-
-        assert_eq!(default_context_id_for_frame(&main, Some("main")), Some(7));
-        assert_eq!(default_context_id_for_frame(&iframe, Some("main")), None);
-        assert_eq!(default_context_id_for_frame(&isolated, Some("main")), None);
-        assert_eq!(default_context_id_for_frame(&main, None), None);
     }
 
     #[test]
@@ -825,25 +715,6 @@ mod tests {
         assert_eq!(rx.recv(), Ok(BrowserEvent::UrlChanged(URL.to_string())));
         assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
         assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
-    }
-
-    #[test]
-    fn title_binding_accepts_only_the_horizon_payload() {
-        let params = serde_json::json!({
-            "name": "__horizonBrowserTitleChanged",
-            "payload": r#"{"title":"Updated","href":"https://example.test/page"}"#,
-        });
-        let other_binding = serde_json::json!({
-            "name": "pageBinding",
-            "payload": r#"{"title":"Wrong","href":"https://example.test/page"}"#,
-        });
-
-        assert_eq!(
-            title_from_binding(&params),
-            Some(("Updated".to_string(), "https://example.test/page".to_string()))
-        );
-        assert_eq!(title_from_binding(&other_binding), None);
-        assert_eq!(title_from_binding(&serde_json::json!({})), None);
     }
 
     #[test]

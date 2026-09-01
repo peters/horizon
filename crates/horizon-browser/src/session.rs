@@ -159,28 +159,6 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
-const TITLE_BINDING_NAME: &str = "__horizonBrowserTitleChanged";
-const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
-    if (window !== top || window.__horizonBrowserTitleObserver) return;
-    let lastTitle;
-    const publish = () => {
-        const title = document.title;
-        if (title === lastTitle) return;
-        lastTitle = title;
-        window.__horizonBrowserTitleChanged(JSON.stringify({ title, href: location.href }));
-    };
-    const install = () => {
-        if (window.__horizonBrowserTitleObserver) return;
-        const root = document.head || document.documentElement;
-        if (!root) return;
-        const observer = new MutationObserver(publish);
-        observer.observe(root, { childList: true, characterData: true, subtree: true });
-        window.__horizonBrowserTitleObserver = observer;
-        publish();
-    };
-    if (document.documentElement) install();
-    else addEventListener('DOMContentLoaded', install, { once: true });
-})()";
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -439,18 +417,13 @@ struct DriverState {
     initial_navigated: bool,
     screencast_on: bool,
     pending_restart_at: Option<Instant>,
-    /// Default execution context of the current document. After a
-    /// navigation, `Runtime.evaluate` without an explicit `contextId` can
-    /// still hit the old document's context for a while, so the title
-    /// fetch targets the latest default context explicitly.
-    title_context_id: Option<u64>,
-    /// `executionContextCreated` for the new document can land after
-    /// `loadEventFired`, so the post-load fetch is slightly delayed to let
-    /// the context tracking catch up first.
+    /// Delayed `Target.getTargetInfo` read after navigation. Title updates
+    /// come from protocol target metadata, not a page-JS binding.
     title_fetch_at: Option<Instant>,
-    /// Retries for a title fetch that still evaluated in the previous
-    /// document's execution context (detected via `location.href`).
-    title_fetch_retries: u32,
+    /// `Runtime.enable` is deferred until snapshot, evaluate, clipboard, or
+    /// scrollbar scrolling actually needs it. Enabling it at attach is a
+    /// script-visible CDP signal.
+    runtime_enabled: bool,
     restart_attempts: u32,
     pending_reattach: bool,
     reattach_in_flight: bool,
@@ -506,9 +479,8 @@ impl DriverState {
             initial_navigated: false,
             screencast_on: false,
             pending_restart_at: None,
-            title_context_id: None,
             title_fetch_at: None,
-            title_fetch_retries: 0,
+            runtime_enabled: false,
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
@@ -615,7 +587,36 @@ impl DriverState {
                 method: method.to_string(),
             });
         };
+        if method.starts_with("Runtime.") {
+            self.ensure_page_runtime(link, event_tx, frame_slot)?;
+        }
         self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
+    }
+
+    fn ensure_page_runtime(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) -> Result<(), CdpError> {
+        if self.runtime_enabled {
+            return Ok(());
+        }
+        let Some(session) = self.session_id.clone() else {
+            return Err(CdpError::NoPageSession {
+                method: "Runtime.enable".to_string(),
+            });
+        };
+        self.call_and_ack(
+            link,
+            event_tx,
+            frame_slot,
+            "Runtime.enable",
+            &serde_json::json!({}),
+            Some(session.as_str()),
+        )?;
+        self.runtime_enabled = true;
+        Ok(())
     }
 
     fn navigate_to(

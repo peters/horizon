@@ -6,12 +6,11 @@ use std::time::{Duration, Instant};
 
 use crate::AutomationDisclosurePolicy;
 use crate::cdp::CdpLink;
-use crate::disclosure::{cdp_preload_source, chromium_user_agent_needs_override, chromium_user_agent_override};
+use crate::disclosure::{chromium_user_agent_needs_override, chromium_user_agent_override};
 use crate::frames::FrameSlot;
 
 use super::{
     BrowserEvent, BrowserEventSender, DriverState, MAX_RESTART_ATTEMPTS, RESTART_BACKOFF, RESTART_BACKOFF_CAP,
-    TITLE_BINDING_NAME, TITLE_OBSERVER_SCRIPT,
 };
 
 impl DriverState {
@@ -37,6 +36,7 @@ impl DriverState {
         if self.session_id.as_deref() != Some(session) {
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout();
+            self.runtime_enabled = false;
         }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
@@ -58,17 +58,18 @@ impl DriverState {
         if !self.resolve_main_frame_id(link, event_tx, frame_slot, session) {
             return false;
         }
-        let observation_setup_commands = [
-            // Observe only top-level response metadata so a completed user
-            // handoff can report a repeated Cloudflare challenge. The driver
-            // receives response headers but never emits them or request bodies.
-            ("Network.enable", serde_json::json!({})),
-            ("Runtime.enable", serde_json::json!({})),
-        ];
-        for (method, params) in observation_setup_commands {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
+        // Observe only top-level response metadata so a completed user
+        // handoff can report a repeated Cloudflare challenge. The driver
+        // receives response headers but never emits them or request bodies.
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Network.enable",
+            &serde_json::json!({}),
+            Some(session),
+        ) {
+            return false;
         }
         self.restore_network_capture(link, event_tx, frame_slot, session);
         if self.config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
@@ -76,36 +77,20 @@ impl DriverState {
         {
             return false;
         }
-        let remaining_setup_commands = [
-            ("Runtime.addBinding", serde_json::json!({ "name": TITLE_BINDING_NAME })),
-            (
-                "Page.addScriptToEvaluateOnNewDocument",
-                serde_json::json!({ "source": TITLE_OBSERVER_SCRIPT }),
-            ),
-            (
-                "Runtime.evaluate",
-                serde_json::json!({ "expression": TITLE_OBSERVER_SCRIPT }),
-            ),
-            (
-                "Emulation.setDeviceMetricsOverride",
-                serde_json::json!({
-                    "width": self.viewport_w,
-                    "height": self.viewport_h,
-                    "screenWidth": self.viewport_w,
-                    "screenHeight": self.viewport_h,
-                    "deviceScaleFactor": 1,
-                    "mobile": false,
-                }),
-            ),
-        ];
-        for (method, params) in remaining_setup_commands {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Emulation.setDeviceMetricsOverride",
+            &Self::viewport_override_params(self.viewport_w, self.viewport_h),
+            Some(session),
+        ) {
+            return false;
         }
         // Never expose the internal metadata-bootstrap page in a screencast.
-        // The disclosure shim and UA override are already active before this
-        // first caller-supplied navigation can execute page author script.
+        // Native automation-flag suppression and any UA override are already
+        // active before this first caller-supplied navigation can execute
+        // page author script.
         self.navigate_initial_url(link, event_tx, frame_slot);
         // A page that loaded before we attached (restart case) already has
         // its title; a fresh about:blank fetch returns empty and is skipped.
@@ -212,7 +197,7 @@ impl DriverState {
         };
         let user_agent_override = match chromium_user_agent_override(&version, user_agent_metadata) {
             Ok(value) => value,
-            Err(error) => return self.setup_failure(event_tx, frame_slot, "Runtime.evaluate", error),
+            Err(error) => return self.setup_failure(event_tx, frame_slot, "Emulation.setUserAgentOverride", error),
         };
         if let Some(params) = user_agent_override
             && !self.setup_command(
@@ -225,20 +210,6 @@ impl DriverState {
             )
         {
             return false;
-        }
-        for (method, params) in [
-            (
-                "Page.addScriptToEvaluateOnNewDocument",
-                serde_json::json!({ "source": cdp_preload_source() }),
-            ),
-            (
-                "Runtime.evaluate",
-                serde_json::json!({ "expression": cdp_preload_source() }),
-            ),
-        ] {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
         }
         true
     }

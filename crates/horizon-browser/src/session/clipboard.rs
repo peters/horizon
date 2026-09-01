@@ -2,7 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use std::sync::Arc;
+
 use crate::cdp::{CdpErrorInfo, CdpEvent, CdpLink};
+use crate::frames::FrameSlot;
 
 use super::{BrowserEvent, BrowserEventSender, DriverState};
 
@@ -51,7 +54,15 @@ impl ClipboardState {
 }
 
 impl DriverState {
-    pub(super) fn request_clipboard_text(&mut self, link: &mut CdpLink) {
+    pub(super) fn request_clipboard_text(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        if self.ensure_page_runtime(link, event_tx, frame_slot).is_err() {
+            return;
+        }
         let Some(page_session) = self.session_id.as_deref() else {
             return;
         };
