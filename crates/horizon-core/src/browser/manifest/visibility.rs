@@ -208,22 +208,32 @@ fn list_at(root: &Path) -> std::io::Result<Vec<BrowserVisibilityRequest>> {
     Ok(requests)
 }
 
-/// Claim one visibility request for the exact actor.
+/// Claim one visibility request for the exact actor when it names this host.
 ///
 /// # Errors
 /// Returns an error for an identity mismatch or coordination failure.
+/// `Ok(None)` means another host already claimed the request or the request
+/// belongs to a different Horizon host instance.
 pub fn claim_visibility_request(
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserVisibilityRequest>> {
-    claim_at(HorizonHome::resolve().root(), request_id, actor, claimant_pid)
+    claim_at(
+        HorizonHome::resolve().root(),
+        request_id,
+        actor,
+        host_instance,
+        claimant_pid,
+    )
 }
 
 fn claim_at(
     root: &Path,
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserVisibilityRequest>> {
     let directory = visibility_directory(root);
@@ -241,7 +251,9 @@ fn claim_at(
             "browser visibility request identity did not match its path or actor",
         ));
     }
-    if request.claimed_by_pid.is_some() {
+    // Compared under the queue lock: a second live host running a copy of
+    // the same session shares the actor but never this host instance.
+    if request.claimed_by_pid.is_some() || request.host_instance.as_deref() != Some(host_instance) {
         return Ok(None);
     }
     request.claimed_by_pid = Some(claimant_pid);
@@ -398,7 +410,13 @@ mod tests {
 
         let request_id = enqueue_at(root.path(), identity, panel_local_id, false, Duration::from_secs(30))
             .expect("enqueue visibility");
-        let request = claim_at(root.path(), &request_id, actor, 42)
+        assert!(
+            claim_at(root.path(), &request_id, actor, "host-b", 41)
+                .expect("other host claim")
+                .is_none(),
+            "a host that did not launch the agent must not claim its request"
+        );
+        let request = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim visibility")
             .expect("request");
         assert!(!request.visible);

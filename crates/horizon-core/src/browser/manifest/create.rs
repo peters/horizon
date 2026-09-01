@@ -200,23 +200,32 @@ fn list_at(root: &Path) -> std::io::Result<Vec<BrowserCreateRequest>> {
 }
 
 /// Atomically claim one request for this Horizon process when its actor still
-/// matches the candidate agent panel.
+/// matches the candidate agent panel and the request names this host.
 ///
 /// # Errors
 /// Returns an error for an identity mismatch, invalid data, or filesystem
-/// failure. `Ok(None)` means another host already claimed the request.
+/// failure. `Ok(None)` means another host already claimed the request or the
+/// request belongs to a different Horizon host instance.
 pub fn claim_create_request(
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
-    claim_at(HorizonHome::resolve().root(), request_id, actor, claimant_pid)
+    claim_at(
+        HorizonHome::resolve().root(),
+        request_id,
+        actor,
+        host_instance,
+        claimant_pid,
+    )
 }
 
 fn claim_at(
     root: &Path,
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
     let directory = create_directory(root);
@@ -238,7 +247,9 @@ fn claim_at(
             "browser create request identity did not match its path or actor",
         ));
     }
-    if request.claimed_by_pid.is_some() {
+    // Compared under the queue lock: a second live host running a copy of
+    // the same session shares the actor but never this host instance.
+    if request.claimed_by_pid.is_some() || request.host_instance.as_deref() != Some(host_instance) {
         return Ok(None);
     }
     request.claimed_by_pid = Some(claimant_pid);
@@ -381,11 +392,17 @@ mod tests {
         assert_eq!(requests[0].host_instance.as_deref(), Some("host-a"));
         assert!(!requests[0].visible);
 
-        let claimed = claim_at(root.path(), &request_id, actor, 42)
+        assert!(
+            claim_at(root.path(), &request_id, actor, "host-b", 41)
+                .expect("other host claim")
+                .is_none(),
+            "a host that did not launch the agent must not claim its request"
+        );
+        let claimed = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim create")
             .expect("unclaimed request");
         assert!(
-            claim_at(root.path(), &request_id, actor, 43)
+            claim_at(root.path(), &request_id, actor, "host-a", 43)
                 .expect("second claim")
                 .is_none()
         );
@@ -463,7 +480,7 @@ mod tests {
             Duration::from_secs(30),
         )
         .expect("enqueue create");
-        let request = claim_at(root.path(), &request_id, actor, 42)
+        let request = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim")
             .expect("request");
         assert_eq!(request.url.as_deref(), Some("http://127.0.0.1:3000"));

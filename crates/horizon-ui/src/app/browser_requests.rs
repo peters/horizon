@@ -65,8 +65,12 @@ impl HorizonApp {
             let Some(actor_panel) = actor_panel(&self.board, &request.actor) else {
                 continue;
             };
-            let request = match manifest::claim_create_request(&request.request_id, &request.actor, std::process::id())
-            {
+            let request = match manifest::claim_create_request(
+                &request.request_id,
+                &request.actor,
+                manifest::host_instance(),
+                std::process::id(),
+            ) {
                 Ok(Some(request)) => request,
                 Ok(None) => continue,
                 Err(error) => {
@@ -175,6 +179,7 @@ impl HorizonApp {
             let request = match manifest::claim_visibility_request(
                 &request.request_id,
                 &request.actor,
+                manifest::host_instance(),
                 std::process::id(),
             ) {
                 Ok(Some(request)) => request,
