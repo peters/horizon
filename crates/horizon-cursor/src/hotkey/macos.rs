@@ -49,6 +49,7 @@ pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, Hotk
         .ok_or(HotkeyError::Failed(
             "one or more speech hotkeys are unsupported on macOS",
         ))?;
+    install_event_handler();
     let manager =
         GlobalHotKeyManager::new().map_err(|_| HotkeyError::Failed("failed to initialize macOS global hotkeys"))?;
     let mut registered = Vec::with_capacity(native.len());
@@ -61,8 +62,6 @@ pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, Hotk
         }
         registered.push(*hotkey);
     }
-
-    install_event_handler();
     let (sender, events) = channel();
     let wake = Arc::new(Mutex::new(None));
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);

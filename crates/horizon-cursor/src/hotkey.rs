@@ -507,12 +507,12 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
 mod live_tests {
     use super::{GlobalHotkeys, Hotkey, HotkeyEvent, HotkeyKey};
 
     #[test]
-    #[ignore = "live desktop global-hotkey smoke"]
+    #[ignore = "live X11 desktop global-hotkey smoke"]
     fn live_global_hotkey_receives_press_and_release() {
         let hotkeys = GlobalHotkeys::listen(&[(
             7,
