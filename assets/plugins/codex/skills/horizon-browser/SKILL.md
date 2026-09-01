@@ -55,7 +55,11 @@ inspect the exact path returned by `browser_network` with read-only tools such
 as `tail -f`, `jq`, or `rg`; never infer or inspect another Horizon runtime
 path. Call `operation: stop` to flush the capture.
 
-Chromium HTTP bodies and WebSocket frames are protocol-native. Firefox HTTP
+Chromium HTTP bodies and WebSocket frames are protocol-native, but CDP cannot
+return a `fetch()` body the page drained with `response.blob()`, and a
+top-level navigation to a PDF yields only the viewer's HTML shell. Such
+`http_response_body` records carry an `error` and no `payload`; when the bytes
+matter, read `text()` or `arrayBuffer()` or leave the body unread. Firefox HTTP
 bodies are native WebDriver BiDi, while WebSocket frames use page
 instrumentation because standard BiDi does not expose them; the panel
 advertises both distinctions. Safari network capture is currently unsupported.

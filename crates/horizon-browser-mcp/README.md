@@ -78,7 +78,12 @@ audit-file, or result-file locations. Horizon's locked manifest queue remains
 private implementation plumbing, not a second API.
 
 Chromium HTTP metadata, response bodies, and WebSocket frames come directly
-from CDP. Firefox HTTP metadata and response bodies use native WebDriver BiDi;
+from CDP. CDP cannot return a `fetch()` body that the page drained straight into
+a `Blob` (`response.blob()`), and a top-level navigation to a PDF captures only
+the PDF viewer's HTML shell. Horizon records such bodies as
+`http_response_body` records with an `error` and no `payload` instead of a
+zero-byte success; read `text()` or `arrayBuffer()`, or leave the body unread,
+when the bytes matter. Firefox HTTP metadata and response bodies use native WebDriver BiDi;
 standard BiDi does not currently expose WebSocket frames, so Firefox uses an
 explicitly advertised, pre-document page bridge that batches only socket
 frames before crossing BiDi. This bridge is observable by page code and is not

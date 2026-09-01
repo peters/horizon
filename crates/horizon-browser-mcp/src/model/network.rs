@@ -32,6 +32,7 @@ pub(crate) struct NetworkInput {
     /// Include bounded HTTP lifecycle metadata (default false). Start only.
     include_http: Option<bool>,
     /// Include bounded HTTP response bodies through native browser protocol support (default false). Start only.
+    /// Chromium cannot return bodies the page consumed with `response.blob()`; those records report an error instead of a payload.
     include_http_bodies: Option<bool>,
     /// Include WebSocket lifecycle and frames (default true). Start only.
     include_websocket: Option<bool>,
