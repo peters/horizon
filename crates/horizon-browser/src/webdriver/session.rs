@@ -601,7 +601,7 @@ impl Driver {
     }
 
     fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
-        if self.handle_network_bidi_event(event) {
+        if self.handle_network_bidi_event(event, event_tx) {
             return;
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();

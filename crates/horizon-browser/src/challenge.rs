@@ -27,8 +27,9 @@ pub(crate) struct ChallengeLoopDetector {
 }
 
 impl ChallengeLoopDetector {
-    pub(crate) fn observe_document_response(&mut self, url: &str, status: Option<u16>, headers: &Value) {
-        self.observe_document_response_at(Instant::now(), url, status, is_cloudflare_challenge(headers));
+    /// Returns whether a same-URL success cleared a pending or surfaced rejection.
+    pub(crate) fn observe_document_response(&mut self, url: &str, status: Option<u16>, headers: &Value) -> bool {
+        self.observe_document_response_at(Instant::now(), url, status, is_cloudflare_challenge(headers))
     }
 
     pub(crate) fn handoff_completed(&mut self) {
@@ -43,7 +44,13 @@ impl ChallengeLoopDetector {
         self.take_rejection_at(Instant::now())
     }
 
-    fn observe_document_response_at(&mut self, now: Instant, url: &str, status: Option<u16>, is_challenge: bool) {
+    fn observe_document_response_at(
+        &mut self,
+        now: Instant,
+        url: &str,
+        status: Option<u16>,
+        is_challenge: bool,
+    ) -> bool {
         if is_challenge {
             let repeated_after_handoff = self.armed.as_ref().is_some_and(|armed| {
                 armed.url == url && now.saturating_duration_since(armed.observed_at) <= HANDOFF_WINDOW
@@ -62,15 +69,18 @@ impl ChallengeLoopDetector {
             if self.handoff_active && self.armed.is_none() {
                 self.arm_latest_challenge(now);
             }
-            return;
+            return false;
         }
 
         if status.is_some_and(|status| (200..300).contains(&status)) {
+            let recovered = self.reported_url.as_deref() == Some(url);
             self.last_challenge = None;
             self.armed = None;
             self.rejection_due = None;
             self.reported_url = None;
+            return recovered;
         }
+        false
     }
 
     fn handoff_started_at(&mut self, now: Instant) {
@@ -331,6 +341,37 @@ mod tests {
             true,
         );
         assert_eq!(detector.take_rejection_at(started + Duration::from_secs(9)), None);
+    }
+
+    #[test]
+    fn successful_same_url_document_reports_recovery_after_rejection() {
+        let started = Instant::now();
+        let mut detector = ChallengeLoopDetector::default();
+        assert!(!detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true,));
+        detector.handoff_completed_at(started + Duration::from_secs(1));
+        assert!(!detector.observe_document_response_at(
+            started + Duration::from_secs(2),
+            "https://example.test/protected",
+            Some(403),
+            true,
+        ));
+        assert_eq!(
+            detector.take_rejection_at(started + Duration::from_secs(3)),
+            Some(REJECTION_MESSAGE)
+        );
+
+        assert!(detector.observe_document_response_at(
+            started + Duration::from_secs(4),
+            "https://example.test/protected",
+            Some(200),
+            false,
+        ));
+        assert!(!detector.observe_document_response_at(
+            started + Duration::from_secs(5),
+            "https://example.test/protected",
+            Some(200),
+            false,
+        ));
     }
 
     #[test]

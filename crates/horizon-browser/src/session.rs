@@ -68,6 +68,7 @@ pub enum BrowserEvent {
     /// Chrome is up and the page session is attached.
     Ready,
     Title(String),
+    /// A top-level document committed or recovered; the URL may repeat to clear a prior failure.
     UrlChanged(String),
     NavigationFailed(String),
     Loading(bool),

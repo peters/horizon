@@ -218,7 +218,7 @@ impl DriverState {
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         if on_page_session {
-            self.handle_network_event(&event);
+            self.handle_network_event(&event, event_tx);
         }
         match event.method {
             "Target.attachedToTarget" => {
