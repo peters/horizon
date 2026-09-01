@@ -170,6 +170,25 @@ pub fn sync_host_state(panel_local_id: &str, visible: bool, workspace: &Manifest
     )
 }
 
+/// Like [`sync_host_state`], addressing the manifest under `root` instead of
+/// the process default Horizon home.
+///
+/// # Errors
+/// Same as [`sync_host_state`].
+pub fn sync_host_state_in(
+    root: &Path,
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+) -> std::io::Result<bool> {
+    sync_host_state_at(
+        &manifest_path_for_root(root, panel_local_id),
+        panel_local_id,
+        visible,
+        workspace,
+    )
+}
+
 fn sync_host_state_at(
     path: &Path,
     panel_local_id: &str,
