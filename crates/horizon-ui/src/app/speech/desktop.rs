@@ -199,7 +199,9 @@ static TEST_INJECT: std::sync::OnceLock<std::sync::Mutex<Option<InjectHook>>> = 
 type PrepareHook = fn() -> Result<(), InjectError>;
 
 #[cfg(all(test, feature = "speech"))]
-static TEST_PREPARE: std::sync::OnceLock<std::sync::Mutex<Option<PrepareHook>>> = std::sync::OnceLock::new();
+thread_local! {
+    static TEST_PREPARE: std::cell::Cell<Option<PrepareHook>> = const { std::cell::Cell::new(None) };
+}
 
 #[cfg(test)]
 fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
@@ -212,11 +214,7 @@ fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
 
 #[cfg(all(test, feature = "speech"))]
 fn test_prepare_result() -> Option<Result<(), InjectError>> {
-    TEST_PREPARE
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .ok()?
-        .map(|hook| hook())
+    TEST_PREPARE.with(std::cell::Cell::get).map(|hook| hook())
 }
 
 #[cfg(not(all(test, feature = "speech")))]
@@ -239,10 +237,7 @@ pub(crate) fn set_test_inject_hook(hook: Option<InjectHook>) {
 
 #[cfg(all(test, feature = "speech"))]
 pub(crate) fn set_test_prepare_hook(hook: Option<PrepareHook>) {
-    *TEST_PREPARE
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+    TEST_PREPARE.with(|slot| slot.set(hook));
 }
 
 #[cfg(test)]
