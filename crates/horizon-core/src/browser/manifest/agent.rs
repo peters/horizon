@@ -467,6 +467,7 @@ mod tests {
         let unbound = AgentIdentity::new("horizon:agent-a", None);
         let mut manifest = BrowserManifest {
             panel_local_id: "panel".to_string(),
+            host: Some("host-a".to_string()),
             workspace: Some(super::super::ManifestWorkspace::new(
                 "host-a",
                 "ws-a",

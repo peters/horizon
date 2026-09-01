@@ -593,6 +593,11 @@ mod tests {
             "workspace-a",
             vec!["horizon:agent-a".to_string()],
         ));
+        assert!(
+            !panel.permits(member),
+            "a stamp without a matching driver host is stale"
+        );
+        panel.host = Some("host-a".to_string());
         assert!(panel.permits(member));
         assert!(
             !panel.permits(AgentIdentity::new("horizon:agent-b", Some("host-a"))),

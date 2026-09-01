@@ -166,13 +166,15 @@ impl BrowserManifest {
         self.user_active && timestamp_is_fresh(now_millis, self.user_active_at, ttl_millis)
     }
 
-    /// Whether the stamping host launched `identity` and placed it in this
-    /// panel's workspace. An unstamped manifest authorizes nobody.
+    /// Whether the host running this panel's driver stamped it, launched
+    /// `identity`, and placed it in this panel's workspace. An unstamped
+    /// manifest, or a stamp left behind by a different host than the one now
+    /// running the driver, authorizes nobody.
     #[must_use]
     pub fn authorizes(&self, identity: AgentIdentity<'_>) -> bool {
-        self.workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.authorizes(identity))
+        self.workspace.as_ref().is_some_and(|workspace| {
+            self.host.as_deref() == Some(workspace.host_instance.as_str()) && workspace.authorizes(identity)
+        })
     }
 
     /// Whether `identity` may discover or control this panel: identities
@@ -493,6 +495,9 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         initialize(panel_local_id, |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
             manifest.host = Some(host_instance().to_string());
+            // A driver start invalidates any stamp left by a previous host; the
+            // running host re-stamps on its next sync.
+            manifest.workspace = None;
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);

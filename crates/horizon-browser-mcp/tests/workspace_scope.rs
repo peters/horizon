@@ -24,6 +24,7 @@ const HOST_B: &str = "host-b";
 const SAME_WORKSPACE_PANEL: &str = "same-workspace";
 const OTHER_WORKSPACE_PANEL: &str = "other-workspace";
 const OTHER_HOST_PANEL: &str = "other-host";
+const STALE_STAMP_PANEL: &str = "stale-stamp";
 const LEGACY_PANEL: &str = "legacy";
 
 struct McpProcess {
@@ -133,8 +134,20 @@ fn horizon_root(home: &Path) -> PathBuf {
     home.join(".horizon")
 }
 
+/// A manifest as its driver writes it: `host` names the process running the
+/// browser, and the host's sync stamps `workspace` with the same host.
 fn manifest(
     panel_local_id: &str,
+    workspace: Option<ManifestWorkspace>,
+    owner: Option<ManifestOwner>,
+) -> BrowserManifest {
+    let host = workspace.as_ref().map(|workspace| workspace.host_instance.clone());
+    manifest_with_host(panel_local_id, host, workspace, owner)
+}
+
+fn manifest_with_host(
+    panel_local_id: &str,
+    host: Option<String>,
     workspace: Option<ManifestWorkspace>,
     owner: Option<ManifestOwner>,
 ) -> BrowserManifest {
@@ -145,6 +158,7 @@ fn manifest(
         url: "https://example.test/".to_string(),
         title: panel_local_id.to_string(),
         workspace,
+        host,
         owner,
         ..BrowserManifest::default()
     }
@@ -173,8 +187,10 @@ fn stale_owner(actor: &str) -> ManifestOwner {
 /// Seed the manifests one Horizon home can hold at the same time: a panel in
 /// the caller's workspace, an unowned panel with a stale owner in another
 /// workspace, a panel stamped by a second live host for a duplicated session
-/// that reuses the caller's persisted agent id and workspace local id, and a
-/// legacy manifest from a host that never stamped workspaces.
+/// that reuses the caller's persisted agent id and workspace local id, a
+/// panel whose driver restarted under another host while the caller's stamp
+/// was still on it, and a legacy manifest from a host that never stamped
+/// workspaces.
 fn seed_home(home: &Path) {
     write_manifest(
         home,
@@ -208,6 +224,15 @@ fn seed_home(home: &Path) {
             None,
         ),
     );
+    write_manifest(
+        home,
+        &manifest_with_host(
+            STALE_STAMP_PANEL,
+            Some(HOST_B.to_string()),
+            Some(ManifestWorkspace::new(HOST_A, "workspace-a", vec![AGENT_A.to_string()])),
+            None,
+        ),
+    );
     write_manifest(home, &manifest(LEGACY_PANEL, None, None));
 }
 
@@ -233,7 +258,7 @@ fn horizon_agents_only_see_and_control_their_own_workspace() {
     assert_eq!(listed["structuredContent"]["panels"][0]["visible"], true);
     assert!(!listed.to_string().contains("browser_ws"));
 
-    for panel_id in [OTHER_WORKSPACE_PANEL, OTHER_HOST_PANEL, LEGACY_PANEL] {
+    for panel_id in [OTHER_WORKSPACE_PANEL, OTHER_HOST_PANEL, STALE_STAMP_PANEL, LEGACY_PANEL] {
         assert_outside_workspace(&agent.call("browser_panel", &json!({ "panel_id": panel_id })), panel_id);
         assert_outside_workspace(&agent.call("browser_audit", &json!({ "panel_id": panel_id })), panel_id);
         assert_outside_workspace(
@@ -364,7 +389,8 @@ fn identities_from_outside_horizon_are_not_workspace_scoped() {
             LEGACY_PANEL,
             OTHER_HOST_PANEL,
             OTHER_WORKSPACE_PANEL,
-            SAME_WORKSPACE_PANEL
+            SAME_WORKSPACE_PANEL,
+            STALE_STAMP_PANEL
         ]
     );
     let legacy = external.call("browser_panel", &json!({ "panel_id": LEGACY_PANEL }));

@@ -379,6 +379,7 @@ mod tests {
             &manifest_path_for_root(root.path(), panel_local_id),
             &BrowserManifest {
                 panel_local_id: panel_local_id.to_string(),
+                host: Some("host-a".to_string()),
                 workspace: Some(super::super::ManifestWorkspace::new(
                     "host-a",
                     "ws-a",

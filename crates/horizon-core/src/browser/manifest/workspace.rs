@@ -300,7 +300,7 @@ mod tests {
         assert!(!valid_host_instance(""));
         assert!(!valid_host_instance("bad\ninstance"));
 
-        let mut manifest = BrowserManifest::default();
+        let mut manifest = driver_manifest(Some(HOST_A));
         let external = AgentIdentity::new("browser-cli-test", None);
         assert!(manifest.permits(external), "unscoped identities need no stamp");
         assert!(!manifest.permits(member()), "unstamped manifests fail closed");
@@ -310,6 +310,17 @@ mod tests {
         );
         manifest.workspace = Some(stamp(HOST_A, &["horizon:agent-a"]));
         assert!(manifest.permits(member()));
+        manifest.host = Some(HOST_B.to_string());
+        assert!(
+            !manifest.permits(member()),
+            "a stamp left by a previous host is stale once another host runs the driver"
+        );
+        manifest.host = None;
+        assert!(
+            !manifest.permits(member()),
+            "a host-less manifest never matches a stamp"
+        );
+        manifest.host = Some(HOST_A.to_string());
         assert!(!manifest.permits(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
         assert!(
             !manifest.permits(AgentIdentity::new("horizon:agent-a", Some(HOST_B))),
@@ -329,9 +340,8 @@ mod tests {
         write_at(
             &manifest_path_for_root(root.path(), panel),
             &BrowserManifest {
-                panel_local_id: panel.to_string(),
                 workspace: Some(stamp(HOST_A, &["horizon:agent-a"])),
-                ..BrowserManifest::default()
+                ..driver_manifest(Some(HOST_A))
             },
         )
         .expect("write manifest");
@@ -392,7 +402,7 @@ mod tests {
         assert!(!workspace.authorizes(AgentIdentity::new("horizon:agent-c", Some(HOST_A))));
         assert!(!workspace.authorizes(AgentIdentity::new("horizon:agent", Some(HOST_A))));
 
-        let mut manifest = BrowserManifest::default();
+        let mut manifest = driver_manifest(Some(HOST_A));
         assert!(!manifest.authorizes(member()));
         manifest.workspace = Some(workspace);
         assert!(manifest.authorizes(member()));
