@@ -97,8 +97,8 @@ impl HorizonApp {
                 // The shared action settles the view on the row head; the
                 // interactive shortcut re-frames the workspace that was
                 // active before the alignment instead.
-                if let Some(alignment) = self.align_attached_workspaces_horizontally(ctx) {
-                    self.reframe_active_workspace_after_alignment(ctx, &alignment);
+                if self.align_attached_workspaces_horizontally(ctx).is_some() {
+                    self.reframe_active_workspace_after_alignment(ctx);
                 }
             }
             CommandId::NewPanel => {
