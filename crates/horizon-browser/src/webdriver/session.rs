@@ -328,7 +328,7 @@ impl Driver {
             ));
         }
         if let Some(link) = bidi.as_mut()
-            && let Err(error) = subscribe(link, config.browser.backend)
+            && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
                 let path = format!("/session/{session_id}");
@@ -854,21 +854,33 @@ fn connect_bidi_with_startup_retry(url: &str, stop_requested: &AtomicBool) -> Re
     }
 }
 
-fn subscribe(link: &mut JsonWsLink, backend: BackendKind) -> Result<(), String> {
-    link.call(
-        COMMAND_TIMEOUT,
-        "session.subscribe",
-        &json!({
-            "events": base_bidi_events(backend)
-        }),
-    )
-    .result
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id: Option<&str>) -> Result<(), String> {
+    subscribe_bidi_events(link, &base_bidi_events(), None)?;
+    if backend == BackendKind::FirefoxBidi {
+        let context = context_id.ok_or_else(|| "Firefox BiDi returned no top-level browsing context".to_string())?;
+        subscribe_bidi_events(link, &["network.responseStarted"], Some(context))?;
+    }
+    Ok(())
 }
 
-fn base_bidi_events(backend: BackendKind) -> Vec<&'static str> {
-    let mut events = vec![
+fn subscribe_bidi_events(link: &mut JsonWsLink, events: &[&str], context: Option<&str>) -> Result<(), String> {
+    let params = bidi_subscription_params(events, context);
+    link.call(COMMAND_TIMEOUT, "session.subscribe", &params)
+        .result
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn bidi_subscription_params(events: &[&str], context: Option<&str>) -> Value {
+    let mut params = json!({ "events": events });
+    if let Some(context) = context {
+        params["contexts"] = json!([context]);
+    }
+    params
+}
+
+fn base_bidi_events() -> Vec<&'static str> {
+    vec![
         "browsingContext.contextCreated",
         "browsingContext.contextDestroyed",
         "browsingContext.navigationStarted",
@@ -876,11 +888,7 @@ fn base_bidi_events(backend: BackendKind) -> Vec<&'static str> {
         "browsingContext.fragmentNavigated",
         "browsingContext.domContentLoaded",
         "browsingContext.load",
-    ];
-    if backend == BackendKind::FirefoxBidi {
-        events.push("network.responseStarted");
-    }
-    events
+    ]
 }
 
 fn install_common_signal_preload(link: &mut JsonWsLink) -> Result<(), String> {
@@ -972,9 +980,9 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 mod tests {
     use super::{
         AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
-        bidi_navigation_complete, bidi_navigation_failed, capture_is_current, classic_navigation_committed,
-        consume_pending_history_start, new_session_capabilities, parse_new_session_response, safe_session_id,
-        validate_firefox_args,
+        bidi_navigation_complete, bidi_navigation_failed, bidi_subscription_params, capture_is_current,
+        classic_navigation_committed, consume_pending_history_start, new_session_capabilities,
+        parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -1098,9 +1106,18 @@ mod tests {
     }
 
     #[test]
-    fn firefox_baseline_observes_responses_without_enabling_safari_network_events() {
-        assert!(base_bidi_events(BackendKind::FirefoxBidi).contains(&"network.responseStarted"));
-        assert!(!base_bidi_events(BackendKind::SafariWebDriver).contains(&"network.responseStarted"));
+    fn firefox_challenge_responses_use_a_context_scoped_subscription() {
+        let baseline = bidi_subscription_params(&base_bidi_events(), None);
+        assert!(!baseline["events"].as_array().is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| event.as_str() == Some("network.responseStarted"))
+        }));
+        assert!(baseline.get("contexts").is_none());
+
+        let responses = bidi_subscription_params(&["network.responseStarted"], Some("top-context"));
+        assert_eq!(responses["events"], serde_json::json!(["network.responseStarted"]));
+        assert_eq!(responses["contexts"], serde_json::json!(["top-context"]));
     }
 
     #[test]
