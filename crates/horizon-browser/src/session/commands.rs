@@ -125,13 +125,13 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Input(input) => {
-                if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
+                if self.handle_vertical_scrollbar_input(link, &input) {
                     return Ok(false);
                 }
                 // Input cannot block on a roundtrip: a detaching session
                 // would otherwise stall every frame for the call timeout.
                 if input.copies_selection() {
-                    self.request_clipboard_text(link, event_tx, frame_slot);
+                    self.request_clipboard_text(link);
                 }
                 let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
                 let (method, params) = input.cdp();
@@ -167,13 +167,7 @@ impl DriverState {
         BrowserControlFailure::new(code, message)
     }
 
-    fn handle_vertical_scrollbar_input(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
-        input: &BrowserInput,
-    ) -> bool {
+    fn handle_vertical_scrollbar_input(&mut self, link: &mut CdpLink, input: &BrowserInput) -> bool {
         match input {
             BrowserInput::MousePress {
                 x,
@@ -198,7 +192,7 @@ impl DriverState {
                         self.vertical_scrollbar_drag = Some(drag);
                     }
                     Some(ScrollbarPress::PageTo(target)) => {
-                        self.scroll_page_to(link, event_tx, frame_slot, target);
+                        self.scroll_page_to(link, target);
                     }
                     None => return false,
                 }
@@ -211,7 +205,7 @@ impl DriverState {
                     .vertical_scrollbar_drag
                     .map(|drag| drag.target_scroll_y(*y))
                     .unwrap_or_default();
-                self.scroll_page_to(link, event_tx, frame_slot, target);
+                self.scroll_page_to(link, target);
                 true
             }
             BrowserInput::MouseRelease {
@@ -221,23 +215,15 @@ impl DriverState {
             } if self.vertical_scrollbar_drag.is_some() => {
                 let drag = self.vertical_scrollbar_drag.take();
                 let target = drag.map(|drag| drag.target_scroll_y(*y)).unwrap_or_default();
-                self.scroll_page_to(link, event_tx, frame_slot, target);
+                self.scroll_page_to(link, target);
                 true
             }
             _ => false,
         }
     }
 
-    fn scroll_page_to(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
-        target: f64,
-    ) {
-        if self.ensure_page_runtime(link, event_tx, frame_slot).is_err() {
-            return;
-        }
+    fn scroll_page_to(&mut self, link: &mut CdpLink, target: f64) {
+        self.request_runtime_for_sessions(link);
         let expression = format!("window.scrollTo(window.scrollX, {target:.3})");
         let Some(session) = self.session_id.clone() else {
             return;

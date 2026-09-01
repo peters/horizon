@@ -36,7 +36,7 @@ impl DriverState {
         if self.session_id.as_deref() != Some(session) {
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout();
-            self.runtime_enabled = false;
+            self.reset_runtime_enable_state();
         }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());

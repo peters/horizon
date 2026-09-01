@@ -109,6 +109,9 @@ impl DriverState {
         if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
             return;
         }
+        if self.handle_runtime_enable_response(id, error.as_ref()) {
+            return;
+        }
         if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
             if let Some(error) = error {
                 tracing::debug!(target: "browser", "scrollbar layout request rejected: {error}");
@@ -207,7 +210,7 @@ impl DriverState {
                     self.reset_clipboard_tracking();
                     self.main_frame_id = None;
                     self.title_fetch_at = None;
-                    self.runtime_enabled = false;
+                    self.reset_runtime_enable_state();
                     // Unexpected detach (the driver never detaches its own
                     // page session): the target usually still exists —
                     // re-bind instead of freezing. `pending_restart_tick`
@@ -276,7 +279,7 @@ impl DriverState {
         self.invalidate_scrollbar_layout();
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
-        self.runtime_enabled = false;
+        self.reset_runtime_enable_state();
         self.manifest_dirty = true;
         true
     }

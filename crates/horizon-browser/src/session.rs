@@ -46,7 +46,7 @@ pub use horizon_browser_protocol::BrowserCommand;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -424,6 +424,8 @@ struct DriverState {
     /// scrollbar scrolling actually needs it. Enabling it at attach is a
     /// script-visible CDP signal.
     runtime_enabled: bool,
+    runtime_enable_requested: HashSet<String>,
+    runtime_enable_inflight: HashMap<u64, String>,
     restart_attempts: u32,
     pending_reattach: bool,
     reattach_in_flight: bool,
@@ -481,6 +483,8 @@ impl DriverState {
             pending_restart_at: None,
             title_fetch_at: None,
             runtime_enabled: false,
+            runtime_enable_requested: HashSet::new(),
+            runtime_enable_inflight: HashMap::new(),
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
@@ -588,35 +592,67 @@ impl DriverState {
             });
         };
         if method.starts_with("Runtime.") {
-            self.ensure_page_runtime(link, event_tx, frame_slot)?;
+            self.ensure_page_runtime(link)?;
         }
         self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
     }
 
-    fn ensure_page_runtime(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
-    ) -> Result<(), CdpError> {
-        if self.runtime_enabled {
-            return Ok(());
-        }
-        let Some(session) = self.session_id.clone() else {
+    fn ensure_page_runtime(&mut self, link: &mut CdpLink) -> Result<(), CdpError> {
+        if self.session_id.is_none() {
             return Err(CdpError::NoPageSession {
                 method: "Runtime.enable".to_string(),
             });
-        };
-        self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Runtime.enable",
-            &serde_json::json!({}),
-            Some(session.as_str()),
-        )?;
-        self.runtime_enabled = true;
+        }
+        self.request_runtime_for_sessions(link);
         Ok(())
+    }
+
+    fn request_runtime_for_sessions(&mut self, link: &mut CdpLink) {
+        let Some(page_session) = self.session_id.clone() else {
+            return;
+        };
+        self.queue_runtime_enable(link, &page_session);
+        let iframe_sessions: Vec<String> = self.clipboard.iframe_sessions.iter().cloned().collect();
+        for session in iframe_sessions {
+            self.queue_runtime_enable(link, &session);
+        }
+    }
+
+    fn queue_runtime_enable(&mut self, link: &mut CdpLink, session: &str) {
+        if self.runtime_enable_requested.contains(session) {
+            return;
+        }
+        match link.send_request("Runtime.enable", &serde_json::json!({}), Some(session)) {
+            Ok(request_id) => {
+                self.runtime_enable_requested.insert(session.to_string());
+                self.runtime_enable_inflight.insert(request_id, session.to_string());
+            }
+            Err(error) => tracing::debug!(
+                target: "browser",
+                session,
+                "Runtime.enable request failed: {error}"
+            ),
+        }
+    }
+
+    fn handle_runtime_enable_response(&mut self, id: u64, error: Option<&crate::cdp::CdpErrorInfo>) -> bool {
+        let Some(session) = self.runtime_enable_inflight.remove(&id) else {
+            return false;
+        };
+        if error.is_some() {
+            self.runtime_enable_requested.remove(&session);
+            return true;
+        }
+        if self.session_id.as_deref() == Some(session.as_str()) {
+            self.runtime_enabled = true;
+        }
+        true
+    }
+
+    fn reset_runtime_enable_state(&mut self) {
+        self.runtime_enabled = false;
+        self.runtime_enable_requested.clear();
+        self.runtime_enable_inflight.clear();
     }
 
     fn navigate_to(

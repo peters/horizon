@@ -349,9 +349,12 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
         brands = list(fingerprint.get("brands") or []) + list(
             (fingerprint.get("high") or {}).get("fullVersionList") or []
         )
-        if any(isinstance(entry, dict) and entry.get("brand") == "HeadlessChrome" for entry in brands):
+        brand_names = [entry.get("brand") for entry in brands if isinstance(entry, dict)]
+        if "HeadlessChrome" in brand_names:
             raise AssertionError(f"headless client-hint brand remained: {fingerprint}")
-        if any(value is False for value in observed) and fingerprint.get("webdriverGetterNative") is not True:
+        if not any(name in {"Chrome", "Chromium"} for name in brand_names):
+            raise AssertionError(f"client-hint brands omitted Chrome/Chromium: {fingerprint}")
+        if fingerprint.get("webdriverDescriptorPresent") is True and fingerprint.get("webdriverGetterNative") is not True:
             raise AssertionError(f"chromium webdriver getter was not native: {fingerprint}")
 
 

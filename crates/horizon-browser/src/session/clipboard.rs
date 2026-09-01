@@ -2,10 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use std::sync::Arc;
-
 use crate::cdp::{CdpErrorInfo, CdpEvent, CdpLink};
-use crate::frames::FrameSlot;
 
 use super::{BrowserEvent, BrowserEventSender, DriverState};
 
@@ -28,7 +25,7 @@ const SELECTED_TEXT_EXPRESSION: &str = r#"(() => {
 pub(super) struct ClipboardState {
     request_ids: HashSet<u64>,
     default_contexts: HashMap<String, HashSet<u64>>,
-    iframe_sessions: HashSet<String>,
+    pub(super) iframe_sessions: HashSet<String>,
 }
 
 impl ClipboardState {
@@ -54,15 +51,8 @@ impl ClipboardState {
 }
 
 impl DriverState {
-    pub(super) fn request_clipboard_text(
-        &mut self,
-        link: &mut CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
-    ) {
-        if self.ensure_page_runtime(link, event_tx, frame_slot).is_err() {
-            return;
-        }
+    pub(super) fn request_clipboard_text(&mut self, link: &mut CdpLink) {
+        self.request_runtime_for_sessions(link);
         let Some(page_session) = self.session_id.as_deref() else {
             return;
         };
@@ -143,8 +133,8 @@ impl DriverState {
         }
     }
 
-    /// Record an auto-attached out-of-process iframe and enable its Runtime
-    /// domain so subsequent selection capture can target its default contexts.
+    /// Record an auto-attached out-of-process iframe. Runtime stays disabled
+    /// until clipboard or evaluation actually needs those sessions.
     /// Returns whether this was an iframe attachment consumed by this path.
     pub(super) fn note_clipboard_target_attachment(&mut self, link: &mut CdpLink, event: &CdpEvent<'_>) -> bool {
         if attached_target_type(event.params) != Some("iframe") {
@@ -153,8 +143,8 @@ impl DriverState {
         let Some(session) = target_event_session_id(event.params, event.session_id) else {
             return true;
         };
-        if self.clipboard.iframe_sessions.insert(session.to_string()) {
-            if let Err(error) = link.send_request(
+        if self.clipboard.iframe_sessions.insert(session.to_string())
+            && let Err(error) = link.send_request(
                 "Target.setAutoAttach",
                 &serde_json::json!({
                     "autoAttach": true,
@@ -162,12 +152,9 @@ impl DriverState {
                     "flatten": true,
                 }),
                 Some(session),
-            ) {
-                tracing::debug!(target: "browser", session, "failed to auto-attach nested iframe targets: {error}");
-            }
-            if let Err(error) = link.send_request("Runtime.enable", &serde_json::json!({}), Some(session)) {
-                tracing::debug!(target: "browser", session, "failed to enable iframe runtime: {error}");
-            }
+            )
+        {
+            tracing::debug!(target: "browser", session, "failed to auto-attach nested iframe targets: {error}");
         }
         true
     }
