@@ -478,7 +478,7 @@ fn remove_owned_at_with_timeout(
     // Only a present manifest that names this host proves ownership; a
     // missing file or a host-less manifest written by an older Horizon that
     // adopted the id is left untouched, results included.
-    if !read_at(path).is_some_and(|manifest| manifest.host.as_deref() == Some(host)) {
+    if read_at(path).is_none_or(|manifest| manifest.host.as_deref() != Some(host)) {
         tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
         return Ok(false);
     }
