@@ -2,16 +2,16 @@
 
 use crate::InjectError;
 
-/// Capture and validate the focused editable target before recording starts.
+/// Prepare focused-target handling before recording starts.
 ///
-/// macOS retains the exact Accessibility object and observes focus changes
-/// until insertion. Linux performs its existing bounded preflight when the
-/// transcript is ready.
+/// macOS validates and retains the exact Accessibility object until insertion.
+/// Linux only probes insertion ownership here and defers focused-target and
+/// AT-SPI validation until transcript delivery.
 ///
 /// # Errors
 ///
-/// Returns a privacy-preserving reason when the focused target cannot safely
-/// receive a future transcript.
+/// On macOS, returns a privacy-preserving target refusal. Linux returns an
+/// error only when another desktop insertion is pending.
 pub fn capture_focused_accessible_target() -> Result<(), InjectError> {
     platform::capture_target()
 }
