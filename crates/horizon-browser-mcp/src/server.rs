@@ -242,7 +242,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_network",
-        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation; set include_http_bodies for native bounded response bodies. Inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium WebSocket frames are protocol-native; Firefox WebSocket frames use disclosed page instrumentation; HTTP lifecycle and bodies are native on both. Safari is unsupported."
+        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation; set include_http_bodies for native bounded response bodies. Inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium WebSocket frames are protocol-native; Firefox WebSocket frames use disclosed page instrumentation; HTTP lifecycle and bodies are native on both. Chromium cannot return a body the page drained with response.blob(); such http_response_body records carry an error and no payload, so read text()/arrayBuffer() or leave the body unread when the bytes matter. Safari is unsupported."
     )]
     async fn browser_network(
         &self,

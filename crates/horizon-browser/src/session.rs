@@ -29,6 +29,7 @@ mod command_queue;
 mod commands;
 mod events;
 mod handle;
+mod http_bodies;
 mod lifecycle;
 mod manifest_io;
 mod network;
@@ -462,7 +463,8 @@ struct DriverState {
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
     network: crate::network::NetworkCaptureState,
-    pending_http_bodies: VecDeque<(String, String)>,
+    pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
+    http_body_evidence: http_bodies::HttpBodyEvidenceTable,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -517,6 +519,7 @@ impl DriverState {
             semantic: SemanticState::default(),
             network: crate::network::NetworkCaptureState::default(),
             pending_http_bodies: VecDeque::new(),
+            http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),
             stop_requested,
         }
     }
