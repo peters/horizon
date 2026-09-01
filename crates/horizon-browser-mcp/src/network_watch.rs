@@ -173,6 +173,13 @@ impl NetworkWatchState {
             tokio::time::sleep(POLL_INTERVAL.min(request.wait.saturating_sub(started.elapsed()))).await;
         }
 
+        // A scan can complete between heartbeats; re-check ownership and
+        // workspace membership under the manifest lock before disclosing
+        // anything captured after the host may have moved the panel.
+        controller
+            .refresh_claim(&request.panel_id)
+            .map_err(|error| error.to_string())?;
+
         let timed_out = started.elapsed() >= request.wait
             && aggregate.records.is_empty()
             && !aggregate.capture_stopped
