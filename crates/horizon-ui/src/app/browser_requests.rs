@@ -68,13 +68,13 @@ impl HorizonApp {
             .browser_create_host
             .last_request_poll
             .is_none_or(|last| now.saturating_duration_since(last) >= CREATE_REQUEST_POLL_INTERVAL);
-        // Placement changes are handled once per frame, after rendering, by
-        // `restamp_browser_manifests_for_placement`; the tick only keeps the
-        // cadence-based stamp.
+        // Every stamp happens once per frame, after rendering, in
+        // `restamp_browser_manifests_for_placement`; the tick only requests
+        // the cadence-based one by forgetting the last stamped placement.
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.poll_host_requests();
-            changed |= self.stamp_current_placement();
+            self.browser_create_host.stamped_placement = None;
         }
         changed
     }
@@ -790,7 +790,12 @@ mod tests {
 
         app.poll_browser_create_requests();
         let first_poll = app.browser_create_host.last_request_poll.expect("first tick polls");
-        let stamped = app.browser_create_host.stamped_placement.expect("first tick stamps");
+        assert!(
+            app.browser_create_host.stamped_placement.is_none(),
+            "the tick only requests a stamp; the end-of-frame check performs it"
+        );
+        app.restamp_browser_manifests_for_placement();
+        let stamped = app.browser_create_host.stamped_placement.expect("end of frame stamps");
 
         app.poll_browser_create_requests();
         assert_eq!(
