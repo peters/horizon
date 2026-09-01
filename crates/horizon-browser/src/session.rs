@@ -423,7 +423,6 @@ struct DriverState {
     /// `Runtime.enable` is deferred until snapshot, evaluate, clipboard, or
     /// scrollbar scrolling actually needs it. Enabling it at attach is a
     /// script-visible CDP signal.
-    runtime_enabled: bool,
     runtime_enable_requested: HashSet<String>,
     runtime_enable_inflight: HashMap<u64, String>,
     restart_attempts: u32,
@@ -482,7 +481,6 @@ impl DriverState {
             screencast_on: false,
             pending_restart_at: None,
             title_fetch_at: None,
-            runtime_enabled: false,
             runtime_enable_requested: HashSet::new(),
             runtime_enable_inflight: HashMap::new(),
             restart_attempts: 0,
@@ -643,9 +641,6 @@ impl DriverState {
             self.runtime_enable_requested.remove(&session);
             return true;
         }
-        if self.session_id.as_deref() == Some(session.as_str()) {
-            self.runtime_enabled = true;
-        }
         true
     }
 
@@ -658,7 +653,6 @@ impl DriverState {
     }
 
     fn reset_runtime_enable_state(&mut self) {
-        self.runtime_enabled = false;
         self.runtime_enable_requested.clear();
         self.runtime_enable_inflight.clear();
     }
