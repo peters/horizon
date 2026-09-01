@@ -156,11 +156,42 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     assert!(sync_host_state_at(&path, "panel", false, &workspace).expect("hide"));
     assert!(read_at(&path).expect("read hidden").hidden);
 
+    // The member holds the lease and a pending handoff when the host moves
+    // the panel to a workspace that no longer contains it.
+    let now = now_millis();
+    update_at(&path, "panel", |manifest| {
+        manifest.owner = Some(crate::browser::manifest::ManifestOwner {
+            name: "horizon:agent-a".to_string(),
+            tty: None,
+            updated_at: now,
+        });
+        manifest.handoff = Some(crate::browser::manifest::ManifestHandoff {
+            request_id: "request-1".to_string(),
+            reason: "sign in".to_string(),
+            requested_at: now,
+            done: false,
+        });
+    })
+    .expect("seed lease and handoff");
+    assert!(
+        !sync_host_state_at(&path, "panel", false, &workspace).expect("same placement"),
+        "an unchanged placement keeps the lease and handoff"
+    );
+    assert!(read_at(&path).expect("read").handoff_pending().is_some());
+
     let moved = ManifestWorkspace::new(HOST_A, "ws-b", vec!["horizon:agent-b".to_string()]);
     assert!(sync_host_state_at(&path, "panel", false, &moved).expect("move"));
     let after_move = read_at(&path).expect("read moved");
     assert!(after_move.authorizes(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
     assert!(!after_move.authorizes(member()));
+    assert!(
+        after_move.owner.is_none(),
+        "a move revokes the lease of an owner the new stamp no longer permits"
+    );
+    assert!(
+        after_move.handoff.is_none(),
+        "a move clears that owner's pending handoff"
+    );
 
     let other_host = stamp(HOST_B, &["horizon:agent-a"]);
     assert_eq!(

@@ -276,6 +276,17 @@ fn stamp_and_claim(
 fn stamp(manifest: &mut BrowserManifest, hidden: bool, workspace: &ManifestWorkspace, now: i64) {
     manifest.hidden = hidden;
     manifest.workspace = Some(workspace.clone());
+    // An owner the new placement no longer permits loses its lease and any
+    // pending handoff at once: handoffs have no TTL and would otherwise block
+    // the destination workspace's agents until a manual hand-back.
+    let owner_revoked = manifest.owner.as_ref().is_some_and(|owner| {
+        let identity = AgentIdentity::new(&owner.name, manifest.host.as_deref());
+        identity.workspace_scoped() && !workspace.authorizes(identity)
+    });
+    if owner_revoked {
+        manifest.owner = None;
+        manifest.handoff = None;
+    }
     manifest.updated_at = now;
 }
 
