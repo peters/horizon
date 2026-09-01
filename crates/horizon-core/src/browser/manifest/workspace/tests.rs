@@ -1,5 +1,5 @@
 use super::*;
-use crate::browser::manifest::write_at;
+use crate::browser::manifest::{update_at, write_at};
 
 const HOST_A: &str = "host-a";
 const HOST_B: &str = "host-b";
@@ -147,13 +147,22 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     write_at(&path, &driver_manifest(Some(HOST_A))).expect("write manifest");
     let workspace = stamp(HOST_A, &["horizon:agent-a"]);
 
-    assert!(sync_host_state_at(&path, "panel", true, &workspace).expect("stamp"));
+    assert_eq!(
+        sync_host_state_at(&path, "panel", true, &workspace).expect("stamp"),
+        HostStampOutcome::Written
+    );
     let stamped = read_at(&path).expect("read stamped");
     assert!(!stamped.hidden);
     assert_eq!(stamped.workspace.as_ref(), Some(&workspace));
-    assert!(!sync_host_state_at(&path, "panel", true, &workspace).expect("steady state"));
+    assert_eq!(
+        sync_host_state_at(&path, "panel", true, &workspace).expect("steady state"),
+        HostStampOutcome::Unchanged
+    );
 
-    assert!(sync_host_state_at(&path, "panel", false, &workspace).expect("hide"));
+    assert_eq!(
+        sync_host_state_at(&path, "panel", false, &workspace).expect("hide"),
+        HostStampOutcome::Written
+    );
     assert!(read_at(&path).expect("read hidden").hidden);
 
     // The member holds the lease and a pending handoff when the host moves
@@ -173,14 +182,18 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
         });
     })
     .expect("seed lease and handoff");
-    assert!(
-        !sync_host_state_at(&path, "panel", false, &workspace).expect("same placement"),
+    assert_eq!(
+        sync_host_state_at(&path, "panel", false, &workspace).expect("same placement"),
+        HostStampOutcome::Unchanged,
         "an unchanged placement keeps the lease and handoff"
     );
     assert!(read_at(&path).expect("read").handoff_pending().is_some());
 
     let moved = ManifestWorkspace::new(HOST_A, "ws-b", vec!["horizon:agent-b".to_string()]);
-    assert!(sync_host_state_at(&path, "panel", false, &moved).expect("move"));
+    assert_eq!(
+        sync_host_state_at(&path, "panel", false, &moved).expect("move"),
+        HostStampOutcome::Written
+    );
     let after_move = read_at(&path).expect("read moved");
     assert!(after_move.authorizes(AgentIdentity::new("horizon:agent-b", Some(HOST_A))));
     assert!(!after_move.authorizes(member()));
@@ -195,10 +208,9 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
 
     let other_host = stamp(HOST_B, &["horizon:agent-a"]);
     assert_eq!(
-        sync_host_state_at(&path, "panel", false, &other_host)
-            .expect_err("another live host must not rewrite the stamp")
-            .kind(),
-        std::io::ErrorKind::PermissionDenied
+        sync_host_state_at(&path, "panel", false, &other_host).expect("foreign host is reported, not an error"),
+        HostStampOutcome::NotOwned,
+        "another live host must not rewrite the stamp"
     );
     assert!(
         read_at(&path)
@@ -210,10 +222,9 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     let legacy = manifest_path_for_root(root.path(), "legacy");
     write_at(&legacy, &driver_manifest(None)).expect("write legacy manifest");
     assert_eq!(
-        sync_host_state_at(&legacy, "legacy", true, &workspace)
-            .expect_err("a manifest without a recorded host is never stamped")
-            .kind(),
-        std::io::ErrorKind::PermissionDenied
+        sync_host_state_at(&legacy, "legacy", true, &workspace).expect("host-less manifest is reported, not an error"),
+        HostStampOutcome::NotOwned,
+        "a manifest without a recorded host is never stamped"
     );
 
     let missing = manifest_path_for_root(root.path(), "missing");

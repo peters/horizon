@@ -20,14 +20,25 @@ use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis,
-    read_at, update_at,
+    BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis, read_at,
 };
 use crate::horizon_home::HorizonHome;
 
 /// Error text shared by every locked transaction that refuses an identity
 /// outside the panel's workspace.
 pub const OUTSIDE_WORKSPACE_MESSAGE: &str = "agent is outside this browser panel's workspace";
+
+/// What a host-state sync did to one manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostStampOutcome {
+    /// Presentation or membership changed and the manifest was rewritten.
+    Written,
+    /// The manifest already carried this host state; nothing was written.
+    Unchanged,
+    /// The manifest records another host's driver (or none), so this host
+    /// must not stamp it. Distinct from an I/O failure, which is an error.
+    NotOwned,
+}
 const OTHER_HOST_MESSAGE: &str = "browser panel's driver runs in another Horizon host";
 /// Environment variable through which Horizon tells an agent process, and
 /// the MCP server it starts, which host process injected its identity.
@@ -156,12 +167,17 @@ impl ManifestWorkspace {
 }
 
 /// Stamp host-owned presentation and placement state on a live manifest,
-/// writing only when something differs. Returns whether a write happened.
+/// writing only when something differs.
 ///
 /// # Errors
 /// Returns `NotFound` when the panel is not live, or another error when the
-/// locked manifest transaction fails.
-pub fn sync_host_state(panel_local_id: &str, visible: bool, workspace: &ManifestWorkspace) -> std::io::Result<bool> {
+/// locked manifest transaction fails. A manifest owned by another host's
+/// driver is reported as [`HostStampOutcome::NotOwned`], not as an error.
+pub fn sync_host_state(
+    panel_local_id: &str,
+    visible: bool,
+    workspace: &ManifestWorkspace,
+) -> std::io::Result<HostStampOutcome> {
     sync_host_state_at(
         &default_manifest_path(panel_local_id),
         panel_local_id,
@@ -180,7 +196,7 @@ pub fn sync_host_state_in(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
-) -> std::io::Result<bool> {
+) -> std::io::Result<HostStampOutcome> {
     sync_host_state_at(
         &manifest_path_for_root(root, panel_local_id),
         panel_local_id,
@@ -194,7 +210,7 @@ fn sync_host_state_at(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
-) -> std::io::Result<bool> {
+) -> std::io::Result<HostStampOutcome> {
     let hidden = !visible;
     let current = read_at(path).ok_or_else(|| {
         std::io::Error::new(
@@ -202,18 +218,23 @@ fn sync_host_state_at(
             format!("browser manifest is not live: {}", path.display()),
         )
     })?;
-    require_driver_host(&current, workspace)?;
-    if current.hidden == hidden && current.workspace.as_ref() == Some(workspace) {
-        return Ok(false);
+    if !driver_host_matches(&current, workspace) {
+        return Ok(HostStampOutcome::NotOwned);
     }
-    let mut outcome = Ok(());
-    update_at(path, panel_local_id, |manifest| {
-        outcome = require_driver_host(manifest, workspace);
-        if outcome.is_ok() {
+    if current.hidden == hidden && current.workspace.as_ref() == Some(workspace) {
+        return Ok(HostStampOutcome::Unchanged);
+    }
+    let mut outcome = HostStampOutcome::NotOwned;
+    mutate_at(path, panel_local_id, false, |manifest| {
+        if driver_host_matches(manifest, workspace) {
             stamp(manifest, hidden, workspace, now_millis());
+            outcome = HostStampOutcome::Written;
+            true
+        } else {
+            false
         }
     })?;
-    outcome.map(|()| true)
+    Ok(outcome)
 }
 
 /// Stamp a freshly created panel and assign its requested owner in one locked
@@ -309,10 +330,14 @@ fn stamp(manifest: &mut BrowserManifest, hidden: bool, workspace: &ManifestWorks
     manifest.updated_at = now;
 }
 
+fn driver_host_matches(manifest: &BrowserManifest, workspace: &ManifestWorkspace) -> bool {
+    manifest.host.as_deref() == Some(workspace.host_instance.as_str())
+}
+
 /// Only the process running the panel's driver may stamp it; a manifest
 /// without a recorded host (older driver) is never stamped.
 fn require_driver_host(manifest: &BrowserManifest, workspace: &ManifestWorkspace) -> std::io::Result<()> {
-    if manifest.host.as_deref() == Some(workspace.host_instance.as_str()) {
+    if driver_host_matches(manifest, workspace) {
         Ok(())
     } else {
         Err(std::io::Error::new(

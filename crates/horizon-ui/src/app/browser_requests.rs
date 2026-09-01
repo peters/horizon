@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
     self, AgentIdentity, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult,
-    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspace,
+    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, HostStampOutcome,
+    ManifestWorkspace,
 };
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
@@ -417,8 +418,9 @@ fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
 
 /// Stamp each placement's manifest under `root`. Manifests that are not live
 /// yet, or that another host's driver owns, are not this host's to stamp and
-/// do not make the sync incomplete; any other failure does, so the caller
-/// retries on the next frame.
+/// do not make the sync incomplete; every I/O failure does (including a
+/// permission failure on the lock or the write), so the caller retries on
+/// the next frame.
 fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> HostStateSync {
     let mut sync = HostStateSync {
         changed: false,
@@ -426,12 +428,12 @@ fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> Hos
     };
     for placement in placements {
         match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
-            Ok(true) => sync.changed = true,
-            Ok(false) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                tracing::debug!(panel_id = %placement.local_id, %error, "browser manifest belongs to another Horizon host");
+            Ok(HostStampOutcome::Written) => sync.changed = true,
+            Ok(HostStampOutcome::Unchanged) => {}
+            Ok(HostStampOutcome::NotOwned) => {
+                tracing::debug!(panel_id = %placement.local_id, "browser manifest belongs to another Horizon host");
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 sync.complete = false;
                 tracing::warn!(panel_id = %placement.local_id, %error, "could not synchronize browser host state");
@@ -623,7 +625,13 @@ fn publish_manifest_host_state(
     visible: bool,
     workspace: &ManifestWorkspace,
 ) -> std::io::Result<()> {
-    manifest::sync_host_state(panel_local_id, visible, workspace).map(|_| ())
+    match manifest::sync_host_state(panel_local_id, visible, workspace)? {
+        HostStampOutcome::Written | HostStampOutcome::Unchanged => Ok(()),
+        HostStampOutcome::NotOwned => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panel's driver runs in another Horizon host",
+        )),
+    }
 }
 
 fn complete_visibility_failure(request: &BrowserVisibilityRequest, code: &str, message: &str) {
