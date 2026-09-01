@@ -5,7 +5,10 @@ Temporary cross-machine plan for the fix to
 exact requested head. The scenario starts its own isolated hidden Chromium
 through the candidate `horizon-browser mcp --standalone` binary with a private
 `HOME`; it never lists, claims, or navigates a panel that belongs to a running
-Horizon.
+Horizon. That standalone process is the same stdio MCP server Horizon
+registers for agents (see `crates/horizon-browser-cli/README.md`), so the
+driver below stays inside the browser-control contract: it only calls MCP
+tools and never touches raw CDP or private runtime files.
 
 ## What changed
 
@@ -256,7 +259,12 @@ The driver prints one line per `http_response_body` record. Pass criteria:
   ending with the same Blob explanation.
 - `empty.json`, `empty-chunked.json`, and `nocontent`: `encoding` `text`,
   `payload_bytes` 0, `payload_present` true, `error` null.
-- No `http_response_body` record is expected for the `HEAD` request.
+- `fixture.pdf?case=head`: Chromium reported no response lifecycle for the
+  `HEAD` fetch on Linux and macOS, so normally only an `http_request` record
+  with `method` `HEAD` appears and no `http_response_body` record follows. If
+  Chromium does report one, it must be a captured zero-byte body (`encoding`
+  `text`, `payload_bytes` 0, `payload_present` true, `error` null); an
+  `error` on the `HEAD` case is a failure.
 - The driver ends with `server exit 0` and the isolated profile home it
   printed no longer contains a `captures` directory.
 
