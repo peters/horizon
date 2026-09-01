@@ -102,6 +102,26 @@ impl HorizonApp {
         }
         Some(alignment)
     }
+
+    /// Re-frame the workspace that was active before an interactive
+    /// alignment, camera-only: the workspace/panel selection is preserved.
+    /// Falls back to the row head when no attached workspace is active, and
+    /// leaves the view untouched for an empty target (matching the shared
+    /// action's treatment of an empty row head).
+    pub(in crate::app) fn reframe_active_workspace_after_alignment(
+        &mut self,
+        ctx: &egui::Context,
+        alignment: &WorkspaceAlignment,
+    ) {
+        let workspace_id = self
+            .board
+            .active_workspace
+            .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
+            .unwrap_or(alignment.leftmost_workspace);
+        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+            self.focus_workspace_bounds(ctx, min, max, true);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -339,7 +339,18 @@ fn manual_alignment_refocuses_the_active_workspace_instead_of_the_row_head() {
         workspaces: vec![
             editor_workspace_state("left", [100.0, 300.0]),
             editor_workspace_state("middle", [700.0, 500.0]),
-            editor_workspace_state("right", [1_400.0, 900.0]),
+            // Two panels so the focused panel is not the workspace's last one:
+            // the reframe must not move the selection.
+            WorkspaceState {
+                local_id: "right".to_string(),
+                name: "right".to_string(),
+                position: Some([1_400.0, 900.0]),
+                panels: vec![
+                    editor_panel_state("right-panel", [1_420.0, 960.0]),
+                    editor_panel_state("right-panel-two", [1_420.0, 1_200.0]),
+                ],
+                ..WorkspaceState::default()
+            },
         ],
         ..RuntimeState::default()
     };
@@ -372,6 +383,57 @@ fn manual_alignment_refocuses_the_active_workspace_instead_of_the_row_head() {
         "the shortcut target must not be the row head"
     );
     assert_eq!(active_workspace_local_id(&app), Some("right"));
+    // Camera-only reframe: the focused panel is preserved.
+    assert_eq!(focused_panel_local_id(&app), Some("right-panel"));
+}
+
+#[test]
+fn manual_alignment_keeps_row_head_framing_when_active_workspace_is_detached() {
+    let runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            editor_workspace_state("right", [700.0, 500.0]),
+            editor_workspace_state("detached", [1_400.0, 900.0]),
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    app.theme_applied = true;
+    let detached_id = app
+        .board
+        .workspace_id_by_local_id("detached")
+        .expect("detached workspace");
+    let detached_local_id = app
+        .board
+        .workspace(detached_id)
+        .expect("detached workspace")
+        .local_id
+        .clone();
+    app.detached_workspaces.insert(
+        detached_local_id,
+        crate::app::DetachedWorkspaceViewportState::new(WindowConfig::default()),
+    );
+    app.board.active_workspace = Some(detached_id);
+    app.board.focused = app.board.panel_id_by_local_id("left-panel");
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    assert_horizontal_row(&app, "left", "right");
+    assert_position_near(workspace_position(&app, "detached"), [1_400.0, 900.0]);
+    let retarget = app
+        .pan_target
+        .take()
+        .expect("the shortcut should keep framing the row head");
+    let left_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
+    let (left_min, left_max) = app.board.workspace_bounds(left_id).expect("left bounds");
+    app.focus_workspace_bounds(&ctx, left_min, left_max, true);
+    let expected = app.pan_target.take().expect("expected row head target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
+    assert_eq!(active_workspace_local_id(&app), Some("detached"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
 }
 
 #[test]
