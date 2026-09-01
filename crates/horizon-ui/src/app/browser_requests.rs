@@ -1,5 +1,6 @@
 //! Host-side handling for agent-requested browser panel lifecycle changes.
 
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
@@ -17,6 +18,9 @@ const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pending: Vec<PendingBrowserCreate>,
+    /// Board placement the manifests were last stamped for; a change
+    /// re-stamps on the same frame instead of waiting for the next tick.
+    stamped_placement: Option<u64>,
 }
 
 struct PendingBrowserCreate {
@@ -42,15 +46,27 @@ impl HorizonApp {
     pub(super) fn poll_browser_create_requests(&mut self) -> bool {
         let mut changed = self.finish_pending_browser_creates();
         let now = Instant::now();
-        if self
+        let placement = placement_fingerprint(&self.board);
+        let placement_changed = self.browser_create_host.stamped_placement != Some(placement);
+        let poll_due = self
             .browser_create_host
             .last_request_poll
-            .is_some_and(|last| now.saturating_duration_since(last) < CREATE_REQUEST_POLL_INTERVAL)
-        {
-            return changed;
+            .is_none_or(|last| now.saturating_duration_since(last) >= CREATE_REQUEST_POLL_INTERVAL);
+        if poll_due {
+            self.browser_create_host.last_request_poll = Some(now);
+            changed |= self.poll_host_requests();
         }
-        self.browser_create_host.last_request_poll = Some(now);
+        // Moving or hiding a panel must revoke the old workspace's access
+        // now, not up to one tick later.
+        if poll_due || placement_changed {
+            self.browser_create_host.stamped_placement = Some(placement);
+            changed |= self.sync_browser_manifest_host_state();
+        }
+        changed
+    }
 
+    fn poll_host_requests(&mut self) -> bool {
+        let mut changed = false;
         let requests = match manifest::list_create_requests() {
             Ok(requests) => requests,
             Err(error) => {
@@ -81,9 +97,7 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed |= self.poll_browser_visibility_requests();
-        changed |= self.sync_browser_manifest_host_state();
-        changed
+        changed | self.poll_browser_visibility_requests()
     }
 
     fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -365,6 +379,24 @@ fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<Manifes
     ))
 }
 
+/// Everything the workspace stamps depend on: which workspace each browser
+/// and agent panel sits in, and whether each browser panel is shown. Cheap
+/// enough to compute every frame; it hashes no strings and touches no files.
+fn placement_fingerprint(board: &Board) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for panel in &board.panels {
+        let browser = panel.kind == PanelKind::Browser;
+        if !browser && !panel.kind.is_agent() {
+            continue;
+        }
+        panel.id.hash(&mut hasher);
+        panel.workspace_id.hash(&mut hasher);
+        browser.hash(&mut hasher);
+        (browser && panel.visible).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Requests name the host that launched the agent; a second Horizon process
 /// hosting a copy of the same session must leave them alone.
 fn launched_by_this_host(host_instance: Option<&str>) -> bool {
@@ -542,6 +574,95 @@ fn complete_visibility_result(result: &BrowserVisibilityResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::test_support::test_app;
+
+    fn agent_options() -> PanelOptions {
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
+        } else {
+            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
+        };
+        PanelOptions {
+            command: Some(command.to_string()),
+            args,
+            kind: PanelKind::Codex,
+            ..PanelOptions::default()
+        }
+    }
+
+    #[test]
+    fn placement_fingerprint_follows_membership_not_unrelated_panels() {
+        let mut board = Board::new();
+        let alpha = board.create_workspace("alpha");
+        let beta = board.create_workspace("beta");
+        let empty = placement_fingerprint(&board);
+        let agent_id = board.create_panel(agent_options(), alpha).expect("agent panel");
+        let with_agent = placement_fingerprint(&board);
+        assert_ne!(
+            empty, with_agent,
+            "an agent panel joining a workspace changes the stamp inputs"
+        );
+
+        let shell_id = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Shell,
+                    ..agent_options()
+                },
+                alpha,
+            )
+            .expect("shell panel");
+        assert_eq!(
+            placement_fingerprint(&board),
+            with_agent,
+            "shell panels do not take part in browser authorization"
+        );
+        board.assign_panel_to_workspace(shell_id, beta);
+        assert_eq!(placement_fingerprint(&board), with_agent);
+
+        board.assign_panel_to_workspace(agent_id, beta);
+        let moved = placement_fingerprint(&board);
+        assert_ne!(with_agent, moved, "moving an agent panel changes the stamp inputs");
+        board.assign_panel_to_workspace(agent_id, alpha);
+        assert_eq!(
+            placement_fingerprint(&board),
+            with_agent,
+            "moving back restores the fingerprint"
+        );
+    }
+
+    #[test]
+    fn a_placement_change_restamps_before_the_next_poll_tick() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let beta = app.board.create_workspace("beta");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+
+        app.poll_browser_create_requests();
+        let first_poll = app.browser_create_host.last_request_poll.expect("first tick polls");
+        let stamped = app.browser_create_host.stamped_placement.expect("first tick stamps");
+
+        app.poll_browser_create_requests();
+        assert_eq!(
+            app.browser_create_host.last_request_poll,
+            Some(first_poll),
+            "an unchanged board waits for the poll interval"
+        );
+        assert_eq!(app.browser_create_host.stamped_placement, Some(stamped));
+
+        app.board.assign_panel_to_workspace(agent_id, beta);
+        app.poll_browser_create_requests();
+        assert_eq!(
+            app.browser_create_host.last_request_poll,
+            Some(first_poll),
+            "a placement change does not advance the request poll cadence"
+        );
+        assert_ne!(
+            app.browser_create_host.stamped_placement,
+            Some(stamped),
+            "a placement change re-stamps on the same frame"
+        );
+    }
 
     #[test]
     fn only_the_exact_horizon_actor_matches_a_panel() {
