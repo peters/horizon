@@ -129,16 +129,12 @@ async fn persist_cancelled_preparation(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     };
-    use std::time::Duration;
-
-    use horizon_browser_cli::execution_control::JobDeadline;
-
-    use super::*;
 
     struct DropFlag(Arc<AtomicBool>);
 
@@ -150,30 +146,30 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_drains_a_late_worker_result_before_returning() {
-        let (mut control, cancellation) = ExecutionControl::until(JobDeadline::after(Duration::from_millis(20)));
+        let (mut control, cancellation) = ExecutionControl::cancellable();
         let mut cancellation_probe = cancellation.probe();
-        let (started_sender, started_receiver) = mpsc::channel();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
         let dropped = Arc::new(AtomicBool::new(false));
         let worker_dropped = Arc::clone(&dropped);
-        let interrupt = std::thread::spawn(move || {
-            started_receiver.recv().expect("worker start signal");
-            std::thread::sleep(Duration::from_millis(50));
-            cancellation.cancel();
+        let worker = tokio::spawn(async move {
+            await_worker(
+                &mut control,
+                &mut cancellation_probe,
+                "late-preparation-test",
+                move || {
+                    started_sender.send(()).expect("signal worker start");
+                    release_receiver.recv().expect("release worker result");
+                    DropFlag(worker_dropped)
+                },
+            )
+            .await
         });
 
-        let result = await_worker(
-            &mut control,
-            &mut cancellation_probe,
-            "late-preparation-test",
-            move || {
-                started_sender.send(()).expect("signal worker start");
-                std::thread::sleep(Duration::from_millis(100));
-                DropFlag(worker_dropped)
-            },
-        )
-        .await;
-
-        interrupt.join().expect("interrupt thread");
+        started_receiver.await.expect("worker start signal");
+        cancellation.cancel();
+        release_sender.send(()).expect("release worker result");
+        let result = worker.await.expect("join cancellation test");
         let WorkerCompletion::Cancelled { result, .. } = result.expect("cancelled worker result") else {
             panic!("cancellation did not drain the late worker result");
         };
