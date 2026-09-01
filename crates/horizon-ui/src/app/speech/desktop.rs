@@ -1,8 +1,8 @@
-//! Desktop-window dictation: sink selection, clipboard-preserving paste, global PTT.
+//! Desktop-window dictation: sink selection, accessibility insertion, global PTT.
 
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
 use horizon_cursor::{
-    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, paste_text_preserving_clipboard,
+    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, insert_text_into_focused_accessible,
 };
 
 use super::super::HorizonApp;
@@ -31,7 +31,7 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    paste_text_preserving_clipboard(text)
+    insert_text_into_focused_accessible(text)
 }
 
 /// Keep the X11 grab while a hold is in flight so a surface opening cannot

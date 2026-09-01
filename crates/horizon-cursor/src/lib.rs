@@ -1,16 +1,16 @@
-//! Lightweight platform cursor query, paste-chord injection, and global hotkeys.
+//! Lightweight platform cursor query, desktop text injection, and global hotkeys.
 //!
 //! Cursor position returns global (screen-space) coordinates without requiring
 //! special permissions.  On macOS this deliberately avoids the Accessibility
 //! subsystem — only Core Graphics is used.
 
-mod clipboard;
+mod accessibility;
 mod hotkey;
 mod inject;
 
-pub use clipboard::paste_text_preserving_clipboard;
+pub use accessibility::insert_text_into_focused_accessible;
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
-pub use inject::{InjectError, send_paste_chord};
+pub use inject::InjectError;
 
 /// Query the current global cursor position in screen (root-window)
 /// coordinates.  Returns `None` when the platform backend is

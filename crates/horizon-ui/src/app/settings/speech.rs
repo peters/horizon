@@ -96,14 +96,14 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     changed |= ui
         .checkbox(
             &mut config.features.speech.desktop_injection,
-            egui::RichText::new("Paste into other apps")
+            egui::RichText::new("Insert into other apps")
                 .color(theme::FG())
                 .size(12.0),
         )
         .changed();
     super::dim_label(
         ui,
-        "When no Horizon window is focused, push-to-talk pastes into the focused OS window. Background dictation currently requires X11; it will not start on a pure Wayland session.",
+        "When no Horizon window is focused, push-to-talk inserts directly into its focused editable field through Linux accessibility. The clipboard is never used. Background dictation currently requires X11; unsupported or protected fields are left unchanged.",
     );
 
     // The microphone applies to every profile, so it renders in both the
