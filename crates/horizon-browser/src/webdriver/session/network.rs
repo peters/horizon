@@ -14,7 +14,7 @@ use crate::{
     BrowserNetworkDirection, BrowserNetworkEventKind, BrowserNetworkOperation, BrowserNetworkPayloadEncoding,
 };
 
-use super::{BrowserEvent, BrowserEventSender, Driver};
+use super::{BrowserEventSender, Driver};
 
 const MAX_HTTP_BODY_FETCHES_PER_TICK: usize = 16;
 const MAX_HTTP_BODY_FLUSH_BATCHES: usize = 4;
@@ -269,10 +269,10 @@ impl Driver {
         Ok(BrowserControlValue::Network { capture })
     }
 
-    pub(super) fn handle_network_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) -> bool {
+    pub(super) fn handle_network_bidi_event(&mut self, event: &Value) -> bool {
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
-        self.observe_challenge_response(method, params, event_tx);
+        self.observe_challenge_response(method, params);
         if method == "script.message" {
             let Some(page) = self.firefox_network.as_ref().and_then(|bridge| bridge.page.as_ref()) else {
                 return false;
@@ -363,7 +363,7 @@ impl Driver {
         false
     }
 
-    fn observe_challenge_response(&mut self, method: &str, params: &Value, event_tx: &BrowserEventSender) {
+    fn observe_challenge_response(&mut self, method: &str, params: &Value) {
         if method != "network.responseStarted"
             || !params.get("navigation").is_some_and(Value::is_string)
             || params.get("context").and_then(Value::as_str) != self.context_id.as_deref()
@@ -373,13 +373,12 @@ impl Driver {
         let Some(url) = string_at(params, "/response/url") else {
             return;
         };
-        if self.challenge_loop.observe_document_response(
+        self.challenge_loop.observe_document_response(
             url,
             u16_at(params, "/response/status"),
             params.pointer("/response/headers").unwrap_or(&Value::Null),
-        ) {
-            let _ = event_tx.send(BrowserEvent::UrlChanged(url.to_string()));
-        }
+            params.get("navigation").and_then(Value::as_str),
+        );
     }
 
     pub(super) fn tick_firefox_http_response_bodies(&mut self, event_tx: &BrowserEventSender) {

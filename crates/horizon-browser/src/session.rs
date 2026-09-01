@@ -626,6 +626,7 @@ impl DriverState {
         url: &str,
     ) -> Result<(), BrowserControlFailure> {
         let url = normalize_navigation_target(url);
+        self.challenge_loop.document_navigation_started();
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
         let result = self.send_page_command(

@@ -17,19 +17,104 @@ struct Observation {
     observed_at: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DocumentCommit {
+    Normal,
+    Recovered,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DocumentResponseKind {
+    Challenge,
+    Success,
+    Other,
+}
+
+#[derive(Clone, Debug)]
+struct DocumentResponse {
+    url: String,
+    navigation_id: Option<String>,
+    kind: DocumentResponseKind,
+}
+
+impl DocumentResponse {
+    fn matches_commit(&self, url: &str, navigation_id: Option<&str>) -> bool {
+        same_document_url(&self.url, url)
+            && match (self.navigation_id.as_deref(), navigation_id) {
+                (Some(response), Some(commit)) => response == commit,
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ChallengeLoopDetector {
     last_challenge: Option<Observation>,
     armed: Option<Observation>,
     rejection_due: Option<Instant>,
     reported_url: Option<String>,
+    pending_document: Option<DocumentResponse>,
     handoff_active: bool,
 }
 
 impl ChallengeLoopDetector {
-    /// Returns whether a same-URL success cleared a pending or surfaced rejection.
-    pub(crate) fn observe_document_response(&mut self, url: &str, status: Option<u16>, headers: &Value) -> bool {
-        self.observe_document_response_at(Instant::now(), url, status, is_cloudflare_challenge(headers))
+    pub(crate) fn observe_document_response(
+        &mut self,
+        url: &str,
+        status: Option<u16>,
+        headers: &Value,
+        navigation_id: Option<&str>,
+    ) {
+        self.observe_document_response_with_navigation_at(
+            Instant::now(),
+            url,
+            status,
+            is_cloudflare_challenge(headers),
+            navigation_id,
+        );
+    }
+
+    pub(crate) fn document_navigation_started(&mut self) {
+        self.pending_document = None;
+    }
+
+    pub(crate) fn document_committed(&mut self, url: &str, navigation_id: Option<&str>) -> DocumentCommit {
+        let response = if self
+            .pending_document
+            .as_ref()
+            .is_some_and(|response| response.matches_commit(url, navigation_id))
+        {
+            self.pending_document.take()
+        } else {
+            None
+        };
+        if self
+            .reported_url
+            .as_deref()
+            .is_some_and(|reported| same_document_url(reported, url))
+        {
+            if response
+                .as_ref()
+                .is_some_and(|response| response.kind == DocumentResponseKind::Success)
+            {
+                self.clear_challenge_state();
+                return DocumentCommit::Recovered;
+            }
+            return DocumentCommit::Rejected;
+        }
+        if response
+            .as_ref()
+            .is_some_and(|response| response.kind == DocumentResponseKind::Success)
+            || self
+                .reported_url
+                .as_deref()
+                .is_some_and(|reported| !same_document_url(reported, url))
+        {
+            self.clear_challenge_state();
+        }
+        DocumentCommit::Normal
     }
 
     pub(crate) fn handoff_completed(&mut self) {
@@ -44,13 +129,31 @@ impl ChallengeLoopDetector {
         self.take_rejection_at(Instant::now())
     }
 
-    fn observe_document_response_at(
+    #[cfg(test)]
+    fn observe_document_response_at(&mut self, now: Instant, url: &str, status: Option<u16>, is_challenge: bool) {
+        self.observe_document_response_with_navigation_at(now, url, status, is_challenge, None);
+    }
+
+    fn observe_document_response_with_navigation_at(
         &mut self,
         now: Instant,
         url: &str,
         status: Option<u16>,
         is_challenge: bool,
-    ) -> bool {
+        navigation_id: Option<&str>,
+    ) {
+        let kind = if is_challenge {
+            DocumentResponseKind::Challenge
+        } else if status.is_some_and(|status| (200..300).contains(&status)) {
+            DocumentResponseKind::Success
+        } else {
+            DocumentResponseKind::Other
+        };
+        self.pending_document = Some(DocumentResponse {
+            url: url.to_string(),
+            navigation_id: navigation_id.map(str::to_string),
+            kind,
+        });
         if is_challenge {
             let repeated_after_handoff = self.armed.as_ref().is_some_and(|armed| {
                 armed.url == url && now.saturating_duration_since(armed.observed_at) <= HANDOFF_WINDOW
@@ -69,18 +172,15 @@ impl ChallengeLoopDetector {
             if self.handoff_active && self.armed.is_none() {
                 self.arm_latest_challenge(now);
             }
-            return false;
         }
+    }
 
-        if status.is_some_and(|status| (200..300).contains(&status)) {
-            let recovered = self.reported_url.as_deref() == Some(url);
-            self.last_challenge = None;
-            self.armed = None;
-            self.rejection_due = None;
-            self.reported_url = None;
-            return recovered;
-        }
-        false
+    fn clear_challenge_state(&mut self) {
+        self.last_challenge = None;
+        self.armed = None;
+        self.rejection_due = None;
+        self.reported_url = None;
+        self.pending_document = None;
     }
 
     fn handoff_started_at(&mut self, now: Instant) {
@@ -136,6 +236,10 @@ impl ChallengeLoopDetector {
         self.rejection_due = None;
         Some(REJECTION_MESSAGE)
     }
+}
+
+fn same_document_url(left: &str, right: &str) -> bool {
+    left.split('#').next() == right.split('#').next()
 }
 
 fn is_cloudflare_challenge(headers: &Value) -> bool {
@@ -333,6 +437,10 @@ mod tests {
             Some(200),
             false,
         );
+        assert_eq!(
+            detector.document_committed("https://example.test/other", None),
+            DocumentCommit::Normal
+        );
         detector.handoff_completed_at(started + Duration::from_secs(6));
         detector.observe_document_response_at(
             started + Duration::from_secs(7),
@@ -344,34 +452,64 @@ mod tests {
     }
 
     #[test]
-    fn successful_same_url_document_reports_recovery_after_rejection() {
+    fn only_a_matching_successful_commit_recovers_a_reported_rejection() {
         let started = Instant::now();
         let mut detector = ChallengeLoopDetector::default();
-        assert!(!detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true,));
+        detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true);
         detector.handoff_completed_at(started + Duration::from_secs(1));
-        assert!(!detector.observe_document_response_at(
+        detector.observe_document_response_at(
             started + Duration::from_secs(2),
             "https://example.test/protected",
             Some(403),
             true,
-        ));
+        );
         assert_eq!(
             detector.take_rejection_at(started + Duration::from_secs(3)),
             Some(REJECTION_MESSAGE)
         );
 
-        assert!(detector.observe_document_response_at(
+        detector.observe_document_response_with_navigation_at(
             started + Duration::from_secs(4),
             "https://example.test/protected",
-            Some(200),
+            Some(204),
             false,
-        ));
-        assert!(!detector.observe_document_response_at(
+            Some("uncommitted"),
+        );
+        detector.document_navigation_started();
+        detector.observe_document_response_with_navigation_at(
             started + Duration::from_secs(5),
+            "https://example.test/protected",
+            Some(403),
+            true,
+            Some("challenge-reload"),
+        );
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", Some("challenge-reload")),
+            DocumentCommit::Rejected
+        );
+        assert_eq!(detector.take_rejection_at(started + Duration::from_secs(6)), None);
+
+        detector.document_navigation_started();
+        detector.observe_document_response_with_navigation_at(
+            started + Duration::from_secs(7),
             "https://example.test/protected",
             Some(200),
             false,
-        ));
+            Some("successful-retry"),
+        );
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", Some("different-navigation")),
+            DocumentCommit::Rejected
+        );
+
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", Some("successful-retry")),
+            DocumentCommit::Recovered
+        );
+        assert_eq!(
+            detector.document_committed("https://example.test/protected", Some("successful-retry")),
+            DocumentCommit::Normal
+        );
     }
 
     #[test]

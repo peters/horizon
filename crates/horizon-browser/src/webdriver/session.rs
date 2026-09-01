@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
+use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
 use crate::input::{is_activity, is_user_activity};
@@ -601,7 +602,7 @@ impl Driver {
     }
 
     fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
-        if self.handle_network_bidi_event(event, event_tx) {
+        if self.handle_network_bidi_event(event) {
             return;
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
@@ -641,10 +642,23 @@ impl Driver {
         }
         let navigation_complete = bidi_navigation_complete(method);
         if navigation_complete && !self.navigation_failed {
-            if let Some(url) = params.get("url").and_then(Value::as_str).filter(|url| *url != self.url) {
-                self.url = url.to_string();
+            let committed_url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .map_or_else(|| self.url.clone(), str::to_string);
+            let previous_url = self.url.clone();
+            let document_commit = self
+                .challenge_loop
+                .document_committed(&committed_url, params.get("navigation").and_then(Value::as_str));
+            if committed_url != self.url {
+                self.url = committed_url;
                 self.coordination_dirty = true;
+            }
+            if document_commit == DocumentCommit::Recovered || previous_url != self.url {
                 let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+            }
+            if document_commit == DocumentCommit::Rejected && previous_url != self.url {
+                let _ = event_tx.send(BrowserEvent::NavigationFailed(REJECTION_MESSAGE.to_string()));
             }
             self.retain_frame_during_navigation = false;
             let _ = event_tx.send(BrowserEvent::Loading(false));
@@ -668,6 +682,7 @@ impl Driver {
     }
 
     fn begin_navigation(&mut self) {
+        self.challenge_loop.document_navigation_started();
         self.pending_classic_history_start = None;
         self.semantic.invalidate();
         self.generation = self.generation.wrapping_add(1);

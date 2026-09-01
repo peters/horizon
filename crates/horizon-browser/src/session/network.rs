@@ -103,8 +103,8 @@ impl DriverState {
         }
     }
 
-    pub(super) fn handle_network_event(&mut self, event: &CdpEvent<'_>, event_tx: &BrowserEventSender) {
-        self.observe_challenge_response(event, event_tx);
+    pub(super) fn handle_network_event(&mut self, event: &CdpEvent<'_>) {
+        self.observe_challenge_response(event);
         if !self.network.is_active() {
             return;
         }
@@ -152,23 +152,22 @@ impl DriverState {
         }
     }
 
-    fn observe_challenge_response(&mut self, event: &CdpEvent<'_>, event_tx: &BrowserEventSender) {
+    fn observe_challenge_response(&mut self, event: &CdpEvent<'_>) {
         if !is_main_document_response(event, self.main_frame_id.as_deref()) {
             return;
         }
         let Some(url) = string_at(event.params, "/response/url") else {
             return;
         };
-        if self.challenge_loop.observe_document_response(
+        self.challenge_loop.observe_document_response(
             url,
             u16_at(event.params, "/response/status"),
             event
                 .params
                 .pointer("/response/headers")
                 .unwrap_or(&serde_json::Value::Null),
-        ) {
-            let _ = event_tx.send(BrowserEvent::UrlChanged(url.to_string()));
-        }
+            string_at(event.params, "/loaderId"),
+        );
     }
 
     fn handle_http_network_event(&mut self, event: &CdpEvent<'_>) -> bool {

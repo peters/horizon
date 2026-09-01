@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cdp::{CdpEvent, CdpLink, CdpMsg};
+use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::frames::FrameSlot;
 
 use super::clipboard::target_event_session_id;
@@ -218,7 +219,7 @@ impl DriverState {
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         if on_page_session {
-            self.handle_network_event(&event, event_tx);
+            self.handle_network_event(&event);
         }
         match event.method {
             "Target.attachedToTarget" => {
@@ -371,10 +372,17 @@ impl DriverState {
         }
         self.retain_frame_during_navigation = false;
         self.navigation_failed = false;
-        if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
-            && normalized_committed_url(target_url) != self.url
-        {
-            self.url = normalized_committed_url(target_url).to_string();
+        let previous_url = self.url.clone();
+        let committed_url = frame
+            .get("url")
+            .and_then(|url| url.as_str())
+            .map_or(self.url.as_str(), normalized_committed_url)
+            .to_string();
+        let document_commit = self
+            .challenge_loop
+            .document_committed(&committed_url, frame.get("loaderId").and_then(|id| id.as_str()));
+        if committed_url != self.url {
+            self.url = committed_url;
             self.manifest_dirty = true;
         }
         self.pending_restart_at = Some(Instant::now());
@@ -386,7 +394,16 @@ impl DriverState {
         self.title_fetch_retries = 0;
         self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
         self.write_manifest(true);
-        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        match document_commit {
+            DocumentCommit::Rejected if previous_url == self.url => {}
+            DocumentCommit::Rejected => {
+                let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+                let _ = event_tx.send(BrowserEvent::NavigationFailed(REJECTION_MESSAGE.to_string()));
+            }
+            DocumentCommit::Normal | DocumentCommit::Recovered => {
+                let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+            }
+        }
         let _ = event_tx.send(BrowserEvent::Loading(true));
     }
 
@@ -723,6 +740,68 @@ mod tests {
         assert!(!state.retain_frame_during_navigation);
         assert!(!state.navigation_failed);
         assert_eq!(state.url, "https://example.test/good#fragment");
+    }
+
+    #[test]
+    fn same_url_challenge_commit_waits_for_a_confirmed_success_before_clearing() {
+        const URL: &str = "https://example.test/protected";
+        let challenge_headers = serde_json::json!({ "cf-mitigated": "challenge" });
+        let mut state = driver_state();
+        state.url = URL.to_string();
+        state
+            .challenge_loop
+            .observe_document_response(URL, Some(403), &challenge_headers, Some("initial"));
+        state.challenge_loop.handoff_completed();
+        state
+            .challenge_loop
+            .observe_document_response(URL, Some(403), &challenge_headers, Some("challenge-reload"));
+        let (tx, rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let challenge_commit = serde_json::json!({
+            "frame": { "id": "main", "loaderId": "challenge-reload", "url": URL }
+        });
+
+        state.handle_frame_navigated(
+            &events,
+            CdpEvent {
+                method: "Page.frameNavigated",
+                params: &challenge_commit,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+        state.challenge_loop.document_navigation_started();
+        state.challenge_loop.observe_document_response(
+            URL,
+            Some(200),
+            &serde_json::Value::Null,
+            Some("successful-retry"),
+        );
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+        let success_commit = serde_json::json!({
+            "frame": { "id": "main", "loaderId": "successful-retry", "url": URL }
+        });
+        state.handle_frame_navigated(
+            &events,
+            CdpEvent {
+                method: "Page.frameNavigated",
+                params: &success_commit,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert_eq!(rx.recv(), Ok(BrowserEvent::UrlChanged(URL.to_string())));
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 
     #[test]
