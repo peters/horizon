@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
+use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
 use crate::input::{is_activity, is_user_activity};
@@ -161,6 +162,7 @@ struct Driver {
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
+    challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
@@ -252,6 +254,9 @@ pub(crate) fn run_webdriver(
             driver.disable_optional_bidi(frame_slot, event_tx);
         }
         driver.tick_firefox_http_response_bodies(event_tx);
+        if let Some(message) = driver.challenge_loop.take_rejection() {
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        }
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
@@ -324,7 +329,7 @@ impl Driver {
             ));
         }
         if let Some(link) = bidi.as_mut()
-            && let Err(error) = subscribe(link)
+            && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
                 let path = format!("/session/{session_id}");
@@ -362,6 +367,7 @@ impl Driver {
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
+            challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
@@ -606,6 +612,9 @@ impl Driver {
         {
             self.context_id = Some(context.to_string());
         }
+        if !bidi_event_targets_context(method, params, self.context_id.as_deref()) {
+            return;
+        }
         if method.ends_with("navigationStarted") {
             if consume_pending_history_start(
                 &mut self.pending_classic_history_start,
@@ -633,10 +642,23 @@ impl Driver {
         }
         let navigation_complete = bidi_navigation_complete(method);
         if navigation_complete && !self.navigation_failed {
-            if let Some(url) = params.get("url").and_then(Value::as_str).filter(|url| *url != self.url) {
-                self.url = url.to_string();
+            let committed_url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .map_or_else(|| self.url.clone(), str::to_string);
+            let previous_url = self.url.clone();
+            let document_commit = self
+                .challenge_loop
+                .document_committed(&committed_url, params.get("navigation").and_then(Value::as_str));
+            if committed_url != self.url {
+                self.url = committed_url;
                 self.coordination_dirty = true;
+            }
+            if document_commit == DocumentCommit::Recovered || previous_url != self.url {
                 let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+            }
+            if document_commit == DocumentCommit::Rejected && previous_url != self.url {
+                let _ = event_tx.send(BrowserEvent::NavigationFailed(REJECTION_MESSAGE.to_string()));
             }
             self.retain_frame_during_navigation = false;
             let _ = event_tx.send(BrowserEvent::Loading(false));
@@ -660,6 +682,7 @@ impl Driver {
     }
 
     fn begin_navigation(&mut self) {
+        self.challenge_loop.document_navigation_started();
         self.pending_classic_history_start = None;
         self.semantic.invalidate();
         self.generation = self.generation.wrapping_add(1);
@@ -846,25 +869,41 @@ fn connect_bidi_with_startup_retry(url: &str, stop_requested: &AtomicBool) -> Re
     }
 }
 
-fn subscribe(link: &mut JsonWsLink) -> Result<(), String> {
-    link.call(
-        COMMAND_TIMEOUT,
-        "session.subscribe",
-        &json!({
-            "events": [
-                "browsingContext.contextCreated",
-                "browsingContext.contextDestroyed",
-                "browsingContext.navigationStarted",
-                "browsingContext.navigationFailed",
-                "browsingContext.fragmentNavigated",
-                "browsingContext.domContentLoaded",
-                "browsingContext.load"
-            ]
-        }),
-    )
-    .result
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id: Option<&str>) -> Result<(), String> {
+    subscribe_bidi_events(link, &base_bidi_events(), None)?;
+    if backend == BackendKind::FirefoxBidi {
+        let context = context_id.ok_or_else(|| "Firefox BiDi returned no top-level browsing context".to_string())?;
+        subscribe_bidi_events(link, &["network.responseStarted"], Some(context))?;
+    }
+    Ok(())
+}
+
+fn subscribe_bidi_events(link: &mut JsonWsLink, events: &[&str], context: Option<&str>) -> Result<(), String> {
+    let params = bidi_subscription_params(events, context);
+    link.call(COMMAND_TIMEOUT, "session.subscribe", &params)
+        .result
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn bidi_subscription_params(events: &[&str], context: Option<&str>) -> Value {
+    let mut params = json!({ "events": events });
+    if let Some(context) = context {
+        params["contexts"] = json!([context]);
+    }
+    params
+}
+
+fn base_bidi_events() -> Vec<&'static str> {
+    vec![
+        "browsingContext.contextCreated",
+        "browsingContext.contextDestroyed",
+        "browsingContext.navigationStarted",
+        "browsingContext.navigationFailed",
+        "browsingContext.fragmentNavigated",
+        "browsingContext.domContentLoaded",
+        "browsingContext.load",
+    ]
 }
 
 fn install_common_signal_preload(link: &mut JsonWsLink) -> Result<(), String> {
@@ -937,6 +976,14 @@ fn bidi_navigation_failed(method: &str) -> bool {
     method.ends_with("navigationFailed")
 }
 
+fn bidi_event_targets_context(method: &str, params: &Value, context_id: Option<&str>) -> bool {
+    let context_scoped = method.ends_with("navigationStarted")
+        || bidi_navigation_failed(method)
+        || bidi_navigation_complete(method)
+        || method.ends_with("contextDestroyed");
+    !context_scoped || params.get("context").and_then(Value::as_str) == context_id
+}
+
 fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url: Option<&str>, now: Instant) -> bool {
     let Some(pending) = pending.take() else {
         return false;
@@ -947,9 +994,10 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, bidi_navigation_complete,
-        bidi_navigation_failed, capture_is_current, classic_navigation_committed, consume_pending_history_start,
-        new_session_capabilities, parse_new_session_response, safe_session_id, validate_firefox_args,
+        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
+        bidi_navigation_complete, bidi_navigation_failed, bidi_subscription_params, capture_is_current,
+        classic_navigation_committed, consume_pending_history_start, new_session_capabilities,
+        parse_new_session_response, safe_session_id, validate_firefox_args,
     };
     use crate::{BackendKind, BrowserConfig};
 
@@ -1050,6 +1098,41 @@ mod tests {
         assert!(bidi_navigation_complete("browsingContext.domContentLoaded"));
         assert!(bidi_navigation_complete("browsingContext.fragmentNavigated"));
         assert!(!bidi_navigation_complete("browsingContext.navigationStarted"));
+    }
+
+    #[test]
+    fn bidi_navigation_events_only_mutate_the_bound_top_level_context() {
+        let top = Some("top");
+        assert!(bidi_event_targets_context(
+            "browsingContext.navigationStarted",
+            &serde_json::json!({ "context": "top" }),
+            top,
+        ));
+        assert!(!bidi_event_targets_context(
+            "browsingContext.domContentLoaded",
+            &serde_json::json!({ "context": "challenge-iframe" }),
+            top,
+        ));
+        assert!(bidi_event_targets_context(
+            "network.responseStarted",
+            &serde_json::json!({ "context": "challenge-iframe" }),
+            top,
+        ));
+    }
+
+    #[test]
+    fn firefox_challenge_responses_use_a_context_scoped_subscription() {
+        let baseline = bidi_subscription_params(&base_bidi_events(), None);
+        assert!(!baseline["events"].as_array().is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| event.as_str() == Some("network.responseStarted"))
+        }));
+        assert!(baseline.get("contexts").is_none());
+
+        let responses = bidi_subscription_params(&["network.responseStarted"], Some("top-context"));
+        assert_eq!(responses["events"], serde_json::json!(["network.responseStarted"]));
+        assert_eq!(responses["contexts"], serde_json::json!(["top-context"]));
     }
 
     #[test]

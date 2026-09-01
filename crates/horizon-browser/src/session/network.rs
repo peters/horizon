@@ -68,19 +68,6 @@ impl DriverState {
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
                 self.flush_http_response_bodies(link, event_tx, frame_slot);
-                if self.network.is_active()
-                    && let Some(session) = self.session_id.clone()
-                    && let Err(error) = self.call_and_ack(
-                        link,
-                        event_tx,
-                        frame_slot,
-                        "Network.disable",
-                        &serde_json::json!({}),
-                        Some(session.as_str()),
-                    )
-                {
-                    tracing::warn!(target: "browser", "Chromium network disable failed before capture flush: {error}");
-                }
                 self.network.stop()?
             }
         };
@@ -117,6 +104,7 @@ impl DriverState {
     }
 
     pub(super) fn handle_network_event(&mut self, event: &CdpEvent<'_>) {
+        self.observe_challenge_response(event);
         if !self.network.is_active() {
             return;
         }
@@ -162,6 +150,24 @@ impl DriverState {
             }
             _ => {}
         }
+    }
+
+    fn observe_challenge_response(&mut self, event: &CdpEvent<'_>) {
+        if !is_main_document_response(event, self.main_frame_id.as_deref()) {
+            return;
+        }
+        let Some(url) = string_at(event.params, "/response/url") else {
+            return;
+        };
+        self.challenge_loop.observe_document_response(
+            url,
+            u16_at(event.params, "/response/status"),
+            event
+                .params
+                .pointer("/response/headers")
+                .unwrap_or(&serde_json::Value::Null),
+            string_at(event.params, "/loaderId"),
+        );
     }
 
     fn handle_http_network_event(&mut self, event: &CdpEvent<'_>) -> bool {
@@ -407,6 +413,12 @@ fn string_at<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str>
     value.pointer(pointer).and_then(serde_json::Value::as_str)
 }
 
+fn is_main_document_response(event: &CdpEvent<'_>, main_frame_id: Option<&str>) -> bool {
+    event.method == "Network.responseReceived"
+        && string_at(event.params, "/type") == Some("Document")
+        && main_frame_id.is_some_and(|frame_id| string_at(event.params, "/frameId") == Some(frame_id))
+}
+
 fn u64_at(value: &serde_json::Value, pointer: &str) -> Option<u64> {
     value.pointer(pointer).and_then(serde_json::Value::as_u64)
 }
@@ -433,5 +445,40 @@ mod tests {
         assert_eq!(u64_at(&value, "/negative"), None);
         assert_eq!(u64_at(&value, "/fractional"), None);
         assert_eq!(u8_at(&value, "/opcode"), Some(2));
+    }
+
+    #[test]
+    fn challenge_observation_requires_the_known_main_document_frame() {
+        let main_document = serde_json::json!({ "type": "Document", "frameId": "main" });
+        let child_document = serde_json::json!({ "type": "Document", "frameId": "child" });
+        let missing_frame = serde_json::json!({ "type": "Document" });
+        let main_script = serde_json::json!({ "type": "Script", "frameId": "main" });
+
+        assert!(is_main_document_response(
+            &CdpEvent {
+                method: "Network.responseReceived",
+                params: &main_document,
+                session_id: Some("session"),
+            },
+            Some("main"),
+        ));
+        assert!(!is_main_document_response(
+            &CdpEvent {
+                method: "Network.responseReceived",
+                params: &main_document,
+                session_id: Some("session"),
+            },
+            None,
+        ));
+        for params in [&child_document, &missing_frame, &main_script] {
+            assert!(!is_main_document_response(
+                &CdpEvent {
+                    method: "Network.responseReceived",
+                    params,
+                    session_id: Some("session"),
+                },
+                Some("main"),
+            ));
+        }
     }
 }

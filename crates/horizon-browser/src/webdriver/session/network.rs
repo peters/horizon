@@ -272,6 +272,7 @@ impl Driver {
     pub(super) fn handle_network_bidi_event(&mut self, event: &Value) -> bool {
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
+        self.observe_challenge_response(method, params);
         if method == "script.message" {
             let Some(page) = self.firefox_network.as_ref().and_then(|bridge| bridge.page.as_ref()) else {
                 return false;
@@ -360,6 +361,24 @@ impl Driver {
             _ => {}
         }
         false
+    }
+
+    fn observe_challenge_response(&mut self, method: &str, params: &Value) {
+        if method != "network.responseStarted"
+            || !params.get("navigation").is_some_and(Value::is_string)
+            || params.get("context").and_then(Value::as_str) != self.context_id.as_deref()
+        {
+            return;
+        }
+        let Some(url) = string_at(params, "/response/url") else {
+            return;
+        };
+        self.challenge_loop.observe_document_response(
+            url,
+            u16_at(params, "/response/status"),
+            params.pointer("/response/headers").unwrap_or(&Value::Null),
+            params.get("navigation").and_then(Value::as_str),
+        );
     }
 
     pub(super) fn tick_firefox_http_response_bodies(&mut self, event_tx: &BrowserEventSender) {
@@ -761,7 +780,6 @@ fn firefox_network_events(options: &BrowserNetworkCaptureOptions) -> Vec<&'stati
     if options.include_http {
         events.extend([
             "network.beforeRequestSent",
-            "network.responseStarted",
             "network.responseCompleted",
             "network.fetchError",
         ]);
@@ -825,6 +843,7 @@ mod tests {
 
         assert_eq!(firefox_network_transport(&options), "webdriver_bidi");
         assert!(!firefox_network_events(&options).contains(&"script.message"));
+        assert!(!firefox_network_events(&options).contains(&"network.responseStarted"));
         assert!(firefox_network_events(&options).contains(&"network.responseCompleted"));
     }
 }

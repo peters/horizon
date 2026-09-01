@@ -7,6 +7,7 @@
 
 mod audit;
 pub mod cdp;
+mod challenge;
 mod coordination;
 mod disclosure;
 mod error;
