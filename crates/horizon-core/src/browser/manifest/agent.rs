@@ -258,16 +258,22 @@ fn request_handoff_locked(
     }
 }
 
+/// Promote queued actions for the driver. An action is ready only if its
+/// actor still holds the live lease and the current stamp still permits it;
+/// an action queued before the host moved the panel is rejected here so the
+/// move revokes browser-side effects, not only result disclosure.
 pub(super) fn take_ready_actions(manifest: &mut BrowserManifest) -> (Vec<AgentAction>, Vec<AgentAction>) {
     let now = now_millis();
     if manifest.user_is_active(now) || manifest.handoff_pending().is_some() {
         return (Vec::new(), Vec::new());
     }
     let owner = manifest.live_owner(now).map(|owner| owner.name.clone());
+    let driver_host = manifest.host.clone();
     let mut ready = Vec::new();
     let mut rejected = Vec::new();
     for action in std::mem::take(&mut manifest.actions) {
-        if owner.as_deref() == Some(action.actor.as_str()) {
+        let still_permitted = manifest.permits(AgentIdentity::new(&action.actor, driver_host.as_deref()));
+        if still_permitted && owner.as_deref() == Some(action.actor.as_str()) {
             ready.push(action);
         } else {
             rejected.push(action);
@@ -400,6 +406,57 @@ mod tests {
         manifest.user_active = true;
         manifest.user_active_at = now_millis();
         manifest.actions.push(ready[0].clone());
+        assert!(take_ready_actions(&mut manifest).0.is_empty());
+    }
+
+    #[test]
+    fn queued_actions_are_rejected_once_the_stamp_no_longer_permits_their_actor() {
+        let now = now_millis();
+        let queued = || AgentAction {
+            action_id: "queued".to_string(),
+            actor: "horizon:agent-a".to_string(),
+            requested_at_millis: now,
+            action: BrowserControlAction::Reload,
+        };
+        let mut manifest = BrowserManifest {
+            panel_local_id: "panel".to_string(),
+            host: Some("host-a".to_string()),
+            workspace: Some(super::super::ManifestWorkspace::new(
+                "host-a",
+                "ws-a",
+                vec!["horizon:agent-a".to_string()],
+            )),
+            owner: Some(ManifestOwner {
+                name: "horizon:agent-a".to_string(),
+                tty: None,
+                updated_at: now,
+            }),
+            actions: vec![queued()],
+            ..BrowserManifest::default()
+        };
+
+        let (ready, rejected) = take_ready_actions(&mut manifest);
+        assert_eq!(ready.len(), 1);
+        assert!(rejected.is_empty());
+
+        // The host moved the panel after the action was queued.
+        manifest.workspace = Some(super::super::ManifestWorkspace::new(
+            "host-a",
+            "ws-b",
+            vec!["horizon:agent-b".to_string()],
+        ));
+        manifest.actions.push(queued());
+        let (ready, rejected) = take_ready_actions(&mut manifest);
+        assert!(ready.is_empty(), "a moved panel must not execute the stale action");
+        assert_eq!(rejected.len(), 1);
+
+        // A stamp left by a previous host is equally stale.
+        manifest.workspace = Some(super::super::ManifestWorkspace::new(
+            "host-b",
+            "ws-a",
+            vec!["horizon:agent-a".to_string()],
+        ));
+        manifest.actions.push(queued());
         assert!(take_ready_actions(&mut manifest).0.is_empty());
     }
 

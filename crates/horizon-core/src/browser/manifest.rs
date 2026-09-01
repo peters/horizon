@@ -494,10 +494,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         initialize(panel_local_id, |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
-            manifest.host = Some(host_instance().to_string());
-            // A driver start invalidates any stamp left by a previous host; the
-            // running host re-stamps on its next sync.
-            manifest.workspace = None;
+            adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -603,6 +600,20 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         let manifest_removed = remove_with_timeout(panel_local_id, timeout);
         let results_removed = result::remove_stale(panel_local_id).is_ok();
         manifest_removed && results_removed
+    }
+}
+
+/// Record the process that now runs the panel's driver. Control state written
+/// under a different host (its stamp, owner lease, queued actions, and
+/// handoff) is dropped so nothing from that host stays effective; a driver
+/// restart inside the same host keeps its state.
+fn adopt_driver_host(manifest: &mut BrowserManifest, host: &str) {
+    if manifest.host.as_deref() != Some(host) {
+        manifest.workspace = None;
+        manifest.owner = None;
+        manifest.actions.clear();
+        manifest.handoff = None;
+        manifest.host = Some(host.to_string());
     }
 }
 
@@ -919,5 +930,56 @@ mod tests {
     #[test]
     fn handoff_request_ids_are_unique_for_same_millisecond_requests() {
         assert_ne!(new_handoff_request_id(), new_handoff_request_id());
+    }
+
+    #[test]
+    fn a_new_driver_host_drops_control_state_written_under_the_previous_host() {
+        let now = now_millis();
+        let inherited = || BrowserManifest {
+            host: Some("host-a".to_string()),
+            workspace: Some(ManifestWorkspace::new(
+                "host-a",
+                "ws-a",
+                vec!["horizon:agent-a".to_string()],
+            )),
+            owner: Some(ManifestOwner {
+                name: "horizon:agent-a".to_string(),
+                tty: None,
+                updated_at: now,
+            }),
+            handoff: Some(ManifestHandoff {
+                request_id: "request-1".to_string(),
+                reason: "sign in".to_string(),
+                requested_at: now,
+                done: false,
+            }),
+            actions: vec![horizon_browser::AgentAction {
+                action_id: "a".to_string(),
+                actor: "horizon:agent-a".to_string(),
+                requested_at_millis: now,
+                action: horizon_browser::BrowserControlAction::Reload,
+            }],
+            ..sample("p")
+        };
+
+        let mut restarted = inherited();
+        adopt_driver_host(&mut restarted, "host-a");
+        assert_eq!(
+            restarted,
+            inherited(),
+            "a same-host driver restart keeps its control state"
+        );
+
+        let mut taken_over = inherited();
+        adopt_driver_host(&mut taken_over, "host-b");
+        assert_eq!(taken_over.host.as_deref(), Some("host-b"));
+        assert!(taken_over.workspace.is_none());
+        assert!(taken_over.owner.is_none());
+        assert!(taken_over.actions.is_empty());
+        assert!(taken_over.handoff.is_none());
+
+        let mut fresh = sample("fresh");
+        adopt_driver_host(&mut fresh, "host-b");
+        assert_eq!(fresh.host.as_deref(), Some("host-b"));
     }
 }
