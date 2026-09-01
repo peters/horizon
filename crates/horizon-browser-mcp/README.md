@@ -27,7 +27,12 @@ shell commands, files, or other MCP servers.
 
 ## Tool contract
 
-- `browser_list` and `browser_panel` discover safe live-panel state.
+- `browser_list` and `browser_panel` discover safe live-panel state. For an
+  agent launched inside Horizon, discovery and every control tool are scoped
+  to the workspace that contains the agent panel: panels in other workspaces
+  are never listed and their ids are rejected even when they are unowned.
+  A panel's `visible` field is host presentation state, not proof that it is
+  in the caller's workspace.
 - `browser_create` opens a panel in the calling agent's Horizon workspace and
   returns only after it is ready and owned by that agent. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
@@ -66,6 +71,13 @@ and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
 visibility requests are accepted only from an identity belonging to a live
 Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
+The Horizon host stamps every live browser manifest with the agent identities
+that currently share the panel's workspace and refreshes the stamp when either
+panel moves, so authorization follows workspace membership without restarting
+the browser session or the agent. Identities are per-panel UUIDs, so separate
+Horizon processes sharing one home never authorize each other's panels even
+when their workspace ids collide, and manifests without a stamp (older hosts,
+or a panel whose host has not stamped it yet) fail closed for Horizon agents.
 When no valid actor is injected, the server uses a process-local identity and
 releases only that identity's claims on clean shutdown. A crash retains the
 heartbeat TTL fallback, while a normal reconnect can claim the panel

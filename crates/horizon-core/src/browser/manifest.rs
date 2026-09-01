@@ -10,7 +10,8 @@
 //! - the **Horizon MCP adapter** (reads discovery fields, heartbeats `owner`,
 //!   writes a `handoff` request, and enqueues validated backend-neutral
 //!   actions),
-//! - the **UI** (reads ownership for the chrome chip).
+//! - the **UI host** (reads ownership for the chrome chip and stamps the
+//!   host-owned `hidden` and `workspace` fields).
 //!
 //! File-based on purpose: it works across process boundaries without putting
 //! a transport dependency in `horizon-browser`. It is not a supported agent
@@ -45,6 +46,7 @@ mod create;
 mod request_queue;
 mod result;
 mod visibility;
+mod workspace;
 
 pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
@@ -58,6 +60,7 @@ pub use visibility::{
     claim_visibility_request, complete_visibility_request, enqueue_visibility, list_visibility_requests,
     record_visibility_status, take_visibility_result,
 };
+pub use workspace::{ManifestWorkspace, sync_host_state};
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
@@ -112,6 +115,11 @@ pub struct BrowserManifest {
     /// session and control channel alive.
     #[serde(default)]
     pub hidden: bool,
+    /// Host-owned workspace membership stamped by the Horizon process hosting
+    /// the panel. Absent until the host stamps it and on manifests from
+    /// older hosts; workspace-scoped callers must treat both as out of scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<ManifestWorkspace>,
     /// Private append-only JSONL action journal for this panel identity.
     #[serde(default)]
     pub audit_path: String,
@@ -146,6 +154,15 @@ impl BrowserManifest {
     pub fn user_is_active(&self, now_millis: i64) -> bool {
         let ttl_millis = i64::try_from(USER_ACTIVE_TTL.as_millis()).unwrap_or(i64::MAX);
         self.user_active && timestamp_is_fresh(now_millis, self.user_active_at, ttl_millis)
+    }
+
+    /// Whether the host has placed `actor` in this panel's workspace. An
+    /// unstamped manifest authorizes nobody.
+    #[must_use]
+    pub fn authorizes_actor(&self, actor: &str) -> bool {
+        self.workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.authorizes(actor))
     }
 }
 
@@ -608,6 +625,7 @@ mod tests {
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
             hidden: false,
+            workspace: None,
             audit_path: String::new(),
             owner: None,
             user_active: false,

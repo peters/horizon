@@ -7,7 +7,7 @@ use horizon_browser::{
     AgentActionResult, BackendKind, BrowserActionOutcome, BrowserControlAction, BrowserControlValue,
 };
 use horizon_core::browser::manifest;
-use horizon_core::browser::manifest::{BrowserCreateOutcome, BrowserVisibilityOutcome};
+use horizon_core::browser::manifest::{BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome};
 use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
@@ -102,6 +102,10 @@ pub(crate) enum ControlError {
     #[error("browser_create is available only to an agent panel launched inside Horizon")]
     CreateUnavailable,
     #[error(
+        "browser panel {panel_id} is outside the calling agent's Horizon workspace; use browser_list to find controllable panels or browser_create to open one there"
+    )]
+    PanelOutsideWorkspace { panel_id: String },
+    #[error(
         "browser panel {panel_id} is already owned by this agent; reuse it, or set allow_additional=true only when the user explicitly requested an independent browser session"
     )]
     AdditionalPanelRequiresOptIn { panel_id: String },
@@ -145,15 +149,46 @@ impl BrowserController {
         }
     }
 
+    /// Live panels the calling identity may control: for a Horizon agent,
+    /// exactly the panels its host placed in the agent's current workspace.
     pub(crate) fn list_panels(&self) -> Vec<BrowserPanel> {
-        let directory = manifest::default_manifest_dir();
-        let mut panels = manifest::list_panels_in(&directory)
-            .into_iter()
-            .filter_map(|panel_id| manifest::read(&panel_id))
+        let mut panels = self
+            .workspace_manifests()
             .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
         panels
+    }
+
+    pub(crate) fn panel(&self, panel_id: &str) -> Result<BrowserPanel, ControlError> {
+        self.authorized_manifest(panel_id)
+            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
+    }
+
+    fn workspace_manifests(&self) -> impl Iterator<Item = BrowserManifest> {
+        let directory = manifest::default_manifest_dir();
+        manifest::list_panels_in(&directory)
+            .into_iter()
+            .filter_map(|panel_id| manifest::read(&panel_id))
+            .filter(|manifest| workspace_authorizes(manifest, &self.actor))
+    }
+
+    /// Every control path starts here, so an out-of-workspace panel is
+    /// rejected before any ownership claim, even when it is unowned.
+    fn authorized_manifest(&self, panel_id: &str) -> Result<BrowserManifest, ControlError> {
+        let manifest = manifest::read(panel_id).ok_or_else(|| {
+            ControlError::internal_io(
+                "could not read browser panel",
+                io::Error::new(io::ErrorKind::NotFound, "browser manifest missing"),
+            )
+        })?;
+        if workspace_authorizes(&manifest, &self.actor) {
+            Ok(manifest)
+        } else {
+            Err(ControlError::PanelOutsideWorkspace {
+                panel_id: panel_id.to_string(),
+            })
+        }
     }
 
     pub(crate) async fn create(
@@ -216,10 +251,7 @@ impl BrowserController {
     }
 
     fn existing_actor_panel_id(&self) -> Option<String> {
-        let directory = manifest::default_manifest_dir();
-        manifest::list_panels_in(&directory)
-            .into_iter()
-            .filter_map(|panel_id| manifest::read(&panel_id))
+        self.workspace_manifests()
             .find(|panel| panel_belongs_to_actor(panel, &self.actor))
             .map(|panel| panel.panel_local_id)
     }
@@ -304,12 +336,14 @@ impl BrowserController {
     }
 
     pub(crate) fn read_audit(&self, panel_id: &str) -> Result<Vec<horizon_browser::BrowserAuditEntry>, ControlError> {
+        self.authorized_manifest(panel_id)?;
         tracing::debug!(actor = %self.actor, panel_id, "reading browser action audit");
         manifest::read_audit(panel_id)
             .map_err(|source| ControlError::internal_io("could not read browser audit", source))
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
+        self.authorized_manifest(panel_id)?;
         let result = match manifest::heartbeat(panel_id, &self.actor) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
@@ -327,6 +361,7 @@ impl BrowserController {
     }
 
     pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
+        self.authorized_manifest(panel_id)?;
         manifest::heartbeat(panel_id, &self.actor)
             .map_err(|source| ControlError::internal_io("lost browser ownership while waiting", source))
     }
@@ -434,8 +469,15 @@ fn is_horizon_actor(actor: &str) -> bool {
         .is_some_and(|identity| !identity.is_empty())
 }
 
-fn panel_belongs_to_actor(panel: &manifest::BrowserManifest, actor: &str) -> bool {
+fn panel_belongs_to_actor(panel: &BrowserManifest, actor: &str) -> bool {
     panel.owner.as_ref().is_some_and(|owner| owner.name == actor)
+}
+
+/// Horizon agent identities are workspace-scoped by their host's stamp.
+/// Identities from outside Horizon (standalone hosts or the process-local
+/// fallback) keep the unscoped behavior because no host places them anywhere.
+fn workspace_authorizes(panel: &BrowserManifest, actor: &str) -> bool {
+    !is_horizon_actor(actor) || panel.authorizes_actor(actor)
 }
 
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
@@ -473,15 +515,54 @@ mod tests {
     }
 
     #[test]
+    fn workspace_membership_gates_horizon_actors_and_fails_closed() {
+        let mut panel = BrowserManifest {
+            panel_local_id: "browser-panel".to_string(),
+            owner: Some(manifest::ManifestOwner {
+                name: "horizon:stale-owner".to_string(),
+                tty: None,
+                updated_at: 1,
+            }),
+            ..BrowserManifest::default()
+        };
+        assert!(
+            !workspace_authorizes(&panel, "horizon:agent-a"),
+            "unstamped manifests fail closed"
+        );
+        assert!(
+            workspace_authorizes(&panel, "horizon-mcp:4242"),
+            "external identities stay unscoped"
+        );
+
+        panel.workspace = Some(manifest::ManifestWorkspace::new(
+            "workspace-a",
+            vec!["horizon:agent-a".to_string()],
+        ));
+        assert!(workspace_authorizes(&panel, "horizon:agent-a"));
+        assert!(
+            !workspace_authorizes(&panel, "horizon:agent-b"),
+            "a stale owner does not open the panel to another workspace"
+        );
+        assert!(!workspace_authorizes(&panel, "horizon:stale-owner"));
+        assert_eq!(
+            ControlError::PanelOutsideWorkspace {
+                panel_id: "browser-panel".to_string(),
+            }
+            .to_string(),
+            "browser panel browser-panel is outside the calling agent's Horizon workspace; use browser_list to find controllable panels or browser_create to open one there"
+        );
+    }
+
+    #[test]
     fn existing_panel_guard_remembers_the_creating_actor_after_heartbeat_expiry() {
-        let panel = manifest::BrowserManifest {
+        let panel = BrowserManifest {
             panel_local_id: "browser-panel".to_string(),
             owner: Some(manifest::ManifestOwner {
                 name: "horizon:agent-panel".to_string(),
                 tty: None,
                 updated_at: 1,
             }),
-            ..manifest::BrowserManifest::default()
+            ..BrowserManifest::default()
         };
 
         assert!(panel_belongs_to_actor(&panel, "horizon:agent-panel"));

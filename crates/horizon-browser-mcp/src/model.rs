@@ -25,6 +25,9 @@ pub(crate) struct BrowserPanel {
     pub(crate) protocol: ProtocolKind,
     pub(crate) url: String,
     pub(crate) title: String,
+    /// Host presentation state (shown or hidden). Every panel the server
+    /// returns is already in the calling agent's workspace; this flag says
+    /// nothing about workspace membership.
     pub(crate) visible: bool,
     pub(crate) owner: Option<String>,
     #[serde(flatten)]

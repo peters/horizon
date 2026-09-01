@@ -22,7 +22,11 @@ platform supports it. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
 session, capture, ownership, or MCP control. An optional bare-host `url`
 defaults to HTTPS while explicit HTTP remains available. Use `browser_panel`
-for a known panel. Before
+for a known panel. Discovery and control are scoped to the workspace that
+contains your agent panel: `browser_list` never shows panels from other
+workspaces, every other tool rejects their ids, and a panel's `visible` field
+is host presentation state, not proof that the panel is in your workspace. If
+nothing usable is listed, create a panel rather than guessing an id. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
