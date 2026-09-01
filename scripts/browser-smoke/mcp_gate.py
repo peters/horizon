@@ -330,6 +330,16 @@ def _webdriver_hidden(value: Any) -> bool:
     return value in {False, None}
 
 
+def _positive_pair(value: Any, name: str, fingerprint: dict[str, Any]) -> tuple[float, float]:
+    if not (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) and item > 0 for item in value)
+    ):
+        raise AssertionError(f"{name} geometry was missing or invalid: {fingerprint}")
+    return float(value[0]), float(value[1])
+
+
 def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) -> None:
     observed = [
         fingerprint.get("earlyWebdriver"),
@@ -349,6 +359,13 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
     horizon_names = fingerprint.get("horizonNames") or []
     if horizon_names:
         raise AssertionError(f"page advertised Horizon identifiers: {fingerprint}")
+    viewport = _positive_pair(fingerprint.get("viewport"), "viewport", fingerprint)
+    screen = _positive_pair(fingerprint.get("screen"), "screen", fingerprint)
+    dpr = fingerprint.get("dpr")
+    if not isinstance(dpr, (int, float)) or isinstance(dpr, bool) or dpr <= 0:
+        raise AssertionError(f"device pixel ratio was missing or invalid: {fingerprint}")
+    if viewport == screen:
+        raise AssertionError(f"viewport claimed the display size: {fingerprint}")
     if policy == "minimize_common_signals" and backend == "chromium":
         if "HeadlessChrome" in str(fingerprint.get("userAgent")):
             raise AssertionError(f"headless token remained: {fingerprint}")

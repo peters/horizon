@@ -110,6 +110,7 @@ impl DriverState {
             return;
         }
         if self.handle_runtime_enable_response(id, error.as_ref()) {
+            self.flush_pending_clipboard(link);
             return;
         }
         if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
@@ -257,6 +258,7 @@ impl DriverState {
             | "Runtime.executionContextDestroyed"
             | "Runtime.executionContextsCleared" => {
                 self.note_clipboard_execution_context(&event);
+                self.flush_pending_clipboard(link);
             }
             "Page.screencastFrame" => self.handle_screencast_frame(link, event_tx, frame_slot, event),
             _ => {}

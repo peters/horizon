@@ -26,6 +26,7 @@ pub(super) struct ClipboardState {
     request_ids: HashSet<u64>,
     default_contexts: HashMap<String, HashSet<u64>>,
     pub(super) iframe_sessions: HashSet<String>,
+    pub(super) pending_capture: bool,
 }
 
 impl ClipboardState {
@@ -47,16 +48,57 @@ impl ClipboardState {
         self.request_ids.clear();
         self.default_contexts.clear();
         self.iframe_sessions.clear();
+        self.pending_capture = false;
     }
+}
+
+fn clipboard_capture_is_ready(
+    page_session: &str,
+    iframe_sessions: &HashSet<String>,
+    default_contexts: &HashMap<String, HashSet<u64>>,
+    requested: &HashSet<String>,
+    inflight: &HashMap<u64, String>,
+) -> bool {
+    if !requested.contains(page_session) || inflight.values().any(|session| session == page_session) {
+        return false;
+    }
+    if default_contexts.get(page_session).is_none_or(HashSet::is_empty) {
+        return false;
+    }
+    iframe_sessions.iter().all(|session| {
+        !inflight.values().any(|tracked| tracked == session)
+            && (!requested.contains(session)
+                || default_contexts
+                    .get(session)
+                    .is_some_and(|contexts| !contexts.is_empty()))
+    })
 }
 
 impl DriverState {
     pub(super) fn request_clipboard_text(&mut self, link: &mut CdpLink) {
+        self.clipboard.pending_capture = true;
         self.request_runtime_for_sessions(link);
-        let Some(page_session) = self.session_id.as_deref() else {
+        self.flush_pending_clipboard(link);
+    }
+
+    pub(super) fn flush_pending_clipboard(&mut self, link: &mut CdpLink) {
+        if !self.clipboard.pending_capture {
+            return;
+        }
+        let Some(page_session) = self.session_id.clone() else {
             return;
         };
-        for (session, context_id) in self.clipboard.evaluation_targets(page_session) {
+        if !clipboard_capture_is_ready(
+            &page_session,
+            &self.clipboard.iframe_sessions,
+            &self.clipboard.default_contexts,
+            &self.runtime_enable_requested,
+            &self.runtime_enable_inflight,
+        ) {
+            return;
+        }
+        self.clipboard.pending_capture = false;
+        for (session, context_id) in self.clipboard.evaluation_targets(&page_session) {
             let mut params = serde_json::json!({
                 "expression": SELECTED_TEXT_EXPRESSION,
                 "returnByValue": true,
@@ -201,9 +243,12 @@ fn clipboard_text_from_evaluation(result: Option<&serde_json::Value>) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
-    use super::{ClipboardState, clipboard_text_from_evaluation, default_context_id, target_event_session_id};
+    use super::{
+        ClipboardState, clipboard_capture_is_ready, clipboard_text_from_evaluation, default_context_id,
+        target_event_session_id,
+    };
 
     #[test]
     fn frame_targets_cover_page_contexts_and_out_of_process_iframe_sessions() {
@@ -270,5 +315,33 @@ mod tests {
         assert_eq!(clipboard_text_from_evaluation(Some(&value)), Some("selected"));
         assert_eq!(clipboard_text_from_evaluation(Some(&exception)), None);
         assert_eq!(clipboard_text_from_evaluation(None), None);
+    }
+
+    #[test]
+    fn clipboard_capture_waits_for_enable_and_page_contexts() {
+        let iframe_sessions = HashSet::from(["oopif".to_string()]);
+        let contexts = HashMap::from([("page".to_string(), HashSet::from([7]))]);
+        let requested = HashSet::from(["page".to_string(), "oopif".to_string()]);
+        let inflight = HashMap::from([(1, "oopif".to_string())]);
+
+        assert!(!clipboard_capture_is_ready(
+            "page",
+            &iframe_sessions,
+            &contexts,
+            &requested,
+            &inflight
+        ));
+
+        let ready_contexts = HashMap::from([
+            ("page".to_string(), HashSet::from([7, 8])),
+            ("oopif".to_string(), HashSet::from([11])),
+        ]);
+        assert!(clipboard_capture_is_ready(
+            "page",
+            &iframe_sessions,
+            &ready_contexts,
+            &requested,
+            &HashMap::new()
+        ));
     }
 }

@@ -655,6 +655,7 @@ impl DriverState {
     fn reset_runtime_enable_state(&mut self) {
         self.runtime_enable_requested.clear();
         self.runtime_enable_inflight.clear();
+        self.clipboard.pending_capture = false;
     }
 
     fn navigate_to(
