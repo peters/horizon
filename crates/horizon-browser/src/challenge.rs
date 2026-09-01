@@ -81,7 +81,9 @@ impl ChallengeLoopDetector {
 
     fn handoff_completed_at(&mut self, now: Instant) {
         self.handoff_active = false;
-        if self.armed.is_none() {
+        if let Some(armed) = &mut self.armed {
+            armed.observed_at = now;
+        } else {
             self.arm_latest_challenge(now);
         }
     }
@@ -181,6 +183,28 @@ mod tests {
         detector.handoff_completed_at(started + Duration::from_secs(5));
         assert_eq!(
             detector.take_rejection_at(started + Duration::from_secs(5)),
+            Some(REJECTION_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn long_handoff_starts_a_fresh_rejection_window_at_hand_back() {
+        let started = Instant::now();
+        let mut detector = ChallengeLoopDetector::default();
+        detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true);
+        detector.handoff_started_at(started + Duration::from_secs(1));
+
+        let hand_back = started + HANDOFF_WINDOW + Duration::from_secs(2);
+        detector.handoff_completed_at(hand_back);
+        detector.observe_document_response_at(
+            hand_back + Duration::from_secs(1),
+            "https://example.test/protected",
+            Some(403),
+            true,
+        );
+
+        assert_eq!(
+            detector.take_rejection_at(hand_back + Duration::from_secs(2)),
             Some(REJECTION_MESSAGE)
         );
     }

@@ -60,8 +60,8 @@ impl DriverState {
         }
         let observation_setup_commands = [
             // Observe only top-level response metadata so a completed user
-            // handoff can report a repeated Cloudflare challenge. No headers
-            // or bodies leave the browser engine through this path.
+            // handoff can report a repeated Cloudflare challenge. The driver
+            // receives response headers but never emits them or request bodies.
             ("Network.enable", serde_json::json!({})),
             ("Runtime.enable", serde_json::json!({})),
         ];
