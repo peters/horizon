@@ -467,9 +467,11 @@ fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> s
 }
 
 /// Run a driver-owned side effect (audit, result, capture storage) while
-/// holding the manifest lock and only if this process still runs the
-/// panel's driver. A missing manifest cannot have been adopted, so the effect
-/// proceeds; a manifest recorded under another host refuses it.
+/// holding the manifest lock and only if a present manifest names this
+/// process as the panel's driver. A missing manifest is not proof of
+/// ownership: another host's `prepare` removes the shared file before its
+/// driver initializes, so the effect is refused until this host's own
+/// manifest is live again.
 fn with_owned_manifest<T>(panel_local_id: &str, effect: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
     with_owned_manifest_at(&default_manifest_path(panel_local_id), host_instance(), effect)
 }
@@ -483,7 +485,13 @@ fn with_owned_manifest_at<T>(
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire(path)?;
-    if read_at(path).is_some_and(|manifest| manifest.host.as_deref() != Some(host)) {
+    let manifest = read_at(path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("browser manifest is not live: {}", path.display()),
+        )
+    })?;
+    if manifest.host.as_deref() != Some(host) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "browser manifest was adopted by another Horizon host",
@@ -1086,8 +1094,12 @@ mod tests {
         assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
         assert!(!path.exists());
         assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
-        with_owned_manifest_at(&path, "host-a", || Ok(()))
-            .expect("a missing manifest cannot have been adopted, so side effects proceed");
+        assert_eq!(
+            with_owned_manifest_at(&path, "host-a", || Ok(()))
+                .expect_err("a missing manifest is not proof of ownership")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
