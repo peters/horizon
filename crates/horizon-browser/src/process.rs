@@ -4,7 +4,6 @@ mod control;
 
 #[cfg(any(windows, test))]
 use std::ffi::OsString;
-use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::Child;
@@ -38,15 +37,6 @@ pub enum ChromeError {
     DevtoolsTimeout(String),
     #[error("browser.extra_args cannot override engine-managed Chrome switch `{0}`")]
     ProtectedExtraArg(String),
-}
-
-impl ChromeError {
-    pub(crate) fn is_devtools_port_conflict(&self) -> bool {
-        match self {
-            Self::NoDevtools(stderr) | Self::DevtoolsTimeout(stderr) => stderr_reports_devtools_port_conflict(stderr),
-            Self::NoBinary | Self::Spawn(_) | Self::ProtectedExtraArg(_) => false,
-        }
-    }
 }
 
 pub type Result<T> = std::result::Result<T, ChromeError>;
@@ -101,21 +91,7 @@ impl ChromeProcess {
     pub(crate) fn spawn(launch: &ChromeLaunch, control: ChromeProcessControl) -> Result<Self> {
         let command = resolve_binary(&launch.command)?;
         prepare_profile_dir(&launch.profile_dir)?;
-        // Chromium treats `--remote-debugging-port=0` as an automation signal.
-        // Reserve a concrete loopback port only for the policy that minimizes
-        // common signals; browser-default mode must preserve Chromium's native
-        // port-zero behavior.
-        let devtools_listener = (launch.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals)
-            .then(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
-            .transpose()
-            .map_err(|error| devtools_port_error(&error))?;
-        let devtools_port = devtools_listener
-            .as_ref()
-            .map(TcpListener::local_addr)
-            .transpose()
-            .map_err(|error| devtools_port_error(&error))?
-            .map_or(0, |address| address.port());
-        let args = launch_args(launch, devtools_port)?;
+        let args = launch_args(launch)?;
 
         let mut command = Command::new(command);
         command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -127,10 +103,6 @@ impl ChromeProcess {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        // Chromium must bind the socket itself. Release immediately before
-        // spawn; startup detects the documented DevTools bind failure and
-        // retries with a fresh reservation if another process wins this gap.
-        drop(devtools_listener);
         let mut child = spawn_process(command)?;
         let Some(stderr) = take_stderr(&mut child) else {
             let _ = kill_and_reap(&mut child, Duration::from_secs(3));
@@ -201,12 +173,8 @@ impl ChromeProcess {
                     return Ok(Some(url));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let stderr = self.stderr_tail_snapshot();
-                    if stderr_reports_devtools_port_conflict(&stderr) {
-                        return Err(ChromeError::NoDevtools(stderr));
-                    }
                     if self.child_status().is_some() {
-                        return Err(ChromeError::NoDevtools(stderr));
+                        return Err(ChromeError::NoDevtools(self.stderr_tail_snapshot()));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -275,29 +243,11 @@ fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn devtools_port_error(error: &std::io::Error) -> ChromeError {
-    ChromeError::Spawn(std::io::Error::new(
-        error.kind(),
-        format!("failed to reserve a loopback Chrome DevTools port: {error}"),
-    ))
-}
-
-fn stderr_reports_devtools_port_conflict(stderr: &str) -> bool {
-    let stderr = stderr.to_ascii_lowercase();
-    [
-        "address already in use",
-        "cannot start http server for devtools",
-        "only one usage of each socket address",
-        "wsaeaddrinuse",
-    ]
-    .iter()
-    .any(|message| stderr.contains(message))
-}
-
-fn launch_args(launch: &ChromeLaunch, devtools_port: u16) -> Result<Vec<String>> {
+fn launch_args(launch: &ChromeLaunch) -> Result<Vec<String>> {
     validate_extra_args(&launch.extra_args, launch.automation_disclosure)?;
     let mut args = vec![
-        format!("--remote-debugging-port={devtools_port}"),
+        // Port 0: the OS picks a free port; we learn it from stderr.
+        "--remote-debugging-port=0".to_string(),
         "--remote-debugging-address=127.0.0.1".to_string(),
         format!("--user-data-dir={}", launch.profile_dir.display()),
         "--no-first-run".to_string(),
@@ -891,7 +841,7 @@ mod tests {
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::MinimizeCommonSignals,
         };
-        let args = launch_args(&launch, 49_152).unwrap_or_default();
+        let args = launch_args(&launch).unwrap_or_default();
 
         assert!(args.iter().any(|argument| argument == "--headless=new"));
         assert!(!args.iter().any(|argument| argument == "--disable-gpu"));
@@ -903,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_default_launch_preserves_the_port_zero_signal() {
+    fn visible_launch_omits_the_headless_switch() {
         let launch = ChromeLaunch {
             command: "chrome".to_string(),
             profile_dir: PathBuf::from("profile"),
@@ -913,25 +863,13 @@ mod tests {
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };
-        let args = launch_args(&launch, 0).unwrap_or_default();
 
-        assert!(!args.iter().any(|argument| argument == "--headless=new"));
-        assert!(args.iter().any(|argument| argument == "--remote-debugging-port=0"));
-    }
-
-    #[test]
-    fn devtools_port_conflicts_are_retryable_startup_errors() {
         assert!(
-            ChromeError::NoDevtools("bind() failed: Address already in use".to_string()).is_devtools_port_conflict()
+            !launch_args(&launch)
+                .unwrap_or_default()
+                .iter()
+                .any(|argument| argument == "--headless=new")
         );
-        assert!(
-            ChromeError::DevtoolsTimeout("Only one usage of each socket address is permitted".to_string())
-                .is_devtools_port_conflict()
-        );
-        assert!(
-            ChromeError::NoDevtools("Cannot start http server for devtools.".to_string()).is_devtools_port_conflict()
-        );
-        assert!(!ChromeError::NoDevtools("profile is locked".to_string()).is_devtools_port_conflict());
     }
 
     #[test]
@@ -945,7 +883,7 @@ mod tests {
             extra_args: vec!["--enable-blink-features=ExperimentalFoo".to_string()],
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };
-        let args = launch_args(&launch, 49_152).unwrap_or_default();
+        let args = launch_args(&launch).unwrap_or_default();
 
         assert!(
             args.iter()

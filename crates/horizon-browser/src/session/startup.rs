@@ -16,10 +16,6 @@ use super::{
     run_loop,
 };
 
-const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
-const DEVTOOLS_PORT_REAP_FAILURE: &str =
-    "failed to reap Chromium after a DevTools-port conflict; aborting retry to preserve exact process ownership";
-
 /// Settles process registration and resolves the driver's teardown signal
 /// exactly once, on thread exit.
 struct DriverCompletion {
@@ -62,7 +58,7 @@ fn initialize_driver(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
-    process_control: &ChromeProcessControl,
+    process_control: ChromeProcessControl,
 ) -> Option<DriverConnection> {
     let launch = match build_launch(config) {
         Ok(launch) => launch,
@@ -76,14 +72,24 @@ fn initialize_driver(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     }
-    let (mut chrome, ws_url) = match start_chrome(&launch, stop_requested, process_control) {
-        Ok(Some(connection)) => connection,
-        Ok(None) => {
+    let mut chrome = match ChromeProcess::spawn(&launch, process_control) {
+        Ok(chrome) => chrome,
+        Err(error) => {
+            let _ = event_tx.send(BrowserEvent::Warning(format!("failed to start chrome: {error}")));
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
-        Err(message) => {
-            let _ = event_tx.send(BrowserEvent::Warning(message));
+    };
+    let ws_url = match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
+        Ok(Some(url)) => url,
+        Ok(None) => {
+            let _ = chrome.kill();
+            let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+            return None;
+        }
+        Err(error) => {
+            let _ = event_tx.send(BrowserEvent::Warning(format!("no DevTools endpoint: {error}")));
+            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
@@ -104,48 +110,6 @@ fn initialize_driver(
         return None;
     }
     initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
-}
-
-fn start_chrome(
-    launch: &crate::process::ChromeLaunch,
-    stop_requested: &AtomicBool,
-    process_control: &ChromeProcessControl,
-) -> Result<Option<(ChromeProcess, String)>, String> {
-    for attempt in 1..=DEVTOOLS_PORT_STARTUP_ATTEMPTS {
-        if stop_requested.load(Ordering::Acquire) {
-            return Ok(None);
-        }
-        let mut chrome = ChromeProcess::spawn(launch, process_control.clone())
-            .map_err(|error| format!("failed to start chrome: {error}"))?;
-        match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
-            Ok(Some(url)) => return Ok(Some((chrome, url))),
-            Ok(None) => {
-                let _ = chrome.kill();
-                return Ok(None);
-            }
-            Err(error) if error.is_devtools_port_conflict() && attempt < DEVTOOLS_PORT_STARTUP_ATTEMPTS => {
-                require_reaped_before_port_retry(chrome.kill())?;
-                tracing::warn!(
-                    attempt,
-                    max_attempts = DEVTOOLS_PORT_STARTUP_ATTEMPTS,
-                    "Chromium DevTools port handoff collided; retrying with a fresh reservation"
-                );
-            }
-            Err(error) => {
-                let _ = chrome.kill();
-                return Err(format!("no DevTools endpoint: {error}"));
-            }
-        }
-    }
-    Err("Chromium exhausted its bounded DevTools-port startup attempts".to_string())
-}
-
-fn require_reaped_before_port_retry(reaped: bool) -> Result<(), &'static str> {
-    if reaped {
-        Ok(())
-    } else {
-        Err(DEVTOOLS_PORT_REAP_FAILURE)
-    }
 }
 
 fn initialize_target(
@@ -351,17 +315,16 @@ pub(super) fn run_driver(
     completion_tx: mpsc::Sender<()>,
     process_control: ChromeProcessControl,
 ) {
-    let completion_guard = DriverCompletion {
+    let _completion = DriverCompletion {
         completion_tx: Some(completion_tx),
-        process_control,
+        process_control: process_control.clone(),
     };
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     };
-    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, &completion_guard.process_control)
-    else {
+    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
         return;
     };
 
@@ -461,9 +424,7 @@ mod tests {
     use crate::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::{
-        DEVTOOLS_PORT_REAP_FAILURE, first_available_page_target_id, profile_dir, require_reaped_before_port_retry,
-    };
+    use super::{first_available_page_target_id, profile_dir};
 
     #[test]
     fn target_selection_skips_attached_pages() {
@@ -477,12 +438,6 @@ mod tests {
             first_available_page_target_id(targets.as_array().expect("target list")),
             Some("available")
         );
-    }
-
-    #[test]
-    fn devtools_port_retry_requires_the_conflicted_child_to_be_reaped() {
-        assert!(require_reaped_before_port_retry(true).is_ok());
-        assert_eq!(require_reaped_before_port_retry(false), Err(DEVTOOLS_PORT_REAP_FAILURE));
     }
 
     #[test]
