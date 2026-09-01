@@ -498,10 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn wayland_display_disables_global_hotkeys() {
-        assert!(!super::session_supports_global_hotkeys(Some(std::ffi::OsStr::new(
-            "wayland-0"
-        ))));
+    fn wayland_display_is_relevant_only_to_x11_platforms() {
+        assert_eq!(
+            super::session_supports_global_hotkeys(Some(std::ffi::OsStr::new("wayland-0"))),
+            !cfg!(any(target_os = "linux", target_os = "freebsd"))
+        );
         assert!(super::session_supports_global_hotkeys(None));
     }
 }
