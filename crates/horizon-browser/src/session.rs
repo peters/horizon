@@ -649,6 +649,14 @@ impl DriverState {
         true
     }
 
+    fn forget_runtime_session(&mut self, session: &str) {
+        forget_tracked_runtime_session(
+            &mut self.runtime_enable_requested,
+            &mut self.runtime_enable_inflight,
+            session,
+        );
+    }
+
     fn reset_runtime_enable_state(&mut self) {
         self.runtime_enabled = false;
         self.runtime_enable_requested.clear();
@@ -728,6 +736,11 @@ fn normalized_committed_url(url: &str) -> &str {
     }
 }
 
+fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mut HashMap<u64, String>, session: &str) {
+    requested.remove(session);
+    inflight.retain(|_, tracked| tracked != session);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,5 +767,16 @@ mod tests {
         }));
         assert!(!is_user_activity(&BrowserCommand::HandoffDone));
         assert!(!is_user_activity(&BrowserCommand::Stop));
+    }
+
+    #[test]
+    fn forgetting_a_runtime_session_drops_requested_and_inflight_entries() {
+        let mut requested = HashSet::from(["page".to_string(), "oopif".to_string()]);
+        let mut inflight = HashMap::from([(7, "oopif".to_string()), (8, "page".to_string())]);
+
+        forget_tracked_runtime_session(&mut requested, &mut inflight, "oopif");
+
+        assert_eq!(requested, HashSet::from(["page".to_string()]));
+        assert_eq!(inflight, HashMap::from([(8, "page".to_string())]));
     }
 }

@@ -165,6 +165,7 @@ impl DriverState {
         };
         self.clipboard.iframe_sessions.remove(session);
         self.clipboard.default_contexts.remove(session);
+        self.forget_runtime_session(session);
     }
 
     pub(super) fn reset_clipboard_tracking(&mut self) {

@@ -16,5 +16,10 @@
     <button id="back-button" type="button" onclick="history.back()">Back</button>
     <a id="alternate-link" href="/alternate.html">Alternate latency page</a>
   </main>
+  <script>
+    if (window.parent !== window) {
+      parent.postMessage({kind: "cross-origin-probe", webdriver: navigator.webdriver}, "*");
+    }
+  </script>
 </body>
 </html>

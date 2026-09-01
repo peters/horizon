@@ -131,6 +131,7 @@
     const consentFrame = document.querySelector('#consent-frame');
     const consentUrl = new URL('/next.html', location.href);
     consentUrl.hostname = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+    const consentOrigin = consentUrl.origin;
     consentFrame.src = consentUrl.href;
 
     async function collectFingerprint() {
@@ -147,6 +148,7 @@
         earlyWebdriver: window.__earlyWebdriver === true ? true : (window.__earlyWebdriver === false ? false : null),
         currentWebdriver: navigator.webdriver === true ? true : (navigator.webdriver === false ? false : null),
         iframeWebdriver: window.__iframeWebdriver === true ? true : (window.__iframeWebdriver === false ? false : null),
+        crossOriginWebdriver: window.__crossOriginWebdriver === true ? true : (window.__crossOriginWebdriver === false ? false : null),
         userAgent: navigator.userAgent,
         brands: uaData?.brands || [],
         high,
@@ -166,6 +168,11 @@
 
     addEventListener('message', (event) => {
       if (event.data?.kind === 'probe-ready') collectFingerprint();
+      if (event.origin === consentOrigin && event.data?.kind === 'cross-origin-probe') {
+        window.__crossOriginWebdriver = event.data.webdriver;
+        window.__crossOriginProbeReady = true;
+        collectFingerprint();
+      }
     });
     collectFingerprint();
     publishStatus();

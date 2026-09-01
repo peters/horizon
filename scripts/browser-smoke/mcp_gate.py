@@ -300,7 +300,11 @@ def wait_for_fingerprint(
     panel_id: str,
     action_ids: list[str],
 ) -> dict[str, Any]:
-    expression = "({fingerprint: window.__fingerprint ?? null, iframeReady: window.__iframeProbeReady === true})"
+    expression = (
+        "({fingerprint: window.__fingerprint ?? null, "
+        "iframeReady: window.__iframeProbeReady === true, "
+        "crossOriginReady: window.__crossOriginProbeReady === true})"
+    )
     deadline = time.monotonic() + 10
     value: Any = None
     while time.monotonic() < deadline:
@@ -315,6 +319,7 @@ def wait_for_fingerprint(
             isinstance(value, dict)
             and isinstance(value.get("fingerprint"), dict)
             and value.get("iframeReady") is True
+            and value.get("crossOriginReady") is True
         ):
             return value["fingerprint"]
         time.sleep(0.1)
@@ -330,12 +335,13 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
         fingerprint.get("earlyWebdriver"),
         fingerprint.get("currentWebdriver"),
         fingerprint.get("iframeWebdriver"),
+        fingerprint.get("crossOriginWebdriver"),
     ]
     if policy == "browser_default":
-        if observed != [True, True, True]:
+        if observed != [True, True, True, True]:
             raise AssertionError(f"browser-default disclosure mismatch: {fingerprint}")
     elif backend == "firefox":
-        if observed != [False, False, False]:
+        if observed != [False, False, False, False]:
             raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
     elif backend == "chromium":
         if not all(_webdriver_hidden(value) for value in observed):
