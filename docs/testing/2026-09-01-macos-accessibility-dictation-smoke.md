@@ -61,8 +61,16 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 Do not use the ignored libtest hotkey smoke on macOS. Carbon hotkey delivery
 depends on the main application event loop, while Rust's test harness runs test
-bodies on worker threads. Validate native press and release delivery through
-the task-owned Horizon bundle in sections 3, 4, and 6 instead.
+bodies on worker threads. Instead, run the main-thread native hotkey smoke while
+the test key is free, then press and release F9 once within its ten-second
+window:
+
+```bash
+cargo run -p horizon-cursor --example macos_global_hotkey_smoke
+```
+
+This low-level harness supplements rather than replaces native delivery through
+the task-owned Horizon bundle in sections 3, 4, and 6.
 
 The macOS-only unit tests must cover target validation, F-key translation,
 native-repeat suppression, and release delivery.
