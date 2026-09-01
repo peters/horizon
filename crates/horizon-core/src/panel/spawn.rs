@@ -879,6 +879,10 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
         env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
+        env.insert(
+            crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
+            crate::browser::manifest::host_instance_id().to_string(),
+        );
     }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
@@ -888,15 +892,18 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
     env
 }
 
-/// Stable private control identity injected into one Horizon agent panel.
+/// Host-scoped private control identity injected into one Horizon agent panel.
 #[must_use]
 pub fn browser_actor(local_id: &str) -> String {
-    if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
-        return format!("horizon:{local_id}");
+    let host_instance_id = crate::browser::manifest::host_instance_id();
+    let direct = format!("horizon:{host_instance_id}:{local_id}");
+    if !local_id.is_empty() && direct.len() <= 128 && !local_id.chars().any(char::is_control) {
+        return direct;
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    host_instance_id.hash(&mut hasher);
     local_id.hash(&mut hasher);
-    format!("horizon:{:016x}", hasher.finish())
+    format!("horizon:{host_instance_id}:{:016x}", hasher.finish())
 }
 
 fn horizon_codex_mcp_args() -> Vec<String> {
@@ -914,7 +921,8 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]".to_string(),
+        "mcp_servers.horizon-browser.env_vars=[\"HORIZON\",\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+            .to_string(),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
     ]
@@ -988,13 +996,18 @@ mod tests {
     #[test]
     fn agent_environment_exposes_a_stable_browser_actor() {
         let env = agent_env(PanelKind::Codex, "panel-42");
+        let expected_actor = browser_actor("panel-42");
         assert_eq!(env.get("HORIZON").map(String::as_str), Some("1"));
         assert_eq!(
             env.get("HORIZON_BROWSER_ACTOR").map(String::as_str),
-            Some("horizon:panel-42")
+            Some(expected_actor.as_str())
+        );
+        assert_eq!(
+            env.get(crate::browser::manifest::HOST_INSTANCE_ENV).map(String::as_str),
+            Some(crate::browser::manifest::host_instance_id())
         );
         assert!(agent_env(PanelKind::Shell, "panel-42").is_empty());
-        assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
+        assert!(browser_actor(&"x".repeat(512)).len() <= 128);
     }
 
     #[test]
@@ -1009,7 +1022,9 @@ mod tests {
         let command = args.join(" ");
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
-        assert!(command.contains("mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\"]"));
+        assert!(command.contains(
+            "mcp_servers.horizon-browser.env_vars=[\"HORIZON\",\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
+        ));
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("--browser-mcp"));
         assert!(!command.contains("browser-cli"));

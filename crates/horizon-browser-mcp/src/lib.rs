@@ -28,9 +28,21 @@ pub enum StdioServerError {
 /// # Errors
 /// Returns when transport initialization or the service task fails.
 pub async fn serve_stdio() -> Result<(), StdioServerError> {
+    serve_stdio_server(HorizonBrowserMcp::from_environment()).await
+}
+
+/// Serve a caller-owned standalone browser with process-local MCP ownership,
+/// ignoring any Horizon workspace identity inherited by the parent shell.
+///
+/// # Errors
+/// Returns when transport initialization or the service task fails.
+pub async fn serve_stdio_standalone() -> Result<(), StdioServerError> {
+    serve_stdio_server(HorizonBrowserMcp::standalone()).await
+}
+
+async fn serve_stdio_server(server: HorizonBrowserMcp) -> Result<(), StdioServerError> {
     use rmcp::ServiceExt as _;
 
-    let server = HorizonBrowserMcp::from_environment();
     let service = server
         .serve(rmcp::transport::stdio())
         .await

@@ -128,7 +128,9 @@ impl OwnedHostProcess {
         let mut child = command
             .env("HOME", home)
             .env("RUST_LOG", "off")
+            .env_remove("HORIZON")
             .env_remove("HORIZON_BROWSER_ACTOR")
+            .env_remove(manifest::HOST_INSTANCE_ENV)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr))
@@ -243,7 +245,7 @@ impl Drop for OwnedHostProcess {
 /// owned browser cannot be stopped within its bounded cleanup deadline.
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     let session = OwnedSession::start(options, &HorizonHome::resolve())?;
-    let mcp_result = horizon_browser_mcp::serve_stdio().await;
+    let mcp_result = horizon_browser_mcp::serve_stdio_standalone().await;
     let stopped = session.shutdown();
     mcp_result?;
     if stopped {

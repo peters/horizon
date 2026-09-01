@@ -11,7 +11,7 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
-env_vars = ["HORIZON_BROWSER_ACTOR"]
+env_vars = ["HORIZON", "HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE"]
 default_tools_approval_mode = "approve"
 ```
 
@@ -27,7 +27,9 @@ shell commands, files, or other MCP servers.
 
 ## Tool contract
 
-- `browser_list` and `browser_panel` discover safe live-panel state.
+- `browser_list` and `browser_panel` discover safe live-panel state. Horizon
+  agent calls are limited to browser panels in the calling agent panel's
+  current workspace; known ids outside that workspace are rejected.
 - `browser_create` opens a panel in the calling agent's Horizon workspace and
   returns only after it is ready and owned by that agent. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
@@ -36,7 +38,9 @@ shell commands, files, or other MCP servers.
   sets `allow_additional: true`. Reuse the original panel for iframe, popup,
   dialog, and consent flows instead of creating a helper panel.
 - `browser_visibility` shows or hides an existing panel without stopping its
-  browser, ownership lease, network capture, or MCP control.
+  browser, ownership lease, network capture, or MCP control. It never moves a
+  panel between workspaces, so `visible: true` is not evidence that a panel
+  belongs to the caller's workspace.
 - `browser_navigate` changes the top-level page.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs. Snapshots keep iframe boundaries discoverable even when
@@ -61,11 +65,13 @@ shell commands, files, or other MCP servers.
 - `browser_audit` returns redacted ordered action records.
 
 The server automatically claims and heartbeats a panel using
-`HORIZON_BROWSER_ACTOR`. Horizon injects that identity into the agent process
-and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
-visibility requests are accepted only from an identity belonging to a live
-Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
-and later actions share the redacted audit identity.
+`HORIZON_BROWSER_ACTOR`. Horizon also injects a private
+`HORIZON_BROWSER_HOST_INSTANCE` identity so processes sharing one Horizon home
+cannot authorize each other's panels. The UI maintains each browser manifest's
+current workspace membership and same-workspace actors. Creation and visibility
+requests are accepted only from an identity belonging to a live Horizon agent
+panel in that workspace. Panel lifecycle and later actions share the redacted
+audit identity.
 When no valid actor is injected, the server uses a process-local identity and
 releases only that identity's claims on clean shutdown. A crash retains the
 heartbeat TTL fallback, while a normal reconnect can claim the panel

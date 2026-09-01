@@ -68,10 +68,11 @@ NETWORK_CAPABILITIES = [
 
 
 class McpClient:
-    def __init__(self, command: Path, log_path: Path, timeout: float, actor: str) -> None:
+    def __init__(self, command: Path, log_path: Path, timeout: float, actor: str, host_instance: str) -> None:
         self.log = log_path.open("w", encoding="utf-8")
         environment = os.environ.copy()
         environment["HORIZON_BROWSER_ACTOR"] = actor
+        environment["HORIZON_BROWSER_HOST_INSTANCE"] = host_instance
         environment["RUST_LOG"] = "off"
         self.process = subprocess.Popen(
             [str(command), "--browser-mcp"],
@@ -485,6 +486,7 @@ def exercise_network_capture(
         args.log.with_name(f"{args.log.stem}-watch{args.log.suffix}"),
         args.timeout,
         args.actor,
+        args.host_instance,
     )
     initialize(watch_client)
 
@@ -644,6 +646,7 @@ def exercise_network_capture(
         args.log.with_name(f"{args.log.stem}-stop-watch{args.log.suffix}"),
         args.timeout,
         args.actor,
+        args.host_instance,
     )
     initialize(stop_watch_client)
 
@@ -1243,6 +1246,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--actor", required=True, help="exact HORIZON_BROWSER_ACTOR from the owning agent panel")
+    parser.add_argument(
+        "--host-instance",
+        required=True,
+        help="exact HORIZON_BROWSER_HOST_INSTANCE from the owning agent panel",
+    )
     parser.add_argument("--timeout", type=float, default=60, help="individual MCP request timeout")
     parser.add_argument("--handoff", action="store_true", help="request handoff and wait for visible user hand-back")
     parser.add_argument("--handoff-timeout", type=float, default=300)
@@ -1255,7 +1263,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not command.is_file():
         raise SystemExit(f"Horizon binary does not exist: {command}")
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    client: McpClient | None = McpClient(command, args.log, args.timeout, args.actor)
+    client: McpClient | None = McpClient(command, args.log, args.timeout, args.actor, args.host_instance)
     try:
         assert client is not None
         result = exercise(client, args)
@@ -1263,7 +1271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client = None
         first_client.close()
         reconnect_log = args.log.with_name(f"{args.log.stem}-reconnect{args.log.suffix}")
-        client = McpClient(command, reconnect_log, args.timeout, args.actor)
+        client = McpClient(command, reconnect_log, args.timeout, args.actor, args.host_instance)
         result["mcp_reconnect"] = exercise_reconnect(
             client,
             args.backend,

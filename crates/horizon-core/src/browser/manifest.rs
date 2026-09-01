@@ -30,6 +30,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,9 @@ pub use visibility::{
 
 /// How long an agent owner heartbeat stays fresh.
 pub const OWNER_TTL_MILLIS: i64 = 10_000;
+/// Environment variable that binds an agent-side MCP process to one live
+/// Horizon host instance.
+pub const HOST_INSTANCE_ENV: &str = "HORIZON_BROWSER_HOST_INSTANCE";
 /// How long the driver's `user_active` signal stays true without another
 /// qualifying interaction.
 pub const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
@@ -72,6 +76,16 @@ const LOCK_WAIT: Duration = Duration::from_secs(2);
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_RETRY: Duration = Duration::from_millis(5);
 static HANDOFF_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+static HOST_INSTANCE_ID: OnceLock<String> = OnceLock::new();
+
+/// Opaque identity shared by the Horizon UI and agent processes it launches.
+///
+/// This prevents separate Horizon processes that share one home directory
+/// from authorizing panels merely because their workspace ids collide.
+#[must_use]
+pub fn host_instance_id() -> &'static str {
+    HOST_INSTANCE_ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestOwner {
@@ -94,6 +108,14 @@ pub struct ManifestHandoff {
     pub requested_at: i64,
     /// Set by the UI when the user clicks "hand back".
     pub done: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManifestWorkspaceScope {
+    pub host_instance_id: String,
+    pub workspace_local_id: String,
+    #[serde(default)]
+    pub actors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
@@ -121,6 +143,10 @@ pub struct BrowserManifest {
     pub user_active_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<ManifestHandoff>,
+    /// Host-maintained authorization boundary for workspace-launched agents.
+    /// Legacy manifests omit this and therefore fail closed for those agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_scope: Option<ManifestWorkspaceScope>,
     /// Bounded host queue consumed only while the user is not steering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<horizon_browser::AgentAction>,
@@ -613,6 +639,7 @@ mod tests {
             user_active: false,
             user_active_at: 0,
             handoff: None,
+            workspace_scope: None,
             actions: Vec::new(),
             updated_at: 0,
         }
@@ -628,6 +655,36 @@ mod tests {
         assert_eq!(back, m);
         assert!(list_panels_in(&root.join("runtime").join("browsers")).contains(&"abc-123".to_string()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_manifest_without_workspace_scope_fails_closed_by_default() {
+        let manifest: BrowserManifest = serde_json::from_str(
+            r#"{
+                "panel_local_id":"legacy",
+                "backend":"chromium",
+                "browser_ws":"",
+                "target_id":"",
+                "url":"",
+                "title":"",
+                "user_active":false,
+                "user_active_at":0,
+                "updated_at":0
+            }"#,
+        )
+        .unwrap();
+
+        assert!(manifest.workspace_scope.is_none());
+    }
+
+    #[test]
+    fn host_instance_identity_is_process_stable() {
+        let first = host_instance_id();
+        let second = host_instance_id();
+
+        assert_eq!(first, second);
+        assert!(!first.is_empty());
+        assert!(!first.chars().any(char::is_control));
     }
 
     #[test]

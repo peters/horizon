@@ -7,7 +7,7 @@ use std::time::SystemTime;
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::BackendKind;
-use horizon_core::HorizonHome;
+use horizon_core::{HorizonHome, browser::manifest};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -271,7 +271,9 @@ fn agent_command(
             "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"",
         ])
         .arg(prompt)
+        .env_remove("HORIZON")
         .env_remove("HORIZON_BROWSER_ACTOR")
+        .env_remove(manifest::HOST_INSTANCE_ENV)
         .env("RUST_LOG", "off");
     Ok(command)
 }

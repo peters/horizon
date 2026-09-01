@@ -175,9 +175,10 @@ success, 1 for execution failure, 2 for invalid CLI or plan input, 124 for a
 job deadline, and 130 for Ctrl-C cancellation.
 
 Outside Horizon, `run` can discover and control existing live panels. When it
-runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR`, so the
-same plan can also call the actor-scoped `browser_create` and
-`browser_visibility` tools. The CLI does not accept an actor override flag.
+runs in a Horizon agent terminal, it inherits `HORIZON_BROWSER_ACTOR` and the
+matching host-instance identity, so the same plan can also call the
+workspace-scoped `browser_create` and `browser_visibility` tools. The CLI does
+not accept an actor override flag.
 An outside-Horizon invocation releases its process-local panel ownership on
 clean exit, so another plan can control the same panel immediately. A crashed
 process still falls back to the bounded ownership TTL.

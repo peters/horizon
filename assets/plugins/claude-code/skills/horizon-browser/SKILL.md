@@ -20,7 +20,10 @@ another independent browser session may you call `browser_create` with
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
-session, capture, ownership, or MCP control. An optional bare-host `url`
+session, capture, ownership, or MCP control. `browser_list` and every panel
+operation are limited to the calling agent panel's current workspace. A known
+panel id outside it is rejected, and visibility never moves a panel between
+workspaces. An optional bare-host `url`
 defaults to HTTPS while explicit HTTP remains available. Use `browser_panel`
 for a known panel. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its

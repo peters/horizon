@@ -22,6 +22,7 @@ const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
     actor: String,
+    host_instance_id: Option<String>,
     process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
 }
 
@@ -101,6 +102,10 @@ pub(crate) enum ControlError {
     CreateTimeout { action_id: String, timeout_millis: u64 },
     #[error("browser_create is available only to an agent panel launched inside Horizon")]
     CreateUnavailable,
+    #[error("browser workspace scope is unavailable; restart the calling Horizon agent panel")]
+    WorkspaceScopeUnavailable,
+    #[error("browser panel {panel_id} is not in the calling agent's Horizon workspace")]
+    PanelOutsideWorkspace { panel_id: String },
     #[error(
         "browser panel {panel_id} is already owned by this agent; reuse it, or set allow_additional=true only when the user explicitly requested an independent browser session"
     )]
@@ -122,25 +127,55 @@ pub(crate) enum ControlError {
 impl BrowserController {
     pub(crate) fn from_environment() -> Self {
         let fallback = format!("horizon-mcp:{}", std::process::id());
-        let actor = std::env::var("HORIZON_BROWSER_ACTOR")
-            .ok()
-            .filter(|value| valid_actor(value));
-        actor.map_or_else(
-            || Self {
-                actor: fallback.clone(),
-                process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(fallback))),
-            },
-            |actor| Self {
+        let actor = std::env::var("HORIZON_BROWSER_ACTOR").ok();
+        let host_instance_id = std::env::var(manifest::HOST_INSTANCE_ENV).ok();
+        Self::from_environment_parts(actor, host_instance_id, std::env::var_os("HORIZON").is_some(), fallback)
+    }
+
+    fn from_environment_parts(
+        actor: Option<String>,
+        host_instance_id: Option<String>,
+        horizon_marker: bool,
+        fallback: String,
+    ) -> Self {
+        let horizon_scoped =
+            horizon_marker || host_instance_id.is_some() || actor.as_deref().is_some_and(is_horizon_actor);
+        let actor = actor.filter(|value| valid_actor(value));
+        let host_instance_id = host_instance_id.filter(|value| valid_host_instance_id(value));
+        if horizon_scoped && actor.as_deref().is_none_or(|value| !is_horizon_actor(value)) {
+            return Self {
+                actor: format!("horizon:unavailable:{fallback}"),
+                host_instance_id: None,
+                process_local_ownership: None,
+            };
+        }
+        match actor {
+            Some(actor) => Self {
                 actor,
+                host_instance_id,
                 process_local_ownership: None,
             },
-        )
+            None => Self::standalone_with_actor(fallback),
+        }
+    }
+
+    pub(crate) fn standalone() -> Self {
+        Self::standalone_with_actor(format!("horizon-mcp:{}", std::process::id()))
+    }
+
+    fn standalone_with_actor(actor: String) -> Self {
+        Self {
+            actor: actor.clone(),
+            host_instance_id: None,
+            process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(actor))),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
         Self {
             actor: actor.into(),
+            host_instance_id: None,
             process_local_ownership: None,
         }
     }
@@ -150,6 +185,7 @@ impl BrowserController {
         let mut panels = manifest::list_panels_in(&directory)
             .into_iter()
             .filter_map(|panel_id| manifest::read(&panel_id))
+            .filter(|panel| self.can_access_manifest(panel))
             .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
@@ -167,6 +203,7 @@ impl BrowserController {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CreateUnavailable);
         }
+        self.ensure_workspace_scope_available()?;
         if !allow_additional && let Some(panel_id) = self.existing_actor_panel_id() {
             return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
         }
@@ -220,6 +257,7 @@ impl BrowserController {
         manifest::list_panels_in(&directory)
             .into_iter()
             .filter_map(|panel_id| manifest::read(&panel_id))
+            .filter(|panel| self.can_access_manifest(panel))
             .find(|panel| panel_belongs_to_actor(panel, &self.actor))
             .map(|panel| panel.panel_local_id)
     }
@@ -304,12 +342,14 @@ impl BrowserController {
     }
 
     pub(crate) fn read_audit(&self, panel_id: &str) -> Result<Vec<horizon_browser::BrowserAuditEntry>, ControlError> {
+        self.ensure_panel_in_workspace(panel_id)?;
         tracing::debug!(actor = %self.actor, panel_id, "reading browser action audit");
         manifest::read_audit(panel_id)
             .map_err(|source| ControlError::internal_io("could not read browser audit", source))
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
+        self.ensure_panel_in_workspace(panel_id)?;
         let result = match manifest::heartbeat(panel_id, &self.actor) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
@@ -327,8 +367,43 @@ impl BrowserController {
     }
 
     pub(crate) fn refresh_claim(&self, panel_id: &str) -> Result<(), ControlError> {
+        self.ensure_panel_in_workspace(panel_id)?;
         manifest::heartbeat(panel_id, &self.actor)
             .map_err(|source| ControlError::internal_io("lost browser ownership while waiting", source))
+    }
+
+    fn ensure_workspace_scope_available(&self) -> Result<(), ControlError> {
+        if is_horizon_actor(&self.actor) && self.host_instance_id.is_none() {
+            return Err(ControlError::WorkspaceScopeUnavailable);
+        }
+        Ok(())
+    }
+
+    fn ensure_panel_in_workspace(&self, panel_id: &str) -> Result<(), ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Ok(());
+        }
+        self.ensure_workspace_scope_available()?;
+        let panel = manifest::read(panel_id).ok_or_else(|| {
+            ControlError::internal_io(
+                "could not read browser panel workspace scope",
+                io::Error::new(io::ErrorKind::NotFound, "browser panel is not live"),
+            )
+        })?;
+        if self.can_access_manifest(&panel) {
+            Ok(())
+        } else {
+            Err(ControlError::PanelOutsideWorkspace {
+                panel_id: panel_id.to_string(),
+            })
+        }
+    }
+
+    fn can_access_manifest(&self, panel: &manifest::BrowserManifest) -> bool {
+        if !is_horizon_actor(&self.actor) {
+            return true;
+        }
+        panel_is_in_actor_workspace(panel, &self.actor, self.host_instance_id.as_deref())
     }
 
     async fn wait_for_result(
@@ -428,6 +503,12 @@ fn valid_actor(actor: &str) -> bool {
     !actor.trim().is_empty() && actor.len() <= 128 && !actor.chars().any(char::is_control)
 }
 
+fn valid_host_instance_id(host_instance_id: &str) -> bool {
+    !host_instance_id.trim().is_empty()
+        && host_instance_id.len() <= 128
+        && !host_instance_id.chars().any(char::is_control)
+}
+
 fn is_horizon_actor(actor: &str) -> bool {
     actor
         .strip_prefix("horizon:")
@@ -436,6 +517,15 @@ fn is_horizon_actor(actor: &str) -> bool {
 
 fn panel_belongs_to_actor(panel: &manifest::BrowserManifest, actor: &str) -> bool {
     panel.owner.as_ref().is_some_and(|owner| owner.name == actor)
+}
+
+fn panel_is_in_actor_workspace(panel: &manifest::BrowserManifest, actor: &str, host_instance_id: Option<&str>) -> bool {
+    let Some(host_instance_id) = host_instance_id else {
+        return false;
+    };
+    panel.workspace_scope.as_ref().is_some_and(|scope| {
+        scope.host_instance_id == host_instance_id && scope.actors.iter().any(|candidate| candidate == actor)
+    })
 }
 
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
@@ -470,6 +560,52 @@ mod tests {
         assert!(!is_horizon_actor("agent"));
         let controller = BrowserController::with_actor("agent");
         assert_eq!(controller.actor, "agent");
+        assert!(controller.host_instance_id.is_none());
+    }
+
+    #[test]
+    fn malformed_horizon_environment_fails_closed_without_changing_standalone_fallback() {
+        let unavailable = BrowserController::from_environment_parts(
+            Some("not-a-horizon-actor".to_string()),
+            Some("host-a".to_string()),
+            true,
+            "horizon-mcp:test".to_string(),
+        );
+        assert!(is_horizon_actor(&unavailable.actor));
+        assert!(unavailable.host_instance_id.is_none());
+        assert!(unavailable.process_local_ownership.is_none());
+
+        let standalone = BrowserController::from_environment_parts(None, None, false, "horizon-mcp:test".to_string());
+        assert_eq!(standalone.actor, "horizon-mcp:test");
+        assert!(standalone.process_local_ownership.is_some());
+    }
+
+    #[test]
+    fn workspace_scope_requires_the_exact_host_and_actor() {
+        let mut panel = manifest::BrowserManifest {
+            panel_local_id: "browser-panel".to_string(),
+            workspace_scope: Some(manifest::ManifestWorkspaceScope {
+                host_instance_id: "host-a".to_string(),
+                workspace_local_id: "workspace-a".to_string(),
+                actors: vec!["horizon:agent-a".to_string()],
+            }),
+            ..manifest::BrowserManifest::default()
+        };
+
+        assert!(panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-a")));
+        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-b", Some("host-a")));
+        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-b")));
+        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", None));
+
+        panel.owner = Some(manifest::ManifestOwner {
+            name: "horizon:agent-b".to_string(),
+            tty: None,
+            updated_at: manifest::now_millis(),
+        });
+        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-b", Some("host-a")));
+
+        panel.workspace_scope = None;
+        assert!(!panel_is_in_actor_workspace(&panel, "horizon:agent-a", Some("host-a")));
     }
 
     #[test]

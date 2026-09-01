@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
     self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult, BrowserVisibilityAuditStatus,
-    BrowserVisibilityRequest, BrowserVisibilityResult,
+    BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspaceScope,
 };
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
@@ -75,7 +75,7 @@ impl HorizonApp {
             self.start_requested_browser(request, actor_panel);
         }
         changed |= self.poll_browser_visibility_requests();
-        changed |= self.sync_browser_manifest_visibility();
+        changed |= self.sync_browser_manifests();
         changed
     }
 
@@ -208,6 +208,14 @@ impl HorizonApp {
             complete_visibility_failure(request, "not_browser_panel", "target panel is not a browser panel");
             return false;
         }
+        if panel.workspace_id != actor_panel.workspace_id {
+            complete_visibility_failure(
+                request,
+                "panel_outside_workspace",
+                "browser panel is not in the requesting agent's workspace",
+            );
+            return false;
+        }
         let original_visible = panel.visible;
         let owned_by_actor = manifest::read(&request.panel_local_id)
             .and_then(|manifest| {
@@ -260,7 +268,7 @@ impl HorizonApp {
         local_changed
     }
 
-    fn sync_browser_manifest_visibility(&self) -> bool {
+    fn sync_browser_manifests(&self) -> bool {
         let mut changed = false;
         for panel in self
             .board
@@ -271,14 +279,17 @@ impl HorizonApp {
             let Some(current) = manifest::read(&panel.local_id) else {
                 continue;
             };
+            let Some(workspace_scope) = browser_workspace_scope(&self.board, panel.workspace_id) else {
+                continue;
+            };
             let expected_hidden = !panel.visible;
-            if current.hidden == expected_hidden {
+            if current.hidden == expected_hidden && current.workspace_scope.as_ref() == Some(&workspace_scope) {
                 continue;
             }
-            match set_manifest_visibility(&panel.local_id, panel.visible) {
+            match set_manifest_host_state(&panel.local_id, panel.visible, workspace_scope) {
                 Ok(()) => changed = true,
                 Err(error) => {
-                    tracing::warn!(panel_id = %panel.local_id, %error, "could not synchronize browser visibility");
+                    tracing::warn!(panel_id = %panel.local_id, %error, "could not synchronize browser host state");
                 }
             }
         }
@@ -296,7 +307,7 @@ impl HorizonApp {
                 changed = true;
                 continue;
             }
-            match finish_ready_browser_create(&pending) {
+            match finish_ready_browser_create(&self.board, &pending) {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
                 BrowserCreateCompletion::Failed => {
@@ -321,6 +332,23 @@ fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
         })
 }
 
+fn browser_workspace_scope(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspaceScope> {
+    let workspace_local_id = board.workspace(workspace_id)?.local_id.clone();
+    let mut actors = board
+        .panels
+        .iter()
+        .filter(|panel| panel.workspace_id == workspace_id && panel.kind.is_agent())
+        .map(|panel| browser_actor(&panel.local_id))
+        .collect::<Vec<_>>();
+    actors.sort();
+    actors.dedup();
+    Some(ManifestWorkspaceScope {
+        host_instance_id: manifest::host_instance_id().to_string(),
+        workspace_local_id,
+        actors,
+    })
+}
+
 fn backend_session_limit_reached(board: &Board, backend: BackendKind) -> bool {
     let Some(limit) = backend.capabilities().max_sessions else {
         return false;
@@ -334,9 +362,28 @@ fn backend_session_limit_reached(board: &Board, backend: BackendKind) -> bool {
     live >= usize::try_from(limit).unwrap_or(usize::MAX)
 }
 
-fn finish_ready_browser_create(pending: &PendingBrowserCreate) -> BrowserCreateCompletion {
+fn finish_ready_browser_create(board: &Board, pending: &PendingBrowserCreate) -> BrowserCreateCompletion {
     if manifest::read(&pending.panel_local_id).is_none() {
         return BrowserCreateCompletion::Waiting;
+    }
+    let Some(workspace_scope) = board
+        .panel(pending.panel_id)
+        .and_then(|panel| browser_workspace_scope(board, panel.workspace_id))
+    else {
+        record_and_complete_failure(
+            pending,
+            "workspace_scope_unavailable",
+            "Horizon could not determine the new browser panel's workspace",
+        );
+        return BrowserCreateCompletion::Failed;
+    };
+    if !workspace_scope.actors.contains(&pending.request.actor) {
+        record_and_complete_failure(
+            pending,
+            "workspace_changed",
+            "the requesting agent left the browser panel's workspace during creation",
+        );
+        return BrowserCreateCompletion::Failed;
     }
     if let Err(error) = manifest::claim(&pending.panel_local_id, &pending.request.actor, None) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not assign requested browser ownership");
@@ -347,8 +394,8 @@ fn finish_ready_browser_create(pending: &PendingBrowserCreate) -> BrowserCreateC
         );
         return BrowserCreateCompletion::Failed;
     }
-    if let Err(error) = set_manifest_visibility(&pending.panel_local_id, pending.request.visible) {
-        tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser visibility");
+    if let Err(error) = set_manifest_host_state(&pending.panel_local_id, pending.request.visible, workspace_scope) {
+        tracing::error!(request_id = %pending.request.request_id, %error, "could not set requested browser host state");
         record_and_complete_failure(
             pending,
             "manifest_update_failed",
@@ -442,6 +489,35 @@ fn set_manifest_visibility(panel_local_id: &str, visible: bool) -> std::io::Resu
     .map(|_| ())
 }
 
+fn set_manifest_host_state(
+    panel_local_id: &str,
+    visible: bool,
+    workspace_scope: ManifestWorkspaceScope,
+) -> std::io::Result<()> {
+    manifest::update(panel_local_id, |manifest| {
+        apply_manifest_host_state(manifest, visible, workspace_scope);
+    })
+    .map(|_| ())
+}
+
+fn apply_manifest_host_state(
+    manifest: &mut manifest::BrowserManifest,
+    visible: bool,
+    workspace_scope: ManifestWorkspaceScope,
+) {
+    let owner_is_authorized = manifest
+        .owner
+        .as_ref()
+        .is_none_or(|owner| workspace_scope.actors.iter().any(|actor| actor == &owner.name));
+    if !owner_is_authorized {
+        manifest.owner = None;
+        manifest.handoff = None;
+    }
+    manifest.hidden = !visible;
+    manifest.workspace_scope = Some(workspace_scope);
+    manifest.updated_at = manifest::now_millis();
+}
+
 fn complete_visibility_failure(request: &BrowserVisibilityRequest, code: &str, message: &str) {
     if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Failed) {
         tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser visibility audit");
@@ -470,5 +546,91 @@ mod tests {
         let board = Board::new();
         assert!(!backend_session_limit_reached(&board, BackendKind::ChromiumCdp));
         assert!(!backend_session_limit_reached(&board, BackendKind::FirefoxBidi));
+    }
+
+    #[test]
+    fn workspace_scope_tracks_agent_and_browser_panel_moves() {
+        let mut board = Board::new();
+        let alpha = board.create_workspace("alpha");
+        let beta = board.create_workspace("beta");
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
+        } else {
+            ("/bin/true", Vec::new())
+        };
+        let agent_id = board
+            .create_panel(
+                PanelOptions {
+                    command: Some(command.to_string()),
+                    args,
+                    kind: PanelKind::Codex,
+                    ..PanelOptions::default()
+                },
+                alpha,
+            )
+            .unwrap();
+        let actor = browser_actor(&board.panel(agent_id).unwrap().local_id);
+        let browser_id = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Editor,
+                    ..PanelOptions::default()
+                },
+                alpha,
+            )
+            .unwrap();
+        board.panel_mut(browser_id).unwrap().kind = PanelKind::Browser;
+
+        let alpha_scope = browser_workspace_scope(&board, alpha).unwrap();
+        let beta_scope = browser_workspace_scope(&board, beta).unwrap();
+        assert_eq!(alpha_scope.actors.as_slice(), std::slice::from_ref(&actor));
+        assert!(beta_scope.actors.is_empty());
+        assert_eq!(alpha_scope.host_instance_id, manifest::host_instance_id());
+
+        board.assign_panel_to_workspace(browser_id, beta);
+        let browser_workspace = board.panel(browser_id).unwrap().workspace_id;
+        assert!(
+            browser_workspace_scope(&board, browser_workspace)
+                .unwrap()
+                .actors
+                .is_empty()
+        );
+
+        board.assign_panel_to_workspace(agent_id, beta);
+
+        assert!(browser_workspace_scope(&board, alpha).unwrap().actors.is_empty());
+        assert_eq!(browser_workspace_scope(&board, beta).unwrap().actors, [actor]);
+    }
+
+    #[test]
+    fn workspace_scope_change_releases_an_out_of_scope_owner() {
+        let mut browser_manifest = manifest::BrowserManifest {
+            owner: Some(manifest::ManifestOwner {
+                name: "horizon:host-a:agent-a".to_string(),
+                tty: None,
+                updated_at: manifest::now_millis(),
+            }),
+            handoff: Some(manifest::ManifestHandoff {
+                request_id: "handoff".to_string(),
+                reason: "steer".to_string(),
+                requested_at: manifest::now_millis(),
+                done: false,
+            }),
+            ..manifest::BrowserManifest::default()
+        };
+
+        apply_manifest_host_state(
+            &mut browser_manifest,
+            true,
+            ManifestWorkspaceScope {
+                host_instance_id: "host-b".to_string(),
+                workspace_local_id: "workspace-b".to_string(),
+                actors: vec!["horizon:host-b:agent-b".to_string()],
+            },
+        );
+
+        assert!(browser_manifest.owner.is_none());
+        assert!(browser_manifest.handoff.is_none());
+        assert!(!browser_manifest.hidden);
     }
 }
