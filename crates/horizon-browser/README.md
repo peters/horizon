@@ -43,8 +43,9 @@ history or frames. Firefox installs the same narrow value shim with WebDriver Bi
 `script.addPreloadScript` before the initial navigation; startup fails instead
 of silently downgrading when that required BiDi command is rejected.
 Chromium panels also use a reserved nonzero loopback DevTools port so Chromium
-does not enable its port-zero `AutomationControlled` behavior. Callers that
-need the browser's unmodified behavior can select
+does not enable its port-zero `AutomationControlled` behavior. Startup retries
+with a fresh reservation when another local process wins the required socket
+handoff. Callers that need the browser's unmodified behavior can select
 `AutomationDisclosurePolicy::BrowserDefault` on any backend.
 
 Safari's public automation surface cannot currently establish the same

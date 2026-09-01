@@ -40,6 +40,15 @@ pub enum ChromeError {
     ProtectedExtraArg(String),
 }
 
+impl ChromeError {
+    pub(crate) fn is_devtools_port_conflict(&self) -> bool {
+        match self {
+            Self::NoDevtools(stderr) | Self::DevtoolsTimeout(stderr) => stderr_reports_devtools_port_conflict(stderr),
+            Self::NoBinary | Self::Spawn(_) | Self::ProtectedExtraArg(_) => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ChromeError>;
 
 /// Candidate binary names, in preference order, scanned on `PATH`.
@@ -113,6 +122,9 @@ impl ChromeProcess {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
+        // Chromium must bind the socket itself. Release immediately before
+        // spawn; startup detects the documented DevTools bind failure and
+        // retries with a fresh reservation if another process wins this gap.
         drop(devtools_listener);
         let mut child = spawn_process(command)?;
         let Some(stderr) = take_stderr(&mut child) else {
@@ -184,8 +196,12 @@ impl ChromeProcess {
                     return Ok(Some(url));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let stderr = self.stderr_tail_snapshot();
+                    if stderr_reports_devtools_port_conflict(&stderr) {
+                        return Err(ChromeError::NoDevtools(stderr));
+                    }
                     if self.child_status().is_some() {
-                        return Err(ChromeError::NoDevtools(self.stderr_tail_snapshot()));
+                        return Err(ChromeError::NoDevtools(stderr));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -259,6 +275,18 @@ fn devtools_port_error(error: &std::io::Error) -> ChromeError {
         error.kind(),
         format!("failed to reserve a loopback Chrome DevTools port: {error}"),
     ))
+}
+
+fn stderr_reports_devtools_port_conflict(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    [
+        "address already in use",
+        "cannot start http server for devtools",
+        "only one usage of each socket address",
+        "wsaeaddrinuse",
+    ]
+    .iter()
+    .any(|message| stderr.contains(message))
 }
 
 fn launch_args(launch: &ChromeLaunch, devtools_port: u16) -> Result<Vec<String>> {
@@ -885,6 +913,21 @@ mod tests {
         assert!(!args.iter().any(|argument| argument == "--headless=new"));
         assert!(args.iter().any(|argument| argument == "--remote-debugging-port=49152"));
         assert!(!args.iter().any(|argument| argument == "--remote-debugging-port=0"));
+    }
+
+    #[test]
+    fn devtools_port_conflicts_are_retryable_startup_errors() {
+        assert!(
+            ChromeError::NoDevtools("bind() failed: Address already in use".to_string()).is_devtools_port_conflict()
+        );
+        assert!(
+            ChromeError::DevtoolsTimeout("Only one usage of each socket address is permitted".to_string())
+                .is_devtools_port_conflict()
+        );
+        assert!(
+            ChromeError::NoDevtools("Cannot start http server for devtools.".to_string()).is_devtools_port_conflict()
+        );
+        assert!(!ChromeError::NoDevtools("profile is locked".to_string()).is_devtools_port_conflict());
     }
 
     #[test]
