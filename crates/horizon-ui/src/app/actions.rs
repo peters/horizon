@@ -105,9 +105,9 @@ impl HorizonApp {
 
     /// Re-frame the workspace that was active before an interactive
     /// alignment, camera-only: the workspace/panel selection is preserved.
-    /// Falls back to the row head when no attached workspace is active, and
-    /// leaves the view untouched for an empty target (matching the shared
-    /// action's treatment of an empty row head).
+    /// Falls back to the row head when no attached workspace is active; an
+    /// empty target uses its empty workspace frame (matching the focus/fit
+    /// paths) so the camera still lands on it.
     pub(in crate::app) fn reframe_active_workspace_after_alignment(
         &mut self,
         ctx: &egui::Context,
@@ -118,8 +118,8 @@ impl HorizonApp {
             .active_workspace
             .filter(|workspace_id| !self.workspace_is_detached(*workspace_id))
             .unwrap_or(alignment.leftmost_workspace);
-        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-            self.focus_workspace_bounds(ctx, min, max, true);
+        if let Some((pos, size)) = self.workspace_focus_frame(workspace_id) {
+            self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
         }
     }
 }

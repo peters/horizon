@@ -437,6 +437,55 @@ fn manual_alignment_keeps_row_head_framing_when_active_workspace_is_detached() {
 }
 
 #[test]
+fn manual_alignment_refocuses_an_empty_active_workspace_via_its_empty_frame() {
+    let runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        active_workspace_local_id: Some("right".to_string()),
+        // No persisted focus: restore then focuses the first visible panel
+        // (ws-left) while keeping the empty ws-right active — the exact
+        // state left behind after closing a workspace's last panel.
+        focused_panel_local_id: None,
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            WorkspaceState {
+                local_id: "right".to_string(),
+                name: "right".to_string(),
+                position: Some([1_400.0, 900.0]),
+                panels: vec![],
+                ..WorkspaceState::default()
+            },
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    app.theme_applied = true;
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    // The alignment equalizes frame tops; an empty workspace's frame top is
+    // its position, so compare frames rather than positions here.
+    let left_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
+    let (left_min, _left_max) = app.board.workspace_bounds(left_id).expect("left bounds");
+    let left_frame_top = left_min[1] - WS_BG_PAD - WS_TITLE_HEIGHT;
+    let right_position = workspace_position(&app, "right");
+    assert!((left_frame_top - right_position[1]).abs() <= POSITION_TOLERANCE);
+    assert!(right_position[0] > workspace_position(&app, "left")[0]);
+    let active_id = app.board.workspace_id_by_local_id("right").expect("right workspace");
+    let retarget = app
+        .pan_target
+        .take()
+        .expect("the shortcut should reframe the empty active workspace");
+    let (pos, size) = app.workspace_focus_frame(active_id).expect("empty workspace frame");
+    app.pan_to_canvas_pos_aligned(&ctx, pos, size, true);
+    let expected = app.pan_target.take().expect("expected empty-frame target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
+    assert_eq!(active_workspace_local_id(&app), Some("right"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
+}
+
+#[test]
 fn already_aligned_startup_does_not_mark_runtime_dirty() {
     let runtime_state = RuntimeState {
         canvas_view: Some(CanvasViewState::default()),
