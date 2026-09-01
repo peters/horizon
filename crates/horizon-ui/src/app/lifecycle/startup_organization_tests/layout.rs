@@ -42,8 +42,28 @@ fn startup_frame_reuses_manual_organization_view() {
         workspace_position(&startup_app, "right"),
         workspace_position(&manual_app, "right"),
     );
-    let manual_target = manual_app.pan_target.expect("manual organization view target");
-    assert_position_near(startup_app.canvas_view.pan_offset, [manual_target.x, manual_target.y]);
+    // The shortcut additionally re-frames the active workspace after the
+    // shared action, so compare startup against the shared row-head target.
+    let retarget = manual_app.pan_target.take().expect("active workspace view target");
+    let left_id = manual_app
+        .board
+        .workspace_id_by_local_id("left")
+        .expect("left workspace");
+    let (left_min, left_max) = manual_app.board.workspace_bounds(left_id).expect("left bounds");
+    manual_app.focus_workspace_bounds(&manual_ctx, left_min, left_max, true);
+    let row_head_target = manual_app.pan_target.take().expect("shared organization view target");
+    assert_position_near(
+        startup_app.canvas_view.pan_offset,
+        [row_head_target.x, row_head_target.y],
+    );
+    let right_id = manual_app
+        .board
+        .workspace_id_by_local_id("right")
+        .expect("right workspace");
+    let (right_min, right_max) = manual_app.board.workspace_bounds(right_id).expect("right bounds");
+    manual_app.focus_workspace_bounds(&manual_ctx, right_min, right_max, true);
+    let active_target = manual_app.pan_target.take().expect("active workspace target");
+    assert_position_near([retarget.x, retarget.y], [active_target.x, active_target.y]);
     assert_eq!(startup_app.canvas_view.zoom.to_bits(), saved_view.zoom.to_bits());
     assert!(startup_app.pan_target.is_none());
 }
@@ -68,7 +88,16 @@ fn settled_manual_view_wins_over_pre_alignment_visible_anchor() {
     manual_app.theme_applied = true;
     run_frame_at_configured_size(&manual_ctx, &mut manual_app);
     manual_app.execute_command(&manual_ctx, &CommandId::AlignWorkspacesHorizontally);
-    let manual_target = manual_app.pan_target.take().expect("manual organization view target");
+    // The shortcut re-frames the active workspace after the shared action;
+    // the startup path settles on the shared row-head target instead.
+    let _shortcut_target = manual_app.pan_target.take().expect("shortcut view target");
+    let left_id = manual_app
+        .board
+        .workspace_id_by_local_id("left")
+        .expect("left workspace");
+    let (left_min, left_max) = manual_app.board.workspace_bounds(left_id).expect("left bounds");
+    manual_app.focus_workspace_bounds(&manual_ctx, left_min, left_max, true);
+    let manual_target = manual_app.pan_target.take().expect("row head organization view target");
     let mut settled_view = manual_app.canvas_view;
     settled_view.set_pan_offset([manual_target.x, manual_target.y]);
     manual_app.canvas_view = settled_view;
@@ -259,10 +288,12 @@ fn manual_alignment_still_runs_after_startup_one_shot() {
     app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
 
     assert_horizontal_row(&app, "left", "right");
-    assert!(
-        app.pan_target.is_none(),
-        "the view already matches the shared organization target"
-    );
+    // The shortcut re-frames the active workspace instead of the row head.
+    let retarget = app.pan_target.take().expect("active workspace view target");
+    let (right_min, right_max) = app.board.workspace_bounds(right_id).expect("right bounds");
+    app.focus_workspace_bounds(&ctx, right_min, right_max, true);
+    let expected = app.pan_target.take().expect("expected active workspace target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
     assert!(app.runtime_dirty_since.is_some());
 }
 
@@ -288,8 +319,170 @@ fn manual_alignment_is_a_clean_no_op_when_row_and_view_are_already_aligned() {
 
     app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
 
-    assert!(app.pan_target.is_none());
+    // The row stays put without a persistence pass, but the shortcut still
+    // re-frames the active workspace for the view.
+    let retarget = app.pan_target.take().expect("active workspace view target");
+    let right_id = app.board.workspace_id_by_local_id("right").expect("right workspace");
+    let (right_min, right_max) = app.board.workspace_bounds(right_id).expect("right bounds");
+    app.focus_workspace_bounds(&ctx, right_min, right_max, true);
+    let expected = app.pan_target.take().expect("expected active workspace target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
     assert!(app.runtime_dirty_since.is_none());
+}
+
+#[test]
+fn manual_alignment_refocuses_the_active_workspace_instead_of_the_row_head() {
+    let runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        active_workspace_local_id: Some("right".to_string()),
+        focused_panel_local_id: Some("right-panel".to_string()),
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            editor_workspace_state("middle", [700.0, 500.0]),
+            // Two panels so the focused panel is not the workspace's last one:
+            // the reframe must not move the selection.
+            WorkspaceState {
+                local_id: "right".to_string(),
+                name: "right".to_string(),
+                position: Some([1_400.0, 900.0]),
+                panels: vec![
+                    editor_panel_state("right-panel", [1_420.0, 960.0]),
+                    editor_panel_state("right-panel-two", [1_420.0, 1_200.0]),
+                ],
+                ..WorkspaceState::default()
+            },
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    app.theme_applied = true;
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    assert_horizontal_row(&app, "left", "middle");
+    assert!(workspace_position(&app, "right")[0] > workspace_position(&app, "middle")[0]);
+    let retarget = app
+        .pan_target
+        .take()
+        .expect("the shortcut should reframe the active workspace");
+    let active_id = app.board.workspace_id_by_local_id("right").expect("right workspace");
+    let (active_min, active_max) = app.board.workspace_bounds(active_id).expect("active bounds");
+    app.focus_workspace_bounds(&ctx, active_min, active_max, true);
+    let expected = app.pan_target.take().expect("expected active workspace target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
+
+    let row_head_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
+    let (row_head_min, row_head_max) = app.board.workspace_bounds(row_head_id).expect("row head bounds");
+    app.focus_workspace_bounds(&ctx, row_head_min, row_head_max, true);
+    let row_head_target = app.pan_target.take().expect("row head target");
+    assert!(
+        (retarget.x - row_head_target.x).abs() > POSITION_TOLERANCE
+            || (retarget.y - row_head_target.y).abs() > POSITION_TOLERANCE,
+        "the shortcut target must not be the row head"
+    );
+    assert_eq!(active_workspace_local_id(&app), Some("right"));
+    // Camera-only reframe: the focused panel is preserved.
+    assert_eq!(focused_panel_local_id(&app), Some("right-panel"));
+}
+
+#[test]
+fn manual_alignment_keeps_row_head_framing_when_active_workspace_is_detached() {
+    let runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            editor_workspace_state("right", [700.0, 500.0]),
+            editor_workspace_state("detached", [1_400.0, 900.0]),
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    app.theme_applied = true;
+    let detached_id = app
+        .board
+        .workspace_id_by_local_id("detached")
+        .expect("detached workspace");
+    let detached_local_id = app
+        .board
+        .workspace(detached_id)
+        .expect("detached workspace")
+        .local_id
+        .clone();
+    app.detached_workspaces.insert(
+        detached_local_id,
+        crate::app::DetachedWorkspaceViewportState::new(WindowConfig::default()),
+    );
+    app.board.active_workspace = Some(detached_id);
+    app.board.focused = app.board.panel_id_by_local_id("left-panel");
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    assert_horizontal_row(&app, "left", "right");
+    assert_position_near(workspace_position(&app, "detached"), [1_400.0, 900.0]);
+    let retarget = app
+        .pan_target
+        .take()
+        .expect("the shortcut should keep framing the row head");
+    let left_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
+    let (left_min, left_max) = app.board.workspace_bounds(left_id).expect("left bounds");
+    app.focus_workspace_bounds(&ctx, left_min, left_max, true);
+    let expected = app.pan_target.take().expect("expected row head target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
+    assert_eq!(active_workspace_local_id(&app), Some("detached"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
+}
+
+#[test]
+fn manual_alignment_refocuses_an_empty_active_workspace_via_its_empty_frame() {
+    let runtime_state = RuntimeState {
+        canvas_view: Some(CanvasViewState::default()),
+        active_workspace_local_id: Some("right".to_string()),
+        // No persisted focus: restore then focuses the first visible panel
+        // (ws-left) while keeping the empty ws-right active — the exact
+        // state left behind after closing a workspace's last panel.
+        focused_panel_local_id: None,
+        workspaces: vec![
+            editor_workspace_state("left", [100.0, 300.0]),
+            WorkspaceState {
+                local_id: "right".to_string(),
+                name: "right".to_string(),
+                position: Some([1_400.0, 900.0]),
+                panels: vec![],
+                ..WorkspaceState::default()
+            },
+        ],
+        ..RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime_state),
+    });
+    app.theme_applied = true;
+
+    app.execute_command(&ctx, &CommandId::AlignWorkspacesHorizontally);
+
+    // The alignment equalizes frame tops; an empty workspace's frame top is
+    // its position, so compare frames rather than positions here.
+    let left_id = app.board.workspace_id_by_local_id("left").expect("left workspace");
+    let (left_min, _left_max) = app.board.workspace_bounds(left_id).expect("left bounds");
+    let left_frame_top = left_min[1] - WS_BG_PAD - WS_TITLE_HEIGHT;
+    let right_position = workspace_position(&app, "right");
+    assert!((left_frame_top - right_position[1]).abs() <= POSITION_TOLERANCE);
+    assert!(right_position[0] > workspace_position(&app, "left")[0]);
+    let active_id = app.board.workspace_id_by_local_id("right").expect("right workspace");
+    let retarget = app
+        .pan_target
+        .take()
+        .expect("the shortcut should reframe the empty active workspace");
+    let (pos, size) = app.workspace_focus_frame(active_id).expect("empty workspace frame");
+    app.pan_to_canvas_pos_aligned(&ctx, pos, size, true);
+    let expected = app.pan_target.take().expect("expected empty-frame target");
+    assert_position_near([retarget.x, retarget.y], [expected.x, expected.y]);
+    assert_eq!(active_workspace_local_id(&app), Some("right"));
+    assert_eq!(focused_panel_local_id(&app), Some("left-panel"));
 }
 
 #[test]

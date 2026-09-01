@@ -328,7 +328,7 @@ impl HorizonApp {
             .or_else(|| self.leftmost_workspace_id())
     }
 
-    fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
+    pub(super) fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
         if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
             return Some((
                 Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT),
