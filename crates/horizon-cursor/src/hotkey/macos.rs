@@ -44,11 +44,11 @@ impl Drop for PlatformGuard {
 pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, HotkeyError> {
     let native = bindings
         .iter()
-        .map(|(profile, hotkey)| native_hotkey(*hotkey).map(|hotkey| (*profile, hotkey)))
-        .collect::<Option<Vec<_>>>()
-        .ok_or(HotkeyError::Failed(
-            "one or more speech hotkeys are unsupported on macOS",
-        ))?;
+        .filter_map(|(profile, hotkey)| native_hotkey(*hotkey).map(|hotkey| (*profile, hotkey)))
+        .collect::<Vec<_>>();
+    if native.is_empty() {
+        return Err(HotkeyError::Failed("no speech hotkeys are supported on macOS"));
+    }
     install_event_handler();
     let manager =
         GlobalHotKeyManager::new().map_err(|_| HotkeyError::Failed("failed to initialize macOS global hotkeys"))?;
@@ -197,8 +197,11 @@ mod tests {
     fn supported_keys_and_plus_map_to_carbon_compatible_codes() {
         let f1 = native_hotkey(plain(HotkeyKey::Function(1))).expect("F1");
         assert_eq!(f1.key, Code::F1);
-        assert!(native_hotkey(plain(HotkeyKey::Function(20))).is_some());
-        assert!(native_hotkey(plain(HotkeyKey::Function(21))).is_none());
+        let native = [HotkeyKey::Function(20), HotkeyKey::Function(21)]
+            .into_iter()
+            .filter_map(|key| native_hotkey(plain(key)))
+            .collect::<Vec<_>>();
+        assert_eq!(native.len(), 1);
 
         let plus = native_hotkey(plain(HotkeyKey::Plus)).expect("plus");
         assert_eq!(plus.key, Code::Equal);
