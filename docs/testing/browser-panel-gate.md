@@ -494,8 +494,9 @@ Run once per host OS after the semantic gate:
    `horizon-browser` skill and Claude plugin descriptor without adding a
    permanent MCP registration to the operator's configuration.
 2. Create a default supported agent panel with no Browser panel. The default
-   launch receives the transient `horizon-browser` stdio MCP registration and
-   stable `HORIZON_BROWSER_ACTOR`, and that exact variable is forwarded to the
+   launch receives the transient `horizon-browser` stdio MCP registration,
+   stable `HORIZON_BROWSER_ACTOR`, and the launching host's
+   `HORIZON_BROWSER_HOST_INSTANCE`, and both variables are forwarded to the
    stdio MCP child. The default Codex registration sets only this MCP server's
    tool approval mode to `approve`, so browser calls proceed without repeated
    operator prompts while unrelated tool approvals keep their normal policy; a

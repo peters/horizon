@@ -25,6 +25,10 @@ pub(crate) struct BrowserPanel {
     pub(crate) protocol: ProtocolKind,
     pub(crate) url: String,
     pub(crate) title: String,
+    /// Host presentation state (shown or hidden). It says nothing about
+    /// workspace membership: for a Horizon-injected agent identity every
+    /// returned panel is already in that agent's workspace, while identities
+    /// from outside Horizon see every live panel.
     pub(crate) visible: bool,
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
