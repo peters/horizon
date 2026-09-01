@@ -8,13 +8,17 @@ use crate::disclosure::{
     CHROMIUM_DISCLOSURE_BOOTSTRAP_URL, CHROMIUM_USER_AGENT_METADATA_EXPRESSION, chromium_user_agent_needs_override,
 };
 use crate::frames::FrameSlot;
-use crate::process::{ChromeProcess, ChromeProcessControl};
+use crate::process::{ChromeError, ChromeProcess, ChromeProcessControl};
 use crate::{AutomationDisclosurePolicy, BrowserConfig};
 
 use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
+
+const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
+const DEVTOOLS_PORT_REAP_FAILURE: &str =
+    "failed to reap Chromium after a DevTools-port conflict; aborting retry to preserve exact process ownership";
 
 /// Settles process registration and resolves the driver's teardown signal
 /// exactly once, on thread exit.
@@ -58,7 +62,7 @@ fn initialize_driver(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
-    process_control: ChromeProcessControl,
+    process_control: &ChromeProcessControl,
 ) -> Option<DriverConnection> {
     let launch = match build_launch(config) {
         Ok(launch) => launch,
@@ -72,24 +76,14 @@ fn initialize_driver(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     }
-    let mut chrome = match ChromeProcess::spawn(&launch, process_control) {
-        Ok(chrome) => chrome,
-        Err(error) => {
-            let _ = event_tx.send(BrowserEvent::Warning(format!("failed to start chrome: {error}")));
-            let _ = event_tx.send(BrowserEvent::Stopped { code: None });
-            return None;
-        }
-    };
-    let ws_url = match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
-        Ok(Some(url)) => url,
+    let (mut chrome, ws_url) = match start_chrome(&launch, stop_requested, process_control) {
+        Ok(Some(connection)) => connection,
         Ok(None) => {
-            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
-        Err(error) => {
-            let _ = event_tx.send(BrowserEvent::Warning(format!("no DevTools endpoint: {error}")));
-            let _ = chrome.kill();
+        Err(message) => {
+            let _ = event_tx.send(BrowserEvent::Warning(message));
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             return None;
         }
@@ -110,6 +104,74 @@ fn initialize_driver(
         return None;
     }
     initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
+}
+
+fn start_chrome(
+    launch: &crate::process::ChromeLaunch,
+    stop_requested: &AtomicBool,
+    process_control: &ChromeProcessControl,
+) -> Result<Option<(ChromeProcess, String)>, String> {
+    run_chrome_startup_attempts(launch.automation_disclosure, || {
+        if stop_requested.load(Ordering::Acquire) {
+            return Ok(ChromeStartupAttempt::Cancelled);
+        }
+        let mut chrome = ChromeProcess::spawn(launch, process_control.clone())
+            .map_err(|error| format!("failed to start chrome: {error}"))?;
+        let outcome = match chrome.wait_ws_url(WS_URL_TIMEOUT, || stop_requested.load(Ordering::Acquire)) {
+            Ok(Some(url)) => ChromeStartupAttempt::Connected((chrome, url)),
+            Ok(None) => {
+                let _ = chrome.kill();
+                ChromeStartupAttempt::Cancelled
+            }
+            Err(error) => ChromeStartupAttempt::Failed {
+                error,
+                reaped: chrome.kill(),
+            },
+        };
+        Ok(outcome)
+    })
+}
+
+enum ChromeStartupAttempt<T> {
+    Connected(T),
+    Cancelled,
+    Failed { error: ChromeError, reaped: bool },
+}
+
+fn run_chrome_startup_attempts<T>(
+    automation_disclosure: AutomationDisclosurePolicy,
+    mut run_attempt: impl FnMut() -> Result<ChromeStartupAttempt<T>, String>,
+) -> Result<Option<T>, String> {
+    for attempt_number in 1..=DEVTOOLS_PORT_STARTUP_ATTEMPTS {
+        match run_attempt()? {
+            ChromeStartupAttempt::Connected(connection) => return Ok(Some(connection)),
+            ChromeStartupAttempt::Cancelled => return Ok(None),
+            ChromeStartupAttempt::Failed { error, reaped }
+                if automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+                    && error.is_devtools_port_conflict()
+                    && attempt_number < DEVTOOLS_PORT_STARTUP_ATTEMPTS =>
+            {
+                require_reaped_before_port_retry(reaped)?;
+                tracing::warn!(
+                    attempt = attempt_number,
+                    max_attempts = DEVTOOLS_PORT_STARTUP_ATTEMPTS,
+                    "Chromium DevTools port handoff collided; retrying with a fresh reservation"
+                );
+            }
+            ChromeStartupAttempt::Failed { error, .. } => {
+                return Err(format!("no DevTools endpoint: {error}"));
+            }
+        }
+    }
+    Err("Chromium exhausted its bounded DevTools-port startup attempts".to_string())
+}
+
+fn require_reaped_before_port_retry(reaped: bool) -> Result<(), &'static str> {
+    if reaped {
+        Ok(())
+    } else {
+        Err(DEVTOOLS_PORT_REAP_FAILURE)
+    }
 }
 
 fn initialize_target(
@@ -315,16 +377,17 @@ pub(super) fn run_driver(
     completion_tx: mpsc::Sender<()>,
     process_control: ChromeProcessControl,
 ) {
-    let _completion = DriverCompletion {
+    let completion_guard = DriverCompletion {
         completion_tx: Some(completion_tx),
-        process_control: process_control.clone(),
+        process_control,
     };
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     };
-    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, process_control) else {
+    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, &completion_guard.process_control)
+    else {
         return;
     };
 
@@ -412,6 +475,90 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
 
 pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> std::path::PathBuf {
     config.profile_dir(panel_local_id)
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use crate::AutomationDisclosurePolicy;
+    use crate::process::ChromeError;
+
+    use super::{ChromeStartupAttempt, DEVTOOLS_PORT_REAP_FAILURE, DEVTOOLS_PORT_STARTUP_ATTEMPTS};
+
+    fn port_conflict() -> ChromeError {
+        ChromeError::NoDevtools("Cannot start http server for devtools.".to_string())
+    }
+
+    #[test]
+    fn minimized_startup_retries_with_fresh_attempts_and_stops_at_the_bound() {
+        let mut attempts = 0;
+        let connection = super::run_chrome_startup_attempts(AutomationDisclosurePolicy::MinimizeCommonSignals, || {
+            attempts += 1;
+            if attempts < DEVTOOLS_PORT_STARTUP_ATTEMPTS {
+                Ok(ChromeStartupAttempt::Failed {
+                    error: port_conflict(),
+                    reaped: true,
+                })
+            } else {
+                Ok(ChromeStartupAttempt::Connected(attempts))
+            }
+        })
+        .unwrap_or_else(|error| panic!("retry startup: {error}"));
+
+        assert_eq!(connection, Some(DEVTOOLS_PORT_STARTUP_ATTEMPTS));
+        assert_eq!(attempts, DEVTOOLS_PORT_STARTUP_ATTEMPTS);
+
+        let mut bounded_attempts = 0;
+        let Err(error) =
+            super::run_chrome_startup_attempts::<()>(AutomationDisclosurePolicy::MinimizeCommonSignals, || {
+                bounded_attempts += 1;
+                Ok(ChromeStartupAttempt::Failed {
+                    error: port_conflict(),
+                    reaped: true,
+                })
+            })
+        else {
+            panic!("conflicting startup unexpectedly succeeded");
+        };
+
+        assert!(error.contains("Cannot start http server for devtools"));
+        assert_eq!(bounded_attempts, DEVTOOLS_PORT_STARTUP_ATTEMPTS);
+    }
+
+    #[test]
+    fn minimized_startup_aborts_before_retry_when_reap_fails() {
+        let mut attempts = 0;
+        let Err(error) =
+            super::run_chrome_startup_attempts::<()>(AutomationDisclosurePolicy::MinimizeCommonSignals, || {
+                attempts += 1;
+                Ok(ChromeStartupAttempt::Failed {
+                    error: port_conflict(),
+                    reaped: false,
+                })
+            })
+        else {
+            panic!("unreaped startup unexpectedly succeeded");
+        };
+
+        assert_eq!(error, DEVTOOLS_PORT_REAP_FAILURE);
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn browser_default_does_not_retry_devtools_conflicts() {
+        let mut attempts = 0;
+        let Err(error) = super::run_chrome_startup_attempts::<()>(AutomationDisclosurePolicy::BrowserDefault, || {
+            attempts += 1;
+            Ok(ChromeStartupAttempt::Failed {
+                error: port_conflict(),
+                reaped: true,
+            })
+        }) else {
+            panic!("browser-default startup unexpectedly succeeded");
+        };
+
+        assert!(error.contains("Cannot start http server for devtools"));
+        assert_eq!(attempts, 1);
+    }
 }
 
 #[cfg(all(test, unix))]
