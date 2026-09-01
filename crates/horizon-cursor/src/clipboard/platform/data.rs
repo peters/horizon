@@ -52,7 +52,6 @@ impl ClipboardSnapshot {
 pub(super) struct StoredTarget {
     pub(super) target: Atom,
     pub(super) property_type: Atom,
-    pub(super) format: u8,
     pub(super) value: StoredValue,
 }
 
@@ -62,7 +61,6 @@ impl StoredTarget {
         Ok(Self {
             target,
             property_type: reply.type_,
-            format: reply.format,
             value,
         })
     }
@@ -72,12 +70,6 @@ pub(super) enum StoredValue {
     Bytes8(Vec<u8>),
     Bytes16(Vec<u16>),
     Bytes32(Vec<u32>),
-}
-
-impl Default for StoredValue {
-    fn default() -> Self {
-        Self::Bytes8(Vec::new())
-    }
 }
 
 impl StoredValue {

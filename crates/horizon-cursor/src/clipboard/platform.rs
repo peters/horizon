@@ -38,6 +38,7 @@ x11rb::atom_manager! {
         CLIPBOARD,
         CLIPBOARD_MANAGER,
         TARGETS,
+        ATOM_PAIR,
         MULTIPLE,
         TIMESTAMP,
         SAVE_TARGETS,
@@ -109,6 +110,7 @@ struct ClipboardSession {
     owns_clipboard: bool,
     target_identity: Option<ClientIdentity>,
     max_property_bytes: usize,
+    clipboard_time: u32,
 }
 
 impl ClipboardSession {
@@ -150,6 +152,7 @@ impl ClipboardSession {
             owns_clipboard: false,
             target_identity: None,
             max_property_bytes,
+            clipboard_time: Time::CURRENT_TIME.into(),
         })
     }
 
@@ -176,15 +179,13 @@ impl ClipboardSession {
     }
 
     fn wait_for_target_request(&mut self) {
-        loop {
-            let Ok(event) = self.conn.wait_for_event() else {
-                return;
-            };
+        while let Ok(event) = self.conn.wait_for_event() {
             match event {
-                Event::SelectionRequest(request) => match self.respond_to_request(request) {
-                    Ok(false) => {}
-                    Ok(true) | Err(_) => return,
-                },
+                Event::SelectionRequest(request) => {
+                    if let Ok(true) = self.respond_to_request(request) {
+                        return;
+                    }
+                }
                 Event::SelectionClear(event) if event.selection == self.atoms.CLIPBOARD => {
                     self.owns_clipboard = false;
                     return;
@@ -198,16 +199,9 @@ impl ClipboardSession {
         if !self.owns_clipboard {
             return;
         }
-        loop {
-            let Ok(event) = self.conn.wait_for_event() else {
-                return;
-            };
+        while let Ok(event) = self.conn.wait_for_event() {
             match event {
-                Event::SelectionRequest(request) => {
-                    if self.respond_to_request(request).is_err() {
-                        return;
-                    }
-                }
+                Event::SelectionRequest(request) => drop(self.respond_to_request(request)),
                 Event::SelectionClear(event) if event.selection == self.atoms.CLIPBOARD => return,
                 _ => {}
             }
@@ -227,6 +221,7 @@ impl ClipboardSession {
             return Err(InjectError::Clipboard("clipboard changed while preparing speech paste"));
         }
         self.owns_clipboard = true;
+        self.clipboard_time = timestamp;
         Ok(())
     }
 
@@ -235,37 +230,101 @@ impl ClipboardSession {
             self.send_selection_notify(request, NONE)?;
             return Ok(false);
         }
+        let serve_staged = self.staged.is_some() && self.request_matches_target(request.requestor);
+        if request.target == self.atoms.MULTIPLE {
+            return self.respond_to_multiple(request, serve_staged);
+        }
         let property = if request.property == NONE {
             request.target
         } else {
             request.property
         };
-        let serve_staged = self.staged.is_some() && self.request_matches_target(request.requestor);
-        let wrote_transcript = if request.target == self.atoms.TARGETS {
+        let Some(wrote_transcript) =
+            self.write_requested_target(request.requestor, property, request.target, serve_staged)?
+        else {
+            self.send_selection_notify(request, NONE)?;
+            return Ok(false);
+        };
+        self.send_selection_notify(request, property)?;
+        Ok(wrote_transcript)
+    }
+
+    fn write_requested_target(
+        &self,
+        requestor: Window,
+        property: Atom,
+        target: Atom,
+        serve_staged: bool,
+    ) -> Result<Option<bool>, InjectError> {
+        if target == self.atoms.TARGETS {
             let targets = self.advertised_targets(serve_staged);
             self.conn
-                .change_property32(PropMode::REPLACE, request.requestor, property, AtomEnum::ATOM, &targets)
+                .change_property32(PropMode::REPLACE, requestor, property, AtomEnum::ATOM, &targets)
                 .map_err(|_| InjectError::Clipboard("failed to serve clipboard target list"))?
                 .check()
                 .map_err(|_| InjectError::Clipboard("failed to serve clipboard target list"))?;
-            false
+            Ok(Some(false))
+        } else if target == self.atoms.TIMESTAMP {
+            self.conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    requestor,
+                    property,
+                    AtomEnum::INTEGER,
+                    &[self.clipboard_time],
+                )
+                .map_err(|_| InjectError::Clipboard("failed to serve clipboard timestamp"))?
+                .check()
+                .map_err(|_| InjectError::Clipboard("failed to serve clipboard timestamp"))?;
+            Ok(Some(false))
         } else if serve_staged {
             let staged = self.staged.as_ref().ok_or(InjectError::Clipboard(
                 "speech transcript was not available for the target request",
             ))?;
-            let Some(wrote_transcript) = self.write_staged_text(request.requestor, property, request.target, staged)?
-            else {
-                self.send_selection_notify(request, NONE)?;
-                return Ok(false);
-            };
-            wrote_transcript
-        } else if let Some(stored) = self.snapshot.find(request.target) {
-            self.write_stored_target(request.requestor, property, stored)?;
-            false
+            self.write_staged_text(requestor, property, target, staged)
+        } else if let Some(stored) = self.snapshot.find(target) {
+            self.write_stored_target(requestor, property, stored)?;
+            Ok(Some(false))
         } else {
+            Ok(None)
+        }
+    }
+
+    fn respond_to_multiple(&self, request: SelectionRequestEvent, serve_staged: bool) -> Result<bool, InjectError> {
+        let requestor = request.requestor;
+        let property = request.property;
+        if property == NONE {
             self.send_selection_notify(request, NONE)?;
             return Ok(false);
-        };
+        }
+        let max_atoms = u32::try_from(MAX_TARGETS * 2).unwrap_or(u32::MAX);
+        let reply = self
+            .conn
+            .get_property(false, requestor, property, self.atoms.ATOM_PAIR, 0, max_atoms)
+            .map_err(|_| InjectError::Clipboard("failed to read a multiple clipboard request"))?
+            .reply()
+            .map_err(|_| InjectError::Clipboard("failed to read a multiple clipboard request"))?;
+        let mut pairs: Vec<_> = reply.value32().into_iter().flatten().collect();
+        if reply.format != 32 || reply.bytes_after != 0 || pairs.len() % 2 != 0 {
+            self.send_selection_notify(request, NONE)?;
+            return Ok(false);
+        }
+        let mut wrote_transcript = false;
+        for pair in pairs.as_chunks_mut::<2>().0 {
+            if pair[1] == NONE || pair[0] == self.atoms.MULTIPLE {
+                pair[0] = NONE;
+                continue;
+            }
+            match self.write_requested_target(requestor, pair[1], pair[0], serve_staged) {
+                Ok(Some(wrote)) => wrote_transcript |= wrote,
+                Ok(None) | Err(_) => pair[0] = NONE,
+            }
+        }
+        self.conn
+            .change_property32(PropMode::REPLACE, requestor, property, self.atoms.ATOM_PAIR, &pairs)
+            .map_err(|_| InjectError::Clipboard("failed to finish a multiple clipboard request"))?
+            .check()
+            .map_err(|_| InjectError::Clipboard("failed to finish a multiple clipboard request"))?;
         self.send_selection_notify(request, property)?;
         Ok(wrote_transcript)
     }
@@ -286,7 +345,7 @@ impl ClipboardSession {
         } else {
             self.snapshot.targets.iter().map(|target| target.target).collect()
         };
-        targets.push(self.atoms.TARGETS);
+        targets.extend([self.atoms.TARGETS, self.atoms.MULTIPLE, self.atoms.TIMESTAMP]);
         if self.staged.is_none() && !self.snapshot.is_empty() {
             targets.push(self.atoms.SAVE_TARGETS);
         }

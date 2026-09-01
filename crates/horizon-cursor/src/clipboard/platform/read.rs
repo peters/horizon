@@ -19,7 +19,7 @@ impl ClipboardSession {
         }
         let deadline = Instant::now() + super::SNAPSHOT_TIMEOUT;
         let targets_reply = self.request_selection_target(self.atoms.TARGETS, timestamp, deadline)?;
-        if targets_reply.format != 32 || targets_reply.property_type != AtomEnum::ATOM.into() {
+        if targets_reply.property_type != AtomEnum::ATOM.into() || targets_reply.value.as_u32_slice().is_none() {
             return Err(InjectError::Clipboard(
                 "clipboard target list has an unsupported format",
             ));
@@ -112,7 +112,7 @@ impl ClipboardSession {
     fn read_incremental_target(&self, target: Atom, deadline: Instant) -> Result<StoredTarget, InjectError> {
         let mut property_type = None;
         let mut format = None;
-        let mut value = StoredValue::default();
+        let mut value = StoredValue::Bytes8(Vec::new());
         loop {
             let event = self.wait_for_event(deadline)?;
             let Event::PropertyNotify(notify) = event else {
@@ -129,9 +129,6 @@ impl ClipboardSession {
                 return Ok(StoredTarget {
                     target,
                     property_type: property_type.ok_or(InjectError::Clipboard(
-                        "existing clipboard sent an empty incremental format",
-                    ))?,
-                    format: format.ok_or(InjectError::Clipboard(
                         "existing clipboard sent an empty incremental format",
                     ))?,
                     value,
@@ -162,7 +159,7 @@ impl ClipboardSession {
                 self.atoms.HORIZON_CLIPBOARD_DATA,
                 AtomEnum::ANY,
                 0,
-                u32::MAX,
+                u32::try_from(MAX_SNAPSHOT_BYTES / 4).unwrap_or(u32::MAX),
             )
             .map_err(|_| InjectError::Clipboard("failed to read existing clipboard data"))?
             .reply()
