@@ -61,8 +61,9 @@ pub use visibility::{
     record_visibility_status, take_visibility_result,
 };
 pub use workspace::{
-    AgentIdentity, HOST_INSTANCE_ENV, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE, actor_is_workspace_scoped,
-    host_instance, publish_requested_panel, read_audit_for, sync_host_state, valid_host_instance,
+    AgentIdentity, HOST_INSTANCE_ENV, HostStampOutcome, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE,
+    actor_is_workspace_scoped, host_instance, publish_requested_panel, read_audit_for, sync_host_state,
+    sync_host_state_in, valid_host_instance,
 };
 
 /// How long an agent owner heartbeat stays fresh.
@@ -237,8 +238,20 @@ pub fn read(panel_local_id: &str) -> Option<BrowserManifest> {
 
 #[must_use]
 pub fn read_at(path: &Path) -> Option<BrowserManifest> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    try_read_at(path).ok().flatten()
+}
+
+/// Read a manifest, distinguishing an absent file (`Ok(None)`) from a read
+/// or parse failure, which callers that must retry later need to see.
+fn try_read_at(path: &Path) -> std::io::Result<Option<BrowserManifest>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// List panel local ids that currently have a valid, canonically named

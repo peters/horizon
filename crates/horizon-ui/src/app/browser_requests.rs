@@ -1,10 +1,13 @@
 //! Host-side handling for agent-requested browser panel lifecycle changes.
 
+use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use horizon_core::browser::manifest::{
     self, AgentIdentity, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult,
-    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, ManifestWorkspace,
+    BrowserVisibilityAuditStatus, BrowserVisibilityRequest, BrowserVisibilityResult, HostStampOutcome,
+    ManifestWorkspace,
 };
 use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
@@ -17,6 +20,9 @@ const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pending: Vec<PendingBrowserCreate>,
+    /// Board placement the manifests were last stamped for; a change
+    /// re-stamps on the same frame instead of waiting for the next tick.
+    stamped_placement: Option<u64>,
 }
 
 struct PendingBrowserCreate {
@@ -38,19 +44,72 @@ enum BrowserCreateCompletion {
     Failed,
 }
 
+/// One browser panel's host-owned state as the board currently has it.
+struct BrowserPlacement {
+    local_id: String,
+    visible: bool,
+    workspace: ManifestWorkspace,
+}
+
+/// Outcome of stamping every browser manifest: whether any file changed and
+/// whether every manifest this host owns is now current. An incomplete sync
+/// keeps the placement fingerprint uncommitted so the next frame retries.
+#[derive(Clone, Copy)]
+struct HostStateSync {
+    changed: bool,
+    complete: bool,
+}
+
 impl HorizonApp {
     pub(super) fn poll_browser_create_requests(&mut self) -> bool {
         let mut changed = self.finish_pending_browser_creates();
         let now = Instant::now();
-        if self
+        let poll_due = self
             .browser_create_host
             .last_request_poll
-            .is_some_and(|last| now.saturating_duration_since(last) < CREATE_REQUEST_POLL_INTERVAL)
-        {
-            return changed;
+            .is_none_or(|last| now.saturating_duration_since(last) >= CREATE_REQUEST_POLL_INTERVAL);
+        // Every stamp happens once per frame, after rendering, in
+        // `restamp_browser_manifests_for_placement`; the tick only requests
+        // the cadence-based one by forgetting the last stamped placement.
+        if poll_due {
+            self.browser_create_host.last_request_poll = Some(now);
+            changed |= self.poll_host_requests();
+            self.browser_create_host.stamped_placement = None;
         }
-        self.browser_create_host.last_request_poll = Some(now);
+        changed
+    }
 
+    /// Re-stamp the manifests as soon as the board placement they depend on
+    /// changes. This runs at the end of every frame, after queued workspace
+    /// changes and the moves made while rendering, so moving or hiding a
+    /// panel revokes the old workspace's access before the frame ends rather
+    /// than on a later tick.
+    pub(super) fn restamp_browser_manifests_for_placement(&mut self) -> bool {
+        if self.browser_create_host.stamped_placement == Some(placement_fingerprint(&self.board)) {
+            return false;
+        }
+        self.stamp_current_placement()
+    }
+
+    /// Stamp every owned manifest for the current placement and remember the
+    /// placement only if all of them are current, so a failed write is
+    /// retried on the next frame instead of waiting for the next tick.
+    fn stamp_current_placement(&mut self) -> bool {
+        let placement = placement_fingerprint(&self.board);
+        let sync = self.sync_browser_manifest_host_state();
+        self.browser_create_host.stamped_placement = sync.complete.then_some(placement);
+        sync.changed
+    }
+
+    /// Root of the Horizon home whose manifests this host stamps. Production
+    /// constructs the session store from `HorizonHome::resolve()`, the same
+    /// root the drivers and the MCP server use for their default paths.
+    fn host_manifest_root(&self) -> &Path {
+        self.session_store.home().root()
+    }
+
+    fn poll_host_requests(&mut self) -> bool {
+        let mut changed = false;
         let requests = match manifest::list_create_requests() {
             Ok(requests) => requests,
             Err(error) => {
@@ -81,9 +140,7 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed |= self.poll_browser_visibility_requests();
-        changed |= self.sync_browser_manifest_host_state();
-        changed
+        changed | self.poll_browser_visibility_requests()
     }
 
     fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -286,30 +343,8 @@ impl HorizonApp {
     /// Keep every live browser manifest's host-owned presentation and
     /// workspace membership current, so MCP authorization follows panel moves
     /// and visibility changes made through the UI.
-    fn sync_browser_manifest_host_state(&self) -> bool {
-        let mut changed = false;
-        for panel in self
-            .board
-            .panels
-            .iter()
-            .filter(|panel| panel.kind == PanelKind::Browser)
-        {
-            let Some(workspace) = browser_workspace(&self.board, panel.workspace_id) else {
-                continue;
-            };
-            match manifest::sync_host_state(&panel.local_id, panel.visible, &workspace) {
-                Ok(true) => changed = true,
-                Ok(false) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                    tracing::debug!(panel_id = %panel.local_id, %error, "browser manifest belongs to another Horizon host");
-                }
-                Err(error) => {
-                    tracing::warn!(panel_id = %panel.local_id, %error, "could not synchronize browser host state");
-                }
-            }
-        }
-        changed
+    fn sync_browser_manifest_host_state(&self) -> HostStateSync {
+        sync_manifest_host_state(self.host_manifest_root(), &browser_placements(&self.board))
     }
 
     fn finish_pending_browser_creates(&mut self) -> bool {
@@ -363,6 +398,73 @@ fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<Manifes
         &workspace.local_id,
         actors,
     ))
+}
+
+/// The host-owned state of every browser panel on the board, in board order.
+fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
+    board
+        .panels
+        .iter()
+        .filter(|panel| panel.kind == PanelKind::Browser)
+        .filter_map(|panel| {
+            browser_workspace(board, panel.workspace_id).map(|workspace| BrowserPlacement {
+                local_id: panel.local_id.clone(),
+                visible: panel.visible,
+                workspace,
+            })
+        })
+        .collect()
+}
+
+/// Stamp each placement's manifest under `root`. Manifests that are not live
+/// yet, or that another host's driver owns, are not this host's to stamp and
+/// do not make the sync incomplete; every I/O failure does (including a
+/// permission failure on the lock or the write), so the caller retries on
+/// the next frame.
+fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> HostStateSync {
+    let mut sync = HostStateSync {
+        changed: false,
+        complete: true,
+    };
+    for placement in placements {
+        match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
+            Ok(HostStampOutcome::Written) => sync.changed = true,
+            Ok(HostStampOutcome::Unchanged) => {}
+            Ok(HostStampOutcome::NotOwned) => {
+                tracing::debug!(panel_id = %placement.local_id, "browser manifest belongs to another Horizon host");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                sync.complete = false;
+                tracing::warn!(panel_id = %placement.local_id, %error, "could not synchronize browser host state");
+            }
+        }
+    }
+    sync
+}
+
+/// Everything the workspace stamps depend on: the persisted identity of each
+/// browser and agent panel, the persisted identity of the workspace it sits
+/// in, and whether each browser panel is shown. Persisted ids rather than
+/// board ids, because activating another session replaces the board and
+/// restarts its numeric ids. Cheap enough to compute once per frame; it
+/// touches no files.
+fn placement_fingerprint(board: &Board) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for panel in &board.panels {
+        let browser = panel.kind == PanelKind::Browser;
+        if !browser && !panel.kind.is_agent() {
+            continue;
+        }
+        panel.local_id.hash(&mut hasher);
+        board
+            .workspace(panel.workspace_id)
+            .map(|workspace| workspace.local_id.as_str())
+            .hash(&mut hasher);
+        browser.hash(&mut hasher);
+        (browser && panel.visible).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Requests name the host that launched the agent; a second Horizon process
@@ -523,7 +625,13 @@ fn publish_manifest_host_state(
     visible: bool,
     workspace: &ManifestWorkspace,
 ) -> std::io::Result<()> {
-    manifest::sync_host_state(panel_local_id, visible, workspace).map(|_| ())
+    match manifest::sync_host_state(panel_local_id, visible, workspace)? {
+        HostStampOutcome::Written | HostStampOutcome::Unchanged => Ok(()),
+        HostStampOutcome::NotOwned => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panel's driver runs in another Horizon host",
+        )),
+    }
 }
 
 fn complete_visibility_failure(request: &BrowserVisibilityRequest, code: &str, message: &str) {
@@ -542,6 +650,186 @@ fn complete_visibility_result(result: &BrowserVisibilityResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::test_support::test_app;
+
+    fn agent_options() -> PanelOptions {
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
+        } else {
+            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
+        };
+        PanelOptions {
+            command: Some(command.to_string()),
+            args,
+            kind: PanelKind::Codex,
+            ..PanelOptions::default()
+        }
+    }
+
+    #[test]
+    fn placement_fingerprint_follows_membership_not_unrelated_panels() {
+        let mut board = Board::new();
+        let alpha = board.create_workspace("alpha");
+        let beta = board.create_workspace("beta");
+        let empty = placement_fingerprint(&board);
+        let agent_id = board.create_panel(agent_options(), alpha).expect("agent panel");
+        let with_agent = placement_fingerprint(&board);
+        assert_ne!(
+            empty, with_agent,
+            "an agent panel joining a workspace changes the stamp inputs"
+        );
+
+        let shell_id = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Shell,
+                    ..agent_options()
+                },
+                alpha,
+            )
+            .expect("shell panel");
+        assert_eq!(
+            placement_fingerprint(&board),
+            with_agent,
+            "shell panels do not take part in browser authorization"
+        );
+        board.assign_panel_to_workspace(shell_id, beta);
+        assert_eq!(placement_fingerprint(&board), with_agent);
+
+        board.assign_panel_to_workspace(agent_id, beta);
+        let moved = placement_fingerprint(&board);
+        assert_ne!(with_agent, moved, "moving an agent panel changes the stamp inputs");
+        board.assign_panel_to_workspace(agent_id, alpha);
+        assert_eq!(
+            placement_fingerprint(&board),
+            with_agent,
+            "moving back restores the fingerprint"
+        );
+
+        // A replacement board (another session) restarts numeric ids; its
+        // persisted ids differ, so its fingerprint must differ too.
+        let mut replacement = Board::new();
+        let other_alpha = replacement.create_workspace("alpha");
+        let _beta = replacement.create_workspace("beta");
+        replacement
+            .create_panel(agent_options(), other_alpha)
+            .expect("agent panel in the replacement board");
+        assert_ne!(
+            placement_fingerprint(&replacement),
+            with_agent,
+            "identically shaped boards with different persisted ids never share a fingerprint"
+        );
+    }
+
+    #[test]
+    fn restamping_rewrites_a_live_manifest_for_the_new_membership() {
+        let root = tempfile::tempdir().expect("isolated horizon home");
+        let mut board = Board::new();
+        let alpha = board.create_workspace("alpha");
+        let beta = board.create_workspace("beta");
+        let agent_id = board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor = browser_actor(&board.panel(agent_id).expect("agent panel").local_id);
+        let path = manifest::manifest_path_for_root(root.path(), "browser-1");
+        manifest::write_at(
+            &path,
+            &manifest::BrowserManifest {
+                panel_local_id: "browser-1".to_string(),
+                host: Some(manifest::host_instance().to_string()),
+                ..manifest::BrowserManifest::default()
+            },
+        )
+        .expect("write live manifest");
+        let placements = |board: &Board, visible: bool| {
+            vec![BrowserPlacement {
+                local_id: "browser-1".to_string(),
+                visible,
+                workspace: browser_workspace(board, alpha).expect("alpha workspace"),
+            }]
+        };
+
+        let first = sync_manifest_host_state(root.path(), &placements(&board, true));
+        assert!(first.changed && first.complete);
+        let stamped = manifest::read_at(&path).expect("stamped manifest");
+        assert!(stamped.authorizes(AgentIdentity::new(&actor, Some(manifest::host_instance()))));
+        assert!(!stamped.hidden);
+
+        board.assign_panel_to_workspace(agent_id, beta);
+        let moved = sync_manifest_host_state(root.path(), &placements(&board, false));
+        assert!(moved.changed && moved.complete);
+        let restamped = manifest::read_at(&path).expect("re-stamped manifest");
+        assert!(
+            !restamped.authorizes(AgentIdentity::new(&actor, Some(manifest::host_instance()))),
+            "the agent that left the workspace is no longer authorized"
+        );
+        assert!(restamped.hidden, "visibility follows the board");
+
+        let steady = sync_manifest_host_state(root.path(), &placements(&board, false));
+        assert!(
+            !steady.changed && steady.complete,
+            "an unchanged placement writes nothing"
+        );
+
+        let missing = vec![BrowserPlacement {
+            local_id: "not-live-yet".to_string(),
+            visible: true,
+            workspace: browser_workspace(&board, alpha).expect("alpha workspace"),
+        }];
+        let sync = sync_manifest_host_state(root.path(), &missing);
+        assert!(
+            !sync.changed && sync.complete,
+            "a manifest that is not live yet is not this host's to stamp"
+        );
+    }
+
+    #[test]
+    fn a_placement_change_restamps_before_the_next_poll_tick() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let beta = app.board.create_workspace("beta");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+
+        app.poll_browser_create_requests();
+        let first_poll = app.browser_create_host.last_request_poll.expect("first tick polls");
+        assert!(
+            app.browser_create_host.stamped_placement.is_none(),
+            "the tick only requests a stamp; the end-of-frame check performs it"
+        );
+        app.restamp_browser_manifests_for_placement();
+        let stamped = app.browser_create_host.stamped_placement.expect("end of frame stamps");
+
+        app.poll_browser_create_requests();
+        assert_eq!(
+            app.browser_create_host.last_request_poll,
+            Some(first_poll),
+            "an unchanged board waits for the poll interval"
+        );
+        assert_eq!(app.browser_create_host.stamped_placement, Some(stamped));
+
+        app.board.assign_panel_to_workspace(agent_id, beta);
+        app.restamp_browser_manifests_for_placement();
+        assert_eq!(
+            app.browser_create_host.last_request_poll,
+            Some(first_poll),
+            "the end-of-frame re-stamp does not advance the request poll cadence"
+        );
+        let after_move = app.browser_create_host.stamped_placement;
+        assert_ne!(
+            after_move,
+            Some(stamped),
+            "a placement change re-stamps on the same frame"
+        );
+
+        app.poll_browser_create_requests();
+        assert_eq!(
+            app.browser_create_host.stamped_placement, after_move,
+            "the next frame's poll leaves the placement to the end-of-frame check"
+        );
+        assert_eq!(app.browser_create_host.last_request_poll, Some(first_poll));
+        assert!(
+            !app.restamp_browser_manifests_for_placement(),
+            "an unchanged placement is not re-stamped again"
+        );
+    }
 
     #[test]
     fn only_the_exact_horizon_actor_matches_a_panel() {

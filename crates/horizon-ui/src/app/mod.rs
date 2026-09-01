@@ -628,6 +628,8 @@ impl eframe::App for HorizonApp {
         }
         self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
+        // Last, after every phase that can move or hide a panel this frame.
+        self.restamp_browser_manifests_for_placement();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
