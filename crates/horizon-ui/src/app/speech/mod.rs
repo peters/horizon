@@ -16,7 +16,7 @@ use horizon_core::PanelId;
 pub enum SpeechSink {
     /// Typed into this terminal panel's PTY.
     Panel(PanelId),
-    /// Inserted directly into a captured OS accessibility field.
+    /// Pasted into the currently focused OS window.
     Desktop,
 }
 

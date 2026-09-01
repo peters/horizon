@@ -272,10 +272,6 @@ pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
     (viewport_width * 0.3).clamp(340.0, 900.0)
 }
 
-pub(super) fn settings_panel_max_width(viewport_width: f32) -> f32 {
-    viewport_width * 0.65
-}
-
 fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
         SettingsStatus::None => (String::new(), theme::FG_DIM()),
@@ -297,7 +293,7 @@ fn render_settings_panel(
     egui::Panel::right(SETTINGS_PANEL_ID)
         .default_size(default_width)
         .min_size(viewport_width * 0.15)
-        .max_size(settings_panel_max_width(viewport_width))
+        .max_size(viewport_width * 0.5)
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())

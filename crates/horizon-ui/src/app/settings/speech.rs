@@ -11,6 +11,7 @@ use crate::app::speech::built_with_speech;
 
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
+const STACKED_SPEECH_GRID_MAX_WIDTH: f32 = 400.0;
 
 mod model_info;
 pub(in crate::app) use model_info::SpeechModelInfoCache;
@@ -91,6 +92,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     if !config.features.speech.enabled {
         return changed;
     }
+    let grid_columns = speech_grid_columns(ui.available_width());
 
     ui.add_space(6.0);
     changed |= ui
@@ -113,7 +115,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     // them here only for the profiles layout, which returns early.
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_shared_grid")
-        .num_columns(2)
+        .num_columns(grid_columns)
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             changed |= speech_microphone_row(ui, config);
@@ -129,7 +131,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     // and validates on save).
     if !config.features.speech.profiles.is_empty() {
         egui::Grid::new("settings_speech_profiles_grid")
-            .num_columns(2)
+            .num_columns(grid_columns)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
                 for index in 0..config.features.speech.profiles.len() {
@@ -167,7 +169,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
 
     ui.add_space(6.0);
     egui::Grid::new("settings_speech_grid")
-        .num_columns(2)
+        .num_columns(grid_columns)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
             changed |= speech_model_rows(ui, config, &model_info_state);
@@ -183,6 +185,10 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
         });
 
     changed
+}
+
+fn speech_grid_columns(available_width: f32) -> usize {
+    usize::from(available_width >= STACKED_SPEECH_GRID_MAX_WIDTH) + 1
 }
 
 const fn desktop_injection_copy() -> &'static str {
@@ -285,6 +291,7 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Microphone").color(theme::FG_SOFT()).size(12.0));
     ui.horizontal(|ui| {
+        let picker_width = (ui.available_width() - 36.0).clamp(120.0, 240.0);
         let devices = input_device_list(ui);
         let current = config.features.speech.input_device.trim().to_string();
         let selected = if current.is_empty() {
@@ -293,7 +300,7 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
             current.clone()
         };
         egui::ComboBox::from_id_salt("settings_speech_input_device")
-            .width(240.0)
+            .width(picker_width)
             .selected_text(egui::RichText::new(selected).size(12.0))
             .show_ui(ui, |ui| {
                 if ui.selectable_label(current.is_empty(), "System default").clicked() && !current.is_empty() {
@@ -338,7 +345,10 @@ fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: &SpeechModelI
     let mut changed = false;
     ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
     changed |= ui
-        .add(egui::TextEdit::singleline(&mut config.features.speech.model).desired_width(260.0))
+        .add(
+            egui::TextEdit::singleline(&mut config.features.speech.model)
+                .desired_width(ui.available_width().min(260.0)),
+        )
         .changed();
     ui.end_row();
 
@@ -455,6 +465,7 @@ fn speech_output_row(
         SpeechTask::Translate => format!("Translate to {}", config.features.speech.target_language),
     };
     egui::ComboBox::from_id_salt("settings_speech_output")
+        .width(ui.available_width().min(260.0))
         .selected_text(selected)
         .show_ui(ui, |ui| {
             changed |= ui
@@ -829,7 +840,7 @@ mod tests {
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
         desktop_injection_copy, hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder,
-        speech_output_row,
+        speech_grid_columns, speech_output_row,
     };
 
     #[test]
@@ -837,6 +848,12 @@ mod tests {
         let copy = desktop_injection_copy();
         assert!(copy.contains("clipboard"));
         assert!(!copy.contains("paste"));
+    }
+
+    #[test]
+    fn speech_fields_stack_before_their_two_column_layout_would_clip() {
+        assert_eq!(speech_grid_columns(399.0), 1);
+        assert_eq!(speech_grid_columns(400.0), 2);
     }
 
     #[test]

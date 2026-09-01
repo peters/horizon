@@ -369,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_card_requires_an_empty_board_without_fixed_overlays() {
+    fn empty_state_card_only_shows_for_truly_empty_board() {
         assert!(should_show_empty_state_card(0, 0, true));
         assert!(!should_show_empty_state_card(1, 0, true));
         assert!(!should_show_empty_state_card(1, 1, true));
