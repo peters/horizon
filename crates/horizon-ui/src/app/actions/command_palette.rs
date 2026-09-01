@@ -94,7 +94,13 @@ impl HorizonApp {
                 let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
             }
             CommandId::AlignWorkspacesHorizontally => {
-                self.align_attached_workspaces_horizontally(ctx);
+                // The shared action settles the view on the row head; the
+                // interactive shortcut re-frames the workspace that was
+                // active before the alignment instead (falling back to the
+                // row head when no attached workspace is active).
+                if self.align_attached_workspaces_horizontally(ctx).is_some() {
+                    let _ = self.focus_active_workspace(ctx, true);
+                }
             }
             CommandId::NewPanel => {
                 let workspace_id = self.ensure_workspace_visible(ctx);
