@@ -9,7 +9,7 @@ pub enum InjectError {
     Unsupported,
     /// The platform backend failed while sending the chord.
     Failed(&'static str),
-    /// The transcript never reached the clipboard, so there is nothing to paste.
+    /// The clipboard could not be staged or preserved safely.
     Clipboard(&'static str),
 }
 

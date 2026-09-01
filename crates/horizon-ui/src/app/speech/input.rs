@@ -551,20 +551,12 @@ impl HorizonApp {
                         let payload = format!("{text} ");
                         match inject_desktop_transcript(&payload) {
                             Ok(()) => {}
-                            Err(horizon_cursor::InjectError::Unsupported) => {
-                                self.show_speech_notice("Transcript copied — paste with Ctrl+V", false);
-                            }
-                            Err(horizon_cursor::InjectError::Clipboard(message)) => {
-                                tracing::warn!(%message, "desktop speech clipboard failed");
-                                self.show_speech_notice(
-                                    format!("Speech input error: could not copy transcript ({message})"),
-                                    true,
-                                );
-                            }
                             Err(error) => {
                                 tracing::warn!(%error, "desktop speech inject failed");
                                 self.show_speech_notice(
-                                    format!("Transcript copied — paste with Ctrl+V ({error})"),
+                                    format!(
+                                        "Speech input error: could not paste transcript ({error}); clipboard unchanged"
+                                    ),
                                     true,
                                 );
                             }

@@ -4,9 +4,11 @@
 //! special permissions.  On macOS this deliberately avoids the Accessibility
 //! subsystem — only Core Graphics is used.
 
+mod clipboard;
 mod hotkey;
 mod inject;
 
+pub use clipboard::paste_text_preserving_clipboard;
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
 pub use inject::{InjectError, send_paste_chord};
 
