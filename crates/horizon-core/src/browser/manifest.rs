@@ -434,6 +434,75 @@ pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bo
     }
 }
 
+/// Remove a manifest at driver teardown only while this process still runs
+/// the panel's driver; a manifest adopted by another host is left alone.
+#[must_use]
+fn remove_owned_with_timeout(panel_local_id: &str, timeout: Duration) -> bool {
+    let path = default_manifest_path(panel_local_id);
+    match remove_owned_at_with_timeout(&path, host_instance(), timeout) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
+            false
+        }
+    }
+}
+
+fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
+    if read_at(path).is_some_and(|manifest| manifest.host.is_some_and(|owner| owner != host)) {
+        tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest adopted by another host");
+        return Ok(());
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Apply a driver-side change only while this process still runs the
+/// panel's driver, so a superseded driver can never touch state that another
+/// host has adopted for the same persisted panel id.
+///
+/// # Errors
+/// Returns `PermissionDenied` when another host has adopted the manifest.
+fn driver_update(panel_local_id: &str, apply: impl FnOnce(&mut BrowserManifest)) -> std::io::Result<BrowserManifest> {
+    driver_update_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        host_instance(),
+        apply,
+    )
+}
+
+fn driver_update_at(
+    path: &Path,
+    panel_local_id: &str,
+    host: &str,
+    apply: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
+    let mut superseded = false;
+    let manifest = update_at(path, panel_local_id, |manifest| {
+        if manifest.host.as_deref() == Some(host) {
+            apply(manifest);
+        } else {
+            superseded = true;
+        }
+    })?;
+    if superseded {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser manifest was adopted by another Horizon host",
+        ))
+    } else {
+        Ok(manifest)
+    }
+}
+
 /// Owns one driver's manifest from startup through every exit path.
 #[cfg(test)]
 pub(crate) struct DriverManifestLifetime {
@@ -509,7 +578,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn update(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -521,7 +590,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn set_user_active(&self, panel_local_id: &str, active: bool) -> std::io::Result<()> {
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             manifest.user_active = active;
             manifest.user_active_at = now_millis();
             manifest.updated_at = manifest.user_active_at;
@@ -533,6 +602,12 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         let Some(snapshot) = read(panel_local_id) else {
             return Ok(horizon_browser::CoordinationSignals::default());
         };
+        if snapshot.host.as_deref() != Some(host_instance()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "browser manifest was adopted by another Horizon host",
+            ));
+        }
         let now = now_millis();
         let legacy_handoff = snapshot
             .handoff_pending()
@@ -545,7 +620,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         let generated_request_id = new_handoff_request_id();
         let mut actions = Vec::new();
         let mut rejected = Vec::new();
-        let manifest = update(panel_local_id, |current| {
+        let manifest = driver_update(panel_local_id, |current| {
             if let Some(current_handoff) = current.handoff.as_mut()
                 && !current_handoff.done
                 && current_handoff.request_id.is_empty()
@@ -562,7 +637,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
 
     fn acknowledge_handoff(&self, panel_local_id: &str, request_id: &str) -> std::io::Result<bool> {
         let mut acknowledged = false;
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             if let Some(handoff) = manifest
                 .handoff
                 .as_mut()
@@ -597,7 +672,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        let manifest_removed = remove_with_timeout(panel_local_id, timeout);
+        let manifest_removed = remove_owned_with_timeout(panel_local_id, timeout);
         let results_removed = result::remove_stale(panel_local_id).is_ok();
         manifest_removed && results_removed
     }
@@ -930,6 +1005,45 @@ mod tests {
     #[test]
     fn handoff_request_ids_are_unique_for_same_millisecond_requests() {
         assert_ne!(new_handoff_request_id(), new_handoff_request_id());
+    }
+
+    #[test]
+    fn a_superseded_driver_cannot_touch_or_remove_an_adopted_manifest() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "adopted");
+        let mut adopted = sample("adopted");
+        adopted.host = Some("host-b".to_string());
+        write_at(&path, &adopted).unwrap();
+
+        let denied = driver_update_at(&path, "adopted", "host-a", |manifest| {
+            manifest.title = "from the superseded driver".to_string();
+        })
+        .unwrap_err();
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(read_at(&path).unwrap().title, "Example");
+        driver_update_at(&path, "adopted", "host-b", |manifest| {
+            manifest.title = "from the adopting driver".to_string();
+        })
+        .unwrap();
+        assert_eq!(read_at(&path).unwrap().title, "from the adopting driver");
+
+        remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1)).unwrap();
+        assert!(
+            path.exists(),
+            "a superseded driver's teardown leaves the adopted manifest"
+        );
+        remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap();
+        assert!(!path.exists());
+        remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap();
+
+        let legacy = manifest_path_for_root(&root, "legacy");
+        write_at(&legacy, &sample("legacy")).unwrap();
+        remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1)).unwrap();
+        assert!(
+            !legacy.exists(),
+            "a manifest without a recorded host is removable at teardown"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

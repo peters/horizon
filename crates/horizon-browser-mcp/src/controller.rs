@@ -327,9 +327,10 @@ impl BrowserController {
             if let Some(result) = manifest::take_visibility_result(&action_id, &self.actor)
                 .map_err(|source| ControlError::internal_io("could not read browser visibility result", source))?
             {
+                // Gate both outcomes: a failure is panel-specific data too.
+                self.refresh_claim(panel_id)?;
                 return match result.outcome {
                     BrowserVisibilityOutcome::Ready { visible: actual } => {
-                        self.refresh_claim(panel_id)?;
                         let manifest = manifest::read(panel_id).ok_or_else(|| {
                             ControlError::internal_io(
                                 "could not read updated browser panel",
