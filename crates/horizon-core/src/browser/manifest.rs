@@ -435,33 +435,61 @@ pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bo
 }
 
 /// Remove a manifest at driver teardown only while this process still runs
-/// the panel's driver; a manifest adopted by another host is left alone.
+/// the panel's driver. `Some(true)` means this host owned the panel (the
+/// manifest is gone), `Some(false)` that another host adopted it and it was
+/// left alone, `None` that removal failed.
 #[must_use]
-fn remove_owned_with_timeout(panel_local_id: &str, timeout: Duration) -> bool {
+fn remove_owned_with_timeout(panel_local_id: &str, timeout: Duration) -> Option<bool> {
     let path = default_manifest_path(panel_local_id);
     match remove_owned_at_with_timeout(&path, host_instance(), timeout) {
-        Ok(()) => true,
+        Ok(owned) => Some(owned),
         Err(error) => {
             tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
-            false
+            None
         }
     }
 }
 
-fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> std::io::Result<()> {
+fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> std::io::Result<bool> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
     if read_at(path).is_some_and(|manifest| manifest.host.is_some_and(|owner| owner != host)) {
         tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest adopted by another host");
-        return Ok(());
+        return Ok(false);
     }
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(error) => Err(error),
     }
+}
+
+/// Run a driver-owned side effect (audit, result, capture storage) while
+/// holding the manifest lock and only if this process still runs the
+/// panel's driver. A missing manifest cannot have been adopted, so the effect
+/// proceeds; a manifest recorded under another host refuses it.
+fn with_owned_manifest<T>(panel_local_id: &str, effect: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+    with_owned_manifest_at(&default_manifest_path(panel_local_id), host_instance(), effect)
+}
+
+fn with_owned_manifest_at<T>(
+    path: &Path,
+    host: &str,
+    effect: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = ManifestLock::acquire(path)?;
+    if read_at(path).is_some_and(|manifest| manifest.host.as_deref() != Some(host)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser manifest was adopted by another Horizon host",
+        ));
+    }
+    effect()
 }
 
 /// Apply a driver-side change only while this process still runs the
@@ -651,7 +679,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn record_action(&self, panel_local_id: &str, entry: &horizon_browser::BrowserAuditEntry) -> std::io::Result<()> {
-        self.audit.append(entry, panel_local_id)
+        with_owned_manifest(panel_local_id, || self.audit.append(entry, panel_local_id))
     }
 
     fn complete_action(
@@ -659,7 +687,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         panel_local_id: &str,
         result: &horizon_browser::AgentActionResult,
     ) -> std::io::Result<()> {
-        result::write(panel_local_id, result)
+        with_owned_manifest(panel_local_id, || result::write(panel_local_id, result))
     }
 
     fn prepare_network_capture(
@@ -668,13 +696,18 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         directory: &Path,
         requested_max_file_bytes: u64,
     ) -> std::io::Result<()> {
-        capture::prepare(panel_local_id, directory, requested_max_file_bytes)
+        with_owned_manifest(panel_local_id, || {
+            capture::prepare(panel_local_id, directory, requested_max_file_bytes)
+        })
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        let manifest_removed = remove_owned_with_timeout(panel_local_id, timeout);
-        let results_removed = result::remove_stale(panel_local_id).is_ok();
-        manifest_removed && results_removed
+        match remove_owned_with_timeout(panel_local_id, timeout) {
+            Some(true) => result::remove_stale(panel_local_id).is_ok(),
+            // Another host adopted the panel: its results are not ours to prune.
+            Some(false) => true,
+            None => false,
+        }
     }
 }
 
@@ -1027,18 +1060,38 @@ mod tests {
         .unwrap();
         assert_eq!(read_at(&path).unwrap().title, "from the adopting driver");
 
-        remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1)).unwrap();
+        let mut effect_ran = false;
+        let denied = with_owned_manifest_at(&path, "host-a", || {
+            effect_ran = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!effect_ran, "a superseded driver's side effect must not run");
+        with_owned_manifest_at(&path, "host-b", || {
+            effect_ran = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(effect_ran);
+
+        assert!(
+            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1)).unwrap(),
+            "a superseded driver's teardown reports the manifest as not its own"
+        );
         assert!(
             path.exists(),
             "a superseded driver's teardown leaves the adopted manifest"
         );
-        remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap();
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
         assert!(!path.exists());
-        remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap();
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
+        with_owned_manifest_at(&path, "host-a", || Ok(()))
+            .expect("a missing manifest cannot have been adopted, so side effects proceed");
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
-        remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1)).unwrap();
+        assert!(remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1)).unwrap());
         assert!(
             !legacy.exists(),
             "a manifest without a recorded host is removable at teardown"
