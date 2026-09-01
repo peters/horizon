@@ -35,7 +35,6 @@ impl StagedText {
 #[derive(Default)]
 pub(super) struct ClipboardSnapshot {
     pub(super) targets: Vec<StoredTarget>,
-    pub(super) total_bytes: usize,
 }
 
 pub(super) struct StoredTarget {

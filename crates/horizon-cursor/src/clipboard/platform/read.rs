@@ -12,13 +12,15 @@ use x11rb::{
 use super::{ClipboardSession, ClipboardSnapshot, MAX_SNAPSHOT_BYTES, MAX_TARGETS, StoredTarget, StoredValue};
 use crate::InjectError;
 
+const TARGETS_BUDGET: usize = MAX_TARGETS * size_of::<Atom>();
+
 impl ClipboardSession {
     pub(super) fn read_snapshot(&self, owner: Window, timestamp: u32) -> Result<ClipboardSnapshot, InjectError> {
         if owner == NONE {
             return Ok(ClipboardSnapshot::default());
         }
         let deadline = Instant::now() + super::SNAPSHOT_TIMEOUT;
-        let targets_reply = self.request_selection_target(self.atoms.TARGETS, timestamp, deadline)?;
+        let targets_reply = self.request_selection_target(self.atoms.TARGETS, timestamp, deadline, TARGETS_BUDGET)?;
         if targets_reply.property_type != AtomEnum::ATOM.into() {
             return Err(InjectError::Clipboard("unsupported clipboard target list"));
         }
@@ -36,21 +38,14 @@ impl ClipboardSession {
 
         let mut seen = HashSet::with_capacity(targets.len());
         let mut snapshot = ClipboardSnapshot::default();
+        let mut remaining_bytes = MAX_SNAPSHOT_BYTES.saturating_sub(targets_reply.value.byte_len());
         for &target in targets {
             if self.is_protocol_target(target) || !seen.insert(target) {
                 continue;
             }
-            let stored = self.request_selection_target(target, timestamp, deadline)?;
-            if stored.value.byte_len() > self.max_property_bytes {
-                return Err(InjectError::Clipboard("clipboard item is too large to preserve safely"));
-            }
-            snapshot.total_bytes = snapshot
-                .total_bytes
-                .checked_add(stored.value.byte_len())
-                .ok_or(InjectError::Clipboard("clipboard is too large to preserve safely"))?;
-            if snapshot.total_bytes > MAX_SNAPSHOT_BYTES {
-                return Err(InjectError::Clipboard("clipboard is too large to preserve safely"));
-            }
+            let budget = remaining_bytes.min(self.max_property_bytes);
+            let stored = self.request_selection_target(target, timestamp, deadline, budget)?;
+            remaining_bytes = remaining_bytes.saturating_sub(stored.value.byte_len());
             snapshot.targets.push(stored);
         }
 
@@ -65,6 +60,7 @@ impl ClipboardSession {
         target: Atom,
         timestamp: u32,
         deadline: Instant,
+        max_bytes: usize,
     ) -> Result<StoredTarget, InjectError> {
         self.conn
             .delete_property(self.window, self.atoms.HORIZON_CLIPBOARD_DATA)
@@ -97,15 +93,20 @@ impl ClipboardSession {
                     "existing clipboard format could not be preserved",
                 ));
             }
-            let reply = self.read_property(true)?;
+            let reply = self.read_property(true, max_bytes)?;
             if reply.type_ == self.atoms.INCR {
-                return self.read_incremental_target(target, deadline);
+                return self.read_incremental_target(target, deadline, max_bytes);
             }
             return StoredTarget::from_reply(target, &reply);
         }
     }
 
-    fn read_incremental_target(&self, target: Atom, deadline: Instant) -> Result<StoredTarget, InjectError> {
+    fn read_incremental_target(
+        &self,
+        target: Atom,
+        deadline: Instant,
+        max_bytes: usize,
+    ) -> Result<StoredTarget, InjectError> {
         let mut property_type = None;
         let mut format = None;
         let mut value = StoredValue::Bytes8(Vec::new());
@@ -120,7 +121,8 @@ impl ClipboardSession {
             {
                 continue;
             }
-            let reply = self.read_property(true)?;
+            let remaining = max_bytes.saturating_sub(value.byte_len());
+            let reply = self.read_property(true, remaining)?;
             if reply.value_len == 0 {
                 return Ok(StoredTarget {
                     target,
@@ -140,13 +142,10 @@ impl ClipboardSession {
             property_type = Some(reply.type_);
             format = Some(reply.format);
             value.extend_reply(&reply)?;
-            if value.byte_len() > MAX_SNAPSHOT_BYTES {
-                return Err(InjectError::Clipboard("clipboard is too large to preserve safely"));
-            }
         }
     }
 
-    fn read_property(&self, delete: bool) -> Result<GetPropertyReply, InjectError> {
+    fn read_property(&self, delete: bool, max_bytes: usize) -> Result<GetPropertyReply, InjectError> {
         let reply = self
             .conn
             .get_property(
@@ -155,7 +154,7 @@ impl ClipboardSession {
                 self.atoms.HORIZON_CLIPBOARD_DATA,
                 AtomEnum::ANY,
                 0,
-                u32::try_from(MAX_SNAPSHOT_BYTES / 4).unwrap_or(u32::MAX),
+                u32::try_from(max_bytes / 4).unwrap_or(u32::MAX),
             )
             .map_err(|_| InjectError::Clipboard("failed to read existing clipboard data"))?
             .reply()
