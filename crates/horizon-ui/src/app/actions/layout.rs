@@ -7,7 +7,9 @@ use horizon_core::{PanelId, WorkspaceId};
 
 use crate::app::attention_feed::estimated_outer_rect;
 use crate::app::root_chrome::effective_sidebar_width;
-use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
+use crate::app::settings::{
+    SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width, settings_panel_max_width,
+};
 use crate::app::util::{OverlayExclusion, viewport_local_rect};
 use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, TOOLBAR_HEIGHT};
 
@@ -191,7 +193,7 @@ pub(super) fn estimated_settings_panel_rect(
     }
 
     remembered_rect.or_else(|| {
-        let width = settings_panel_default_width(viewport.width());
+        let width = settings_panel_default_width(viewport.width()).min(settings_panel_max_width(viewport.width()));
         Some(Rect::from_min_max(
             Pos2::new(viewport.max.x - width, viewport.min.y + TOOLBAR_HEIGHT),
             Pos2::new(viewport.max.x, viewport.max.y - SETTINGS_BAR_HEIGHT),
