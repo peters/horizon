@@ -102,14 +102,19 @@ impl ChromeProcess {
         let command = resolve_binary(&launch.command)?;
         prepare_profile_dir(&launch.profile_dir)?;
         // Chromium treats `--remote-debugging-port=0` as an automation signal.
-        // Reserve a concrete loopback port so visible panels avoid that
-        // additional port-zero marker.
-        let devtools_listener =
-            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| devtools_port_error(&error))?;
+        // Reserve a concrete loopback port only for the policy that minimizes
+        // common signals; browser-default mode must preserve Chromium's native
+        // port-zero behavior.
+        let devtools_listener = (launch.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals)
+            .then(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+            .transpose()
+            .map_err(|error| devtools_port_error(&error))?;
         let devtools_port = devtools_listener
-            .local_addr()
+            .as_ref()
+            .map(TcpListener::local_addr)
+            .transpose()
             .map_err(|error| devtools_port_error(&error))?
-            .port();
+            .map_or(0, |address| address.port());
         let args = launch_args(launch, devtools_port)?;
 
         let mut command = Command::new(command);
@@ -898,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_launch_omits_headless_and_uses_an_explicit_devtools_port() {
+    fn browser_default_launch_preserves_the_port_zero_signal() {
         let launch = ChromeLaunch {
             command: "chrome".to_string(),
             profile_dir: PathBuf::from("profile"),
@@ -908,11 +913,10 @@ mod tests {
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
         };
-        let args = launch_args(&launch, 49_152).unwrap_or_default();
+        let args = launch_args(&launch, 0).unwrap_or_default();
 
         assert!(!args.iter().any(|argument| argument == "--headless=new"));
-        assert!(args.iter().any(|argument| argument == "--remote-debugging-port=49152"));
-        assert!(!args.iter().any(|argument| argument == "--remote-debugging-port=0"));
+        assert!(args.iter().any(|argument| argument == "--remote-debugging-port=0"));
     }
 
     #[test]

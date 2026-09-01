@@ -42,11 +42,12 @@ before attaching the caller's `about:blank` page, so it cannot enter caller
 history or frames. Firefox installs the same narrow value shim with WebDriver BiDi
 `script.addPreloadScript` before the initial navigation; startup fails instead
 of silently downgrading when that required BiDi command is rejected.
-Chromium panels also use a reserved nonzero loopback DevTools port so Chromium
-does not enable its port-zero `AutomationControlled` behavior. Startup retries
-with a fresh reservation when another local process wins the required socket
-handoff. Callers that need the browser's unmodified behavior can select
-`AutomationDisclosurePolicy::BrowserDefault` on any backend.
+Chromium panels minimizing common signals also use a reserved nonzero loopback
+DevTools port so Chromium does not enable its port-zero `AutomationControlled`
+behavior. Startup retries with a fresh reservation when another local process
+wins the required socket handoff. Callers that need the browser's unmodified
+behavior can select `AutomationDisclosurePolicy::BrowserDefault` on any
+backend; Chromium then retains its native port-zero automation signal.
 
 Safari's public automation surface cannot currently establish the same
 pre-document contract, so an active Safari session reports
