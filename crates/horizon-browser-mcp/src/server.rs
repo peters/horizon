@@ -58,7 +58,7 @@ impl HorizonBrowserMcp {
 impl HorizonBrowserMcp {
     #[tool(
         name = "browser_list",
-        description = "List the live Horizon browser panels in the calling agent's workspace with their safe capabilities. Panels in other workspaces are never listed, and a panel's visible field is host presentation state, not workspace membership. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
+        description = "List live Horizon browser panels with their safe capabilities. For an agent identity injected by Horizon, only panels in that agent's current workspace are listed; identities from outside Horizon keep unscoped discovery. A panel's visible field is host presentation state, not workspace membership. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
     )]
     fn browser_list(&self) -> Json<BrowserListOutput> {
         Json(BrowserListOutput {
@@ -90,7 +90,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_visibility",
-        description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable. The panel must already be in the calling agent's workspace; visible=true never moves a panel there."
+        description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable. For a Horizon-injected agent identity the panel must already be in the calling agent's workspace; visible=true never moves a panel there."
     )]
     async fn browser_visibility(
         &self,
@@ -323,7 +323,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_panel",
-        description = "Read one live Horizon browser panel's safe state. Panel ids outside the calling agent's workspace are rejected; use browser_list when the panel id is unknown."
+        description = "Read one live Horizon browser panel's safe state. For a Horizon-injected agent identity, panel ids outside the calling agent's workspace are rejected. Use browser_list when the panel id is unknown."
     )]
     fn browser_panel(
         &self,
@@ -341,7 +341,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 

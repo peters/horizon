@@ -80,6 +80,8 @@ and audit read, so a move cannot race past the boundary. Identities are per-pane
 Horizon processes sharing one home never authorize each other's panels even
 when their workspace ids collide, and manifests without a stamp (older hosts,
 or a panel whose host has not stamped it yet) fail closed for Horizon agents.
+Identities from outside Horizon (a standalone host or the process-local
+fallback) are not placed in any workspace and keep unscoped discovery.
 When no valid actor is injected, the server uses a process-local identity and
 releases only that identity's claims on clean shutdown. A crash retains the
 heartbeat TTL fallback, while a normal reconnect can claim the panel
