@@ -64,6 +64,10 @@ impl DriverState {
             }
         };
         publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
+        self.challenge_loop.observe_handoff_change(
+            self.handoff_seen.as_deref(),
+            signals.handoff.as_ref().map(|handoff| handoff.request_id.as_str()),
+        );
         publish_handoff_change(&mut self.handoff_seen, signals.handoff, event_tx);
         signals.actions
     }

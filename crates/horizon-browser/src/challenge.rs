@@ -23,6 +23,7 @@ pub(crate) struct ChallengeLoopDetector {
     armed: Option<Observation>,
     rejection_due: Option<Instant>,
     reported_url: Option<String>,
+    handoff_active: bool,
 }
 
 impl ChallengeLoopDetector {
@@ -32,6 +33,14 @@ impl ChallengeLoopDetector {
 
     pub(crate) fn handoff_completed(&mut self) {
         self.handoff_completed_at(Instant::now());
+    }
+
+    pub(crate) fn observe_handoff_change(&mut self, previous: Option<&str>, current: Option<&str>) {
+        match (previous, current) {
+            (previous, Some(current)) if previous != Some(current) => self.handoff_started_at(Instant::now()),
+            (Some(_), None) => self.handoff_cancelled_at(),
+            _ => {}
+        }
     }
 
     pub(crate) fn take_rejection(&mut self) -> Option<&'static str> {
@@ -65,7 +74,27 @@ impl ChallengeLoopDetector {
         }
     }
 
+    fn handoff_started_at(&mut self, now: Instant) {
+        self.handoff_active = true;
+        self.arm_latest_challenge(now);
+    }
+
     fn handoff_completed_at(&mut self, now: Instant) {
+        self.handoff_active = false;
+        if self.armed.is_none() {
+            self.arm_latest_challenge(now);
+        }
+    }
+
+    fn handoff_cancelled_at(&mut self) {
+        self.handoff_active = false;
+        self.armed = None;
+        if self.rejection_due.take().is_some() {
+            self.reported_url = None;
+        }
+    }
+
+    fn arm_latest_challenge(&mut self, now: Instant) {
         self.armed = self.last_challenge.as_ref().and_then(|challenge| {
             (now.saturating_duration_since(challenge.observed_at) <= HANDOFF_WINDOW).then(|| Observation {
                 url: challenge.url.clone(),
@@ -75,6 +104,9 @@ impl ChallengeLoopDetector {
     }
 
     fn take_rejection_at(&mut self, now: Instant) -> Option<&'static str> {
+        if self.handoff_active {
+            return None;
+        }
         let due = self.rejection_due.filter(|due| now >= *due)?;
         debug_assert!(now >= due);
         self.rejection_due = None;
@@ -129,6 +161,45 @@ mod tests {
             detector.take_rejection_at(started + Duration::from_secs(3)),
             Some(REJECTION_MESSAGE)
         );
+        assert_eq!(detector.take_rejection_at(started + Duration::from_secs(4)), None);
+    }
+
+    #[test]
+    fn repeated_challenge_during_handoff_reports_after_hand_back() {
+        let started = Instant::now();
+        let mut detector = ChallengeLoopDetector::default();
+        detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true);
+        detector.handoff_started_at(started + Duration::from_secs(1));
+        detector.observe_document_response_at(
+            started + Duration::from_secs(2),
+            "https://example.test/protected",
+            Some(403),
+            true,
+        );
+
+        assert_eq!(detector.take_rejection_at(started + Duration::from_secs(4)), None);
+        detector.handoff_completed_at(started + Duration::from_secs(5));
+        assert_eq!(
+            detector.take_rejection_at(started + Duration::from_secs(5)),
+            Some(REJECTION_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn cancelled_handoff_discards_an_unreported_rejection() {
+        let started = Instant::now();
+        let mut detector = ChallengeLoopDetector::default();
+        detector.observe_document_response_at(started, "https://example.test/protected", Some(403), true);
+        detector.handoff_started_at(started + Duration::from_secs(1));
+        detector.observe_document_response_at(
+            started + Duration::from_secs(2),
+            "https://example.test/protected",
+            Some(403),
+            true,
+        );
+
+        detector.handoff_cancelled_at();
+
         assert_eq!(detector.take_rejection_at(started + Duration::from_secs(4)), None);
     }
 
