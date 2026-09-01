@@ -26,7 +26,14 @@ pub fn release_focused_accessible_target() {
 /// `None` means this platform does not use macOS Accessibility permission.
 #[must_use]
 pub fn accessibility_permission_granted() -> Option<bool> {
-    platform::permission_granted()
+    #[cfg(target_os = "macos")]
+    {
+        Some(platform::permission_granted())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 /// Ask macOS to show its standard Accessibility permission prompt.
@@ -35,7 +42,14 @@ pub fn accessibility_permission_granted() -> Option<bool> {
 /// platforms return `None` and never prompt.
 #[must_use]
 pub fn request_accessibility_permission() -> Option<bool> {
-    platform::request_permission()
+    #[cfg(target_os = "macos")]
+    {
+        Some(platform::request_permission())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 /// Insert text at the caret of the focused editable accessibility object.
@@ -90,14 +104,6 @@ mod platform {
     }
 
     pub(super) const fn release_target() {}
-
-    pub(super) const fn permission_granted() -> Option<bool> {
-        None
-    }
-
-    pub(super) const fn request_permission() -> Option<bool> {
-        None
-    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TargetFacts {
@@ -592,14 +598,6 @@ mod platform {
     }
 
     pub(super) const fn release_target() {}
-
-    pub(super) const fn permission_granted() -> Option<bool> {
-        None
-    }
-
-    pub(super) const fn request_permission() -> Option<bool> {
-        None
-    }
 
     pub(super) fn insert_text(_text: &str) -> Result<(), InjectError> {
         Err(InjectError::Unsupported)

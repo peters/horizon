@@ -87,12 +87,12 @@ pub(super) fn release_target() {
     PREPARED_TARGET.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
-pub(super) fn permission_granted() -> Option<bool> {
-    Some(is_process_trusted())
+pub(super) fn permission_granted() -> bool {
+    is_process_trusted()
 }
 
-pub(super) fn request_permission() -> Option<bool> {
-    Some(is_process_trusted_with_prompt())
+pub(super) fn request_permission() -> bool {
+    is_process_trusted_with_prompt()
 }
 
 pub(super) fn insert_text(text: &str) -> Result<(), InjectError> {
