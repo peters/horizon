@@ -1,14 +1,12 @@
-//! Desktop-window dictation: sink selection, clipboard paste, global PTT.
-
-use std::sync::{Mutex, OnceLock, PoisonError};
+//! Desktop-window dictation: sink selection, accessibility insertion, global PTT.
 
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
-use horizon_cursor::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, send_paste_chord};
+use horizon_cursor::{
+    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, insert_text_into_focused_accessible,
+};
 
 use super::super::HorizonApp;
 use super::SpeechSink;
-
-static CLIPBOARD_OWNER: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
 
 /// Choose the insert sink for a push-to-talk press.
 ///
@@ -33,20 +31,7 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    let mut clipboard = arboard::Clipboard::new().map_err(|_| InjectError::Clipboard("clipboard unavailable"))?;
-    clipboard
-        .set_text(text)
-        .map_err(|_| InjectError::Clipboard("failed to copy transcript"))?;
-    let result = send_paste_chord();
-    retain_clipboard_owner(clipboard);
-    result
-}
-
-fn retain_clipboard_owner(clipboard: arboard::Clipboard) {
-    *CLIPBOARD_OWNER
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(clipboard);
+    insert_text_into_focused_accessible(text)
 }
 
 /// Keep the X11 grab while a hold is in flight so a surface opening cannot

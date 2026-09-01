@@ -70,8 +70,9 @@ uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
-tokio = { version = "1.53.1", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.54", package = "surge-core" }
+atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.55", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
