@@ -10,6 +10,8 @@ use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
 
+use crate::navigation::AgentActionExecution;
+
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
     VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY, VerticalScrollbarLayout,
@@ -50,12 +52,25 @@ impl DriverState {
         actions: Vec<AgentAction>,
     ) -> bool {
         for request in actions {
+            // A blocking action later in the batch must not delay the typed
+            // timeout of a navigation dispatched earlier in it.
+            self.tick_pending_navigation();
             if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
                 self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
+            if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
+                // Navigation settles from page events; a dispatch-only wait
+                // completes here, everything else stays pending.
+                if let AgentActionExecution::Done(result) =
+                    self.begin_agent_navigation(link, event_tx, frame_slot, &request)
+                {
+                    self.complete_agent_action(&request, result);
+                }
+                continue;
+            }
             let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
             self.complete_agent_action(&request, result);
             if stop {
@@ -94,11 +109,15 @@ impl DriverState {
             BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
                 self.invalidate_scrollbar_layout();
+                // The user (or a non-agent caller) took over the page: a
+                // pending agent navigation can no longer claim the outcome.
+                self.supersede_pending_navigation(Instant::now());
                 self.navigate_to(link, event_tx, frame_slot, &url)?;
                 Ok(false)
             }
             BrowserCommand::Reload => {
                 self.invalidate_scrollbar_layout();
+                self.supersede_pending_navigation(Instant::now());
                 match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
                     Ok(_) => {
                         self.pending_restart_at = Some(Instant::now());
@@ -462,6 +481,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         delta: i64,
     ) -> Result<(), BrowserControlFailure> {
+        self.supersede_pending_navigation(Instant::now());
         let Some(session) = self.session_id.clone() else {
             return Err(self.page_command_failure(
                 event_tx,

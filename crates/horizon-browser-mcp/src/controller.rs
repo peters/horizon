@@ -18,6 +18,14 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) const DEFAULT_ACTION_TIMEOUT_MILLIS: u64 = 15_000;
 pub(crate) const MAX_ACTION_TIMEOUT_MILLIS: u64 = 60_000;
+/// Extra time this server waits beyond an engine-enforced bound: one
+/// coordination tick (250 ms) for the engine to notice the bound, plus result
+/// delivery through the manifest's locked, durably written files, which on a
+/// host under heavy load with a nearly full disk has been measured at up to
+/// about 2.5 s after the engine completed the action. The caller only waits
+/// this long when the engine's typed outcome is late; a normal outcome
+/// returns as soon as it is written.
+pub(crate) const RESULT_DELIVERY_HEADROOM_MILLIS: u64 = 5_000;
 const DEFAULT_CREATE_TIMEOUT_MILLIS: u64 = 60_000;
 const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 
@@ -382,6 +390,68 @@ impl BrowserController {
         self.wait_for_result(panel_id, action_id, timeout_millis).await
     }
 
+    /// Execute an action whose bound the engine enforces itself (navigation
+    /// and selector waits): the engine gets the full documented bound and
+    /// this server waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer, so the
+    /// engine's typed timeout outcome always arrives before the server's own
+    /// generic timeout.
+    pub(crate) async fn execute_engine_bounded(
+        &self,
+        panel_id: &str,
+        action: BrowserControlAction,
+        engine_bound_millis: u64,
+    ) -> Result<ActionReceipt, ControlError> {
+        let engine_bound_millis = engine_bound_millis.clamp(1, MAX_ACTION_TIMEOUT_MILLIS);
+        self.ensure_claim(panel_id)?;
+        let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
+            .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
+        self.wait_for_engine_result(panel_id, action_id, engine_bound_millis)
+            .await
+    }
+
+    /// Like `wait_for_result`, but for an action whose bound the engine
+    /// enforces itself (navigations and selector waits). The engine always
+    /// produces a typed result for such an action: at its bound when it is
+    /// being observed, and at once when it is dispatched late because the
+    /// bound is anchored at the request time. Only the driver being blocked
+    /// (a synchronous backend call, a classic navigation, a claimed batch
+    /// serviced in order) can delay that result, so this keeps waiting for
+    /// it past the bound plus delivery headroom, up to a hard cap, instead of
+    /// returning a generic timeout that hides the typed outcome.
+    async fn wait_for_engine_result(
+        &self,
+        panel_id: &str,
+        action_id: String,
+        engine_bound_millis: u64,
+    ) -> Result<ActionReceipt, ControlError> {
+        let started = Instant::now();
+        // What the controller actually waits: the engine bound, the delivery
+        // headroom, and the allowance for a blocked driver; the error reports
+        // this whole duration.
+        let timeout_millis = engine_bound_millis + RESULT_DELIVERY_HEADROOM_MILLIS + MAX_ACTION_TIMEOUT_MILLIS;
+        let hard_cap = Duration::from_millis(timeout_millis);
+        let mut last_heartbeat = started;
+        loop {
+            if let Some(result) = manifest::take_action_result(panel_id, &action_id)
+                .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
+            {
+                self.refresh_claim(panel_id)?;
+                return outcome(result);
+            }
+            if started.elapsed() >= hard_cap {
+                return Err(ControlError::Timeout {
+                    action_id,
+                    timeout_millis,
+                });
+            }
+            if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                self.refresh_claim(panel_id)?;
+                last_heartbeat = Instant::now();
+            }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
+    }
+
     pub(crate) fn request_handoff(&self, panel_id: &str, reason: &str) -> Result<String, ControlError> {
         self.ensure_claim(panel_id)?;
         manifest::request_handoff(panel_id, self.identity(), reason)
@@ -474,6 +544,11 @@ fn bounded_timeout(timeout_millis: Option<u64>) -> u64 {
     timeout_millis
         .unwrap_or(DEFAULT_ACTION_TIMEOUT_MILLIS)
         .clamp(1, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
+/// The per-action timeout this server enforces for `timeout_millis`.
+pub(crate) fn bounded_action_timeout(timeout_millis: Option<u64>) -> u64 {
+    bounded_timeout(timeout_millis)
 }
 
 fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {

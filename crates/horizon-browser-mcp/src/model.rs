@@ -184,14 +184,139 @@ pub(crate) struct PanelInput {
     pub(crate) panel_id: String,
 }
 
+/// Readiness `browser_navigate` waits for before it returns.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavigateWait {
+    /// Return as soon as the engine handed the command to the backend. The
+    /// browser's acceptance is not awaited (a later rejection is a failed
+    /// page state, not an action error) and nothing about the destination is
+    /// known yet; use `commit` for confirmation.
+    Dispatched,
+    /// Return once the top-level document committed, so `committed_url` is
+    /// authoritative (default).
+    #[default]
+    Commit,
+    /// Return once the committed document fired `DOMContentLoaded`.
+    #[serde(alias = "domcontentloaded")]
+    DomContentLoaded,
+}
+
+impl From<NavigateWait> for horizon_browser::NavigationWait {
+    fn from(wait: NavigateWait) -> Self {
+        match wait {
+            NavigateWait::Dispatched => Self::Dispatched,
+            NavigateWait::Commit => Self::Commit,
+            NavigateWait::DomContentLoaded => Self::DomContentLoaded,
+        }
+    }
+}
+
+impl From<horizon_browser::NavigationWait> for NavigateWait {
+    fn from(wait: horizon_browser::NavigationWait) -> Self {
+        match wait {
+            horizon_browser::NavigationWait::Dispatched => Self::Dispatched,
+            horizon_browser::NavigationWait::Commit => Self::Commit,
+            horizon_browser::NavigationWait::DomContentLoaded => Self::DomContentLoaded,
+        }
+    }
+}
+
+/// Where the navigation stood when `browser_navigate` returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavigateState {
+    /// Handed to the backend; acceptance was not awaited.
+    Dispatched,
+    /// The top-level document committed; `committed_url` is authoritative.
+    Committed,
+    /// The committed document fired `DOMContentLoaded`.
+    DomContentLoaded,
+    /// The requested readiness did not arrive within `timeout_millis`; the
+    /// other fields carry the latest page state. Inspect or retry.
+    TimedOut,
+    /// A later navigation on the same panel replaced this one.
+    Superseded,
+}
+
+impl From<horizon_browser::NavigationState> for NavigateState {
+    fn from(state: horizon_browser::NavigationState) -> Self {
+        match state {
+            horizon_browser::NavigationState::Dispatched => Self::Dispatched,
+            horizon_browser::NavigationState::Committed => Self::Committed,
+            horizon_browser::NavigationState::DomContentLoaded => Self::DomContentLoaded,
+            horizon_browser::NavigationState::TimedOut => Self::TimedOut,
+            horizon_browser::NavigationState::Superseded => Self::Superseded,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct NavigateInput {
     /// Stable panel id returned by `browser_list`.
     pub(crate) panel_id: String,
     /// Destination URL.
     pub(crate) url: String,
-    /// Per-action timeout in milliseconds (1-60000).
+    /// Readiness to wait for before returning (default `commit`). The wait
+    /// is bounded by `timeout_millis`; on expiry the result reports
+    /// `state: "timed_out"` with the latest page state instead of failing.
+    pub(crate) wait: Option<NavigateWait>,
+    /// Navigation bound in milliseconds (1000-60000, default 15000); values
+    /// below 1000 are raised so the typed `timed_out` outcome can be reported.
     pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NavigateOutput {
+    pub(crate) panel_id: String,
+    pub(crate) action_id: String,
+    /// Whether the requested readiness was reached. `false` for
+    /// `timed_out` and `superseded`; unreachable destinations and rejected
+    /// commands are reported as errors instead.
+    pub(crate) completed: bool,
+    pub(crate) state: NavigateState,
+    /// Readiness that was requested.
+    pub(crate) wait: NavigateWait,
+    /// Destination after omnibox normalization.
+    pub(crate) requested_url: String,
+    /// Committed top-level document URL, once a document committed during
+    /// this navigation.
+    pub(crate) committed_url: Option<String>,
+    /// Title of the committed document, when already known.
+    pub(crate) title: Option<String>,
+    /// Whether the committed document was still loading when reported.
+    pub(crate) loading: bool,
+    /// The committed URL differs from the requested destination.
+    pub(crate) redirected: bool,
+    /// Time from the caller queuing the action until this report; it
+    /// includes queue latency, so it measures the caller's wall-clock wait.
+    pub(crate) elapsed_millis: u64,
+}
+
+impl NavigateOutput {
+    pub(crate) fn from_outcome(
+        panel_id: String,
+        action_id: String,
+        navigation: horizon_browser::NavigationOutcome,
+    ) -> Self {
+        let state = NavigateState::from(navigation.state);
+        Self {
+            panel_id,
+            action_id,
+            completed: matches!(
+                state,
+                NavigateState::Dispatched | NavigateState::Committed | NavigateState::DomContentLoaded
+            ),
+            state,
+            wait: navigation.wait.into(),
+            requested_url: navigation.requested_url,
+            committed_url: navigation.committed_url,
+            title: navigation.title,
+            loading: navigation.loading,
+            redirected: navigation.redirected,
+            elapsed_millis: navigation.elapsed_millis,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

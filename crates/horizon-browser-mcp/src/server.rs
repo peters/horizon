@@ -19,9 +19,9 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
-    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput,
-    NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput, SnapshotInput,
-    SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
+    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput, NetworkInput,
+    NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput,
+    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -108,27 +108,34 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_navigate",
-        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path."
+        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path and report a typed outcome. By default it returns once the top-level document committed (wait=commit); wait=dispatched returns as soon as the engine handed the command to the backend, without awaiting the browser's acceptance (a rejection after that point shows as a failed page state, not as an action error; use commit when you need confirmation), and wait=dom_content_loaded after DOMContentLoaded. The result carries requested_url, committed_url, title, loading, redirected, elapsed_millis and state; check completed, because a wait that exceeds timeout_millis (1000-60000 ms, enforced in full by the engine; smaller values are raised to 1000) returns state=timed_out with the latest page state instead of an error. Unreachable destinations and rejected commands are errors. Safari's classic WebDriver has no dispatch-only navigation: every wait returns once the page loaded or the bound elapsed."
     )]
     async fn browser_navigate(
         &self,
         Parameters(input): Parameters<NavigateInput>,
-    ) -> Result<Json<ActionOutput>, String> {
+    ) -> Result<Json<NavigateOutput>, String> {
+        let wait = input.wait.unwrap_or_default();
         let receipt = self
             .controller
-            .execute(
+            .execute_engine_bounded(
                 &input.panel_id,
-                BrowserControlAction::Navigate { url: input.url },
-                input.timeout_millis,
+                BrowserControlAction::Navigate {
+                    url: input.url,
+                    wait: wait.into(),
+                    timeout_millis: Some(bounded_navigation_timeout(input.timeout_millis)),
+                },
+                bounded_navigation_timeout(input.timeout_millis),
             )
             .await
             .map_err(|error| error.to_string())?;
-        require_accepted(&receipt.value)?;
-        Ok(Json(ActionOutput {
-            panel_id: input.panel_id,
-            action_id: receipt.action_id,
-            completed: true,
-        }))
+        match receipt.value {
+            BrowserControlValue::Navigation { navigation } => Ok(Json(NavigateOutput::from_outcome(
+                input.panel_id,
+                receipt.action_id,
+                navigation,
+            ))),
+            _ => Err("browser returned an unexpected navigation result".to_string()),
+        }
     }
 
     #[tool(
@@ -370,12 +377,15 @@ impl ServerHandler for HorizonBrowserMcp {
     }
 }
 
-fn require_accepted(value: &BrowserControlValue) -> Result<(), String> {
-    if matches!(value, BrowserControlValue::Accepted) {
-        Ok(())
-    } else {
-        Err("browser returned an unexpected action result".to_string())
-    }
+/// Shortest navigation bound this server accepts: the engine reports its
+/// typed `timed_out` outcome on a 250 ms coordination tick, so smaller
+/// bounds could only end in this server's generic timeout.
+const MIN_NAVIGATION_TIMEOUT_MILLIS: u64 = 1_000;
+
+/// The bound the engine enforces for a navigation action; the controller
+/// waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer for the typed report.
+fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
+    crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
 }
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
@@ -482,6 +492,61 @@ mod tests {
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));
+    }
+
+    #[test]
+    fn navigation_outcomes_map_to_typed_tool_results() {
+        let outcome = |state| horizon_browser::NavigationOutcome {
+            requested_url: "https://example.test/".to_string(),
+            wait: horizon_browser::NavigationWait::Commit,
+            state,
+            committed_url: Some("https://example.test/landing".to_string()),
+            title: None,
+            loading: true,
+            redirected: true,
+            elapsed_millis: 12,
+        };
+        let committed = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Committed),
+        );
+        assert!(committed.completed);
+        assert_eq!(committed.state, crate::model::NavigateState::Committed);
+        assert_eq!(committed.wait, crate::model::NavigateWait::Commit);
+        assert!(committed.redirected);
+        assert_eq!(committed.committed_url.as_deref(), Some("https://example.test/landing"));
+        for state in [
+            horizon_browser::NavigationState::TimedOut,
+            horizon_browser::NavigationState::Superseded,
+        ] {
+            let output = NavigateOutput::from_outcome("panel".to_string(), "action".to_string(), outcome(state));
+            assert!(!output.completed, "{state:?} never counts as completed");
+            assert_eq!(output.elapsed_millis, 12);
+        }
+        let dispatched = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Dispatched),
+        );
+        assert!(dispatched.completed);
+
+        assert_eq!(bounded_navigation_timeout(None), 15_000);
+        assert_eq!(
+            bounded_navigation_timeout(Some(100)),
+            1_000,
+            "bounds below 1 s are raised"
+        );
+        assert_eq!(
+            bounded_navigation_timeout(Some(600_000)),
+            60_000,
+            "the engine gets the full documented bound; the controller adds delivery headroom"
+        );
+        let encoded = serde_json::to_value(crate::model::NavigateWait::DomContentLoaded).expect("encode");
+        assert_eq!(encoded, serde_json::json!("dom_content_loaded"));
+        let aliased: crate::model::NavigateWait =
+            serde_json::from_value(serde_json::json!("domcontentloaded")).expect("alias decodes");
+        assert_eq!(aliased, crate::model::NavigateWait::DomContentLoaded);
     }
 
     #[test]

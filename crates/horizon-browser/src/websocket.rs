@@ -106,6 +106,16 @@ impl JsonWsLink {
         }
     }
 
+    /// Send a command without waiting for its reply. The reply arrives
+    /// through [`Self::drain`] carrying the returned `id`, so callers that
+    /// must not block the driver loop can route it themselves.
+    pub(crate) fn send_request(&mut self, method: &str, params: &Value) -> Result<u64, JsonWsError> {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        self.send(&json!({ "id": id, "method": method, "params": params }))?;
+        Ok(id)
+    }
+
     pub(crate) fn drain(&mut self, max_messages: usize) -> Result<Vec<Value>, JsonWsError> {
         let mut values = Vec::new();
         for _ in 0..max_messages {

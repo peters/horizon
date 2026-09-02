@@ -27,8 +27,10 @@ back into large multi-purpose modules.
 - Host-specific IPC, authentication, persistence, and retention stay outside
   the crate behind `BrowserCoordination`.
 - `session.rs` orchestrates the Chromium driver; command dispatch, event
-  transitions, host coordination, lifecycle, startup, and shutdown belong in
-  focused `session/` leaves.
+  transitions, host coordination, lifecycle, startup, shutdown, and agent
+  navigation settlement (`session/navigation.rs`) belong in focused
+  `session/` leaves. The backend-neutral pending-navigation state machine
+  lives in `navigation.rs` so both drivers settle the same typed outcome.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
   outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,

@@ -39,10 +39,54 @@ pub struct BrowserSnapshot {
     pub nodes: Vec<BrowserNode>,
 }
 
+/// Where a navigation action stood when its outcome was reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationState {
+    /// The command was handed to the backend; its acceptance was not awaited
+    /// and nothing about the page is known yet.
+    Dispatched,
+    /// The top-level document committed; `committed_url` is authoritative.
+    Committed,
+    /// The committed document fired `DOMContentLoaded`.
+    DomContentLoaded,
+    /// The requested readiness did not arrive within the bound; the fields
+    /// carry the latest page state the engine observed.
+    TimedOut,
+    /// A later navigation action replaced this one before it settled.
+    Superseded,
+}
+
+/// Typed result of a navigation action. Failures (unreachable destination,
+/// rejected command) are reported as a failed action, not as a state here.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct NavigationOutcome {
+    /// Destination after omnibox normalization.
+    pub requested_url: String,
+    /// Readiness the caller asked to wait for.
+    pub wait: crate::NavigationWait,
+    pub state: NavigationState,
+    /// URL of the committed top-level document, when one committed during
+    /// this action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_url: Option<String>,
+    /// Title observed for the committed document, when already known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the committed document was still loading when reported.
+    pub loading: bool,
+    /// The committed URL differs from the requested destination.
+    pub redirected: bool,
+    pub elapsed_millis: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserControlValue {
     Accepted,
+    Navigation {
+        navigation: NavigationOutcome,
+    },
     Snapshot {
         snapshot: BrowserSnapshot,
     },

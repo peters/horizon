@@ -152,8 +152,16 @@ struct Driver {
     generation: u64,
     retain_frame_during_navigation: bool,
     navigation_failed: bool,
+    /// Agent navigation whose typed outcome is settled by `BiDi` events.
+    pending_navigation: Option<crate::navigation::PendingNavigation>,
+    /// In-flight `browsingContext.navigate` sent without waiting: Firefox
+    /// answers it only once the destination responds.
+    navigate_request_id: Option<u64>,
     pending_classic_history_start: Option<PendingHistoryStart>,
     refresh_pending_at: Option<Instant>,
+    /// Session page-load timeout a bounded classic navigation lowered and the
+    /// loop still has to restore, once the typed outcome was published.
+    classic_timeout_to_restore: Option<u64>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
@@ -233,17 +241,15 @@ pub(crate) fn run_webdriver(
         }
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
-            if let Err(message) = request.action.validate() {
-                driver.audit_agent_action(&request, crate::BrowserAuditStatus::Rejected);
-                driver.complete_agent_action(
-                    &request,
-                    Err(crate::BrowserControlFailure::new("invalid_input", message)),
-                );
-                continue;
-            }
-            driver.audit_agent_action(&request, crate::BrowserAuditStatus::Dispatched);
-            let result = driver.execute_agent_action(&request, event_tx);
-            driver.complete_agent_action(&request, result);
+            // A blocking action later in the batch must not delay the typed
+            // timeout of a navigation dispatched earlier in it, and a
+            // navigation that hit its bound earlier in the batch must have its
+            // session timeout restored and page state refreshed before the
+            // next request runs.
+            driver.tick_pending_navigation();
+            driver.tick_classic_timeout_restore();
+            driver.tick_page_state_refresh(event_tx);
+            driver.service_agent_request(&request, event_tx);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
@@ -260,7 +266,9 @@ pub(crate) fn run_webdriver(
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
+        driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
+        driver.tick_pending_navigation();
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
@@ -357,8 +365,11 @@ impl Driver {
             generation: 0,
             retain_frame_during_navigation: false,
             navigation_failed: false,
+            pending_navigation: None,
+            navigate_request_id: None,
             pending_classic_history_start: None,
             refresh_pending_at: None,
+            classic_timeout_to_restore: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),
@@ -601,6 +612,12 @@ impl Driver {
     }
 
     fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
+        if let Some(id) = event.get("id").and_then(Value::as_u64)
+            && self.navigate_request_id == Some(id)
+        {
+            self.handle_bidi_navigate_response(event, event_tx);
+            return;
+        }
         if self.handle_network_bidi_event(event) {
             return;
         }
@@ -627,6 +644,17 @@ impl Driver {
             return;
         }
         if bidi_navigation_failed(method) {
+            let navigation = params.get("navigation").and_then(Value::as_str);
+            if self
+                .pending_navigation
+                .as_ref()
+                .is_some_and(|pending| !pending.correlates(navigation))
+            {
+                // A superseded navigation failing late must not poison the
+                // state of the navigation that replaced it.
+                tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
+                return;
+            }
             self.navigation_failed = true;
             self.retain_frame_during_navigation = true;
             self.frames.suspend_for_navigation();
@@ -635,8 +663,13 @@ impl Driver {
                 .get("url")
                 .and_then(Value::as_str)
                 .unwrap_or("the requested page");
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!("could not navigate to {url}")));
+            let message = format!("could not navigate to {url}");
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
+            self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
+                message: &message,
+                id: navigation,
+            });
             return;
         }
         let navigation_complete = bidi_navigation_complete(method);
@@ -663,6 +696,7 @@ impl Driver {
             let _ = event_tx.send(BrowserEvent::Loading(false));
             self.frames.demand();
             self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
+            self.settle_navigation_from_bidi(method, params.get("navigation").and_then(Value::as_str));
         } else if method.ends_with("contextDestroyed") {
             let destroyed = params.get("context").and_then(Value::as_str);
             if destroyed == self.context_id.as_deref() {
@@ -690,37 +724,6 @@ impl Driver {
         self.refresh_pending_at = None;
         self.scrollbar.reset();
         self.frames.suspend_for_navigation();
-    }
-
-    fn refresh_page_state(&mut self, event_tx: &BrowserEventSender) {
-        if let Ok(response) = self.classic_get("url")
-            && let Some(url) = webdriver_value(&response).and_then(Value::as_str)
-            && url != self.url
-        {
-            self.url = normalize_url(url).to_string();
-            self.coordination_dirty = true;
-            let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-        }
-        if let Ok(response) = self.classic_get("title")
-            && let Some(title) = webdriver_value(&response).and_then(Value::as_str)
-            && title != self.title
-        {
-            self.title = title.to_string();
-            self.coordination_dirty = true;
-            let _ = event_tx.send(BrowserEvent::Title(self.title.clone()));
-        }
-        let _ = event_tx.send(BrowserEvent::Loading(false));
-    }
-
-    fn tick_page_state_refresh(&mut self, event_tx: &BrowserEventSender) {
-        let Some(refresh_at) = self.refresh_pending_at else {
-            return;
-        };
-        if Instant::now() < refresh_at {
-            return;
-        }
-        self.refresh_pending_at = None;
-        self.refresh_page_state(event_tx);
     }
 
     fn classic_get(&self, suffix: &str) -> Result<Value, String> {
@@ -992,6 +995,26 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_timeouts_keep_a_bounded_classic_navigation_running() {
+        use super::navigation::classic_error_is_page_load_timeout;
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver timeout: Timed out waiting for page load"
+        ));
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver HTTP I/O: Resource temporarily unavailable (os error 11)"
+        ));
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver HTTP I/O: connection timed out"
+        ));
+        assert!(!classic_error_is_page_load_timeout(
+            "WebDriver unknown error: net::ERR_NAME_NOT_RESOLVED"
+        ));
+        assert!(!classic_error_is_page_load_timeout(
+            "browser did not commit a reachable URL"
+        ));
+    }
+
     use super::{
         AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
         bidi_navigation_complete, bidi_navigation_failed, bidi_subscription_params, capture_is_current,
